@@ -1,0 +1,8 @@
+namespace nprpc {
+
+interface Nameserver {
+	void Bind(obj: in object, name: in string);
+	boolean Resolve(name: in string, obj: out object);
+}
+
+}

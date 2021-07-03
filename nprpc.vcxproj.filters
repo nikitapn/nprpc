@@ -1,0 +1,93 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="src\session.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="win\dllmain.cpp">
+      <Filter>win</Filter>
+    </ClCompile>
+    <ClCompile Include="src\server_session_socket.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\client_socket_connection.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\server_session_websocket.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="include\nprpc\nprpc_nameserver.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\nprpc.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\nprpc\nprpc.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\flat.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\nprpc_nameserver.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\nprpc_base.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\export.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="src\asio.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\framework.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\session.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\nprpc_impl.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\buffer.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\basic.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\exception.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\object_ptr.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\nprpc_nameserver_m.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="include\nprpc\flat.ts">
+      <Filter>include</Filter>
+    </None>
+    <None Include="include\nprpc\nprpc_base.npidl">
+      <Filter>include</Filter>
+    </None>
+    <None Include="include\nprpc\nprpc_nameserver.npidl">
+      <Filter>include</Filter>
+    </None>
+    <None Include="Makefile" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="include">
+      <UniqueIdentifier>{38f08fb5-ba58-463e-8416-97ffdcf610fb}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src">
+      <UniqueIdentifier>{59c7d1a7-68d1-44de-9c0f-d8fb750c5aa2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="win">
+      <UniqueIdentifier>{7684758b-58db-4c04-b387-bafef32e220d}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

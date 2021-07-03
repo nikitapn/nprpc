@@ -1,0 +1,31 @@
+namespace nprpc {
+
+using poa_idx_t = u16;
+using oid_t 	= u64;
+using ifs_idx_t = u8;
+using fn_idx_t 	= u8;
+
+namespace detail {
+
+ObjectIdLocal : flat {
+	poa_idx: poa_idx_t;
+	object_id: oid_t;
+}
+
+ObjectId : flat {
+	ip4: u32;
+	port: u16;
+	poa_idx: poa_idx_t;
+	object_id: oid_t;
+	flags: u32;
+	class_id: string;
+}
+
+CallHeader : flat {
+	poa_idx: poa_idx_t;
+	interface_idx: ifs_idx_t;
+	function_idx: fn_idx_t;
+	object_id: oid_t;
+}
+
+}}
