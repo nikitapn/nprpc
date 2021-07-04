@@ -385,7 +385,7 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 		auto utype = static_cast<Ast_Wrap_Type*>(type)->type;
 		if (is_flat(utype)) {
 			auto [size, align] = get_type_size_align(utype);
-			oc << "  memcpy(" << op1 << "().data(), &" << op2 << "[0], " << op2 << ".size() * " << size << ");\n";
+			oc << "  memcpy(" << op1 << "().data(), " << op2 << ".data(), " << op2 << ".size() * " << size << ");\n";
 		} else {
 			oc <<
 				"  auto span = " << op1 << "();\n"
@@ -451,7 +451,7 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 					;
 			}
 			oc <<
-				"    memcpy(&" << op1 << "[0], span.data(), " << size << " * span.size());\n"
+				"    memcpy(" << op1 << ".data(), span.data(), " << size << " * span.size());\n"
 				"  }\n"
 				;
 		} else {
