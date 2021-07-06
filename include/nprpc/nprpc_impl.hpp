@@ -42,8 +42,10 @@ NPRPC_API extern RpcImpl* g_orb;
 class Connection 
 	: public EndPoint 
 {
+	bool closed_ = false;
 protected:
 	void close();
+	bool is_closed() { return closed_; }
 public:
 	virtual void send_receive(
 		boost::beast::flat_buffer& buffer, 
@@ -58,6 +60,8 @@ public:
 		: EndPoint(endpoint)
 	{
 	}
+
+	virtual ~Connection() = default;
 };
 
 /*
@@ -84,13 +88,14 @@ class SocketConnection : public Connection {
 	std::mutex mut_;
   std::deque<std::unique_ptr<work>> wq_;
 	uint32_t rx_size_ = 0;
-	boost::posix_time::time_duration timeout_;
+	boost::posix_time::time_duration timeout_ = boost::posix_time::milliseconds(1000);
 
 	void reconnect();
 	void add_work(std::unique_ptr<work>&& w);
 public:
 	void set_timeout(uint32_t timeout_ms) {
 		timeout_ = boost::posix_time::milliseconds(timeout_ms);
+		timeout_timer_.expires_from_now(timeout_);
 	}
 	
 	void check_timeout() noexcept;
@@ -429,6 +434,7 @@ struct Config {
 };
 
 inline void Connection::close() {
+	closed_ = true;
 	impl::g_orb->close_connection(this);
 }
 

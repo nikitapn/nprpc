@@ -9,9 +9,17 @@
 namespace nprpc::impl {
 
 void SocketConnection::check_timeout() noexcept {
+	if (is_closed()) return;
+
 	if (timeout_timer_.expires_at() <= boost::asio::deadline_timer::traits_type::now()) {
-		socket_.cancel();
-		timeout_timer_.expires_at(boost::posix_time::pos_infin);
+		boost::system::error_code ec;
+
+		socket_.cancel(ec);
+		if (ec) fail(ec, "socket::cancel()");
+
+		ec = {};
+		timeout_timer_.expires_at(boost::posix_time::pos_infin, ec);
+		if (ec) fail(ec, "timeout_timer::expires_at()");
 	}
 	timeout_timer_.async_wait(std::bind(&SocketConnection::check_timeout, this));
 }
@@ -99,7 +107,7 @@ void SocketConnection::reconnect() {
 void SocketConnection::do_read_size() {
 	auto& buf = current_rx_buffer();
 	buf.consume(buf.size());
-	buf.prepare(4); // leave first 4 bytes as a placeholder for correct alignment
+	buf.prepare(4); // 4 bytes padding for correct alignment
 	buf.commit(4);
 
 	timeout_timer_.expires_from_now(timeout_);
@@ -118,7 +126,7 @@ void SocketConnection::do_read_body() {
 
 void SocketConnection::on_read_size(const boost::system::error_code& ec, size_t len) {
 	timeout_timer_.expires_at(boost::posix_time::pos_infin);
-
+	
 	if (ec) {
 		fail(ec, "read");
 		(*wq_.front()).on_failed(ec);
