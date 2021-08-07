@@ -1,0 +1,67 @@
+// Copyright (c) 2021 nikitapnn1@gmail.com
+// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+
+namespace nprpc {
+
+using poa_idx_t = u16;
+using oid_t 	= u64;
+using ifs_idx_t = u8;
+using fn_idx_t 	= u8;
+
+ExceptionCommFailure : exception {}
+ExceptionTimeout : exception {}
+ExceptionObjectNotExist : exception {}
+ExceptionUnknownFunctionIndex : exception {}
+ExceptionUnknownMessageId : exception {}
+
+namespace detail {
+ObjectIdLocal : flat {
+	poa_idx: poa_idx_t;
+	object_id: oid_t;
+}
+
+ObjectId : flat {
+	ip4: u32;
+	port: u16;
+	poa_idx: poa_idx_t;
+	object_id: oid_t;
+	flags: u32;
+	class_id: string;
+}
+}
+
+namespace impl {
+enum MessageId: u32 {
+	FunctionCall = 0,
+	BlockResponse,
+	AddReference,
+	ReleaseObject,
+	Success,
+	Exception,
+	Error_PoaNotExist,
+	Error_ObjectNotExist,
+	Error_CommFailure,
+	Error_UnknownFunctionIdx,
+	Error_UnknownMessageId,
+}
+
+enum MessageType: u32 {
+	Request = 0,
+	Answer
+}
+
+Header: flat {
+	size: u32;
+	msg_id: MessageId;
+	msg_type: MessageType;
+	reserved: u32;
+}
+
+CallHeader: flat {
+	poa_idx: poa_idx_t;
+	interface_idx: ifs_idx_t;
+	function_idx: fn_idx_t;
+	object_id: oid_t;
+}
+
+}}
