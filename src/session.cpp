@@ -12,12 +12,12 @@ std::optional<ObjectGuard> get_object(boost::beast::flat_buffer& buf, uint16_t p
 	do {
 		auto poa = g_orb->get_poa(poa_idx);
 		if (!poa) {
-			make_simple_message(buf, MessageId::Error_PoaNotExist);
+			make_simple_answer(buf, MessageId::Error_PoaNotExist);
 			break;
 		}
 		auto obj = poa->get_object(object_id);
 		if (!obj) {
-			make_simple_message(buf, MessageId::Error_ObjectNotExist);
+			make_simple_answer(buf, MessageId::Error_ObjectNotExist);
 			break;
 		}
 		return obj;
@@ -33,9 +33,9 @@ void Session::handle_request() {
 	}
 
 	auto cb = rx_buffer_().cdata();
-	switch (*(MessageId*)((uint32_t*)cb.data() + 1)) {
+	switch (static_cast<const impl::Header*>(cb.data())->msg_id) {
 	case MessageId::FunctionCall: {
-		detail::flat::CallHeader_Direct ch(rx_buffer_(), 4 + 4);
+		impl::flat::CallHeader_Direct ch(rx_buffer_(), sizeof(impl::Header));
 		
 		if (g_cfg.debug_level >= DebugLevel_EveryCall) {
 			std::cout << "FunctionCall. " << "interface_idx: " << (uint32_t)ch.interface_idx() << ", fn_idx: " << (uint32_t)ch.function_idx() 
@@ -56,7 +56,7 @@ void Session::handle_request() {
 		break;
 	}
 	case MessageId::AddReference: {
-		detail::flat::ObjectIdLocal_Direct msg(rx_buffer_(), 4 + 4);
+		detail::flat::ObjectIdLocal_Direct msg(rx_buffer_(), sizeof(impl::Header));
 		detail::ObjectIdLocal oid{ msg.poa_idx(), msg.object_id() };
 		
 		if (g_cfg.debug_level >= DebugLevel_EveryCall) {
@@ -75,18 +75,18 @@ void Session::handle_request() {
 			if (g_cfg.debug_level >= DebugLevel_EveryCall) {
 				std::cout << "Refference added." << std::endl;
 			}
-			make_simple_message(rx_buffer_(), nprpc::impl::MessageId::Success);
+			make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Success);
 		} else {
 			if (g_cfg.debug_level >= DebugLevel_EveryCall) {
 				std::cout << "Object not found." << std::endl;
 			}
-			make_simple_message(rx_buffer_(), nprpc::impl::MessageId::Error_ObjectNotExist);
+			make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Error_ObjectNotExist);
 		}
 
 		break;
 	}
 	case MessageId::ReleaseObject: {
-		detail::flat::ObjectIdLocal_Direct msg(rx_buffer_(), 4 + 4);
+		detail::flat::ObjectIdLocal_Direct msg(rx_buffer_(), sizeof(impl::Header));
 		detail::ObjectIdLocal oid{ msg.poa_idx(), msg.object_id() };
 
 		if (g_cfg.debug_level >= DebugLevel_EveryCall) {
@@ -94,15 +94,15 @@ void Session::handle_request() {
 		}
 
 		if (ref_list_.remove_ref(msg.poa_idx(), msg.object_id())) {
-			make_simple_message(rx_buffer_(), nprpc::impl::MessageId::Success);
+			make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Success);
 		} else {
-			make_simple_message(rx_buffer_(), nprpc::impl::MessageId::Error_ObjectNotExist);
+			make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Error_ObjectNotExist);
 		}
 
 		break;
 	}
 	default:
-		assert(false);
+		make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Error_UnknownMessageId);
 		break;
 	}
 

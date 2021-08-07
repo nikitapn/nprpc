@@ -105,11 +105,11 @@ class Lexer {
 	static constexpr bool is_digit(char c) noexcept {
 		return c >= '0' && c <= '9';
 	}
-	static constexpr bool is_letter(char c) noexcept {
-		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+	static constexpr bool is_letter_or_underscore(char c) noexcept {
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
 	}
 	static constexpr bool is_valid_name(char c) noexcept {
-		return is_digit(c) || is_letter(c) || c == '_';
+		return is_digit(c) || is_letter_or_underscore(c) || c == '_';
 	}
 
 	static constexpr bool is_delimeter(char c) noexcept {
@@ -168,7 +168,7 @@ class Lexer {
 	}
 
 	Token read_string() {
-		assert(is_letter(cur()));
+		assert(is_letter_or_underscore(cur()));
 
 		const char* begin = ptr_;
 
@@ -206,7 +206,8 @@ class Lexer {
 			{ "enum"sv, TokenId::Enum },
 			{ "using"sv, TokenId::Using },
 			{ "exception"sv, TokenId::Exception },
-			{ "raises"sv, TokenId::Raises }
+			{ "raises"sv, TokenId::Raises },
+			{ "direct"sv, TokenId::OutDirect }
 		};
 
 		static constexpr Map<std::string_view, TokenId,
@@ -261,7 +262,7 @@ public:
 		default:
 			if (is_digit(cur())) {
 				return Token{ TokenId::Number, read_number() };
-			} else if (is_letter(cur())) {
+			} else if (is_letter_or_underscore(cur())) {
 				return read_string();
 			} else {
 				using namespace std::string_literals;
@@ -572,6 +573,11 @@ class Parser {
 		else {
 			throw_error("Expected 'in' or 'out' keywords after parameter name declaration.");
 		}
+
+		if (arg.modifier == ArgumentModifier::Out && check(&Parser::one, TokenId::OutDirect)) {
+			arg.direct = true;
+		}
+
 		if (!check(&Parser::type_decl, std::ref(arg.type))) return false;
 
 		arg.name = arg_name.name;
@@ -652,6 +658,8 @@ class Parser {
 		}
 
 		calc_struct_size_align(s);
+
+		// std::cerr << s->name << ": size " << s->size << ", alignof "<< s->align << '\n';
 
 		builder_.emit((!s->is_exception() ? &Builder::emit_struct : &Builder::emit_exception), s);
 		ctx_.nm_cur()->add(s->name, s);
@@ -781,7 +789,7 @@ class Parser {
 			ifs->fns[idx]->idx = idx;
 		}
 
-
+		ctx_.interfaces.push_back(ifs);
 		ctx_.nm_cur()->add(ifs->name, ifs);
 		builder_.emit(&Builder::emit_interface, ifs);
 
@@ -960,13 +968,16 @@ int main(int argc, char* argv[]) {
 	namespace po = boost::program_options;
 	
 	std::filesystem::path out_inc_dir, out_src_dir, out_ts_dir, input_file;
+	bool generate_typescript;
 
 	// Declare the supported options.
 	po::options_description desc("Allowed options");
 	desc.add_options()
+		("help", "produce help message")
 		("out-inc-dir", po::value<std::filesystem::path>(&out_inc_dir), "directory for generated include files")
 		("out-src-dir", po::value<std::filesystem::path>(&out_src_dir), "directory for generated source files")
 		("out-ts-dir", po::value<std::filesystem::path>(&out_ts_dir), "directory for generated typescript files")
+		("gen-ts", po::value<bool>(&generate_typescript)->default_value(true), "generate typescript")
 		("input-file", po::value<std::filesystem::path>(&input_file), "input file")
 		;
 
@@ -977,6 +988,10 @@ int main(int argc, char* argv[]) {
 		po::variables_map vm;
 		po::store(po::command_line_parser(argc, argv).options(desc).positional(p).run(), vm);
 		po::notify(vm);
+		if (vm.count("help")) {
+			std::cout << desc << "\n";
+			return 0;
+		}
 		if (!vm.count("input-file")) {
 			std::cerr << "no input file...\n";
 			return -1;
@@ -987,13 +1002,15 @@ int main(int argc, char* argv[]) {
 	}
 
 	try {
-//		auto file_path = std::filesystem::path("c:/projects/cpp/npsystem/npc/idl/server.npidl");
+		//input_file = std::filesystem::path("c:\\projects\\cpp\\npk-calculator\\server\\idl\\npkcalc.npidl");
 
-		Context ctx;
+		Context ctx(input_file);
 
 		BuildGroup builder(ctx);
 		builder.add<Builder_Cpp>(input_file, out_inc_dir, out_src_dir);
-//		builder.add<Builder_Typescript>(input_file, out_ts_dir);
+		if (generate_typescript) {
+			builder.add<Builder_Typescript>(input_file, out_ts_dir);
+		}
 
 		Parser parser(input_file, ctx, builder);
 		parser.parse();

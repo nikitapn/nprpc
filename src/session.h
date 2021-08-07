@@ -19,8 +19,8 @@ protected:
 	Buffers rx_buffer_;
 	EndPoint remote_endpoint_;
 public:
-	virtual void send(void* data, size_t len) = 0;
 	void handle_request();
+	virtual void send(void* data, size_t len) = 0;
 	virtual ~Session() = default;
 };
 

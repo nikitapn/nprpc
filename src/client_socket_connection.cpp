@@ -79,8 +79,13 @@ void SocketConnection::send_receive(boost::beast::flat_buffer& buffer, uint32_t 
 
 	auto ec = post_work_and_wait();
 	
-	if (!ec) return;
-	
+	if (!ec) {
+		if (g_cfg.debug_level >= DebugLevel_EveryMessageContent) {
+			dump_message(buffer, true);
+		}
+		return;
+	}
+
 	if (ec == boost::asio::error::connection_reset || ec == boost::asio::error::broken_pipe) {
 		reconnect();
 		auto ec = post_work_and_wait();
@@ -107,8 +112,7 @@ void SocketConnection::reconnect() {
 void SocketConnection::do_read_size() {
 	auto& buf = current_rx_buffer();
 	buf.consume(buf.size());
-	buf.prepare(4); // 4 bytes padding for correct alignment
-	buf.commit(4);
+	buf.prepare(4);
 
 	timeout_timer_.expires_from_now(timeout_);
 	socket_.async_read_some(net::mutable_buffer(&rx_size_, 4),
@@ -142,6 +146,10 @@ void SocketConnection::on_read_size(const boost::system::error_code& ec, size_t 
 		pop_and_execute_next_task();
 		return;
 	}
+
+	auto& buf = current_rx_buffer();
+	*static_cast<uint32_t*>(buf.data().data()) = rx_size_;
+	buf.commit(4);
 
 	do_read_body();
 }

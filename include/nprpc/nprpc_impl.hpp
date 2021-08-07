@@ -21,19 +21,6 @@
 
 namespace nprpc::impl {
 
-enum MessageId : uint32_t {
-	FunctionCall = 0,
-	BlockResponse,
-	AddReference,
-	ReleaseObject,
-	Success,
-	Exception,
-	Error_PoaNotExist,
-	Error_ObjectNotExist,
-	Error_CommFailure,
-	Error_UnknownFunctionIdx,
-};
-
 class RpcImpl;
 class PoaImpl;
 
@@ -161,14 +148,14 @@ public:
 	NPRPC_API std::optional<ObjectGuard> get_object(poa_idx_t poa_idx, oid_t oid);
 
 	boost::asio::io_context& ioc() noexcept { return ioc_; }
-	void start() override;
+	void start(bool with_websocket = false, std::string_view http_root_dir = {}) override;
 	void destroy() override;
 	Poa* create_poa(uint32_t objects_max, std::initializer_list<Policy*> policy_list) override;
 	bool close_connection(Connection* con);
 	virtual ObjectPtr<Nameserver> get_nameserver(std::string_view nameserver_ip) override;
 	void check_unclaimed_objects();
 
-	Object* create_object_from_flat(nprpc::detail::flat::ObjectId_Direct oid, EndPoint remote_endpoint) {
+	Object* create_object_from_flat(detail::flat::ObjectId_Direct oid, EndPoint remote_endpoint) {
 		if (oid.object_id() == invalid_object_id) return nullptr;
 
 		auto obj = new Object();
@@ -306,7 +293,9 @@ class PoaImpl : public Poa {
 
 
 		std::remove_pointer_t<T>* get(uint64_t id) noexcept {
-			auto& item = data(index(id));
+			const auto idx = index(id);
+			if (idx > max_size_) return nullptr;
+			auto& item = data(idx);
 			if (item.gix != generation_index(id)) return nullptr;
 
 			if constexpr (std::is_pointer_v<T> == false) {
@@ -355,7 +344,9 @@ public:
 		oid.ip4 = localhost_ip4;
 		oid.port = g_orb->port();
 		oid.poa_idx = get_index();
-		obj->object_id_ = oid.object_id = object_map_.add(obj);
+		auto object_id_internal = object_map_.add(obj);
+		if (object_id_internal == -1) throw Exception("Poa fixed size has been exceeded");
+		obj->object_id_ = oid.object_id = object_id_internal;
 		oid.flags = (pl_lifespan << Object::Flags::Lifespan);
 		oid.class_id = obj->get_class();
 		
@@ -386,34 +377,17 @@ public:
 	}
 };
 
-inline void make_simple_message(boost::beast::flat_buffer& buf, MessageId id) {
-	assert(id == MessageId::Success || id == MessageId::Error_CommFailure || id == MessageId::Error_ObjectNotExist);
+inline void make_simple_answer(boost::beast::flat_buffer& buf, MessageId id) {
+	assert(id == MessageId::Success 
+		|| id == MessageId::Error_CommFailure 
+		|| id == MessageId::Error_ObjectNotExist 
+		|| id == MessageId::Error_UnknownMessageId);
 	buf.consume(buf.size());
-	auto mb = buf.prepare(4 + 4);
-	*(uint32_t*)mb.data() = 4;
-	*((uint32_t*)mb.data() + 1) = id;
-	buf.commit(4 + 4);
-}
-
-//  0 - Success
-//  1 - exception
-// -1 - not handled
-inline int handle_standart_reply(boost::beast::flat_buffer& buf) {
-	if (buf.size() < 8) throw ExceptionCommFailure();
-	switch (*((std::uint32_t*)buf.cdata().data() + 1)) {
-	case MessageId::Success:
-		return 0;
-	case MessageId::Exception:
-		return 1;
-	case MessageId::Error_ObjectNotExist:
-		throw ExceptionObjectNotExist();
-	case MessageId::Error_CommFailure:
-		throw ExceptionCommFailure();
-	case MessageId::Error_UnknownFunctionIdx:
-		throw ExceptionUnknownFunctionIndex();
-	default:
-		return -1;
-	}
+	auto mb = buf.prepare(sizeof(impl::Header));
+	static_cast<impl::Header*>(mb.data())->size = sizeof(impl::Header) - 4;
+	static_cast<impl::Header*>(mb.data())->msg_id = id;
+	static_cast<impl::Header*>(mb.data())->msg_type = impl::MessageType::Answer;
+	buf.commit(sizeof(impl::Header));
 }
 
 inline void dump_message(boost::beast::flat_buffer& buffer, bool rx) {
@@ -428,6 +402,33 @@ inline void dump_message(boost::beast::flat_buffer& buffer, bool rx) {
 	}
 	std::cout << std::dec << std::endl;
 }
+
+//  0 - Success
+//  1 - exception
+// -1 - not handled
+inline int handle_standart_reply(boost::beast::flat_buffer& buf) {
+	if (buf.size() < sizeof(impl::Header)) throw ExceptionCommFailure();
+	auto header = static_cast<const impl::Header*>(buf.cdata().data());
+	assert(header->size == buf.size() - 4);
+	switch (header->msg_id) {
+	case MessageId::Success:
+		return 0;
+	case MessageId::Exception:
+		return 1;
+	case MessageId::Error_ObjectNotExist:
+		throw ExceptionObjectNotExist();
+	case MessageId::Error_CommFailure:
+		throw ExceptionCommFailure();
+	case MessageId::Error_UnknownFunctionIdx:
+		throw ExceptionUnknownFunctionIndex();
+	case MessageId::Error_UnknownMessageId:
+		throw ExceptionUnknownMessageId();
+	default:
+		return -1;
+	}
+}
+
+
 
 struct Config {
 	int debug_level;

@@ -7,6 +7,7 @@
 #include <vector>
 #include <optional>
 #include <cassert>
+#include <filesystem>
 
 constexpr int fundamental_type_first = 256;
 constexpr int fundamental_type_last = fundamental_type_first + 16;
@@ -56,7 +57,8 @@ enum class TokenId {
 	Out,
 	Enum,
 	Using,
-	Raises
+	Raises,
+	OutDirect
 };
 
 struct Ast_Struct_Decl;
@@ -69,7 +71,7 @@ class Namespace {
 	Namespace* parent_;
 	std::string name_;
 	std::vector<std::pair<std::string, Ast_Type_Decl*>> types_;
-	std::string construct_path(const std::string& delim) const noexcept;
+	std::string construct_path(const std::string& delim, bool omit_root = false) const noexcept;
 	
 public:
 	Namespace();
@@ -81,6 +83,7 @@ public:
 	const std::string& name() const noexcept;
 	Namespace* parent() const noexcept;
 	std::string to_cpp17_namespace() const noexcept;
+	std::string to_ts_namespace() const noexcept;
 	std::string to_interface_path() const noexcept;
 };
 
@@ -198,6 +201,10 @@ struct Ast_Enum_Decl : Ast_Fundamental_Type {
 struct Ast_Field_Decl {
 	Ast_Type_Decl* type;
 	std::string name;
+	bool function_argument = false;
+	bool input_function_argument;
+	std::string_view function_name;
+	std::string_view function_argument_name;
 };
 
 struct Ast_Struct_Decl : Ast_Type_Decl {
@@ -231,8 +238,17 @@ struct Ast_MessageDescriptor_Decl : Ast_Type_Decl {
 };
 
 constexpr auto cft(Ast_Type_Decl* type) noexcept {
-	assert(type->id == FieldType::Fundamental);
+	assert(type->id == FieldType::Fundamental || type->id == FieldType::Enum);
 	return static_cast<Ast_Fundamental_Type*>(type);
+}
+
+constexpr auto cwt(Ast_Type_Decl* type) noexcept {
+	assert(
+		type->id == FieldType::Array ||
+		type->id == FieldType::Vector ||
+		type->id == FieldType::Alias
+	);
+	return static_cast<Ast_Wrap_Type*>(type)->type;
 }
 
 constexpr auto car(Ast_Type_Decl* type) noexcept {
@@ -289,14 +305,16 @@ enum class ArgumentModifier { In, Out };
 
 struct Ast_Function_Argument : Ast_Field_Decl {
 	ArgumentModifier modifier;
+	bool direct = false;
 };
 
 struct Ast_Function_Decl {
 	uint16_t idx;
 	std::string name;
 	Ast_Type_Decl* ret_value;
-	Ast_Struct_Decl* in_s;
-	Ast_Struct_Decl* out_s;
+	Ast_Struct_Decl* in_s = nullptr;
+	Ast_Struct_Decl* out_s = nullptr;
+	bool arguments_structs_has_been_made = false;
 	Ast_Struct_Decl* ex = nullptr;
 	std::vector<Ast_Function_Argument*> args;
 
@@ -321,6 +339,8 @@ public:
 	void put(const IdType& id, T item) {
 		items_.emplace_back(id, item);
 	}
+	auto begin() { return items_.begin(); }
+	auto end() { return items_.end(); }
 };
 
 
@@ -361,10 +381,13 @@ inline void Namespace::add(const std::string& name, Ast_Type_Decl* type) {
 	types_.push_back({ name, type });
 }
 
-inline std::string Namespace::construct_path(const std::string& delim) const noexcept {
-		auto ptr = parent();
+inline std::string Namespace::construct_path(const std::string& delim, bool omit_root) const noexcept {
+	if (omit_root && parent() && parent()->name().empty()) return {};
+	
+	auto ptr = parent();
 	std::string result = name();
 	while (ptr && !ptr->name().empty()) {
+		if (omit_root && ptr->parent() && ptr->parent()->name().empty()) break;
 		result = ptr->name() + delim + result;
 		ptr = ptr->parent();
 	}
@@ -374,6 +397,11 @@ inline std::string Namespace::construct_path(const std::string& delim) const noe
 inline std::string Namespace::to_cpp17_namespace() const noexcept {
 	static const auto delim = std::string(2, ':');
 	return construct_path(delim);
+}
+
+inline std::string Namespace::to_ts_namespace() const noexcept {
+	static const auto delim = std::string(2, '.');
+	return construct_path(delim, true);
 }
 
 inline std::string Namespace::to_interface_path() const noexcept {
@@ -397,8 +425,11 @@ class Context {
 	Namespace* nm_cur_;
 	uint32_t exception_id_last = -1;
 public:
+	std::string base_name;
 	AFFAList affa_list;
+	int m_struct_n_ = 0;
 	std::vector<Ast_Struct_Decl*> exceptions;
+	std::vector<Ast_Interface_Decl*> interfaces;
 	uint32_t message_id_last = 0;
 
 	uint32_t next_exception_id () noexcept { return ++exception_id_last; }
@@ -416,7 +447,14 @@ public:
 	Namespace* nm_cur() { return nm_cur_; }
 	Namespace* nm_root() { return nm_root_; }
 
-	Context() {
+	bool is_nprpc_base() const noexcept {
+		return base_name == "nprpc_base";
+	}
+
+	Context(const std::filesystem::path& file_path) {
+		base_name = file_path.filename().replace_extension().string();
+		std::transform(base_name.begin(), base_name.end(), base_name.begin(), [](char c) {
+			return c == '.' ? '_' : ::tolower(c); });
 		nm_root_ = nm_cur_ = new Namespace();
 	}
 };

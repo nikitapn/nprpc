@@ -16,9 +16,6 @@
     <ClCompile Include="src\server_session_websocket.cpp">
       <Filter>src</Filter>
     </ClCompile>
-    <ClCompile Include="include\nprpc\nprpc_nameserver.cpp">
-      <Filter>src</Filter>
-    </ClCompile>
     <ClCompile Include="src\nprpc.cpp">
       <Filter>src</Filter>
     </ClCompile>
@@ -66,18 +63,21 @@
     <ClInclude Include="include\nprpc\nprpc_nameserver_m.hpp">
       <Filter>include</Filter>
     </ClInclude>
+    <ClInclude Include="include\nprpc\utils.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="include\nprpc\flat.ts">
-      <Filter>include</Filter>
-    </None>
-    <None Include="include\nprpc\nprpc_base.npidl">
-      <Filter>include</Filter>
-    </None>
-    <None Include="include\nprpc\nprpc_nameserver.npidl">
-      <Filter>include</Filter>
-    </None>
     <None Include="Makefile" />
+    <None Include="idl\make.bat">
+      <Filter>idl</Filter>
+    </None>
+    <None Include="idl\nprpc_base.npidl">
+      <Filter>idl</Filter>
+    </None>
+    <None Include="idl\nprpc_nameserver.npidl">
+      <Filter>idl</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="include">
@@ -88,6 +88,9 @@
     </Filter>
     <Filter Include="win">
       <UniqueIdentifier>{7684758b-58db-4c04-b387-bafef32e220d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="idl">
+      <UniqueIdentifier>{01324650-62b0-41b6-8381-d9e781d06399}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

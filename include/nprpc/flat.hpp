@@ -229,9 +229,9 @@ public:
 
 template<typename T>
 class Vector_Direct {
+protected:
 	boost::beast::flat_buffer& buffer_;
 	size_t offset_;
-protected:
 	Vector<T>& v() noexcept {
 		return *reinterpret_cast<Vector<T>*>((std::byte*)buffer_.data().data() + offset_);
 	}
@@ -250,9 +250,18 @@ class Vector_Direct1 : public Vector_Direct<T> {
 public:
 	auto operator ()() noexcept { return (Span<T>)this->v(); }
 	Vector_Direct1(boost::beast::flat_buffer& buffer, size_t offset)
-		: Vector_Direct<T>(buffer, offset)
-	{
+		: Vector_Direct<T>(buffer, offset) {}
+};
+
+class String_Direct1 : public Vector_Direct1<char> {
+public:
+	void operator=(std::string_view str) noexcept {
+		length(str.length());
+		auto span = this->operator()();
+		std::copy(str.begin(), str.end(), span.begin());
 	}
+	String_Direct1(boost::beast::flat_buffer& buffer, size_t offset)
+		: Vector_Direct1<char>(buffer, offset) {}
 };
 
 template<typename T, typename TD>

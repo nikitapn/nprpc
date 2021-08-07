@@ -97,7 +97,7 @@ public:
 
   void do_read_size() {
     rx_buffer_().consume(rx_buffer_().size());
-    rx_buffer_().prepare(4); // leave first 4 bytes as a placeholder for correct alignment
+    rx_buffer_().prepare(4);
     socket_.async_read_some(net::mutable_buffer(&size_to_read_, 4), 
       std::bind(&Session_Socket::on_read_size, shared_from_this(), 
         std::placeholders::_1, std::placeholders::_2)

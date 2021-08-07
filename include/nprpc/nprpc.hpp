@@ -19,6 +19,7 @@
 #include <nprpc/basic.hpp>
 #include <nprpc/buffer.hpp>
 #include <nprpc/object_ptr.hpp>
+#include <nprpc/utils.hpp>
 
 namespace nprpc {
 
@@ -34,6 +35,7 @@ namespace impl {
 class PoaImpl;
 class RpcImpl;
 }
+
 
 class ObjectId : private detail::ObjectId {
 	friend impl::PoaImpl;
@@ -62,6 +64,7 @@ public:
 		return *this;
 	}
 };
+
 
 class NPRPC_API Policy {
 public:
@@ -151,7 +154,7 @@ protected:
 class NPRPC_API Rpc {
 public:
 	virtual Poa* create_poa(uint32_t objects_max, std::initializer_list<Policy*> policy_list = {}) = 0;
-	virtual void start() = 0;
+	virtual void start(bool with_websocket = false, std::string_view http_root_dir = {}) = 0;
 	virtual void destroy() = 0;
 	virtual ObjectPtr<Nameserver> get_nameserver(std::string_view nameserver_ip) = 0;
 	virtual ~Rpc() = default;
@@ -170,7 +173,7 @@ T* narrow(Object*& obj) noexcept {
 	return t;
 }
 
-inline void assign_to_out(const nprpc::ObjectId& oid, nprpc::detail::flat::ObjectId_Direct& out) {
+inline void assign_to_out(const nprpc::ObjectId& oid, detail::flat::ObjectId_Direct& out) {
 	out.ip4() = oid._data().ip4;
 	out.port() = oid._data().port;
 	out.poa_idx() = oid._data().poa_idx;

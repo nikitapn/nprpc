@@ -3,7 +3,8 @@
 
 #include "utils.hpp"
 #include <cassert>
-
+#include <stack>
+#include <boost/container/small_vector.hpp>
 
 int get_fundamental_size(TokenId token_id) {
 	switch (token_id) {
@@ -32,10 +33,10 @@ void calc_struct_size_align(Ast_Struct_Decl* s, Ast_Type_Decl* t, int& offset, i
 		}
 		case FieldType::Struct:
 		{
-			auto s = cflat(t);
-			assert(s->align != -1 && s->size != -1);
-			if (s->align < s->align) s->align = s->align;
-			align_offset(s->align, offset, s->size, elements_size);
+			auto member_s = cflat(t);
+			assert(member_s->align != -1 && member_s->size != -1);
+			if (s->align < member_s->align) s->align = member_s->align;
+			align_offset(member_s->align, offset, member_s->size, elements_size);
 			break;
 		}
 		case FieldType::Array:
@@ -173,3 +174,32 @@ bool is_flat(Ast_Type_Decl* type) {
 		return false;
 	}
 }
+
+bool is_fundamental(Ast_Type_Decl* type) {
+	switch (type->id) {
+	case FieldType::Fundamental:
+	case FieldType::Enum:
+		return true;
+	case FieldType::Alias:
+		return is_flat(calias(type)->type);
+	default:
+		return false;
+	}
+}
+
+void dfs_interface(std::function<void(Ast_Interface_Decl*)> fn, Ast_Interface_Decl* start) {
+	using T = std::pair<size_t, std::vector<Ast_Interface_Decl*>*>;
+	std::stack<T, boost::container::small_vector<T, 8>> stack;
+	stack.push({0, &start->plist});
+	fn(start);
+	do {
+		auto& top = stack.top();
+		if (top.first < top.second->size()) {
+			auto next_ifs = (*top.second)[top.first++];
+			fn(next_ifs);
+			stack.push({0, &next_ifs->plist});
+		} else {
+			stack.pop();
+		}
+	} while (!stack.empty());
+};

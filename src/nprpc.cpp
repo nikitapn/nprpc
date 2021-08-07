@@ -5,7 +5,7 @@
 #include <nprpc/nprpc_nameserver.hpp>
 
 extern void init_socket(boost::asio::io_context& ioc, unsigned short port);
-extern void init_web_socket(boost::asio::io_context& ioc, unsigned short port);
+extern void init_web_socket(boost::asio::io_context& ioc, unsigned short port, std::string_view http_root_dir);
 
 using namespace nprpc;
 
@@ -34,9 +34,10 @@ void RpcImpl::check_unclaimed_objects() {
 Config g_cfg;
 NPRPC_API RpcImpl* g_orb;
 
-void RpcImpl::start() {
+void RpcImpl::start(bool with_websocket, std::string_view http_root_dir) {
 	init_socket(ioc_, port_);
-	init_web_socket(ioc_, port_ + 1);
+	if (with_websocket)
+		init_web_socket(ioc_, port_ + 1, http_root_dir);
 }
 
 void RpcImpl::destroy() {
@@ -203,14 +204,15 @@ NPRPC_API uint32_t Object::add_ref() {
 
 	boost::beast::flat_buffer buf;
 
-	auto constexpr msg_size = 4 + 4 + sizeof(nprpc::detail::flat::ObjectIdLocal);
+	auto constexpr msg_size = sizeof(impl::Header) + sizeof(::nprpc::detail::flat::ObjectIdLocal);
 	auto mb = buf.prepare(msg_size);
 	buf.commit(msg_size);
 
-	*((uint32_t*)mb.data()) = msg_size - 4;
-	*((uint32_t*)mb.data() + 1) = ::nprpc::impl::MessageId::AddReference;
+	static_cast<impl::Header*>(mb.data())->size = msg_size - 4;
+	static_cast<impl::Header*>(mb.data())->msg_id = impl::MessageId::AddReference;
+	static_cast<impl::Header*>(mb.data())->msg_type = impl::MessageType::Request;
 
-	::nprpc::detail::flat::ObjectIdLocal_Direct msg(buf, 4 + 4);
+	::nprpc::detail::flat::ObjectIdLocal_Direct msg(buf, sizeof(impl::Header));
 	msg.object_id() = this->_data().object_id;
 	msg.poa_idx() = this->_data().poa_idx;
 
@@ -236,14 +238,15 @@ NPRPC_API uint32_t Object::release() {
 	if (policy_lifespan() == Policy_Lifespan::Transient) {
 		boost::beast::flat_buffer buf;
 
-		auto constexpr msg_size = 4 + 4 + sizeof(nprpc::detail::flat::ObjectIdLocal);
+		auto constexpr msg_size = sizeof(impl::Header) + sizeof(::nprpc::detail::flat::ObjectIdLocal);
 		auto mb = buf.prepare(msg_size);
 		buf.commit(msg_size);
 
-		*((uint32_t*)mb.data()) = msg_size - 4;
-		*((uint32_t*)mb.data() + 1) = ::nprpc::impl::MessageId::ReleaseObject;
+		static_cast<impl::Header*>(mb.data())->size = msg_size - 4;
+		static_cast<impl::Header*>(mb.data())->msg_id = impl::MessageId::ReleaseObject;
+		static_cast<impl::Header*>(mb.data())->msg_type = impl::MessageType::Request;
 
-		::nprpc::detail::flat::ObjectIdLocal_Direct msg(buf, 4 + 4);
+		::nprpc::detail::flat::ObjectIdLocal_Direct msg(buf, sizeof(impl::Header));
 		msg.object_id() = this->_data().object_id;
 		msg.poa_idx() = this->_data().poa_idx;
 
