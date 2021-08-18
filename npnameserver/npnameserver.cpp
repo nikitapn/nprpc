@@ -38,8 +38,12 @@ int main() {
 	Nameserver server;
 	boost::asio::io_context ioc;
 
-	nprpc::set_debug_level(nprpc::DebugLevel_Critical);
-	auto orb = nprpc::init(ioc, 15000);
+	nprpc::Config rpc_cfg;
+	rpc_cfg.debug_level = nprpc::DebugLevel::DebugLevel_Critical;
+	rpc_cfg.port = 15000;
+	rpc_cfg.websocket_port = 15001;
+
+	auto orb = nprpc::init(ioc, std::move(rpc_cfg));
 	auto p1 = std::make_unique<nprpc::Policy_Lifespan>(nprpc::Policy_Lifespan::Persistent);
 	auto poa = orb->create_poa(1, { p1.get() });
 	auto oid = poa->activate_object(&server);

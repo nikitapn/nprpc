@@ -4,12 +4,13 @@
 #include <nprpc/nprpc_impl.hpp>
 #include <nprpc/nprpc_nameserver.hpp>
 
-extern void init_socket(boost::asio::io_context& ioc, unsigned short port);
-extern void init_web_socket(boost::asio::io_context& ioc, unsigned short port, std::string_view http_root_dir);
 
 using namespace nprpc;
 
 namespace nprpc::impl {
+
+extern void init_socket(boost::asio::io_context& ioc);
+extern void init_web_socket(boost::asio::io_context& ioc);
 
 void RpcImpl::check_unclaimed_objects() {
 	if (timer1_.expires_at() <= boost::asio::deadline_timer::traits_type::now()) {
@@ -34,10 +35,9 @@ void RpcImpl::check_unclaimed_objects() {
 Config g_cfg;
 NPRPC_API RpcImpl* g_orb;
 
-void RpcImpl::start(bool with_websocket, std::string_view http_root_dir) {
-	init_socket(ioc_, port_);
-	if (with_websocket)
-		init_web_socket(ioc_, port_ + 1, http_root_dir);
+void RpcImpl::start() {
+	init_socket(ioc_);
+	init_web_socket(ioc_);
 }
 
 void RpcImpl::destroy() {
@@ -54,13 +54,13 @@ Poa* RpcImpl::create_poa(uint32_t objects_max, std::initializer_list<Policy*> po
 	return poa;
 }
 
-NPRPC_API std::shared_ptr<Connection> RpcImpl::get_connection(const EndPoint& endpoint) {
-	std::shared_ptr<Connection> con;
+NPRPC_API std::shared_ptr<Session> RpcImpl::get_session(const EndPoint& endpoint) {
+	std::shared_ptr<Session> con;
 	{
 		std::lock_guard<std::mutex> lk(connections_mut_);
-		if (auto founded = std::find_if(opened_connections_.begin(), opened_connections_.end(),
-			[&endpoint](auto const& ptr) { return static_cast<EndPoint&>(*ptr.get()) == endpoint; });
-			founded != opened_connections_.end()) {
+		if (auto founded = std::find_if(opened_sessions_.begin(), opened_sessions_.end(),
+			[&endpoint](auto const& ptr) { return ptr->remote_endpoint() == endpoint; });
+			founded != opened_sessions_.end()) {
 			con = (*founded);
 		} else {
 			if (endpoint.is_local()) {
@@ -71,7 +71,7 @@ NPRPC_API std::shared_ptr<Connection> RpcImpl::get_connection(const EndPoint& en
 					boost::asio::ip::tcp::socket(boost::asio::make_strand(ioc_))
 					);
 			}
-			opened_connections_.push_back(con);
+			opened_sessions_.push_back(con);
 		}
 	}
 	return con;
@@ -81,12 +81,12 @@ NPRPC_API void RpcImpl::call(
 	const EndPoint& endpoint,
 	boost::beast::flat_buffer& buffer,
 	uint32_t timeout_ms) {
-	get_connection(endpoint)->send_receive(buffer, timeout_ms);
+	get_session(endpoint)->send_receive(buffer, timeout_ms);
 }
 
 NPRPC_API void RpcImpl::call_async(const EndPoint& endpoint, boost::beast::flat_buffer&& buffer,
 	std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler, uint32_t timeout_ms) {
-	get_connection(endpoint)->send_receive_async(std::move(buffer), std::move(completion_handler), timeout_ms);
+	get_session(endpoint)->send_receive_async(std::move(buffer), std::move(completion_handler), timeout_ms);
 }
 
 NPRPC_API std::optional<ObjectGuard> RpcImpl::get_object(poa_idx_t poa_idx, oid_t object_id) {
@@ -95,14 +95,20 @@ NPRPC_API std::optional<ObjectGuard> RpcImpl::get_object(poa_idx_t poa_idx, oid_
 	return poa->get_object(object_id);
 }
 
-bool RpcImpl::close_connection(Connection* con) {
+bool RpcImpl::has_session(const EndPoint& endpoint) const noexcept {
 	std::lock_guard<std::mutex> lk(connections_mut_);
-	if (auto founded = std::find_if(opened_connections_.begin(), opened_connections_.end(),
-		[con](auto const& ptr) { return static_cast<EndPoint&>(*ptr.get()) == static_cast<EndPoint&>(*con); });
-		founded != opened_connections_.end()) {
-		opened_connections_.erase(founded);
+	return std::find_if(opened_sessions_.begin(), opened_sessions_.end(),
+		[endpoint](auto const& ptr) { return ptr->remote_endpoint() == endpoint; }) != opened_sessions_.end();
+}
+
+bool RpcImpl::close_session(Session* session) {
+	std::lock_guard<std::mutex> lk(connections_mut_);
+	if (auto founded = std::find_if(opened_sessions_.begin(), opened_sessions_.end(),
+		[session](auto const& ptr) { return ptr->remote_endpoint() == session->remote_endpoint(); });
+		founded != opened_sessions_.end()) {
+		opened_sessions_.erase(founded);
 	} else {
-		std::cerr << "Error: connection was not found\n";
+		std::cerr << "Error: session was not found\n";
 		return false;
 	}
 	return true;
@@ -114,15 +120,14 @@ ObjectPtr<Nameserver> RpcImpl::get_nameserver(std::string_view nameserver_ip) {
 	obj->_data().port = 15000;
 	obj->_data().poa_idx = 0;
 	obj->_data().object_id = 0;
-	obj->_data().flags = (Policy_Lifespan::Persistent << Object::Flags::Lifespan);
+	obj->_data().flags = (Policy_Lifespan::Persistent << static_cast<int>(detail::ObjectFlag::Policy_Lifespan));
 	obj->_data().class_id = INameserver_Servant::_get_class();
 	obj->add_ref();
 	return obj;
 }
 
-RpcImpl::RpcImpl(boost::asio::io_context& ioc, uint16_t port)
+RpcImpl::RpcImpl(boost::asio::io_context& ioc)
 	: ioc_{ioc}
-	, port_{port}
 	, timer1_{ioc}
 {
 	timer1_.expires_from_now(boost::posix_time::milliseconds(2500));
@@ -166,19 +171,15 @@ public:
 
 namespace nprpc {
 
-NPRPC_API Rpc* init(boost::asio::io_context& ioc, uint16_t port) {
+NPRPC_API Rpc* init(boost::asio::io_context& ioc, Config&& cfg) {
+	impl::g_cfg = std::move(cfg);
 	if (impl::g_orb) throw Exception("rpc has been previously initialized");
-	impl::g_orb = new impl::RpcImpl(ioc, port);
+	impl::g_orb = new impl::RpcImpl(ioc);
 	return impl::g_orb;
 }
 
 void Policy_Lifespan::apply_policy(Poa* poa) {
 	static_cast<impl::PoaImpl*>(poa)->pl_lifespan = this->policy_;
-}
-
-
-NPRPC_API void set_debug_level(DebugLevel level) {
-	impl::g_cfg.debug_level = level;
 }
 
 uint32_t ObjectServant::release() noexcept {
@@ -236,32 +237,42 @@ NPRPC_API uint32_t Object::release() {
 	if (cnt != 0) return cnt;
 
 	if (policy_lifespan() == Policy_Lifespan::Transient) {
-		boost::beast::flat_buffer buf;
+		const nprpc::EndPoint endpoint(this->_data().ip4, this->_data().port);
 
-		auto constexpr msg_size = sizeof(impl::Header) + sizeof(::nprpc::detail::flat::ObjectIdLocal);
-		auto mb = buf.prepare(msg_size);
-		buf.commit(msg_size);
+		if (is_web_origin() && ::nprpc::impl::g_orb->has_session(endpoint) == false) {
+			// websocket session was closed.
+		} else {
+			boost::beast::flat_buffer buf;
 
-		static_cast<impl::Header*>(mb.data())->size = msg_size - 4;
-		static_cast<impl::Header*>(mb.data())->msg_id = impl::MessageId::ReleaseObject;
-		static_cast<impl::Header*>(mb.data())->msg_type = impl::MessageType::Request;
+			auto constexpr msg_size = sizeof(impl::Header) + sizeof(::nprpc::detail::flat::ObjectIdLocal);
+			auto mb = buf.prepare(msg_size);
+			buf.commit(msg_size);
 
-		::nprpc::detail::flat::ObjectIdLocal_Direct msg(buf, sizeof(impl::Header));
-		msg.object_id() = this->_data().object_id;
-		msg.poa_idx() = this->_data().poa_idx;
+			static_cast<impl::Header*>(mb.data())->size = msg_size - 4;
+			static_cast<impl::Header*>(mb.data())->msg_id = impl::MessageId::ReleaseObject;
+			static_cast<impl::Header*>(mb.data())->msg_type = impl::MessageType::Request;
 
-		::nprpc::impl::g_orb->call_async(
-			nprpc::EndPoint(this->_data().ip4, this->_data().port),
-			std::move(buf),
-			[](const boost::system::error_code& ec, boost::beast::flat_buffer& buf) {
-				//if (!ec) {
-					//auto std_reply = nprpc::impl::handle_standart_reply(buf);
-					//if (std_reply == false) {
-					//	std::cerr << "received an unusual reply for function with no output arguments" << std::endl;
-					//}
-				//}
+			::nprpc::detail::flat::ObjectIdLocal_Direct msg(buf, sizeof(impl::Header));
+			msg.object_id() = this->_data().object_id;
+			msg.poa_idx() = this->_data().poa_idx;
+
+			try {
+				::nprpc::impl::g_orb->call_async(
+					endpoint,
+					std::move(buf),
+					[](const boost::system::error_code& ec, boost::beast::flat_buffer& buf) {
+						//if (!ec) {
+							//auto std_reply = nprpc::impl::handle_standart_reply(buf);
+							//if (std_reply == false) {
+							//	std::cerr << "received an unusual reply for function with no output arguments" << std::endl;
+							//}
+						//}
+					}
+				);
+			} catch (Exception& ex) {
+				std::cerr << ex.what() << '\n';
 			}
-		);
+		}
 	}
 
 	delete this;
@@ -303,6 +314,8 @@ NPRPC_API Object* Object::create_from_object_id(detail::flat::ObjectId_Direct oi
 		auto obj = new Object();
 		assert(oid.ip4() && oid.port());
 		
+		obj->_data().object_id = oid.object_id();
+
 		if (this->_data().ip4 == oid.ip4()) {
 			obj->_data().ip4 = oid.ip4();
 		} else if (oid.ip4() == localhost_ip4) {
@@ -312,8 +325,10 @@ NPRPC_API Object* Object::create_from_object_id(detail::flat::ObjectId_Direct oi
 		}
 		
 		obj->_data().port = oid.port();
+		obj->_data().websocket_port = oid.websocket_port();
+
 		obj->_data().poa_idx = oid.poa_idx();
-		obj->_data().object_id = oid.object_id();
+		
 		obj->_data().flags = oid.flags();
 		obj->_data().class_id = (std::string_view)oid.class_id();
 

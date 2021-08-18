@@ -61,6 +61,10 @@ export class FlatBuffer {
 		return this.dv.getUint32(8, true) as impl.MessageType;
 	}
 
+	public read_exception_number(): number {
+		return this.dv.getUint32(16, true);
+	}
+
 	public get writable_view(): DataView {
 		return new DataView(this.array_buffer, 0, this.size);
 	}
@@ -76,28 +80,4 @@ export class FlatBuffer {
 		new Uint8Array(this.array_buffer, 0, this.size).forEach((x:number) => s += x.toString(16) + ' ');
 		console.log(s);
 	}
-
 }
-
-
-export class Buffers {
-	private bufs: FlatBuffer[];
-	private ix: number;
-
-	public get $() { return this.bufs[this.ix];}
-	
-	public flip(): FlatBuffer {
-		this.ix ^= 1;
-		return this.bufs[this.ix];
-	}
-
-	constructor(initial_capacity: number = 2 * 1024) {
-		this.bufs = new Array(2).fill(null);
-		Object.seal(this.bufs);
-
-		this.bufs[0] = FlatBuffer.create(initial_capacity);
-		this.bufs[1] = FlatBuffer.create(initial_capacity);
-
-		this.ix = 0;
-	}
-};

@@ -8,7 +8,8 @@
 		"noImplicitAny": true,
 		"module": "commonjs",
 		"target": "esnext",
-		"typeRoots": [ "./node_modules/@types", "./types" ]
+		"typeRoots": [ "./node_modules/@types", "./types" ],
+		"stripInternal": true
 	},
 	"include": [
 			"./src/**/*"

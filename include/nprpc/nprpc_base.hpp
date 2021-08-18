@@ -149,6 +149,13 @@ public:
 };
 } // namespace flat
 
+enum class DebugLevel : uint32_t {
+  DebugLevel_Critical,
+  DebugLevel_InactiveTimeout,
+  DebugLevel_EveryCall,
+  DebugLevel_EveryMessageContent,
+  DebugLevel_TraceAll
+};
 namespace detail { 
 struct ObjectIdLocal {
   nprpc::poa_idx_t poa_idx;
@@ -181,21 +188,27 @@ public:
 };
 } // namespace flat
 
+enum class ObjectFlag : uint32_t {
+  Policy_Lifespan,
+  WebObject
+};
 struct ObjectId {
+  nprpc::oid_t object_id;
   uint32_t ip4;
   uint16_t port;
+  uint16_t websocket_port;
   nprpc::poa_idx_t poa_idx;
-  nprpc::oid_t object_id;
   uint32_t flags;
   std::string class_id;
 };
 
 namespace flat {
 struct ObjectId {
+  uint64_t object_id;
   uint32_t ip4;
   uint16_t port;
+  uint16_t websocket_port;
   uint16_t poa_idx;
-  uint64_t object_id;
   uint32_t flags;
   ::flat::String class_id;
 };
@@ -213,19 +226,22 @@ public:
     , offset_(offset)
   {
   }
+  const uint64_t& object_id() const noexcept { return base().object_id;}
+  uint64_t& object_id() noexcept { return base().object_id;}
   const uint32_t& ip4() const noexcept { return base().ip4;}
   uint32_t& ip4() noexcept { return base().ip4;}
   const uint16_t& port() const noexcept { return base().port;}
   uint16_t& port() noexcept { return base().port;}
+  const uint16_t& websocket_port() const noexcept { return base().websocket_port;}
+  uint16_t& websocket_port() noexcept { return base().websocket_port;}
   const uint16_t& poa_idx() const noexcept { return base().poa_idx;}
   uint16_t& poa_idx() noexcept { return base().poa_idx;}
-  const uint64_t& object_id() const noexcept { return base().object_id;}
-  uint64_t& object_id() noexcept { return base().object_id;}
   const uint32_t& flags() const noexcept { return base().flags;}
   uint32_t& flags() noexcept { return base().flags;}
   void class_id(const char* str) { new (&base().class_id) ::flat::String(buffer_, str); }
   void class_id(const std::string& str) { new (&base().class_id) ::flat::String(buffer_, str); }
   auto class_id() noexcept { return (::flat::Span<char>)base().class_id; }
+  auto class_id() const noexcept { return (::flat::Span<const char>)base().class_id; }
   auto class_id_vd() noexcept {     return ::flat::String_Direct1(buffer_, offset_ + offsetof(ObjectId, class_id));  }
 };
 } // namespace flat
@@ -332,7 +348,7 @@ public:
 
 } // namespace nprpc
 
-namespace helper {
-} // namespace helper
+namespace nprpc_base::helper {
+} // namespace nprpc_base::helper
 
 #endif

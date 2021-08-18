@@ -6,6 +6,7 @@
 #include <string_view>
 #include <algorithm>
 #include "utils.hpp"
+#include <map>
 
 static std::string_view fundamental_to_ts(TokenId id);
 
@@ -51,6 +52,9 @@ static std::ostream& operator << (std::ostream& os, const TokenId& token_id) {
 	if (token_mod == 0) {
 		const auto offset = os.iword(read_field::offset_addr);
 		switch (token_id) {
+		case TokenId::Boolean:
+			os << "(this.buffer.dv.getUint8" << "(this.offset+" << offset << ") === 0x01)";
+			break;
 		case TokenId::Int8:
 			os << "this.buffer.dv.getInt8" << "(this.offset+" << offset << ")";
 			break;
@@ -87,6 +91,9 @@ static std::ostream& operator << (std::ostream& os, const TokenId& token_id) {
 	} else if (token_mod == 1) {
 		const auto offset = os.iword(read_field::offset_addr);
 		switch (token_id) {
+		case TokenId::Boolean:
+			os << "this.buffer.dv.setUint8" << "(this.offset+" << offset << ", value === true ? 0x01 : 0x00)";
+			break;
 		case TokenId::Int8:
 			os << "this.buffer.dv.setInt8" << "(this.offset+" << offset << ",value)";
 			break;
@@ -124,19 +131,20 @@ static std::ostream& operator << (std::ostream& os, const TokenId& token_id) {
 		//os << fundamental_to_ts(token_id);
 		
 		switch (token_id) {
-		case TokenId::Int8:			os << "I8"; break;
-		case TokenId::UInt8:		os << "U8"; break;
-		case TokenId::Int16:		os << "I16"; break;
-		case TokenId::UInt16:		os << "U16"; break;
-		case TokenId::Int32:		os << "I32"; break;
-		case TokenId::UInt32:		os << "U32"; break;
-		case TokenId::Int64:		os << "I64"; break;
-		case TokenId::UInt64:		os << "U64"; break;
-		case TokenId::Float32:	os << "Float32"; break;
-		case TokenId::Float64:	os << "Float64"; break;
+		case TokenId::Boolean:	os << "boolean"; break;
+		case TokenId::Int8:			os << "i8"; break;
+		case TokenId::UInt8:		os << "u8"; break;
+		case TokenId::Int16:		os << "i16"; break;
+		case TokenId::UInt16:		os << "u16"; break;
+		case TokenId::Int32:		os << "i32"; break;
+		case TokenId::UInt32:		os << "u32"; break;
+		case TokenId::Int64:		os << "i64"; break;
+		case TokenId::UInt64:		os << "u64"; break;
+		case TokenId::Float32:	os << "float32"; break;
+		case TokenId::Float64:	os << "float64"; break;
 		default: assert(false);
 		}
-		
+
 	} else {
 		assert(false);
 	}
@@ -196,7 +204,7 @@ void Builder_Typescript::emit_type(Ast_Type_Decl* type, std::ostream& os) {
 		os << "void";
 		break;
 	case FieldType::Object:
-		os << "nprpc.ObjectId";
+		os << "NPRPC.detail.ObjectId";
 		break;
 	case FieldType::Alias:
 		os << ns(calias(type)->nm) << calias(type)->name;
@@ -233,7 +241,7 @@ void Builder_Typescript::emit_flat_type(Ast_Type_Decl* type, std::ostream& os) {
 		os << ',' << car(type)->length << '>';
 		break;
 	case FieldType::Object:
-		os << "NPRPC.Detail.Flat.ObjectId";
+		os << "NPRPC.detail.Flat_nprpc_base.ObjectId";
 		break;
 	case FieldType::Alias: {
 		emit_flat_type(calias(type)->get_real_type(), os);
@@ -352,15 +360,17 @@ void Builder_Typescript::emit_accessors(const std::string& flat_name, Ast_Field_
 			"    let enc = new TextEncoder();\n"
 			"    let bytes = enc.encode(str);\n"
 			"    let len = bytes.length;\n"
-			"    let offset = NPRPC.Flat._alloc(this.buffer, this.offset + " << offset_addr << ", len + 4, " << 1 << ", " << 4 << ");\n"
+			"    let offset = NPRPC.Flat._alloc(this.buffer, this.offset + " << offset_addr << ", len, 1, 1);\n"
 			"    new Uint8Array(this.buffer.array_buffer, offset).set(bytes);\n"
 			"  }\n";
 
 		break;
 	}
-	case FieldType::Object:
-		out << "  auto " << f->name << "() noexcept { return "
-			"NPRPC.detail.Flat.ObjectId_Direct(this.buffer, this.offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
+	case FieldType::Object: 
+		out <<
+			"  public get " << f->name << "() { return "
+			"new NPRPC.detail.Flat_nprpc_base.ObjectId_Direct(this.buffer, "
+			"this.offset + " << align_offset(align_of_object, last_field_ended, size_of_object) << "); }\n";
 		break;
 	case FieldType::Alias: {
 		auto temp = std::make_unique<Ast_Field_Decl>();
@@ -383,11 +393,25 @@ void Builder_Typescript::emit_parameter_type_for_servant_callback_r(Ast_Type_Dec
 	case FieldType::Struct:
 		emit_flat_type(type, os); os << "_Direct";
 		break;
-	case FieldType::Array:
+	case FieldType::Array: {
+		auto utype = cwt(type);
+		for (;;) {
+			if (utype->id == FieldType::Fundamental || utype->id == FieldType::Enum) {
+				out << "NPRPC.Flat.Array_Direct1_" << toktype << cft(utype)->token_id;
+			} else if (utype->id == FieldType::Struct) {
+				out << "NPRPC.Flat.Array_Direct2<"; emit_parameter_type_for_servant_callback_r(utype, out, input); out << ">";
+			} else if (utype->id == FieldType::Alias) {
+				utype = calias(utype)->get_real_type();
+				continue;
+			} else {
+				assert(false);
+			}
+			break;
+		}
 		break;
+	}
 	case FieldType::Vector: {
 		auto utype = cwt(type);
-
 		for (;;) {
 			if (utype->id == FieldType::Fundamental || utype->id == FieldType::Enum) {
 				out << "NPRPC.Flat.Vector_Direct1_" << toktype << cft(utype)->token_id;
@@ -401,36 +425,20 @@ void Builder_Typescript::emit_parameter_type_for_servant_callback_r(Ast_Type_Dec
 			}
 			break;
 		}
-
-//			for (;;) {
-//				if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
-//					os << "/*out*/::flat::Vector_Direct1<"; emit_parameter_type_for_servant_callback_r(wt, os, input); os << ">";
-//				} else if (wt->id == FieldType::Struct) {
-//					os << "/*out*/::flat::Vector_Direct2<"; emit_parameter_type_for_servant_callback_r(wt, os, input); os << ", ";
-//					emit_parameter_type_for_servant_callback_r(wt, os, input); os << ">";
-//				} else if (wt->id == FieldType::Alias) {
-//					wt = calias(wt)->get_real_type();
-//					continue;
-//				} else {
-//					assert(false);
-//				}
-//				break;
-//			}
-//		}
 		break;
 	}
 	case FieldType::String:
 		if (input) {
-			os << "::flat::Span<char>";
+			os << "string";
 		} else {
-			os << "std::string";
+			os << "NPRPC.String_Direct1";
 		}
 		break;
 	case FieldType::Object:
 		if (input) {
-			os << "nprpc::Object*";
+			os << "NPRPC.ObjectProxy";
 		} else {
-			os << "nprpc::detail::flat::ObjectId_Direct";
+			os << "NPRPC.detail.Flat_nprpc_base.ObjectId_Direct";
 		}
 		break;
 	case FieldType::Enum:
@@ -499,8 +507,8 @@ void Builder_Typescript::emit_parameter_type_for_proxy_call_r(Ast_Type_Decl* typ
 		os << "void";
 		break;
 	case FieldType::Object:
-		if (input) os << "ObjectId";
-		else os << "Object*";
+		if (input) os << "NPRPC.detail.ObjectId";
+		else os << "NPRPC.ref<NPRPC.ObjectProxy>";
 		break;
 	default:
 		assert(false);
@@ -567,8 +575,18 @@ void Builder_Typescript::assign_from_ts_type(Ast_Type_Decl* type, std::string op
 		assign_from_ts_type(calias(type)->type, op1, op2, from_iterator);
 		break;
 	case FieldType::Object:
-		out << "  memcpy(&" << op1 << "().ip4(), &" << op2 << "._data().ip4, " << size_of_object_without_class_id <<");\n";
-		out << "  " << op1 << "().class_id(" << op2 << "._data().class_id);\n";
+		out <<
+			"  " << op1 << ".object_id = " << op2 << ".object_id;\n"
+			"  " << op1 << ".ip4 = " << op2 << ".ip4;\n"
+			"  " << op1 << ".port = " << op2 << ".port;\n"
+			"  " << op1 << ".websocket_port = " << op2 << ".websocket_port;\n"
+			"  " << op1 << ".poa_idx = " << op2 << ".poa_idx;\n"
+			"  " << op1 << ".flags = " << op2 << ".flags;\n"
+			"  " << op1 << ".class_id = " << op2 << ".class_id;\n"
+			;
+		
+		//out << "  memcpy(&" << op1 << "().ip4(), &" << op2 << "._data().ip4, " << size_of_object_without_class_id <<");\n";
+		//out << "  " << op1 << "().class_id(" << op2 << "._data().class_id);\n";
 		break;
 	default:
 		assert(false);
@@ -624,7 +642,12 @@ void Builder_Typescript::assign_from_flat_type(Ast_Type_Decl* type, std::string 
 		assign_from_flat_type(calias(type)->get_real_type(), op1, op2, from_iterator, false);
 		break;
 	case FieldType::Object:
-		out << "  " << op1 << " = this->create_from_object_id(" << op2 << "());\n";
+		if (top_object) {
+			// expecting out passed by reference
+			out << "  " << op1 << ".value = NPRPC.create_object_from_flat(" << op2 << ", this.data.ip4);\n";
+		} else {
+			out << "  " << op1 << " = NPRPC.oid_create_from_flat(" << op2 << ");\n";
+		}
 		break;
 	default:
 		assert(false);
@@ -644,10 +667,10 @@ void Builder_Typescript::emit_struct2(Ast_Struct_Decl* s, bool is_exception) {
 	} else {
 		out <<
 			"export class " << s->name << " extends NPRPC.Exception {\n"
-			"  constructor(public ";
+			"  constructor(";
 		for (size_t ix = 1; ix < s->fields.size(); ++ix) {
 			auto f = s->fields[ix];
-			out << f->name << "?: "; emit_type(f->type, out);
+			out << "public " << f->name << "?: "; emit_type(f->type, out);
 			if (ix + 1 < s->fields.size()) out << ", ";
 		}
 		out << ") { super(\""<< s->name << "\"); }\n";
@@ -758,6 +781,9 @@ void Builder_Typescript::emit_namespace_end() {
 }
 
 void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
+	auto const flat_nm = "Flat_" + ctx_.base_name;
+	const auto servant_iname = 'I' + ifs->name + "_Servant";
+
 	auto emit_function_arguments = [](Ast_Function_Decl* fn, std::ostream& os,
 		std::function<void(Ast_Function_Argument*, std::ostream& os)> emitter) {
 			os << "(";
@@ -775,44 +801,50 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 	out <<
 		"export class " << ifs->name;
 
-	if (ifs->plist.size()) {
-		out << "  : public " << ifs->plist[0]->name << "\n";
-		for (size_t i = 1; i < ifs->plist.size(); ++i) {
-			out << "  , public " << ifs->plist[i]->name << "\n";
-		}
-		out << "{\n";
-	} else {
-		out << " extends NPRPC.ObjectProxy\n{\n";
-	}
+	//if (ifs->plist.size()) {
+		//out << " extends " << ifs->plist[0]->name << "\n";
+		//for (size_t i = 1; i < ifs->plist.size(); ++i) {
+		//	out << " extends " << ifs->plist[i]->name << "\n";
+		//}
+		//out << "{\n";
+	//} else {
+	//}
 
-	out <<
-		"  public interface_idx: number;\n"
-//		"  type servant_t = I" << ifs->name << "_Servant;\n\n"
+	out << 
+		" extends NPRPC.ObjectProxy {\n"
+		"  public static get servant_t(): new() => _"<< servant_iname <<" {\n"
+		"    return _" << servant_iname << ";\n"
+		"  }\n\n"
 		;
 
-	if (ifs->plist.empty()) {
-		out << "  constructor (interface_idx: number) { super(); this.interface_idx = interface_idx; }\n";
-	} else {
-		out <<
-			"  " << ifs->name << "(uint8_t interface_idx)\n"
-			"    : interface_idx_(interface_idx)\n"
-			;
+	// parent's functions
+	std::map<Ast_Interface_Decl*, int> ifs_idxs;
+	auto count_all = [&ifs_idxs](Ast_Interface_Decl* ifs_inherited, int& n) { 
+		ifs_idxs.emplace(ifs_inherited, n);
+	};
 
-		auto count_all = [](Ast_Interface_Decl* ifs_inherited, int& n) { ++n; };
-
-		int n = 1;
-		for (auto parent : ifs->plist) {
-			out <<
-				"    , " << parent->name << "(interface_idx + " << n << ")\n"
-				;
-			dfs_interface(std::bind(count_all, _1, std::ref(n)), parent);
-		}
-		out <<
-			"  {\n"
-			"  }\n"
-			;
+	int n = 1;
+	for (auto parent : ifs->plist) {
+		dfs_interface(std::bind(count_all, _1, std::ref(n)), parent);
 	}
-
+		
+	for (auto& inherited_ifs : ifs_idxs) {
+		if (inherited_ifs.first->fns.size()) {
+			out << "  // " << inherited_ifs.first->name << '\n';
+		}
+		for (auto& fn : inherited_ifs.first->fns) {
+			out << "  public async " << fn->name;
+			emit_function_arguments(fn, out,
+				std::bind(&Builder_Typescript::emit_parameter_type_for_proxy_call, this, _1, _2)
+			);
+			out << ": Promise<"; emit_type(fn->ret_value, out);  out << "> {\n";
+			out << "    " << (!fn->is_void() ? "return " : "") << inherited_ifs.first->name << ".prototype." << fn->name << ".bind(this,";
+			for (auto arg : fn->args) {
+				out << arg->name << ',';
+			}
+			out << inherited_ifs.second << ")();\n  }\n";
+		}
+	}
 	// proxy object functions definitions
 	out << '\n';
 	for (auto& fn : ifs->fns) {
@@ -821,7 +853,9 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 		emit_function_arguments(fn, out,
 			std::bind(&Builder_Typescript::emit_parameter_type_for_proxy_call, this, _1, _2)
 		);
-		out << ": Promise<"; emit_type(fn->ret_value, out);  out << "> {\n";
+		out << ": Promise<"; emit_type(fn->ret_value, out);  out << "> {\n"
+			"    let interface_idx = (arguments.length == " << fn->args.size() << " ? 0 : arguments[arguments.length - 1]);\n"
+			;
 
 		const auto fixed_size = get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
 		const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
@@ -834,7 +868,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 			"    let __ch = new NPRPC.impl.Flat_nprpc_base.CallHeader_Direct(buf, " << size_of_header << ");\n"
 			"    __ch.object_id = this.data.object_id;\n"
 			"    __ch.poa_idx = this.data.poa_idx;\n"
-			"    __ch.interface_idx = this.interface_idx;\n"
+			"    __ch.interface_idx = interface_idx;\n"
 			"    __ch.function_idx = " << fn->idx << ";\n"
 			;
 
@@ -854,8 +888,8 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 			"    buf.write_len(buf.size - 4);\n";
 
 		out <<
-			"    await NPRPC.g.rpc.call(\n"
-			"      {ip4: this.data.ip4, port: this.data.port}, buf, this.timeout\n"
+			"    await NPRPC.rpc.call(\n"
+			"      {ip4: this.data.ip4, port: this.data.websocket_port}, buf, this.timeout\n"
 			"    );\n"
 			"    let std_reply = NPRPC.handle_standart_reply(buf);\n"
 			;
@@ -903,247 +937,249 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 	}
 
 	out << "};\n\n"; // Proxy class ends
-
+	
 	// Servant definition
-//	out << "export abstract class I" << ifs->name << "_Servant\n";
-//	if (ifs->plist.size()) {
-//		//out << "  : public I" << ifs->plist[0]->name << "_Servant\n";
-//		//for (size_t i = 1; i < ifs->plist.size(); ++i) {
-//		//	out << "  , public I" << ifs->plist[i]->name << "_Servant\n";
-//		//}
-//		//out << "{\n";
-//	} else {
-//		out << "  extends NPRPC.ObjectServant\n{\n";
-//	}
-//
-//	out << "  // Interfaces\n";
-//	for (auto fn : ifs->fns) {
-//		make_arguments_structs(fn);
-//
-//		out << "  abstract " << fn->name;
-//		emit_function_arguments(fn, out,
-//			std::bind(&Builder_Typescript::emit_parameter_type_for_servant_callback, this, _1, _2)
-//		);
-//		out << ": "; emit_type(fn->ret_value, out); out << ";\n";
-//	}
-//
-//	out <<
-//		"\n"
-//		"  public static _get_class(): string { return \"" << ctx_.base_name << '/' << ctx_.nm_cur()->to_interface_path() << '.' << ifs->name << "\"; }\n"
-//		"  public get_class(): string { return I" << ifs->name << "_Servant._get_class(); }\n"
-//		"  public dispatch(bufs: NPRPC.Buffers, remote_endpoint: NPRPC.EndPoint, from_parent: boolean, ref_list: NPRPC.ReferenceList): void {\n"
-//		;
-//
-//	
-//
-//	// Servant dispatch ====================================================
-//	out << 
-//		"  let __ch = new NPRPC.impl.flat.CallHeader_Direct(bufs.$, " << size_of_header << ");\n"
-//		;
-//		
-//	if (ifs->plist.empty()) {
-//		// ok
-//	} else {
-//		out <<
-//			"  if (from_parent == false) {\n"
-//			"    switch(__ch.interface_idx) {\n"
-//			"      case 0:\n"
-//			"        break;\n"
-//			;
-//	
-//		int ix = 1;
-//		auto select_interface = [&ix, this, ifs](Ast_Interface_Decl* i) {
-//			if (i == ifs) return;
-//			out <<
-//				"      case "<< ix << ":\n"
-//				"        I" << i->name << "_Servant.dispatch(bufs, remote_endpoint, true, ref_list);\n"
-//				"        return;\n"
-//			;
-//			++ix;
-//		};
-//		
-//		//dfs(select_interface, ifs);
-//		
-//		out <<
-//			"      default:\n"
-//			"        assert(false);\n"
-//			"        throw \"unknown interface\";\n"
-//			"    }\n"
-//			"  }\n"
-//			;
-//	}
-//
-//	out <<
-//			"  switch(__ch.function_idx) {\n"
-//			;
-//
-//
-//	for (auto fn : ifs->fns) {
-//		out << "    case " << fn->idx << ": {\n";
-//
-//		int out_ix = fn->is_void() ? 0 : 1;
-//
-//		if (fn->out_s && fn->out_s->flat) {
-//			for (auto arg : fn->args) {
-//				if (arg->modifier == ArgumentModifier::Out) {
-//					out << "      "; emit_type(arg->type, out); out << " _out_" << ++out_ix << ";\n";
-//				}
-//			}
-//		}
-//
-//		if (fn->in_s) {
-//			out <<
-//				"      flat." << fn->in_s->name << "_Direct ia(bufs(), " << get_arguments_offset() << ");\n"
-//				;
-//		}
-//
-//		if (fn->out_s && !fn->out_s->flat) {
-//			const auto offset = size_of_header;
-//			const auto initial_size = offset + fn->out_s->size;
-//			out <<
-//				"      auto& obuf = bufs.flip();\n"
-//				"      obuf.consume(obuf.size());\n"
-//				"      obuf.prepare(" << initial_size + 128 << ");\n"
-//				"      obuf.commit(" << initial_size << ");\n"
-//				"      ::flat::" << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n"
-//				;
-//		}
-//
-//		if (!fn->is_void()) {
-//			emit_type(fn->ret_value, out); out << " __ret_val;\n";
-//		}
-//
-//		if (fn->ex) out << "      try {\n";
-//		
-//		out <<
-//			(fn->is_void() ? "      " : "      __ret_val = ") << "this." << fn->name << "("
-//			;
-//
-//		int in_ix = 0, idx = 0; out_ix = fn->is_void() ? 0 : 1;
-//		for (auto arg : fn->args) {
-//			if (arg->modifier == ArgumentModifier::Out) {
-//				assert(fn->out_s);
-//				if (!fn->out_s->flat) {
-//					out << "oa._" << ++out_ix;
-//					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::String) {
-//						out << "_vd()";
-//					} else {
-//						out << "()";
-//					}
-//				} else {
-//					out << "_out_" << ++out_ix;
-//				}
-//			} else {
-//				if (arg->type->id == FieldType::Object) {
-//					out << "NPRPC.impl.g_orb->create_object_from_flat(ia._" << ++in_ix << "(), remote_endpoint)";
-//				} else {
-//					out << "ia._" << ++in_ix << "()";
-//				}
-//			}
-//			if (++idx != fn->args.size()) out << ", ";
-//		}
-//		out << ");\n";
-//
-//		/*
-//		out_ix = fn->is_void() ? 0 : 1;
-//		for (auto arg : fn->args) {
-//			if (arg->modifier == ArgumentModifier::Out) {
-//				++out_ix;
-//				if (arg->type->id == FieldType::Object) {
-//					oc <<
-//						"{\n"
-//						"  auto obj = impl::g_orb->get_object(" << "oa._" << out_ix << "().poa_idx(), " << "oa._" << out_ix << "().object_id());\n"
-//						"  if (obj) if (auto real_obj = (*obj).get(); real_obj) ref_list.add_ref(real_obj);\n"
-//						"}\n"
-//						;
-//				}
-//			}
-//		}
-//		*/
-//
-//		if (fn->ex) {
-//			const auto offset = size_of_header;
-//			const auto initial_size = offset + fn->ex->size;
-//			
-//			always_full_namespace(true);
-//			out <<
-//				"      }\n"
-//				"      catch(" << ns(fn->ex->nm) << fn->ex->name << "& e) {\n"
-//				"        auto& obuf = bufs();\n"
-//				"        obuf.consume(obuf.size());\n"
-//				"        obuf.prepare(" << initial_size << ");\n"
-//				"        obuf.commit(" << initial_size << ");\n"
-//				"        "<< ns(fn->ex->nm) << "flat::" <<fn->ex->name << "_Direct oa(obuf," << offset << ");\n"
-//				"        oa.__ex_id() = " << fn->ex->exception_id << ";\n"
-//				;
-//			always_full_namespace(false);
-//
-//			for (auto i = 1; i < fn->ex->fields.size(); ++i) {
-//				auto mb = fn->ex->fields[i];
-//				//assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name);
-//			}
-//
-//			out << 
-//				"        *((uint32_t*)obuf.data().data()) = static_cast<uint32_t>(obuf.size() - 4);\n"
-//				"        *((::nprpc::impl::MessageId*)obuf.data().data() + 1) = ::nprpc::impl::MessageId::Exception;\n"
-//				"        return;\n"
-//				"      }\n"
-//				;
-//		}
-//
-//		if (!fn->out_s) {
-//			out << "      NPRPC.make_simple_answer(bufs.$, NPRPC.impl.MessageId.Success);\n";
-//		} else {
-//			if (fn->out_s->flat) { // it means that we are writing output data in the input buffer, 
-//				// so we must pass stack variables first and then assign result back to the buffer
-//				const auto offset = size_of_header;
-//				const auto initial_size = offset + fn->out_s->size;
-//
-//				out <<
-//					"      auto& obuf = bufs();\n"
-//					"      obuf.consume(obuf.size());\n"
-//					"      obuf.prepare(" << initial_size << ");\n"
-//					"      obuf.commit(" << initial_size << ");\n"
-//					"      ::flat::" << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n"
-//					;
-//				
-//				int ix;
-//				if (!fn->is_void()) {
-//					//assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val");
-//					ix = 1;
-//				} else {
-//					ix = 0;
-//				}
-//
-//				for (auto out : fn->args) {
-//					if (out->modifier == ArgumentModifier::In) continue;
-//					auto n = std::to_string(++ix);
-//					//assign_from_cpp_type(out->type, "oa._" + n, "_out_" + n);
-//				}
-//			} else if (!fn->is_void()) {
-//				//assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val");
-//			}
-//
-//			out <<
-//				"      *((uint32_t*)obuf.data().data()) = static_cast<uint32_t>(obuf.size() - 4);\n"
-//				"      *((::nprpc::impl::MessageId*)obuf.data().data() + 1) = NPRPC.impl.MessageId.BlockResponse;\n"
-//				;
-//		}
-//
-//		out <<
-//			"      break;\n"
-//			"    }\n"
-//			;
-//	}
-//
-//	out <<
-//		"    default:\n"
-//		"      NPRPC.make_simple_answer(bufs.$, NPRPC.impl.MessageId.Error_UnknownFunctionIdx);\n"
-//		"  }\n"; // switch block
-//	;
-//
-//	out << "  }\n"; // dispatch
-//	out << "}\n\n"; // class ends
+	out << "export interface " << servant_iname << '\n';
+	if (ifs->plist.size()) {
+		out << " extends I" << ifs->plist[0]->name << "_Servant\n";
+		for (size_t i = 1; i < ifs->plist.size(); ++i) {
+			out << ", I" << ifs->plist[i]->name << "_Servant\n";
+		}
+	}
+	out << "{\n";
+
+	for (auto fn : ifs->fns) {
+		out << "  " << fn->name;
+		emit_function_arguments(fn, out,
+			std::bind(&Builder_Typescript::emit_parameter_type_for_servant_callback, this, _1, _2)
+		);
+		out << ": "; emit_type(fn->ret_value, out); out << ";\n";
+	}
+
+	out << "}\n\n"; // interface ends
+
+	out <<
+		"export class _" << servant_iname << " extends NPRPC.ObjectServant {\n"
+		"  public static _get_class(): string { return \"" << ctx_.base_name << '/' << ctx_.nm_cur()->to_interface_path() << '.' << ifs->name << "\"; }\n"
+		"  public readonly get_class = () => { return _"<< servant_iname << "._get_class(); }\n"
+		"  public readonly dispatch = (buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, from_parent: boolean) => {\n"
+		"    _" << servant_iname << "._dispatch(this, buf, remote_endpoint, from_parent);\n"
+		"  }\n"
+		"  static _dispatch(obj: _" << servant_iname << ", buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, from_parent: boolean): void {\n"
+		;
+
+	// Servant dispatch ====================================================
+	out << 
+		"  let __ch = new NPRPC.impl.Flat_nprpc_base.CallHeader_Direct(buf, " << size_of_header << ");\n"
+		;
+		
+	if (ifs->plist.empty()) {
+		// ok
+	} else {
+		out <<
+			"  if (from_parent == false) {\n"
+			"    switch(__ch.interface_idx) {\n"
+			"      case 0:\n"
+			"        break;\n"
+			;
+	
+		int ix = 1;
+		auto select_interface = [&ix, this, ifs](Ast_Interface_Decl* i) {
+			if (i == ifs) return;
+			out <<
+				"      case "<< ix << ":\n"
+				"        _I" << i->name << "_Servant._dispatch(obj, buf, remote_endpoint, true);\n"
+				"        return;\n"
+			;
+			++ix;
+		};
+		
+		dfs_interface(select_interface, ifs);
+		
+		out <<
+			"      default:\n"
+			//"        assert(false);\n"
+			"        throw \"unknown interface\";\n"
+			"    }\n"
+			"  }\n"
+			;
+	}
+
+	out <<
+			"  switch(__ch.function_idx) {\n"
+			;
+
+
+	for (auto fn : ifs->fns) {
+		out << "    case " << fn->idx << ": {\n";
+
+		int out_ix = fn->is_void() ? 0 : 1;
+
+		if (fn->out_s && fn->out_s->flat) {
+			for (auto arg : fn->args) {
+				if (arg->modifier == ArgumentModifier::Out) {
+					out << "      let _out_" << ++out_ix << ": "; emit_type(arg->type, out); out << ";\n";
+				}
+			}
+		}
+
+		if (fn->in_s) {
+			out <<
+				"      let ia = new " << flat_nm << '.' << fn->in_s->name << "_Direct(buf, " << get_arguments_offset() << ");\n"
+				;
+		}
+
+		if (fn->out_s && !fn->out_s->flat) {
+			const auto offset = size_of_header;
+			const auto initial_size = offset + fn->out_s->size;
+			out <<
+				"      let obuf = buf;\n"
+				"      obuf.consume(obuf.size);\n"
+				"      obuf.prepare(" << initial_size + 128 << ");\n"
+				"      obuf.commit(" << initial_size << ");\n"
+				"      let oa = new " << flat_nm << '.' << fn->out_s->name << "_Direct(obuf," << offset << ");\n"
+				;
+		}
+
+		if (!fn->is_void()) {
+			out << "let __ret_val: "; emit_type(fn->ret_value, out); out << ";\n";
+		}
+
+		if (fn->ex) out << "      try {\n";
+		
+		out <<
+			(fn->is_void() ? "      " : "      __ret_val = ") << "(obj as any)." << fn->name << "("
+			;
+
+		int in_ix = 0, idx = 0; out_ix = fn->is_void() ? 0 : 1;
+		for (auto arg : fn->args) {
+			if (arg->modifier == ArgumentModifier::Out) {
+				assert(fn->out_s);
+				if (!fn->out_s->flat) {
+					out << "oa._" << ++out_ix;
+					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::Array || arg->type->id == FieldType::String) {
+						out << "_vd";
+					}
+				} else {
+					out << "_out_" << ++out_ix;
+				}
+			} else {
+				if (arg->type->id == FieldType::Object) {
+					out << "NPRPC.create_object_from_flat(ia._" << ++in_ix << ", remote_endpoint.ip4)";
+				} else {
+					out << "ia._" << ++in_ix;
+					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::Array) out << "_vd()";
+				}
+			}
+			if (++idx != fn->args.size()) out << ", ";
+		}
+		out << ");\n";
+
+		/*
+		out_ix = fn->is_void() ? 0 : 1;
+		for (auto arg : fn->args) {
+			if (arg->modifier == ArgumentModifier::Out) {
+				++out_ix;
+				if (arg->type->id == FieldType::Object) {
+					oc <<
+						"{\n"
+						"  auto obj = impl::g_orb->get_object(" << "oa._" << out_ix << "().poa_idx(), " << "oa._" << out_ix << "().object_id());\n"
+						"  if (obj) if (auto real_obj = (*obj).get(); real_obj) ref_list.add_ref(real_obj);\n"
+						"}\n"
+						;
+				}
+			}
+		}
+		*/
+
+		if (fn->ex) {
+			const auto offset = size_of_header;
+			const auto initial_size = offset + fn->ex->size;
+			
+			always_full_namespace(true);
+			out <<
+				"      }\n"
+				"      catch(e) {\n"
+				"        let obuf = buf;\n"
+				"        obuf.consume(obuf.size);\n"
+				"        obuf.prepare(" << initial_size << ");\n"
+				"        obuf.commit(" << initial_size << ");\n"
+				"        let oa = new "<< ns(fn->ex->nm) << flat_nm << '.' << fn->ex->name << "_Direct(obuf," << offset << ");\n"
+				"        oa.__ex_id = " << fn->ex->exception_id << ";\n"
+				;
+			always_full_namespace(false);
+
+			for (auto i = 1; i < fn->ex->fields.size(); ++i) {
+				auto mb = fn->ex->fields[i];
+				assign_from_ts_type(mb->type, "oa." + mb->name, "e." + mb->name);
+			}
+	
+			out << 
+				"        obuf.write_len(obuf.size - 4);\n"
+				"        obuf.write_msg_id(NPRPC.impl.MessageId.Exception);\n"
+				"        obuf.write_msg_type(NPRPC.impl.MessageType.Answer);\n"
+				"        return;\n"
+				"      }\n"
+				;
+		}
+
+		if (!fn->out_s) {
+			out << "      NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);\n";
+		} else {
+			if (fn->out_s->flat) { // it means that we are writing output data in the input buffer, 
+				// so we must pass stack variables first and then assign result back to the buffer
+				const auto offset = size_of_header;
+				const auto initial_size = offset + fn->out_s->size;
+
+				out <<
+					"      let obuf = buf;\n"
+					"      obuf.consume(obuf.size);\n"
+					"      obuf.prepare(" << initial_size << ");\n"
+					"      obuf.commit(" << initial_size << ");\n"
+					"      let oa = new " << flat_nm << '.' << fn->out_s->name << "_Direct(obuf," << offset << ");\n"
+					;
+				
+				int ix;
+				if (!fn->is_void()) {
+					assign_from_ts_type(fn->ret_value, "oa._1", "__ret_val");
+					ix = 1;
+				} else {
+					ix = 0;
+				}
+
+				for (auto out : fn->args) {
+					if (out->modifier == ArgumentModifier::In) continue;
+					auto n = std::to_string(++ix);
+					assign_from_ts_type(out->type, "oa._" + n, "_out_" + n);
+				}
+			} else if (!fn->is_void()) {
+				assign_from_ts_type(fn->ret_value, "oa._1", "__ret_val");
+			}
+
+			out <<
+				"      obuf.write_len(obuf.size - 4);\n"
+				"      obuf.write_msg_id(NPRPC.impl.MessageId.BlockResponse);\n"
+				"      obuf.write_msg_type(NPRPC.impl.MessageType.Answer);\n"
+				;
+		}
+
+		out <<
+			"      break;\n"
+			"    }\n"
+			;
+	}
+
+	out <<
+		"    default:\n"
+		"      NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Error_UnknownFunctionIdx);\n"
+		"  }\n"; // switch block ends
+	;
+
+
+  out <<
+		"  }\n" // dispatch ends
+		"}\n\n" // class ends
+		;
 }
 
 Builder_Typescript::_ns Builder_Typescript::ns(Namespace* nm) {

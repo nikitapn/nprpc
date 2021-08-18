@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <nprpc/nprpc.hpp>
+
 #include <boost/asio/deadline_timer.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/strand.hpp>
@@ -19,37 +19,18 @@
 #include <optional>
 #include <deque>
 
+#include <nprpc/nprpc.hpp>
+#include <nprpc/session.hpp>
+
 namespace nprpc::impl {
+
+extern Config g_cfg;
 
 class RpcImpl;
 class PoaImpl;
 
 NPRPC_API extern RpcImpl* g_orb;
 
-class Connection 
-	: public EndPoint 
-{
-	bool closed_ = false;
-protected:
-	void close();
-	bool is_closed() { return closed_; }
-public:
-	virtual void send_receive(
-		boost::beast::flat_buffer& buffer, 
-		uint32_t timeout_ms) = 0;
-
-	virtual void send_receive_async(
-		boost::beast::flat_buffer&& buffer,
-		std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler,
-		uint32_t timeout_ms) = 0;
-
-	Connection(const EndPoint& endpoint)
-		: EndPoint(endpoint)
-	{
-	}
-
-	virtual ~Connection() = default;
-};
 
 /*
 class LocalSocketConnection : public Connection {
@@ -58,40 +39,37 @@ public:
 };
 */
 
-class SocketConnection : public Connection {
+class SocketConnection : public Session {
+	boost::asio::ip::tcp::socket socket_;
+	uint32_t rx_size_ = 0;
+
 	struct work {
-    virtual void operator()() noexcept = 0;
+    virtual void operator()() = 0;
 		virtual void on_failed(const boost::system::error_code& ec) noexcept = 0;
     virtual void on_executed() noexcept = 0;
 		virtual boost::beast::flat_buffer& buffer() noexcept = 0;
     virtual ~work() = default;
   };
-
-	boost::asio::deadline_timer inactive_timer_;
-	boost::asio::deadline_timer timeout_timer_;
-	boost::asio::ip::tcp::socket socket_;
-	
-	std::condition_variable cv_;
-	std::mutex mut_;
-  std::deque<std::unique_ptr<work>> wq_;
-	uint32_t rx_size_ = 0;
-	boost::posix_time::time_duration timeout_ = boost::posix_time::milliseconds(1000);
-
-	void reconnect();
+	std::deque<std::unique_ptr<work>> wq_;
 	void add_work(std::unique_ptr<work>&& w);
-public:
-	void set_timeout(uint32_t timeout_ms) {
-		timeout_ = boost::posix_time::milliseconds(timeout_ms);
-		timeout_timer_.expires_from_now(timeout_);
-	}
-	
-	void check_timeout() noexcept;
-	
+	void reconnect();
+
 	boost::beast::flat_buffer& current_rx_buffer() noexcept {
 		assert(wq_.size() > 0);
 		return wq_.front()->buffer();
 	}
 
+	void pop_and_execute_next_task() {
+		wq_.pop_front();
+		if (wq_.empty() == false) (*wq_.front())();
+	}
+protected:
+	virtual void timeout_action() final {
+		boost::system::error_code ec;
+		socket_.cancel(ec);
+		if (ec) fail(ec, "socket::cancel()");
+	}
+public:
 	void send_receive(boost::beast::flat_buffer& buffer, uint32_t timeout_ms) override;
 
 	void send_receive_async(
@@ -110,11 +88,6 @@ public:
 		socket_.async_send(buf.cdata(), std::forward<WriteHandler>(handler));
 	}
 
-	void pop_and_execute_next_task() {
-		wq_.pop_front();
-		if (wq_.empty() == false) (*wq_.front())();
-	}
-
 	SocketConnection(const EndPoint& endpoint, boost::asio::ip::tcp::socket&& socket);
 };
 
@@ -126,18 +99,23 @@ class RpcImpl : public Rpc {
 	std::array<PoaImpl*, 10> poas_;
 	poa_idx_t poa_size_ = 0;
 
-	std::mutex connections_mut_;
-	std::vector<std::shared_ptr<Connection>> opened_connections_;
-
-	uint16_t port_;
+	mutable std::mutex connections_mut_;
+	std::vector<std::shared_ptr<Session>> opened_sessions_;
 
 	boost::asio::deadline_timer timer1_;
 public:
 	std::mutex new_activated_objects_mut_;
 	std::vector<ObjectServant*> new_activated_objects_;
 
-	uint16_t port() const noexcept { return port_; }
-	NPRPC_API std::shared_ptr<Connection> get_connection(const EndPoint& endpoint);
+	uint16_t port() const noexcept { return g_cfg.port; }
+	uint16_t websocket_port() const noexcept { return g_cfg.websocket_port; }
+
+	void add_connection(std::shared_ptr<Session>&& session) {
+		opened_sessions_.push_back(std::move(session));
+	}
+
+	bool has_session(const EndPoint& endpoint) const noexcept;
+	NPRPC_API std::shared_ptr<Session> get_session(const EndPoint& endpoint);
 	NPRPC_API void call(const EndPoint& endpoint, boost::beast::flat_buffer& buffer, uint32_t timeout_ms = 2500);
 	
 	NPRPC_API void call_async(
@@ -148,10 +126,10 @@ public:
 	NPRPC_API std::optional<ObjectGuard> get_object(poa_idx_t poa_idx, oid_t oid);
 
 	boost::asio::io_context& ioc() noexcept { return ioc_; }
-	void start(bool with_websocket = false, std::string_view http_root_dir = {}) override;
+	void start() override;
 	void destroy() override;
 	Poa* create_poa(uint32_t objects_max, std::initializer_list<Policy*> policy_list) override;
-	bool close_connection(Connection* con);
+	bool close_session(Session* con);
 	virtual ObjectPtr<Nameserver> get_nameserver(std::string_view nameserver_ip) override;
 	void check_unclaimed_objects();
 
@@ -160,10 +138,22 @@ public:
 
 		auto obj = new Object();
 
-		assert(oid.ip4() && oid.port());
+		assert(oid.ip4());
+		
+		if (oid.flags() & (1 << static_cast<int>(detail::ObjectFlag::WebObject))) {
+			std::cerr << "remote_endpoint.port: " << remote_endpoint.port << '\n';
+			obj->_data().port = remote_endpoint.port;
+			obj->_data().websocket_port = remote_endpoint.port;
+		} else {
+			assert(oid.port());
+			obj->_data().port = oid.port();
+			obj->_data().websocket_port = oid.websocket_port();
+		}
+
+		obj->_data().object_id = oid.object_id();
 
 		if (remote_endpoint.ip4 == localhost_ip4) {
-			// could be the object on the same mashine or from any other location
+			// could be the object on the same machine or from any other location
 			obj->_data().ip4 = oid.ip4();
 		} else {
 			if (oid.ip4() == localhost_ip4) {
@@ -175,14 +165,11 @@ public:
 			}
 		}
 
-		obj->_data().port = oid.port();
 		obj->_data().poa_idx = oid.poa_idx();
-		obj->_data().object_id = oid.object_id();
 		obj->_data().flags = oid.flags();
 		obj->_data().class_id = (std::string_view)oid.class_id();
 
 		return obj;
-
 	}
 
 	PoaImpl* get_poa(uint16_t idx) noexcept {
@@ -190,7 +177,7 @@ public:
 		return poas_[idx];
 	}
 
-	RpcImpl(boost::asio::io_context& ioc, uint16_t port);
+	RpcImpl(boost::asio::io_context& ioc);
 };
 
 class ObjectGuard {
@@ -262,7 +249,7 @@ class PoaImpl : public Poa {
 			Val old_free, new_free;
 			old_free = tail_ix_.load(std::memory_order_relaxed);
 			for (;;) {
-				if (old_free.idx == max_size_) [[unlikely]] return -1;
+				if (old_free.idx == max_size_) [[unlikely]] return (uint64_t)(-1);
 				new_free.idx = data(old_free.idx).next;
 				new_free.cnt = old_free.cnt + 1;
 				if (tail_ix_.compare_exchange_weak(old_free, new_free, std::memory_order_acquire, std::memory_order_relaxed)) break;
@@ -283,6 +270,7 @@ class PoaImpl : public Poa {
 			++to_be_removed.gix;
 
 			Val new_free;
+			new_free.val = 0ull;
 			new_free.idx = idx;
 			Val old_free = tail_ix_.load(std::memory_order_relaxed);
 			do {
@@ -294,7 +282,7 @@ class PoaImpl : public Poa {
 
 		std::remove_pointer_t<T>* get(uint64_t id) noexcept {
 			const auto idx = index(id);
-			if (idx > max_size_) return nullptr;
+			if (idx >= max_size_) return nullptr;
 			auto& item = data(idx);
 			if (item.gix != generation_index(id)) return nullptr;
 
@@ -309,6 +297,9 @@ class PoaImpl : public Poa {
 			for (uint32_t i = 0; i < max_size_; ++i) {
 				data(i).gix = 0;
 				data(i).next = i + 1;
+				if constexpr (std::is_pointer_v<T>) {
+					data(i).val = nullptr;
+				}
 			}
 			tail_ix_ = Val{ 0 };
 		}
@@ -341,13 +332,17 @@ public:
 		obj->activation_time_ = std::chrono::steady_clock::now();
 
 		ObjectId oid;
+		auto object_id_internal = object_map_.add(obj);
+		if (object_id_internal == (uint64_t)(-1)) throw Exception("Poa fixed size has been exceeded");
+		obj->object_id_ = oid.object_id = object_id_internal;
+
 		oid.ip4 = localhost_ip4;
 		oid.port = g_orb->port();
+		oid.websocket_port = g_orb->websocket_port();
+		
 		oid.poa_idx = get_index();
-		auto object_id_internal = object_map_.add(obj);
-		if (object_id_internal == -1) throw Exception("Poa fixed size has been exceeded");
-		obj->object_id_ = oid.object_id = object_id_internal;
-		oid.flags = (pl_lifespan << Object::Flags::Lifespan);
+		
+		oid.flags = (pl_lifespan << static_cast<int>(detail::ObjectFlag::Policy_Lifespan));
 		oid.class_id = obj->get_class();
 		
 		if (pl_lifespan == Policy_Lifespan::Type::Transient) {
@@ -428,17 +423,9 @@ inline int handle_standart_reply(boost::beast::flat_buffer& buf) {
 	}
 }
 
-
-
-struct Config {
-	int debug_level;
-};
-
-inline void Connection::close() {
+inline void Session::close() {
 	closed_ = true;
-	impl::g_orb->close_connection(this);
+	impl::g_orb->close_session(this);
 }
-
-extern Config g_cfg;
 
 } // namespace nprpc::impl

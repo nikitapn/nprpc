@@ -23,7 +23,7 @@ $(OUT_LIB)/nprpcst.o: include/nprpc/nprpc_nameserver.cpp
 	$(CXX) $(CXXFLAGS) -fPIC -I./include -c -o $@ $<
 
 $(OUT_LIB)/libnprpc.so: $(OBJS)
-	$(CXX) $(OBJS) -lpthread /usr/lib/libboost_system.a -L$(OUT_LIB) -lnplib -shared -o $@
+	$(CXX) $(OBJS) -lpthread -lssl -lcrypto /usr/lib/libboost_system.a -L$(OUT_LIB) -shared -o $@
 
 obj/%.o: src/%.cpp | obj
 	$(CXX) $(CXXFLAGS) -fPIC -I./include -I../nplib/include -c -o $@ $<

@@ -20,7 +20,7 @@ constexpr uint32_t align_of_call_header = 8;
 
 constexpr size_t size_of_object = 32;
 constexpr size_t align_of_object = 8;
-constexpr size_t size_of_object_without_class_id = 20;
+constexpr size_t size_of_object_without_class_id = 24;
 
 
 inline constexpr uint32_t  get_arguments_offset() {

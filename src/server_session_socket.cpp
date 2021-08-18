@@ -15,14 +15,16 @@
 #include <boost/beast/core/flat_buffer.hpp>
 
 #include <nprpc/nprpc.hpp>
+#include <nprpc/nprpc_impl.hpp>
+#include <nprpc/session.hpp>
 
-#include "asio.h"
-#include "session.h"
+#include <nprpc/asio.hpp>
 
-class Session_Socket 
+namespace nprpc::impl {
+class Session_Socket
   : public nprpc::impl::Session
   , public std::enable_shared_from_this<Session_Socket> {
-  
+
   struct work {
     virtual void operator()() = 0;
     virtual ~work() = default;
@@ -32,11 +34,28 @@ class Session_Socket
   uint32_t size_to_read_ = 0;
   std::deque<std::unique_ptr<work>> write_queue_;
 public:
+  virtual void timeout_action() final {
+    assert(false);
+  }
+  virtual void send_receive(
+		boost::beast::flat_buffer& buffer,
+		uint32_t timeout_ms
+	) {
+    assert(false);
+	}
+
+	virtual void send_receive_async(
+		boost::beast::flat_buffer&& buffer,
+		std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler,
+		uint32_t timeout_ms
+	) {
+    assert(false);
+	}
 
   void on_write(boost::system::error_code ec, std::size_t /*bytes_transferred*/) {
-		if (ec) return fail(ec, "write");
+    if (ec) return fail(ec, "write");
 
-		assert(write_queue_.size() >= 1);
+    assert(write_queue_.size() >= 1);
     write_queue_.pop_front();
 
     if (write_queue_.size()) {
@@ -64,17 +83,17 @@ public:
 
     handle_request();
 
-		write_queue_.push_front({});
+    write_queue_.push_front({});
 
-    socket_.async_send(rx_buffer_().cdata(), 
+    socket_.async_send(rx_buffer_().cdata(),
       std::bind(&Session_Socket::on_write, shared_from_this(),
-      std::placeholders::_1, std::placeholders::_2)
+        std::placeholders::_1, std::placeholders::_2)
     );
-	}
+  }
 
-  void do_read_body() { 
-   socket_.async_read_some(rx_buffer_().prepare(size_to_read_),
-      std::bind(&Session_Socket::on_read_body, shared_from_this(), 
+  void do_read_body() {
+    socket_.async_read_some(rx_buffer_().prepare(size_to_read_),
+      std::bind(&Session_Socket::on_read_body, shared_from_this(),
         std::placeholders::_1, std::placeholders::_2)
     );
   }
@@ -98,8 +117,8 @@ public:
   void do_read_size() {
     rx_buffer_().consume(rx_buffer_().size());
     rx_buffer_().prepare(4);
-    socket_.async_read_some(net::mutable_buffer(&size_to_read_, 4), 
-      std::bind(&Session_Socket::on_read_size, shared_from_this(), 
+    socket_.async_read_some(net::mutable_buffer(&size_to_read_, 4),
+      std::bind(&Session_Socket::on_read_size, shared_from_this(),
         std::placeholders::_1, std::placeholders::_2)
     );
   }
@@ -108,15 +127,9 @@ public:
     do_read_size();
   }
 
-  virtual void send(void* data, size_t len) override {
-    struct work_send : work {
-      virtual void operator()() {}
-   };
-    
-  }
-
   Session_Socket(tcp::socket&& socket)
-    : socket_(std::move(socket))
+    : Session(socket.get_executor())
+    , socket_(std::move(socket))
   {
     auto remote_endpoint = socket_.remote_endpoint();
     remote_endpoint_.ip4 = remote_endpoint.address().to_v4().to_uint();
@@ -138,7 +151,7 @@ public:
   }
 
   void do_accept() {
-    acceptor_.async_accept(net::make_strand(ioc_), 
+    acceptor_.async_accept(net::make_strand(ioc_),
       boost::beast::bind_front_handler(&Acceptor::on_accept, shared_from_this())
     );
   }
@@ -150,6 +163,8 @@ public:
   }
 };
 
-void init_socket(net::io_context& ioc, unsigned short port) {
-  std::make_shared<Acceptor>(ioc, port)->do_accept();
+void init_socket(net::io_context& ioc) {
+  std::make_shared<Acceptor>(ioc, nprpc::impl::g_cfg.port)->do_accept();
 }
+
+} // namespace nprpc::impl

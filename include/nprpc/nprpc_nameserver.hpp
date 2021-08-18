@@ -30,5 +30,7 @@ public:
 
 } // namespace nprpc
 
+namespace nprpc_nameserver::helper {
+} // namespace nprpc_nameserver::helper
 
 #endif

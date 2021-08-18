@@ -23,7 +23,7 @@ void Builder::emit_arguments_structs(std::function<void(Ast_Struct_Decl*)> emitt
 }
 
 void Builder::make_arguments_structs(Ast_Function_Decl* fn) {
-	if (fn->arguments_structs_has_been_made) return;
+	if (fn->arguments_structs_have_been_made) return;
 
 	std::vector<Ast_Function_Argument*> in_args, out_args;
 
@@ -76,7 +76,7 @@ void Builder::make_arguments_structs(Ast_Function_Decl* fn) {
 	fn->in_s = make_struct(in_args);
 	fn->out_s = make_struct(out_args);
 
-	fn->arguments_structs_has_been_made = true;
+	fn->arguments_structs_have_been_made = true;
 }
 
 std::ostream& operator<<(std::ostream& os, const Builder_Cpp::_ns& ns) {
@@ -398,6 +398,7 @@ void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f
 		os << "  void " << f->name << "(const char* str) { new (&base()." << f->name << ") ::flat::String(buffer_, str); }\n";
 		os << "  void " << f->name << "(const std::string& str) { new (&base()." << f->name << ") ::flat::String(buffer_, str); }\n";
 		os << "  auto " << f->name << "() noexcept { return (::flat::Span<char>)base()." << f->name << "; }\n";
+		os << "  auto " << f->name << "() const noexcept { return (::flat::Span<const char>)base()." << f->name << "; }\n";
 		os << 
 			"  auto " << f->name << "_vd() noexcept { "
 			"    return ::flat::String_Direct1(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << "));"
@@ -490,7 +491,7 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 		break;
 	case FieldType::Object:
 		assert(top_type == false);
-		os << "  memcpy(&" << op1 << "().ip4(), &" << op2 << "._data().ip4, " << size_of_object_without_class_id <<");\n";
+		os << "  memcpy(" << op1 << "().__data(), &" << op2 << "._data(), " << size_of_object_without_class_id <<");\n";
 		os << "  " << op1 << "().class_id(" << op2 << "._data().class_id);\n";
 		break;
 	default:
@@ -499,7 +500,7 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 	}
 }
 
-void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, std::string op2, bool from_iterator) {
+void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, std::string op2, bool from_iterator, bool top_object) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		oc << "  " << op1 << " = " << op2 << "();\n";
@@ -550,7 +551,11 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 		assign_from_flat_type(calias(type)->get_real_type(), op1, op2, from_iterator);
 		break;
 	case FieldType::Object:
-		oc << "  " << op1 << " = this->create_from_object_id(" << op2 << "());\n";
+		if (top_object) {
+			oc << "  " << op1 << " = this->create_from_object_id(" << op2 << "());\n";
+		} else {
+			oc << "  " << op1 << ".assign_from_direct(" << op2 << "());\n";
+		}
 		break;
 	default:
 		assert(false);
@@ -676,7 +681,7 @@ void Builder_Cpp::emit_file_footer() {
 
 			for (size_t i = 1; i < ex->fields.size(); ++i) {
 				auto f = ex->fields[i];
-				assign_from_flat_type(f->type, "ex." + f->name, "ex_flat." + f->name);
+				assign_from_flat_type(f->type, "ex." + f->name, "ex_flat." + f->name, false, true);
 			}
 
 
@@ -902,14 +907,14 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 			oc <<
 				"  if (std_reply != 0) {\n"
 				"    std::cerr << \"received an unusual reply for function with no output arguments\\n\";\n"
-				"    assert(false);\n"
+				//"    assert(false);\n"
 				"  }\n"
 				;
 		} else {
 			oc <<
 				"  if (std_reply != -1) {\n"
 				"    std::cerr << \"received an unusual reply for function with output arguments\\n\";\n"
-				"    assert(false);\n"
+				//"    assert(false);\n"
 				"    throw nprpc::Exception(\"Unknown Error\");\n"
 				"  }\n"
 				;
@@ -920,12 +925,12 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 
 			for (auto out : fn->args) {
 				if (out->modifier == ArgumentModifier::In) continue;
-				assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix));
+				assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), false, true);
 			}
 
 			if (!fn->is_void()) {
 				oc << "  "; emit_type(fn->ret_value, oc); oc << " __ret_value;\n";
-				assign_from_flat_type(fn->ret_value, "__ret_value", "out._1");
+				assign_from_flat_type(fn->ret_value, "__ret_value", "out._1", false, true);
 				oc << "  return __ret_value;\n";
 			}
 		}
@@ -963,7 +968,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 		
 		oc <<
 			"      default:\n"
-			"        assert(false);\n"
+			//"        assert(false);\n"
 			"        throw \"unknown interface\";\n"
 			"    }\n"
 			"  }\n"

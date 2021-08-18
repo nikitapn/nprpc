@@ -15,8 +15,13 @@ public:
 		ix_ ^= 1;
 		return bufs_[ix_];
 	}
+
 	boost::beast::flat_buffer& operator()() noexcept {
 		return bufs_[ix_];
+	}
+
+	boost::beast::flat_buffer&& operator()(bool) noexcept {
+		return std::move(bufs_[ix_]);
 	}
 
 	Buffers(size_t initial_capacity = 2 * 1024) {

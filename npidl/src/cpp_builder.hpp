@@ -29,7 +29,7 @@ private:
 	void emit_parameter_type_for_servant_callback(Ast_Function_Argument* arg, std::ostream& os);
 
 	void assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std::string op2, std::ostream& os, bool from_iterator = false, bool top_type = false);
-	void assign_from_flat_type(Ast_Type_Decl* type, std::string op1, std::string op2, bool from_iterator = false);
+	void assign_from_flat_type(Ast_Type_Decl* type, std::string op1, std::string op2, bool from_iterator = false, bool top_object = false);
 
 	void emit_type(Ast_Type_Decl* type, std::ostream& os);
 	void emit_flat_type(Ast_Type_Decl* type, std::ostream& os);

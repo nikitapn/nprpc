@@ -24,20 +24,20 @@ struct TSpan { // a pure accessor read/write access to an array of T
 	T* const last;
 
 	T* begin() {
-		assert((size_t)first % alignof(T) == 0);
+		//assert((size_t)first % alignof(T) == 0);
 		return first;
 	}
 	T* end() {
-		assert((size_t)first % alignof(T) == 0);
+		//assert((size_t)first % alignof(T) == 0);
 		return last;
 	}
 	const T* begin() const {
-		assert((size_t)first % alignof(T) == 0);
+		//assert((size_t)first % alignof(T) == 0);
 		return first;
 	}
 	
 	const T* end() const {
-		assert((size_t)first % alignof(T) == 0);
+		//assert((size_t)first % alignof(T) == 0);
 		return last;
 	}
 
@@ -69,6 +69,13 @@ struct Span<char> : public TSpan<char> {
 		for (char& c : *this) c = *str++;
 		// expect<check_truncation>([p] { return *p == 0; }, Error_code::truncation);
 	}
+	operator std::string_view() const noexcept {
+		return { this->first, this->size() };
+	}
+};
+
+template<>
+struct Span<const char> : public TSpan<const char> {
 	operator std::string_view() const noexcept {
 		return { this->first, this->size() };
 	}
@@ -205,15 +212,24 @@ public:
 		return reinterpret_cast<Vector<T>*>(this_);
 	}
 
-	auto begin() {
+	auto begin() noexcept {
 		return (T*)(reinterpret_cast<std::byte*>(this) + offset_);
 	}
 
-	auto end() {
+	auto end() noexcept {
 		return begin() + size_;
 	}
 
-	operator Span<T>() { return { begin(), end() }; }
+	auto begin() const noexcept {
+		return (const T*)(reinterpret_cast<const std::byte*>(this) + offset_);
+	}
+
+	auto end() const noexcept {
+		return begin() + size_;
+	}
+
+	operator Span<T>() noexcept { return { begin(), end() }; }
+	operator Span<const T>() const noexcept { return { begin(), end() }; }
 
 	std::tuple<size_t, size_t> range(void* base_ptr) const noexcept {
 		auto data_offset_abs = ((std::byte*)this - (std::byte*)base_ptr) + offset_;

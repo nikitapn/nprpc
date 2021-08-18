@@ -111,7 +111,22 @@ std::tuple<int, int> get_type_size_align(Ast_Type_Decl* type) {
 void get_type_id(const Ast_Type_Decl* type, struct_id_t& id, std::string* field_name) {
 	switch (type->id) {
 	case FieldType::Fundamental:
-		id += 'F' + std::to_string(get_fundamental_size(static_cast<const Ast_Fundamental_Type*>(type)->token_id));
+		switch (cft(type)->token_id) {
+		case TokenId::Boolean: id += "Fb"; break;
+		case TokenId::Int8: id += "Fi8"; break;
+		case TokenId::UInt8: id += "Fu8"; break;
+		case TokenId::Int16: id += "Fi16"; break;
+		case TokenId::UInt16: id += "Fu16"; break;
+		case TokenId::Int32: id += "Fi32"; break;
+		case TokenId::UInt32: id += "Fu32"; break;
+		case TokenId::Int64: id += "Fi64"; break;
+		case TokenId::UInt64: id += "Fu64"; break;
+		case TokenId::Float32: id += "Ff32"; break;
+		case TokenId::Float64: id += "Ff64"; break;
+		default:
+			assert(false);
+			break;
+		}
 		break;
 	case FieldType::Struct:
 		id += static_cast<const Ast_Struct_Decl*>(type)->name;
@@ -187,7 +202,10 @@ bool is_fundamental(Ast_Type_Decl* type) {
 	}
 }
 
-void dfs_interface(std::function<void(Ast_Interface_Decl*)> fn, Ast_Interface_Decl* start) {
+void dfs_interface(
+	std::function<void(Ast_Interface_Decl*)> fn, 
+	Ast_Interface_Decl* start
+) {
 	using T = std::pair<size_t, std::vector<Ast_Interface_Decl*>*>;
 	std::stack<T, boost::container::small_vector<T, 8>> stack;
 	stack.push({0, &start->plist});

@@ -41,8 +41,8 @@ class FlatArray extends Flat {
 
 type Constructor = new (...args: any[]) => {};
 
-function Iteratable<TBase extends Constructor>(Base: TBase) {
-	return class _Iteratable extends Base {
+function Iterable<TBase extends Constructor>(Base: TBase) {
+	return class _Iterable extends Base {
 		// *[Symbol.iterator]() {
 		// 	let size: number = (this as any).elements_size;
 		// 	for (let ix = 0; ix < size; ++ix) {
@@ -73,6 +73,10 @@ function Accessor_U8<TBase extends Constructor>(Base: TBase) {
 				(this as any).buffer.dv.setUint8(offset, n);
 				offset += 1;
 			}
+		}
+		public get array_buffer(): ArrayBuffer {
+			let offset: number = (this as any).elements_offset;
+			return ((this as any).buffer as FlatBuffer).array_buffer.slice(offset, offset + (this as any).elements_size);
 		}
 	};
 }
@@ -230,24 +234,32 @@ export class Array_Direct2<T extends Flat> extends FlatArray {
 	}
 }
 
-export const Vector_Direct1_U8 = Iteratable(Accessor_U8(Vector));
-export const Vector_Direct1_I8 = Iteratable(Accessor_I8(Vector));
-export const Vector_Direct1_U16 = Iteratable(Accessor_U16(Vector));
-export const Vector_Direct1_I16 = Iteratable(Accessor_I16(Vector));
-export const Vector_Direct1_U32 = Iteratable(Accessor_U32(Vector));
-export const Vector_Direct1_I32 = Iteratable(Accessor_I32(Vector));
-export const Vector_Direct1_U64 = Iteratable(Accessor_U64(Vector));
-export const Vector_Direct1_I64 = Iteratable(Accessor_I64(Vector));
-export const Vector_Direct1_Float32 = Iteratable(Accessor_Float32(Vector));
-export const Vector_Direct1_Float64 = Iteratable(Accessor_Float64(Vector));
+export class String_Direct1 extends Iterable(Accessor_U8(Vector)) {
+	public assign(str: string): void {
+    let utf8_string = new TextEncoder().encode(str);
+    let offset = _alloc(this.buffer, this.offset, utf8_string.length, 1, 1);
+    new Uint8Array(this.buffer.array_buffer, offset).set(utf8_string);
+	}
+}
 
-export const Array_Direct1_U8 = Iteratable(Accessor_U8(FlatArray));
-export const Array_Direct1_I8 = Iteratable(Accessor_I8(FlatArray));
-export const Array_Direct1_U16 = Iteratable(Accessor_U16(FlatArray));
-export const Array_Direct1_I16 = Iteratable(Accessor_I16(FlatArray));
-export const Array_Direct1_U32 = Iteratable(Accessor_U32(FlatArray));
-export const Array_Direct1_I32 = Iteratable(Accessor_I32(FlatArray));
-export const Array_Direct1_U64 = Iteratable(Accessor_U64(FlatArray));
-export const Array_Direct1_I64 = Iteratable(Accessor_I64(FlatArray));
-export const Array_Direct1_Float32 = Iteratable(Accessor_Float32(FlatArray));
-export const Array_Direct1_Float64 = Iteratable(Accessor_Float64(FlatArray));
+export class Vector_Direct1_u8 extends Iterable(Accessor_U8(Vector)) {}
+export class Vector_Direct1_i8 extends Iterable(Accessor_I8(Vector)){}
+export class Vector_Direct1_u16 extends Iterable(Accessor_U16(Vector)){}
+export class Vector_Direct1_i16 extends Iterable(Accessor_I16(Vector)){}
+export class Vector_Direct1_u32 extends Iterable(Accessor_U32(Vector)){}
+export class Vector_Direct1_i32 extends Iterable(Accessor_I32(Vector)){}
+export class Vector_Direct1_u64 extends Iterable(Accessor_U64(Vector)){}
+export class Vector_Direct1_i64 extends Iterable(Accessor_I64(Vector)){}
+export class Vector_Direct1_float32 extends Iterable(Accessor_Float32(Vector)){}
+export class Vector_Direct1_float64 extends Iterable(Accessor_Float64(Vector)){}
+
+export class Array_Direct1_u8 extends Iterable(Accessor_U8(FlatArray)){}
+export class Array_Direct1_i8 extends Iterable(Accessor_I8(FlatArray)){}
+export class Array_Direct1_u16 extends Iterable(Accessor_U16(FlatArray)){}
+export class Array_Direct1_i16 extends Iterable(Accessor_I16(FlatArray)){}
+export class Array_Direct1_u32 extends Iterable(Accessor_U32(FlatArray)){}
+export class Array_Direct1_i32 extends Iterable(Accessor_I32(FlatArray)){}
+export class Array_Direct1_u64 extends Iterable(Accessor_U64(FlatArray)){}
+export class Array_Direct1_i64 extends Iterable(Accessor_I64(FlatArray)){}
+export class Array_Direct1_float32 extends Iterable(Accessor_Float32(FlatArray)){}
+export class Array_Direct1_float64 extends Iterable(Accessor_Float64(FlatArray)){}

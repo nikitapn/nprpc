@@ -2,32 +2,16 @@
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 
 #include <nprpc/nprpc_impl.hpp>
+#include <nprpc/asio.hpp>
 #include <iostream>
-#include "asio.h"
 #include <future>
 
 namespace nprpc::impl {
 
-void SocketConnection::check_timeout() noexcept {
-	if (is_closed()) return;
-
-	if (timeout_timer_.expires_at() <= boost::asio::deadline_timer::traits_type::now()) {
-		boost::system::error_code ec;
-
-		socket_.cancel(ec);
-		if (ec) fail(ec, "socket::cancel()");
-
-		ec = {};
-		timeout_timer_.expires_at(boost::posix_time::pos_infin, ec);
-		if (ec) fail(ec, "timeout_timer::expires_at()");
-	}
-	timeout_timer_.async_wait(std::bind(&SocketConnection::check_timeout, this));
-}
-
 void SocketConnection::send_receive(boost::beast::flat_buffer& buffer, uint32_t timeout_ms) {
 	assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
-	if (g_cfg.debug_level >= DebugLevel_EveryMessageContent) {
+	if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
 		dump_message(buffer, false);
 	}
 
@@ -80,7 +64,7 @@ void SocketConnection::send_receive(boost::beast::flat_buffer& buffer, uint32_t 
 	auto ec = post_work_and_wait();
 	
 	if (!ec) {
-		if (g_cfg.debug_level >= DebugLevel_EveryMessageContent) {
+		if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
 			dump_message(buffer, true);
 		}
 		return;
@@ -97,11 +81,61 @@ void SocketConnection::send_receive(boost::beast::flat_buffer& buffer, uint32_t 
 	}
 }
 
+void SocketConnection::send_receive_async(boost::beast::flat_buffer&& buffer,
+	std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler,
+	uint32_t timeout_ms) 
+{
+	assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
+
+	struct work_impl : work {
+		boost::beast::flat_buffer buf;
+		SocketConnection& this_;
+		uint32_t timeout_ms;
+		std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)> handler;
+		
+		void operator()() noexcept override {
+			this_.set_timeout(timeout_ms);
+			this_.write_async(buf, [&](const boost::system::error_code& ec, size_t bytes_transferred) {
+				boost::ignore_unused(bytes_transferred);
+				if (ec) {
+					on_failed(ec);
+					this_.pop_and_execute_next_task();
+					return;
+				}
+				this_.do_read_size();
+				});
+		}
+
+		void on_failed(const boost::system::error_code& ec) noexcept override {
+			handler(ec, buf);
+		}
+
+		void on_executed() noexcept override {
+			handler(boost::system::error_code{}, buf);
+		}
+
+		boost::beast::flat_buffer& buffer() noexcept override { return buf; };
+
+		work_impl(boost::beast::flat_buffer&& _buf, 
+			SocketConnection& _this_, 
+			std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& _handler,
+			uint32_t _timeout_ms)
+			: buf(std::move(_buf))
+			, this_(_this_)
+			, timeout_ms(_timeout_ms)
+			, handler(std::move(_handler))
+		{
+		}
+	};
+
+	add_work(std::make_unique<work_impl>(std::move(buffer), *this, std::move(completion_handler), timeout_ms));
+}
+
 void SocketConnection::reconnect() {
 	socket_ = std::move(net::ip::tcp::socket(socket_.get_executor()));
 
 	boost::system::error_code ec;
-	socket_.connect(tcp::endpoint(net::ip::address_v4(this->ip4), this->port), ec);
+	socket_.connect(tcp::endpoint(net::ip::address_v4(this->remote_endpoint_.ip4), this->remote_endpoint_.port), ec);
 
 	if (ec) {
 		close();
@@ -177,56 +211,6 @@ void SocketConnection::on_read_body(const boost::system::error_code& ec, size_t 
 	}
 }
 
-void SocketConnection::send_receive_async(boost::beast::flat_buffer&& buffer,
-	std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler,
-	uint32_t timeout_ms) 
-{
-	assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
-
-	struct work_impl : work {
-		boost::beast::flat_buffer buf;
-		SocketConnection& this_;
-		uint32_t timeout_ms;
-		std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)> handler;
-		
-		void operator()() noexcept override {
-			this_.set_timeout(timeout_ms);
-			this_.write_async(buf, [&](const boost::system::error_code& ec, size_t bytes_transferred) {
-				boost::ignore_unused(bytes_transferred);
-				if (ec) {
-					on_failed(ec);
-					this_.pop_and_execute_next_task();
-					return;
-				}
-				this_.do_read_size();
-				});
-		}
-
-		void on_failed(const boost::system::error_code& ec) noexcept override {
-			handler(ec, buf);
-		}
-
-		void on_executed() noexcept override {
-			handler(boost::system::error_code{}, buf);
-		}
-
-		boost::beast::flat_buffer& buffer() noexcept override { return buf; };
-
-		work_impl(boost::beast::flat_buffer&& _buf, 
-			SocketConnection& _this_, 
-			std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& _handler,
-			uint32_t _timeout_ms)
-			: buf(std::move(_buf))
-			, this_(_this_)
-			, timeout_ms(_timeout_ms)
-			, handler(std::move(_handler))
-		{
-		}
-	};
-
-	add_work(std::make_unique<work_impl>(std::move(buffer), *this, std::move(completion_handler), timeout_ms));
-}
-
 void SocketConnection::add_work(std::unique_ptr<work>&& w) {
 	boost::asio::post(socket_.get_executor(), [w{std::move(w)}, this]() mutable {
 		wq_.push_back(std::move(w));
@@ -235,15 +219,14 @@ void SocketConnection::add_work(std::unique_ptr<work>&& w) {
 }
 
 SocketConnection::SocketConnection(const EndPoint& endpoint, boost::asio::ip::tcp::socket&& socket)
-	: Connection{endpoint}
-	, inactive_timer_{socket.get_executor()}
-	, timeout_timer_{socket.get_executor()}
+	: Session(socket.get_executor())
 	, socket_{std::move(socket)}
 {
+	remote_endpoint_ = endpoint;
 	timeout_timer_.expires_at(boost::posix_time::pos_infin);
 	boost::system::error_code ec;
-	socket_.connect(tcp::endpoint(net::ip::address_v4(ip4), port), ec);
-	if (ec) throw nprpc::ExceptionCommFailure();
+	socket_.connect(tcp::endpoint(net::ip::address_v4(remote_endpoint_.ip4), remote_endpoint_.port), ec);
+	if (ec) throw nprpc::Exception(("Could not connect to the socket: " + ec.message()).c_str());
 	check_timeout();
 }
 

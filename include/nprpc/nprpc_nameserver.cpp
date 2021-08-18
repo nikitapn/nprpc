@@ -2,7 +2,7 @@
 #include "nprpc_nameserver_m.hpp"
 #include <nprpc/nprpc_impl.hpp>
 
-void NPRPC_NAMESERVER__throw_exception(boost::beast::flat_buffer& buf);
+void nprpc_nameserver_throw_exception(boost::beast::flat_buffer& buf);
 
 namespace nprpc { 
 void nprpc::Nameserver::Bind(/*in*/const ObjectId& obj, /*in*/const std::string& name) {
@@ -18,8 +18,8 @@ void nprpc::Nameserver::Bind(/*in*/const ObjectId& obj, /*in*/const std::string&
   __ch.poa_idx() = this->_data().poa_idx;
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 0;
-  ::flat::NPRPC_NAMESERVER__M1_Direct _(buf,32);
-  memcpy(&_._1().ip4(), &obj._data().ip4, 20);
+  ::flat::nprpc_nameserver_M1_Direct _(buf,32);
+  memcpy(_._1().__data(), &obj._data(), 24);
   _._1().class_id(obj._data().class_id);
   _._2(name);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size() - 4);
@@ -29,7 +29,6 @@ void nprpc::Nameserver::Bind(/*in*/const ObjectId& obj, /*in*/const std::string&
   auto std_reply = nprpc::impl::handle_standart_reply(buf);
   if (std_reply != 0) {
     std::cerr << "received an unusual reply for function with no output arguments\n";
-    assert(false);
   }
 }
 
@@ -46,7 +45,7 @@ bool nprpc::Nameserver::Resolve(/*in*/const std::string& name, /*out*/Object*& o
   __ch.poa_idx() = this->_data().poa_idx;
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 1;
-  ::flat::NPRPC_NAMESERVER__M2_Direct _(buf,32);
+  ::flat::nprpc_nameserver_M2_Direct _(buf,32);
   _._1(name);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size() - 4);
   ::nprpc::impl::g_orb->call(
@@ -55,10 +54,9 @@ bool nprpc::Nameserver::Resolve(/*in*/const std::string& name, /*out*/Object*& o
   auto std_reply = nprpc::impl::handle_standart_reply(buf);
   if (std_reply != -1) {
     std::cerr << "received an unusual reply for function with output arguments\n";
-    assert(false);
     throw nprpc::Exception("Unknown Error");
   }
-  ::flat::NPRPC_NAMESERVER__M3_Direct out(buf, sizeof(::nprpc::impl::Header));
+  ::flat::nprpc_nameserver_M3_Direct out(buf, sizeof(::nprpc::impl::Header));
   obj = this->create_from_object_id(out._2());
   bool __ret_value;
   __ret_value = out._1();
@@ -69,18 +67,18 @@ void nprpc::INameserver_Servant::dispatch(nprpc::Buffers& bufs, nprpc::EndPoint 
   nprpc::impl::flat::CallHeader_Direct __ch(bufs(), sizeof(::nprpc::impl::Header));
   switch(__ch.function_idx()) {
     case 0: {
-      ::flat::NPRPC_NAMESERVER__M1_Direct ia(bufs(), 32);
+      ::flat::nprpc_nameserver_M1_Direct ia(bufs(), 32);
       Bind(nprpc::impl::g_orb->create_object_from_flat(ia._1(), remote_endpoint), ia._2());
       nprpc::impl::make_simple_answer(bufs(), nprpc::impl::MessageId::Success);
       break;
     }
     case 1: {
-      ::flat::NPRPC_NAMESERVER__M2_Direct ia(bufs(), 32);
+      ::flat::nprpc_nameserver_M2_Direct ia(bufs(), 32);
       auto& obuf = bufs.flip();
       obuf.consume(obuf.size());
       obuf.prepare(184);
       obuf.commit(56);
-      ::flat::NPRPC_NAMESERVER__M3_Direct oa(obuf,16);
+      ::flat::nprpc_nameserver_M3_Direct oa(obuf,16);
 bool __ret_val;
       __ret_val = Resolve(ia._1(), oa._2());
   oa._1() = __ret_val;

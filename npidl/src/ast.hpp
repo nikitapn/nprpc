@@ -242,6 +242,11 @@ constexpr auto cft(Ast_Type_Decl* type) noexcept {
 	return static_cast<Ast_Fundamental_Type*>(type);
 }
 
+constexpr auto cft(const Ast_Type_Decl* type) noexcept {
+	assert(type->id == FieldType::Fundamental || type->id == FieldType::Enum);
+	return static_cast<const Ast_Fundamental_Type*>(type);
+}
+
 constexpr auto cwt(Ast_Type_Decl* type) noexcept {
 	assert(
 		type->id == FieldType::Array ||
@@ -314,7 +319,7 @@ struct Ast_Function_Decl {
 	Ast_Type_Decl* ret_value;
 	Ast_Struct_Decl* in_s = nullptr;
 	Ast_Struct_Decl* out_s = nullptr;
-	bool arguments_structs_has_been_made = false;
+	bool arguments_structs_have_been_made = false;
 	Ast_Struct_Decl* ex = nullptr;
 	std::vector<Ast_Function_Argument*> args;
 
