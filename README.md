@@ -6,7 +6,7 @@ The proxy-stub code could be generated either for C++ or Typescript.\
 It's a part of my DCS system.
 
 # Examples
-
+Server example: https://github.com/nikitapn/nprpc/blob/main/npnameserver/npnameserver.cpp \
 Client example:
 ```
 export async function rpc_init() {
@@ -74,6 +74,3 @@ export async function rpc_init() {
 	}
 }
 ```
-
-Server example: https://github.com/nikitapn/nprpc/blob/main/npnameserver/npnameserver.cpp
-
