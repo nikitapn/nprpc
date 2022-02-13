@@ -1,0 +1,42 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClInclude Include="src\ast.hpp">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\builder.hpp">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\cpp_builder.hpp">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ts_builder.hpp">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\utils.hpp">
+      <Filter>src</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\cpp_builder.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ts_builder.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\main.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\utils.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\check_size.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="src">
+      <UniqueIdentifier>{7e3f86e3-0566-40c1-b05b-2aeb1f1a4e87}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
