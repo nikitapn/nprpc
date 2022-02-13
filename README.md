@@ -7,7 +7,7 @@ It's a part of my DCS system.
 
 # Examples
 
-Client
+Client example:
 ```
 export async function rpc_init() {
 	let rpc = NPRPC.init();
@@ -74,51 +74,6 @@ export async function rpc_init() {
 	}
 }
 ```
-Server
-```
-int main(int argc, char* argv[]) {
-#ifdef _WIN32
-	SetConsoleOutputCP(CP_UTF8);
-	setvbuf(stdout, nullptr, _IOFBF, 1000);
-#endif
-	g_cfg.load("npwebserver");
-	std::cout << g_cfg << std::endl;
-  
-	boost::asio::signal_set signals(thread_pool::get_instance().ctx(), SIGINT, SIGTERM);
-	signals.async_wait(
-		[&](boost::beast::error_code const&, int) {
-			thread_pool::get_instance().stop();
-		});
 
-	IWebServerImpl web_server;
+Server example: https://github.com/nikitapn/nprpc/blob/main/npnameserver/npnameserver.cpp
 
-	try {
-		nprpc::Config rpc_cfg;
-		rpc_cfg.debug_level = nprpc::DebugLevel::DebugLevel_Critical;
-		rpc_cfg.port = g_cfg.socket_port;
-		rpc_cfg.websocket_port = g_cfg.websocket_port;
-		rpc_cfg.http_root_dir = g_cfg.doc_root;
-
-		auto rpc = nprpc::init(thread_pool::get_instance().ctx(), std::move(rpc_cfg));
-		auto p1 = std::make_unique<nprpc::Policy_Lifespan>(nprpc::Policy_Lifespan::Persistent);
-		auto poa = rpc->create_poa(2, { p1.get() });
-		
-		auto oid = poa->activate_object(&web_server);
-		
-		auto nameserver = rpc->get_nameserver(g_cfg.nameserver_ip);
-		odb::Database::init(nameserver.get(), poa, g_cfg.data_dir / "keys", "npwebserver");
-
-		nameserver->Bind(oid, "npsystem_webserver");
-
-		rpc->start();
-		thread_pool::get_instance().ctx().run();
-	} catch (std::exception& ex) {
-		std::cerr << ex.what();
-		return EXIT_FAILURE;
-	}
-
-	std::cout << "server is shutting down..." << std::endl;
-
-	return EXIT_SUCCESS;
-}
-```
