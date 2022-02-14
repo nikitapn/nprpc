@@ -37,6 +37,7 @@ obj:
 	mkdir -p obj
 
 install:
+	cp -r include/* /usr/local/include
 	cp $(OUT_LIB)/libnprpc.so /usr/local/lib
 	cp $(OUT_LIB)/nprpcst.a /usr/local/lib
 	cp $(OUT_BIN)/npnameserver /usr/local/bin
