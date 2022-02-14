@@ -1,5 +1,5 @@
 # libnprpc.so
-# nprpcst
+# nprpcst.a
 # npnameserver
 
 CXX = g++
@@ -13,11 +13,16 @@ OBJS = $(addprefix obj/,$(addsuffix .o, $(basename $(notdir $(SRCS)))))
 OUT_BIN = ../build/bin
 OUT_LIB = ../build/lib
 
+all: $(OUT_BIN)/npnameserver $(OUT_LIB)/nprpcst.a
+
 $(OUT_BIN)/npnameserver: $(OUT_LIB)/libnprpc.so $(OUT_LIB)/nprpcst.o obj/npnameserver.o
 	$(CXX) -lpthread -L$(OUT_LIB) -lnprpc $(OUT_LIB)/nprpcst.o obj/npnameserver.o -o $@
 
 obj/npnameserver.o: npnameserver/npnameserver.cpp
 	$(CXX) $(CXXFLAGS) -I./include -c -o $@ $<
+
+$(OUT_LIB)/nprpcst.a: $(OUT_LIB)/nprpcst.o
+	ar rcs $(OUT_LIB)/nprpcst.a $^
 
 $(OUT_LIB)/nprpcst.o: include/nprpc/nprpc_nameserver.cpp
 	$(CXX) $(CXXFLAGS) -fPIC -I./include -c -o $@ $<
@@ -33,9 +38,10 @@ obj:
 
 install:
 	cp lib/libnprpc.so /usr/local/lib
+	cp lib/nprpcst.a /usr/local/lib
 	cp bin/npnameserver /usr/local/bin
 
 clean:
 	rm -rf obj/
 
-.PHONY: install clean
+.PHONY: all install clean
