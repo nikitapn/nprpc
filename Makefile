@@ -13,7 +13,7 @@ OBJS = $(addprefix obj/,$(addsuffix .o, $(basename $(notdir $(SRCS)))))
 OUT_BIN = ../build/bin
 OUT_LIB = ../build/lib
 
-all: $(OUT_BIN)/npnameserver $(OUT_LIB)/nprpcst.a
+all: $(OUT_LIB)/libnprpc.so $(OUT_LIB)/nprpcst.a $(OUT_BIN)/npnameserver
 
 $(OUT_BIN)/npnameserver: $(OUT_LIB)/libnprpc.so $(OUT_LIB)/nprpcst.o obj/npnameserver.o
 	$(CXX) -lpthread -L$(OUT_LIB) -lnprpc $(OUT_LIB)/nprpcst.o obj/npnameserver.o -o $@
