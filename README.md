@@ -4,6 +4,7 @@ CORBA-like RPC.\
 The IDL language is almost similar to CORBA IDL.\
 The proxy-stub code can be generated either for C++ or Typescript.\
 It's a part of my DCS system.
+The idea for a serialization protocol was borrowed from this man's video: https://www.youtube.com/watch?v=ERzENfQ51Ck.
 
 # Examples
 Server example: https://github.com/nikitapn/nprpc/blob/main/npnameserver/npnameserver.cpp \
