@@ -10,6 +10,13 @@
 #include <algorithm>
 
 class Builder {
+protected:
+	Context& ctx_;
+	bool always_full_namespace_ = false;
+
+	void always_full_namespace(bool flag) { always_full_namespace_ = flag; }
+	void make_arguments_structs(Ast_Function_Decl* fn);
+	void emit_arguments_structs(std::function<void(Ast_Struct_Decl*)> fn);
 public:
 	virtual void emit_struct(Ast_Struct_Decl* s) = 0;
 	virtual void emit_exception(Ast_Struct_Decl* s) = 0;
@@ -22,12 +29,6 @@ public:
 	
 	Builder(Context& ctx) : ctx_(ctx) {}
 	virtual ~Builder() = default;
-protected:
-	Context& ctx_;
-	bool always_full_namespace_ = false;
-	void always_full_namespace(bool flag) { always_full_namespace_ = flag; }
-	void make_arguments_structs(Ast_Function_Decl* fn);
-	void emit_arguments_structs(std::function<void(Ast_Struct_Decl*)> fn);
 };
 
 class BuildGroup {

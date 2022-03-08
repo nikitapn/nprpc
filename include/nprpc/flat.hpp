@@ -325,6 +325,11 @@ inline const ::flat::Span<const T> make_read_only_span(Span<T> span) noexcept  {
 	return {span.begin(), span.end()};
 }
 
+template<typename T, typename Alloc>
+inline ::flat::Span<T> make_span(std::vector<T, Alloc>& v) noexcept  {
+	return {v.data(), v.data() + v.size()};
+}
+
 } // namespace flat
 
 #endif // NPIDL_FLAT_HPP_
