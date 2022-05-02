@@ -21,11 +21,14 @@
 #include "utils.hpp"
 #include <boost/program_options.hpp>
 
+#include <charconv>
+#include <variant>
+
 struct Token {
 	TokenId id;
 	std::string name;
 	std::string_view static_name;
-
+	
 	bool operator == (TokenId id) const noexcept {
 		return this->id == id;
 	}
@@ -160,8 +163,21 @@ class Lexer {
 	std::string read_number() {
 		const char* begin = ptr_;
 
+		bool hex = false;
+
 		while (!is_delimeter(cur())) {
-			if (!is_digit(cur())) throw lexical_error(line_, col_, "Error.");
+			if (cur() == 'x') {
+				if (hex) throw lexical_error(line_, col_, "Incorrect hexadecimal number.");
+				hex = true;
+			} else if (hex) {
+				auto c = std::tolower(cur());
+				if (!(is_digit(c) || (c >= 'a' && c <= 'f'))) {
+					throw lexical_error(line_, col_, "Error.");
+				}
+			}
+			else if (!is_digit(cur())) {
+				throw lexical_error(line_, col_, "Error.");
+			}
 			next();
 		}
 		return std::string(begin, ptr_ - begin);
@@ -207,7 +223,9 @@ class Lexer {
 			{ "using"sv, TokenId::Using },
 			{ "exception"sv, TokenId::Exception },
 			{ "raises"sv, TokenId::Raises },
-			{ "direct"sv, TokenId::OutDirect }
+			{ "direct"sv, TokenId::OutDirect },
+			{ "class"sv, TokenId::Class },
+			{ "extends"sv, TokenId::Extends }
 		};
 
 		static constexpr Map<std::string_view, TokenId,
@@ -423,6 +441,42 @@ class Parser {
 	void throw_unexpected_token(const Token& tok) {
 		throw parser_error(lex_.line(), lex_.col(), 
 			"Unexpected token: '" + std::string(tok.to_string_view()) + '\'');
+	}
+
+	Ast_Number parse_number(const Token& tok) {
+		const auto& str = tok.name;
+
+		std::int64_t i64;
+		float flt32;
+		double flt64;
+
+		if (str.size() > 2 && str[0] == '0' && str[1] == 'x') {
+			auto result = std::from_chars(str.data() + 2, str.data() + str.size(), i64, 16);
+			if (result.ec != std::errc()) { 
+				throw_error("Hex number.std::from_chars returned: " + std::make_error_code(result.ec).message()); 
+			}
+			return Ast_Number{ i64, NumberFormat::Hex };
+		} else if(str.find('.') != std::string::npos) {
+			if (str.back() == 'f') {
+				auto result = std::from_chars(str.data(), str.data() + str.size(), flt32);
+				if (result.ec != std::errc()) {
+					throw_error("Float32 number.std::from_chars returned: " + std::make_error_code(result.ec).message());
+				}
+				return Ast_Number{ flt32, NumberFormat::Decimal };
+			} else {
+				auto result = std::from_chars(str.data(), str.data() + str.size(), flt64);
+				if (result.ec != std::errc()) {
+					throw_error("Float64 number.std::from_chars returned: " + std::make_error_code(result.ec).message());
+				}
+				return Ast_Number{ flt64, NumberFormat::Decimal };
+			}
+		} else {
+			auto result = std::from_chars(str.data(), str.data() + str.size(), i64, 10);
+			if (result.ec != std::errc()) {
+				throw_error("Integer number.std::from_chars returned: " + std::make_error_code(result.ec).message());
+			}
+			return Ast_Number{ i64, NumberFormat::Decimal };
+		}
 	}
 
 	template<typename T, typename... Args>
@@ -796,6 +850,15 @@ class Parser {
 		return true;
 	}
 
+	bool class_decl() {
+		if (peek() != TokenId::Class) return false;
+		flush();
+
+		auto ifs = new Ast_Interface_Decl();
+		ifs->name = match(TokenId::Name).name;
+
+	}
+
 	bool one(TokenId id) {
 		if (peek() == id) { flush(); return true; }
 		return false;
@@ -895,6 +958,8 @@ class Parser {
 			}
 		}
 
+		const int max_size = get_fundamental_size(e->token_id);
+
 		match('{');
 
 		Token tok;
@@ -902,17 +967,29 @@ class Parser {
 
 		while ((tok = peek()) != TokenId::BracketClose) {
 			if (tok.id != TokenId::Name) throw_error("Unexpected token '" + tok.name + '\'');
-			e->items.emplace_back(std::move(tok.name), ix);
+			
+			auto name = std::move(tok.name);
 
 			tok = peek();
 
 			if (tok.id == TokenId::Assignment) {
 				flush();
-				int64_t n = std::atoi(match(TokenId::Number).name.c_str());
-				e->items.back().second = n;
-				ix = n + 1;
+				auto n = parse_number(match(TokenId::Number));
+				n.max_size = max_size;
+
+				if (!std::holds_alternative<std::int64_t>(n.value)) {
+					throw_error("Floating types are not allowed.");
+				}
+
+				// explicit
+				e->items.emplace_back(std::move(name), std::pair<Ast_Number, bool>{ n, true });
+				
+				ix = std::get<std::int64_t>(n.value) + 1;
 				tok = peek();
 			} else {
+
+				// implicit
+				e->items.emplace_back(std::move(name), std::pair<Ast_Number, bool>{ ix, 0 });
 				ix++;
 			}
 
@@ -939,6 +1016,7 @@ class Parser {
 			check(&Parser::enum_decl) ||
 			check(&Parser::message_descriptor_decl, std::ref(ctx_.message_id_last)) ||
 			check(&Parser::using_decl) ||
+			check(&Parser::class_decl) ||
 			check(&Parser::one, TokenId::Semicolon)
 			);
 	}

@@ -179,19 +179,18 @@ class Vector {
 	uint32_t offset_; // in bytes from this pointer
 	uint32_t size_; // in elements
 public:
-
 	[[nodiscard]]
 	auto alloc(boost::beast::flat_buffer& buffer, size_t size) {
+		auto old_base = reinterpret_cast<std::byte*>(buffer.data().data());
+		auto this_ = reinterpret_cast<std::byte*>(this);
+		auto this_offset = this_ - old_base;
+
 		if (!size) {
-			offset_ = -1;
+			offset_ = this_offset;
 			size_ = 0;
 			return this;
 		}
 
-		auto old_base = reinterpret_cast<std::byte*>(buffer.data().data());
-		auto this_ = reinterpret_cast<std::byte*>(this);
-		auto this_offset = this_ - old_base;
-		
 		const auto current_size = buffer.data().size();
 
 		auto rem = current_size % alignof(T);

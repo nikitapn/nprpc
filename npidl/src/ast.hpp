@@ -8,6 +8,7 @@
 #include <optional>
 #include <cassert>
 #include <filesystem>
+#include <variant>
 
 constexpr int fundamental_type_first = 256;
 constexpr int fundamental_type_last = fundamental_type_first + 16;
@@ -58,7 +59,9 @@ enum class TokenId {
 	Enum,
 	Using,
 	Raises,
-	OutDirect
+	OutDirect,
+	Class,
+	Extends
 };
 
 struct Ast_Struct_Decl;
@@ -99,7 +102,57 @@ enum class FieldType {
 	Alias,
 	Enum,
 	Message,
+	Class,
 };
+
+enum class NumberFormat { Decimal, Hex, Scientific };
+
+struct Ast_Number {
+	std::variant<std::int64_t, float, double, bool> value;
+	NumberFormat format;
+	int max_size = 0;
+
+	std::int64_t decimal() const noexcept {
+		assert(std::holds_alternative<std::int64_t>(value));
+		return std::get<std::int64_t>(value);
+	}
+};
+
+inline bool operator == (std::int64_t x, const Ast_Number& n) {
+	assert(std::holds_alternative<std::int64_t>(n.value));
+	return std::get<std::int64_t>(n.value) == x;
+}
+
+inline bool operator != (std::int64_t x, const Ast_Number& n) {
+	return !::operator==(x, n);
+}
+
+// helper type for the visitor #4
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+// explicit deduction guide (not needed as of C++20)
+//template<class... Ts> overloaded(Ts...)->overloaded<Ts...>;
+
+inline std::ostream& operator << (std::ostream& os, const Ast_Number& n) {
+	std::visit(overloaded{
+		[&](int64_t x) { 
+			if (n.format == NumberFormat::Hex) {
+				os << "0x" << std::hex;
+				if (n.max_size) {
+					os << std::setfill('0') << std::setw(n.max_size * 2);
+				}
+				os << x;
+				os << std::dec;
+			} else {
+				os << x;
+			}
+		},
+		[&](float x) { os << x; },
+		[&](double x) { os << x; },
+		[&](bool x) { os << x; },
+		}, n.value);
+	return os;
+}
+
 
 struct Ast_Type_Decl {
 	FieldType id;
@@ -186,10 +239,21 @@ struct Ast_Interface_Decl : Ast_Type_Decl {
 	}
 };
 
+
+struct Ast_Class_Decl : Ast_Type_Decl {
+	Ast_Class_Decl* parent = nullptr;
+	std::string name;
+	
+
+	Ast_Class_Decl() {
+		id = FieldType::Class;
+	}
+};
+
 struct Ast_Enum_Decl : Ast_Fundamental_Type {
 	std::string name;
 	Namespace* nm;
-	std::vector<std::pair<std::string, int64_t>> items;
+	std::vector<std::pair<std::string, std::pair<Ast_Number, bool>>> items;
 	
 	Ast_Enum_Decl() 
 		: Ast_Fundamental_Type(TokenId::UInt32) 

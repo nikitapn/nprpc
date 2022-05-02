@@ -1155,12 +1155,13 @@ void Builder_Cpp::emit_using(Ast_Alias_Decl* u) {
 
 void Builder_Cpp::emit_enum(Ast_Enum_Decl* e) {
 	oh << "enum class " << e->name << " : " << fundamental_to_cpp(e->token_id) << " {\n";
-	for (size_t i = 0, ix = 0; i < e->items.size(); ++i) {
+	int64_t ix = 0;
+	for (size_t i = 0; i < e->items.size(); ++i) {
 		oh << "  " << e->items[i].first;
 		auto const n = e->items[i].second;
-		if (ix != n) {
-			oh << " = " << n;
-			ix = n + 1;
+		if (n.second || ix != n.second) { // explicit
+			oh << " = " << n.first;
+			ix = n.first.decimal() + 1;
 		} else {
 			++ix;
 		}

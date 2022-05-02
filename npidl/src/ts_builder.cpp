@@ -756,12 +756,13 @@ void Builder_Typescript::emit_using(Ast_Alias_Decl* u) {
 
 void Builder_Typescript::emit_enum(Ast_Enum_Decl* e) {
 	out << "export const enum " << e->name << " { //" << toktype << e->token_id << '\n';
-	for (size_t i = 0, ix = 0; i < e->items.size(); ++i) {
+	std::int64_t ix = 0;
+	for (size_t i = 0; i < e->items.size(); ++i) {
 		out << "  " << e->items[i].first;
 		auto const n = e->items[i].second;
-		if (ix != n) {
-			out << " = " << n;
-			ix = n + 1;
+		if (n.second || ix != n.second) { // explicit
+			out << " = " << n.first;
+			ix = n.first.decimal() + 1;
 		} else {
 			++ix;
 		}
