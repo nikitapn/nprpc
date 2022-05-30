@@ -190,7 +190,7 @@ void Builder_Cpp::emit_parameter_type_for_proxy_call_r(Ast_Type_Decl* type, std:
 		os << fundamental_to_cpp(cft(type)->token_id);
 		break;
 	case FieldType::Struct:
-		os << ctx_.nm_cur()->to_cpp17_namespace() << "::" << cflat(type)->name;
+		os << (!always_full_namespace_ ? ctx_.nm_cur()->to_cpp17_namespace() : cflat(type)->nm->to_cpp17_namespace()) << "::" << cflat(type)->name;
 		break;
 	case FieldType::Vector:
 		if (input) {
@@ -482,7 +482,6 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 		os << "  " << op1 << "() = " << op2 << ";\n";
 		break;
 	case FieldType::Alias:
-		assert(top_type == false);
 		assign_from_cpp_type(calias(type)->type, op1, op2, os, from_iterator);
 		break;
 	case FieldType::String:
@@ -500,18 +499,21 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 	}
 }
 
-void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, std::string op2, bool from_iterator, bool top_object) {
+void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, std::string op2, std::ostream& os, bool from_iterator, bool top_object) {
 	switch (type->id) {
 	case FieldType::Fundamental:
-		oc << "  " << op1 << " = " << op2 << "();\n";
+		os << "  " << op1 << " = " << op2 << "();\n";
 		break;
 	case FieldType::Struct: {
 		auto s = cflat(type);
 		if (s->flat) {
-			oc << "  memcpy(&" << op1 << ", " << op2 << "().__data(), " << s->size << ");\n";
+			os << "  memcpy(&" << op1 << ", " << op2 << "().__data(), " << s->size << ");\n";
 		} else {
 			for (auto field : s->fields) {
-				assign_from_flat_type(field->type, op1 + '.' + field->name, op2 + (from_iterator ? "." : "().") + field->name);
+				assign_from_flat_type(field->type, 
+					op1 + '.' + field->name, 
+					op2 + (top_object ? "." : (from_iterator ? "." : "().")) + field->name,
+					os);
 			}
 		}
 		break;
@@ -520,17 +522,17 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 	case FieldType::Vector:
 	{
 		auto const size = std::get<0>(get_type_size_align(static_cast<Ast_Wrap_Type*>(type)->type));
-		oc <<
+		os <<
 			"  {\n"
 			"    auto span = " << op2 << "();\n"
 			;
 		if (type->id == FieldType::Vector) {
-			oc <<
+			os <<
 				"    " << op1 << ".resize(span.size());\n"
 				;
 		}
 		if (is_flat(static_cast<Ast_Wrap_Type*>(type)->type)) {
-			oc <<
+			os <<
 				"    memcpy(" << op1 << ".data(), span.data(), " << size << " * span.size());\n"
 				;
 		} else {
@@ -538,23 +540,23 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 			//	"    memcpy(" << op1 << ".data(), span.data(), " << size << " * span.size());\n"
 			//	;
 		}
-		oc << "  }\n";
+		os << "  }\n";
 		break;
 	}
 	case FieldType::String:
-		oc << "  " << op1 << " = (std::string_view)" << op2 << "();\n";
+		os << "  " << op1 << " = (std::string_view)" << op2 << "();\n";
 		break;
 	case FieldType::Enum:
-		oc << "  " << op1 << " = " << op2 << "();\n";
+		os << "  " << op1 << " = " << op2 << "();\n";
 		break;
 	case FieldType::Alias:
-		assign_from_flat_type(calias(type)->get_real_type(), op1, op2, from_iterator);
+		assign_from_flat_type(calias(type)->get_real_type(), op1, op2, oc, from_iterator);
 		break;
 	case FieldType::Object:
 		if (top_object) {
-			oc << "  " << op1 << " = this->create_from_object_id(" << op2 << "());\n";
+			os << "  " << op1 << " = this->create_from_object_id(" << op2 << "());\n";
 		} else {
-			oc << "  " << op1 << ".assign_from_direct(" << op2 << "());\n";
+			os << "  " << op1 << ".assign_from_direct(" << op2 << "());\n";
 		}
 		break;
 	default:
@@ -681,7 +683,7 @@ void Builder_Cpp::emit_file_footer() {
 
 			for (size_t i = 1; i < ex->fields.size(); ++i) {
 				auto f = ex->fields[i];
-				assign_from_flat_type(f->type, "ex." + f->name, "ex_flat." + f->name, false, true);
+				assign_from_flat_type(f->type, "ex." + f->name, "ex_flat." + f->name, oc, false, true);
 			}
 
 
@@ -719,25 +721,44 @@ void Builder_Cpp::emit_namespace_end() {
 }
 
 void Builder_Cpp::emit_helpers() {
+	always_full_namespace(true);
 	oh << "namespace " << ctx_.base_name << "::helper {\n";
 	for (auto& [unused, s] : ctx_.affa_list) {
 		for (auto f : s->fields) {
 			assert(f->function_argument);
+			if (is_fundamental(f->type) || f->type->id == FieldType::String || f->type->id == FieldType::Object) continue;
+
 			if (f->input_function_argument) {
-				continue;
+				if (f->type->id == FieldType::Struct) {
+					oh <<
+						"inline void assign_from_flat_" << f->function_name << "_" << f->function_argument_name << "("; emit_parameter_type_for_servant_callback_r(f->type, oh, false); oh << "& src, "; emit_parameter_type_for_proxy_call_r(f->type, oh, false); oh << "& dest) {\n"
+						;
+					assign_from_flat_type(f->type, "dest", "src", oh, false, true);
+					oh << "}\n";
+				}
+			
 			} else {
-				if (is_fundamental(f->type) || f->type->id == FieldType::String || f->type->id == FieldType::Object) continue;
-				oh << 
-					"template<::nprpc::IterableCollection T>\n"
-					"void assign_" << f->function_name << "_" << f->function_argument_name << "("; emit_parameter_type_for_servant_callback_r(f->type, oh, false); oh << "& dest, const T & src) {\n"
-					;
-				assign_from_cpp_type(f->type, "dest", "src", oh, false, true);
+				if (f->function_argument_name == "ret_val") continue;
+				if (f->type->id == FieldType::Struct) {
+					oh <<
+						"inline void assign_from_cpp_" << f->function_name << "_" << f->function_argument_name << "("; emit_parameter_type_for_servant_callback_r(f->type, oh, false); oh << "& dest, const "; emit_parameter_type_for_proxy_call_r(f->type, oh, false); oh << "& src) {\n"
+						;
+					assign_from_cpp_type(f->type, "dest", "src", oh, false, true);
+					oh << "}\n";
+				} else { // Itearable
+					oh <<
+						"template<::nprpc::IterableCollection T>\n"
+						"void assign_from_cpp_" << f->function_name << "_" << f->function_argument_name << "("; emit_parameter_type_for_servant_callback_r(f->type, oh, false); oh << "& dest, const T & src) {\n"
+						;
+					assign_from_cpp_type(f->type, "dest", "src", oh, false, true);
+					oh << "}\n";
+				}
 			}
-			oh << "}\n";
 		}
 	}
 
 	oh << "} // namespace " << ctx_.base_name << "::helper\n";
+	always_full_namespace(false);
 }
 
 void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
@@ -925,12 +946,14 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 
 			for (auto out : fn->args) {
 				if (out->modifier == ArgumentModifier::In) continue;
-				assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), false, true);
+				assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), oc, false, 
+					out->type->id == FieldType::Object && out->direct == false);
 			}
 
 			if (!fn->is_void()) {
 				oc << "  "; emit_type(fn->ret_value, oc); oc << " __ret_value;\n";
-				assign_from_flat_type(fn->ret_value, "__ret_value", "out._1", false, true);
+				assign_from_flat_type(fn->ret_value, "__ret_value", "out._1", oc, false, 
+					fn->ret_value->id == FieldType::Object);
 				oc << "  return __ret_value;\n";
 			}
 		}
@@ -1155,12 +1178,13 @@ void Builder_Cpp::emit_using(Ast_Alias_Decl* u) {
 
 void Builder_Cpp::emit_enum(Ast_Enum_Decl* e) {
 	oh << "enum class " << e->name << " : " << fundamental_to_cpp(e->token_id) << " {\n";
-	for (size_t i = 0, ix = 0; i < e->items.size(); ++i) {
+	int64_t ix = 0;
+	for (size_t i = 0; i < e->items.size(); ++i) {
 		oh << "  " << e->items[i].first;
 		auto const n = e->items[i].second;
-		if (ix != n) {
-			oh << " = " << n;
-			ix = n + 1;
+		if (n.second || ix != n.second) { // explicit
+			oh << " = " << n.first;
+			ix = n.first.decimal() + 1;
 		} else {
 			++ix;
 		}

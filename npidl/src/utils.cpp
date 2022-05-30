@@ -196,7 +196,7 @@ bool is_fundamental(Ast_Type_Decl* type) {
 	case FieldType::Enum:
 		return true;
 	case FieldType::Alias:
-		return is_flat(calias(type)->type);
+		return is_fundamental(calias(type)->type);
 	default:
 		return false;
 	}

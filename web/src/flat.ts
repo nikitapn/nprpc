@@ -78,6 +78,10 @@ function Accessor_U8<TBase extends Constructor>(Base: TBase) {
 			let offset: number = (this as any).elements_offset;
 			return ((this as any).buffer as FlatBuffer).array_buffer.slice(offset, offset + (this as any).elements_size);
 		}
+		
+		public get data_view(): DataView {
+			return new DataView((this as any).buffer.array_buffer, (this as any).elements_offset);
+		}
 	};
 }
 

@@ -1,4 +1,3 @@
-
 import * as Flat from './flat';
 import { FlatBuffer } from './flat_buffer';
 
@@ -123,7 +122,7 @@ export class Connection {
 			
 					let obj = get_object(buf, ch.poa_idx, ch.object_id)
 					if (obj) {
-						console.log(obj);
+						//console.log(obj);
 						obj.dispatch(buf, this.endpoint, false);
 					}
 					break;

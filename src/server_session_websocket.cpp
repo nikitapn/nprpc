@@ -87,6 +87,7 @@ beast::string_view mime_type(beast::string_view path)
 	if (iequals(ext, ".json")) return "application/json";
 	if (iequals(ext, ".xml"))  return "application/xml";
 	if (iequals(ext, ".swf"))  return "application/x-shockwave-flash";
+	if (iequals(ext, ".wasm")) return "application/wasm";
 	if (iequals(ext, ".flv"))  return "video/x-flv";
 	if (iequals(ext, ".png"))  return "image/png";
 	if (iequals(ext, ".jpe"))  return "image/jpeg";
@@ -1160,8 +1161,8 @@ void init_web_socket(boost::asio::io_context& ioc) {
 
 	if (nprpc::impl::g_cfg.use_ssl) {
 		auto read_file_to_string = [](std::string const file) {
-			std::ifstream is(file);
-			if (is.bad()) { throw std::runtime_error("could not open certificate file: \"" + file + "\""); }
+			std::ifstream is(file, std::ios_base::in);
+			if (!is) { throw std::runtime_error("could not open certificate file: \"" + file + "\""); }
 			return std::string(std::istreambuf_iterator<char>(is),
 				std::istreambuf_iterator<char>());
 		};
@@ -1178,8 +1179,8 @@ void init_web_socket(boost::asio::io_context& ioc) {
 
 		ctx.set_options(
 			boost::asio::ssl::context::default_workarounds |
-			boost::asio::ssl::context::no_sslv2 |
-			boost::asio::ssl::context::single_dh_use);
+			boost::asio::ssl::context::no_sslv2/* |
+			boost::asio::ssl::context::single_dh_use */);
 
 		ctx.use_certificate_chain(
 			boost::asio::buffer(cert.data(), cert.size()));

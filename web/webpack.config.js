@@ -23,7 +23,7 @@ module.exports = env => {
 		libraryTarget: 'umd',
     library: 'nprpc_runtime',
     umdNamedDefine: true,
-    path: path.resolve(__dirname, 'nprpc'),
+    path: path.resolve(__dirname, 'dist'),
   },
 }
 };

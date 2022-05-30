@@ -7,7 +7,7 @@ export * from './nprpc_nameserver'
 import {Nameserver, _INameserver_Servant} from './nprpc_nameserver'
 
 
-function sip4_to_u32(str: string): number {
+const sip4_to_u32 = (str: string): number => {
 	let rx = /(\d+)\.(\d+)\.(\d+)\.(\d+)/ig;
 	let parts = rx.exec(str);
 	if (parts.length != 5) throw "ip address is incorrect";
@@ -24,4 +24,23 @@ export function get_nameserver(nameserver_ip: string): Nameserver {
 	obj.data.flags = 0;
 	obj.data.class_id = _INameserver_Servant._get_class();
 	return obj;
+}
+
+export interface HostInfo {
+	ip: number;
+	port: number;
+}  
+
+export const read_host = async (): Promise<HostInfo> => {
+	let x = await fetch("./host.json");
+	if (!x.ok) throw "read_host error: " + x.statusText;
+
+	let info = JSON.parse(await x.text()) as HostInfo;
+
+	if (info.ip == undefined) throw "ip not found";
+	if (info.port == undefined) throw "port not found";
+
+	info.ip = sip4_to_u32(info.ip as any);
+
+	return info;
 }
