@@ -3,7 +3,6 @@
 CORBA-like RPC.\
 The IDL language is almost similar to CORBA IDL.\
 The proxy-stub code can be generated either for C++ or Typescript.\
-It's a part of my DCS system.
 
 # Examples
 Server example: https://github.com/nikitapn/nprpc/blob/main/npnameserver/npnameserver.cpp \
