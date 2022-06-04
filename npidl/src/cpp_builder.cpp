@@ -492,6 +492,7 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 		assert(top_type == false);
 		os << "  memcpy(" << op1 << "().__data(), &" << op2 << "._data(), " << size_of_object_without_class_id <<");\n";
 		os << "  " << op1 << "().class_id(" << op2 << "._data().class_id);\n";
+		os << "  " << op1 << "().hostname(" << op2 << "._data().hostname);\n";
 		break;
 	default:
 		assert(false);

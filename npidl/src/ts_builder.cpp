@@ -583,6 +583,7 @@ void Builder_Typescript::assign_from_ts_type(Ast_Type_Decl* type, std::string op
 			"  " << op1 << ".poa_idx = " << op2 << ".poa_idx;\n"
 			"  " << op1 << ".flags = " << op2 << ".flags;\n"
 			"  " << op1 << ".class_id = " << op2 << ".class_id;\n"
+			"  " << op1 << ".hostname = " << op2 << ".hostname;\n"
 			;
 		
 		//out << "  memcpy(&" << op1 << "().ip4(), &" << op2 << "._data().ip4, " << size_of_object_without_class_id <<");\n";
@@ -890,7 +891,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 
 		out <<
 			"    await NPRPC.rpc.call(\n"
-			"      {ip4: this.data.ip4, port: this.data.websocket_port}, buf, this.timeout\n"
+			"      this.endpoint(), buf, this.timeout\n"
 			"    );\n"
 			"    let std_reply = NPRPC.handle_standart_reply(buf);\n"
 			;
@@ -1194,8 +1195,8 @@ Builder_Typescript::Builder_Typescript(Context& ctx, std::filesystem::path file_
 	filename.replace_extension(".ts");
 	out.open(out_dir / filename);
 
-	if (!ctx_.is_nprpc_base()) {
-		out << "import * as NPRPC from './nprpc'\n\n";
+	if (ctx_.is_nprpc_core()) [[unlikely]] {
+		out << "import * as NPRPC from './index_internal'\n\n";
 	} else {
 		out << "import * as NPRPC from './nprpc'\n\n";
 	}

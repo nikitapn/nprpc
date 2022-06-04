@@ -186,7 +186,7 @@ public:
 		auto this_offset = this_ - old_base;
 
 		if (!size) {
-			offset_ = this_offset;
+			offset_ = static_cast<uint32_t>(this_offset);
 			size_ = 0;
 			return this;
 		}

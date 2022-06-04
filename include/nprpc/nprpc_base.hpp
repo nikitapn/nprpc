@@ -149,12 +149,53 @@ public:
 };
 } // namespace flat
 
+class ExceptionUnsecuredObject : public ::nprpc::Exception {
+public:
+  std::string class_id;
+
+  ExceptionUnsecuredObject() : ::nprpc::Exception("ExceptionUnsecuredObject") {} 
+  ExceptionUnsecuredObject(std::string _class_id)
+    : ::nprpc::Exception("ExceptionUnsecuredObject")
+    , class_id(_class_id)
+  {
+  }
+};
+
+namespace flat {
+struct ExceptionUnsecuredObject {
+  uint32_t __ex_id;
+  ::flat::String class_id;
+};
+
+class ExceptionUnsecuredObject_Direct {
+  boost::beast::flat_buffer& buffer_;
+  const size_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<ExceptionUnsecuredObject*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const ExceptionUnsecuredObject*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  void* __data() noexcept { return (void*)&base(); }
+  ExceptionUnsecuredObject_Direct(boost::beast::flat_buffer& buffer, size_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& __ex_id() const noexcept { return base().__ex_id;}
+  uint32_t& __ex_id() noexcept { return base().__ex_id;}
+  void class_id(const char* str) { new (&base().class_id) ::flat::String(buffer_, str); }
+  void class_id(const std::string& str) { new (&base().class_id) ::flat::String(buffer_, str); }
+  auto class_id() noexcept { return (::flat::Span<char>)base().class_id; }
+  auto class_id() const noexcept { return (::flat::Span<const char>)base().class_id; }
+  auto class_id_vd() noexcept {     return ::flat::String_Direct1(buffer_, offset_ + offsetof(ExceptionUnsecuredObject, class_id));  }
+};
+} // namespace flat
+
 enum class DebugLevel : uint32_t {
   DebugLevel_Critical,
-  DebugLevel_InactiveTimeout,
-  DebugLevel_EveryCall,
-  DebugLevel_EveryMessageContent,
-  DebugLevel_TraceAll
+  DebugLevel_InactiveTimeout = 1,
+  DebugLevel_EveryCall = 2,
+  DebugLevel_EveryMessageContent = 3,
+  DebugLevel_TraceAll = 4
 };
 namespace detail { 
 struct ObjectIdLocal {
@@ -189,8 +230,9 @@ public:
 } // namespace flat
 
 enum class ObjectFlag : uint32_t {
-  Policy_Lifespan,
-  WebObject
+  Policy_Lifespan = 0,
+  WebObject = 1,
+  Secured = 2
 };
 struct ObjectId {
   nprpc::oid_t object_id;
@@ -200,6 +242,7 @@ struct ObjectId {
   nprpc::poa_idx_t poa_idx;
   uint32_t flags;
   std::string class_id;
+  std::string hostname;
 };
 
 namespace flat {
@@ -211,6 +254,7 @@ struct ObjectId {
   uint16_t poa_idx;
   uint32_t flags;
   ::flat::String class_id;
+  ::flat::String hostname;
 };
 
 class ObjectId_Direct {
@@ -243,6 +287,11 @@ public:
   auto class_id() noexcept { return (::flat::Span<char>)base().class_id; }
   auto class_id() const noexcept { return (::flat::Span<const char>)base().class_id; }
   auto class_id_vd() noexcept {     return ::flat::String_Direct1(buffer_, offset_ + offsetof(ObjectId, class_id));  }
+  void hostname(const char* str) { new (&base().hostname) ::flat::String(buffer_, str); }
+  void hostname(const std::string& str) { new (&base().hostname) ::flat::String(buffer_, str); }
+  auto hostname() noexcept { return (::flat::Span<char>)base().hostname; }
+  auto hostname() const noexcept { return (::flat::Span<const char>)base().hostname; }
+  auto hostname_vd() noexcept {     return ::flat::String_Direct1(buffer_, offset_ + offsetof(ObjectId, hostname));  }
 };
 } // namespace flat
 
@@ -250,21 +299,21 @@ public:
 
 namespace impl { 
 enum class MessageId : uint32_t {
-  FunctionCall,
-  BlockResponse,
-  AddReference,
-  ReleaseObject,
-  Success,
-  Exception,
-  Error_PoaNotExist,
-  Error_ObjectNotExist,
-  Error_CommFailure,
-  Error_UnknownFunctionIdx,
-  Error_UnknownMessageId
+  FunctionCall = 0,
+  BlockResponse = 1,
+  AddReference = 2,
+  ReleaseObject = 3,
+  Success = 4,
+  Exception = 5,
+  Error_PoaNotExist = 6,
+  Error_ObjectNotExist = 7,
+  Error_CommFailure = 8,
+  Error_UnknownFunctionIdx = 9,
+  Error_UnknownMessageId = 10
 };
 enum class MessageType : uint32_t {
-  Request,
-  Answer
+  Request = 0,
+  Answer = 1
 };
 struct Header {
   uint32_t size;

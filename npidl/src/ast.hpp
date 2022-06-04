@@ -521,6 +521,10 @@ public:
 		return base_name == "nprpc_base";
 	}
 
+	bool is_nprpc_core() const noexcept {
+		return is_nprpc_base() || base_name == "nprpc_nameserver";
+	}
+
 	Context(const std::filesystem::path& file_path) {
 		base_name = file_path.filename().replace_extension().string();
 		std::transform(base_name.begin(), base_name.end(), base_name.begin(), [](char c) {

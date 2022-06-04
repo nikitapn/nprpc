@@ -331,9 +331,11 @@ NPRPC_API Object* Object::create_from_object_id(detail::flat::ObjectId_Direct oi
 		
 		obj->_data().flags = oid.flags();
 		obj->_data().class_id = (std::string_view)oid.class_id();
+		obj->_data().hostname = (std::string_view)oid.hostname();
 
 		return obj;
 	}
 
 } // namespace nprpc
 
+#include <nprpc/serialization/nvp.hpp>

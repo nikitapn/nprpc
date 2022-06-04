@@ -8,8 +8,8 @@ namespace nprpc {
 void nprpc::Nameserver::Bind(/*in*/const ObjectId& obj, /*in*/const std::string& name) {
   boost::beast::flat_buffer buf;
   {
-    auto mb = buf.prepare(200);
-    buf.commit(72);
+    auto mb = buf.prepare(208);
+    buf.commit(80);
     static_cast<::nprpc::impl::Header*>(mb.data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
     static_cast<::nprpc::impl::Header*>(mb.data())->msg_type = ::nprpc::impl::MessageType::Request;
   }
@@ -21,6 +21,7 @@ void nprpc::Nameserver::Bind(/*in*/const ObjectId& obj, /*in*/const std::string&
   ::flat::nprpc_nameserver_M1_Direct _(buf,32);
   memcpy(_._1().__data(), &obj._data(), 24);
   _._1().class_id(obj._data().class_id);
+  _._1().hostname(obj._data().hostname);
   _._2(name);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size() - 4);
   ::nprpc::impl::g_orb->call(
@@ -76,8 +77,8 @@ void nprpc::INameserver_Servant::dispatch(nprpc::Buffers& bufs, nprpc::EndPoint 
       ::flat::nprpc_nameserver_M2_Direct ia(bufs(), 32);
       auto& obuf = bufs.flip();
       obuf.consume(obuf.size());
-      obuf.prepare(184);
-      obuf.commit(56);
+      obuf.prepare(192);
+      obuf.commit(64);
       ::flat::nprpc_nameserver_M3_Direct oa(obuf,16);
 bool __ret_val;
       __ret_val = Resolve(ia._1(), oa._2());

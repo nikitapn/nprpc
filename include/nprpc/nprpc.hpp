@@ -22,6 +22,8 @@
 #include <nprpc/utils.hpp>
 #include <nprpc/endpoint.hpp>
 
+#include <nprpc/serialization/serialization.h>
+
 namespace nprpc {
 
 class Nameserver;
@@ -40,17 +42,18 @@ class ObjectGuard;
 class ObjectId : private detail::ObjectId {
 	friend impl::PoaImpl;
 public:
-	ObjectId() {
-		this->object_id = invalid_object_id;
+	template<typename Archive>
+	void serialize(Archive& ar) {
+		ar & NVP2("object_id", this->object_id);
+		ar & NVP2("ip4", this->ip4);
+		ar & NVP2("port", this->port);
+		ar & NVP2("websocket_port", this->websocket_port);
+		ar & NVP2("poa_idx", this->poa_idx);
+		ar & NVP2("flags", this->flags);
+		ar & NVP2("class_id", this->class_id);
+		ar & NVP2("hostname", this->hostname);
 	}
 
-	ObjectId(const ObjectId&) = default;
-
-	ObjectId(const detail::ObjectId& other) :
-		detail::ObjectId(other) {}
-
-	ObjectId(ObjectId&&) = default;
-	
 	detail::ObjectId& _data() noexcept { return static_cast<detail::ObjectId&>(*this); }
 	const detail::ObjectId& _data() const noexcept { return static_cast<const detail::ObjectId&>(*this); }
 
@@ -75,12 +78,24 @@ public:
 		_data().poa_idx = other.poa_idx();
 		_data().flags = other.flags();
 		_data().class_id = (std::string_view)other.class_id();
+		_data().hostname = (std::string_view)other.hostname();
 	}
 
 	ObjectId& operator=(ObjectId&& other) noexcept {
 		_data() = std::move(other._data());
 		return *this;
 	}
+
+	ObjectId() {
+		this->object_id = invalid_object_id;
+	}
+
+	ObjectId(const ObjectId&) = default;
+
+	ObjectId(const detail::ObjectId& other) :
+		detail::ObjectId(other) {}
+
+	ObjectId(ObjectId&&) = default;
 };
 
 class NPRPC_API Policy {
@@ -175,12 +190,14 @@ public:
 
 struct Config {
 	DebugLevel debug_level = DebugLevel::DebugLevel_Critical;
+	std::string hostname;
 	uint16_t port;
 	uint16_t websocket_port = 0;
 	std::string http_root_dir;
 	bool use_ssl = false;
 	std::string ssl_public_key;
 	std::string ssl_secret_key;
+	std::string ssl_dh_params;
 };
 
 NPRPC_API Rpc* init(boost::asio::io_context& ioc, Config&& cfg);

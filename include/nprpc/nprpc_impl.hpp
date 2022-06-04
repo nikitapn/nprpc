@@ -168,6 +168,7 @@ public:
 		obj->_data().poa_idx = oid.poa_idx();
 		obj->_data().flags = oid.flags();
 		obj->_data().class_id = (std::string_view)oid.class_id();
+		obj->_data().hostname = (std::string_view)oid.hostname();
 
 		return obj;
 	}
@@ -342,8 +343,12 @@ public:
 		
 		oid.poa_idx = get_index();
 		
-		oid.flags = (pl_lifespan << static_cast<int>(detail::ObjectFlag::Policy_Lifespan));
+		oid.flags = 
+			(pl_lifespan << static_cast<int>(detail::ObjectFlag::Policy_Lifespan)) |
+			(g_cfg.use_ssl << static_cast<int>(detail::ObjectFlag::Secured));
+		
 		oid.class_id = obj->get_class();
+		oid.hostname = g_cfg.hostname;
 		
 		if (pl_lifespan == Policy_Lifespan::Type::Transient) {
 			std::lock_guard<std::mutex> lk(g_orb->new_activated_objects_mut_);

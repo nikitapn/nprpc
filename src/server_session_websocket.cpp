@@ -1169,7 +1169,7 @@ void init_web_socket(boost::asio::io_context& ioc) {
 
 		std::string const cert = read_file_to_string(nprpc::impl::g_cfg.ssl_public_key);
 		std::string const key = read_file_to_string(nprpc::impl::g_cfg.ssl_secret_key);
-
+		
 		ctx.set_password_callback(
 			[](std::size_t,
 				boost::asio::ssl::context_base::password_purpose)
@@ -1179,8 +1179,10 @@ void init_web_socket(boost::asio::io_context& ioc) {
 
 		ctx.set_options(
 			boost::asio::ssl::context::default_workarounds |
-			boost::asio::ssl::context::no_sslv2/* |
-			boost::asio::ssl::context::single_dh_use */);
+			boost::asio::ssl::context::no_sslv2 | 
+			boost::asio::ssl::context::no_sslv3 |
+			(nprpc::impl::g_cfg.ssl_dh_params.size() > 0 ? boost::asio::ssl::context::single_dh_use : 0)
+		);
 
 		ctx.use_certificate_chain(
 			boost::asio::buffer(cert.data(), cert.size()));
@@ -1189,8 +1191,12 @@ void init_web_socket(boost::asio::io_context& ioc) {
 			boost::asio::buffer(key.data(), key.size()),
 			boost::asio::ssl::context::file_format::pem);
 
-		//ctx.use_tmp_dh(
-		//	boost::asio::buffer(dh.data(), dh.size()));
+		if (nprpc::impl::g_cfg.ssl_dh_params.size() > 0) {
+			std::string const dh = read_file_to_string(nprpc::impl::g_cfg.ssl_dh_params);
+			ctx.use_tmp_dh(
+				boost::asio::buffer(dh.data(), dh.size())
+			);
+		}
 	}
 
 	// Create and launch a listening port

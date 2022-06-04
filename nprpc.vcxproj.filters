@@ -69,6 +69,18 @@
     <ClInclude Include="include\nprpc\asio.hpp">
       <Filter>include</Filter>
     </ClInclude>
+    <ClInclude Include="include\nprpc\serialization\iarchive.h">
+      <Filter>include\serialization</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\serialization\oarchive.h">
+      <Filter>include\serialization</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\serialization\serialization.h">
+      <Filter>include\serialization</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\serialization\nvp.hpp">
+      <Filter>include\serialization</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="Makefile" />
@@ -94,6 +106,9 @@
     </Filter>
     <Filter Include="idl">
       <UniqueIdentifier>{01324650-62b0-41b6-8381-d9e781d06399}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\serialization">
+      <UniqueIdentifier>{f63a3b5c-0024-4cdb-bb9c-07fefc1b6bed}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>
