@@ -1,4 +1,4 @@
-import * as NPRPC from './nprpc'
+import * as NPRPC from './index_internal'
 
 export type poa_idx_t = number/*u16*/;
 export type oid_t = bigint/*u64*/;
@@ -54,12 +54,36 @@ export class ExceptionUnknownMessageId_Direct extends NPRPC.Flat.Flat {
   public set __ex_id(value: number) { this.buffer.dv.setUint32(this.offset+0,value,true); }
 }
 } // namespace Flat 
+export class ExceptionUnsecuredObject extends NPRPC.Exception {
+  constructor(public class_id?: string) { super("ExceptionUnsecuredObject"); }
+}
+
+export namespace Flat_nprpc_base {
+export class ExceptionUnsecuredObject_Direct extends NPRPC.Flat.Flat {
+  public get __ex_id() { return this.buffer.dv.getUint32(this.offset+0,true); }
+  public set __ex_id(value: number) { this.buffer.dv.setUint32(this.offset+0,value,true); }
+  public get class_id() {
+    let enc = new TextDecoder("utf-8");
+    let v_begin = this.offset + 4;
+    let data_offset = v_begin + this.buffer.dv.getUint32(v_begin, true);
+    let bn = this.buffer.array_buffer.slice(data_offset, data_offset + this.buffer.dv.getUint32(v_begin + 4, true));
+    return enc.decode(bn);
+  }
+  public set class_id(str: string) {
+    let enc = new TextEncoder();
+    let bytes = enc.encode(str);
+    let len = bytes.length;
+    let offset = NPRPC.Flat._alloc(this.buffer, this.offset + 4, len, 1, 1);
+    new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
+  }
+}
+} // namespace Flat 
 export const enum DebugLevel { //u32
   DebugLevel_Critical,
-  DebugLevel_InactiveTimeout,
-  DebugLevel_EveryCall,
-  DebugLevel_EveryMessageContent,
-  DebugLevel_TraceAll
+  DebugLevel_InactiveTimeout = 1,
+  DebugLevel_EveryCall = 2,
+  DebugLevel_EveryMessageContent = 3,
+  DebugLevel_TraceAll = 4
 }
 export namespace detail { 
 export interface ObjectIdLocal {
@@ -76,8 +100,9 @@ export class ObjectIdLocal_Direct extends NPRPC.Flat.Flat {
 }
 } // namespace Flat 
 export const enum ObjectFlag { //u32
-  Policy_Lifespan,
-  WebObject
+  Policy_Lifespan = 0,
+  WebObject = 1,
+  Secured = 2
 }
 export interface ObjectId {
   object_id: oid_t;
@@ -87,6 +112,7 @@ export interface ObjectId {
   poa_idx: poa_idx_t;
   flags: number/*u32*/;
   class_id: string;
+  hostname: string;
 }
 
 export namespace Flat_nprpc_base {
@@ -117,27 +143,41 @@ export class ObjectId_Direct extends NPRPC.Flat.Flat {
     let offset = NPRPC.Flat._alloc(this.buffer, this.offset + 24, len, 1, 1);
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
+  public get hostname() {
+    let enc = new TextDecoder("utf-8");
+    let v_begin = this.offset + 32;
+    let data_offset = v_begin + this.buffer.dv.getUint32(v_begin, true);
+    let bn = this.buffer.array_buffer.slice(data_offset, data_offset + this.buffer.dv.getUint32(v_begin + 4, true));
+    return enc.decode(bn);
+  }
+  public set hostname(str: string) {
+    let enc = new TextEncoder();
+    let bytes = enc.encode(str);
+    let len = bytes.length;
+    let offset = NPRPC.Flat._alloc(this.buffer, this.offset + 32, len, 1, 1);
+    new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
+  }
 }
 } // namespace Flat 
 } // namespace detail
 
 export namespace impl { 
 export const enum MessageId { //u32
-  FunctionCall,
-  BlockResponse,
-  AddReference,
-  ReleaseObject,
-  Success,
-  Exception,
-  Error_PoaNotExist,
-  Error_ObjectNotExist,
-  Error_CommFailure,
-  Error_UnknownFunctionIdx,
-  Error_UnknownMessageId
+  FunctionCall = 0,
+  BlockResponse = 1,
+  AddReference = 2,
+  ReleaseObject = 3,
+  Success = 4,
+  Exception = 5,
+  Error_PoaNotExist = 6,
+  Error_ObjectNotExist = 7,
+  Error_CommFailure = 8,
+  Error_UnknownFunctionIdx = 9,
+  Error_UnknownMessageId = 10
 }
 export const enum MessageType { //u32
-  Request,
-  Answer
+  Request = 0,
+  Answer = 1
 }
 export interface Header {
   size: number/*u32*/;
@@ -210,6 +250,13 @@ function nprpc_base_throw_exception(buf: NPRPC.FlatBuffer): void {
   {
     let ex_flat = new Flat_nprpc_base.ExceptionUnknownMessageId_Direct(buf, 16);
     let ex = new ExceptionUnknownMessageId();
+    throw ex;
+  }
+  case 5:
+  {
+    let ex_flat = new Flat_nprpc_base.ExceptionUnsecuredObject_Direct(buf, 16);
+    let ex = new ExceptionUnsecuredObject();
+  ex.class_id = ex_flat.class_id;
     throw ex;
   }
   default:
