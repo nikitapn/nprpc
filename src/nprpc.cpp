@@ -63,6 +63,7 @@ NPRPC_API std::shared_ptr<Session> RpcImpl::get_session(const EndPoint& endpoint
 			founded != opened_sessions_.end()) {
 			con = (*founded);
 		} else {
+			if (endpoint.websocket) throw nprpc::ExceptionCommFailure();
 			if (endpoint.is_local()) {
 				// not impl
 			} else {
@@ -218,7 +219,7 @@ NPRPC_API uint32_t Object::add_ref() {
 	msg.poa_idx() = this->_data().poa_idx;
 
 	::nprpc::impl::g_orb->call_async(
-		nprpc::EndPoint(this->_data().ip4, this->_data().port), 
+		get_endpoint(),
 		std::move(buf),
 		[](const boost::system::error_code& ec, boost::beast::flat_buffer& buf) {
 			//if (!ec) {
@@ -237,7 +238,7 @@ NPRPC_API uint32_t Object::release() {
 	if (cnt != 0) return cnt;
 
 	if (policy_lifespan() == Policy_Lifespan::Transient) {
-		const nprpc::EndPoint endpoint(this->_data().ip4, this->_data().port);
+		const auto endpoint = get_endpoint();
 
 		if (is_web_origin() && ::nprpc::impl::g_orb->has_session(endpoint) == false) {
 			// websocket session was closed.

@@ -12,8 +12,9 @@ struct EndPoint {
 		};
 		uint64_t hash;
 	};
+	bool websocket;
 	EndPoint() = default;
-	EndPoint(uint32_t _ip4, uint32_t _port) : ip4{_ip4}, port{_port} {}
+	EndPoint(uint32_t _ip4, uint32_t _port, bool _websocket) : ip4{ _ip4 }, port{ _port }, websocket{ _websocket } {}
 	bool is_local() const noexcept { return hash == 0; }
 	bool operator==(const EndPoint& other) const noexcept { return hash == other.hash; }
 };

@@ -24,9 +24,7 @@ void nprpc::Nameserver::Bind(/*in*/const ObjectId& obj, /*in*/const std::string&
   _._1().hostname(obj._data().hostname);
   _._2(name);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size() - 4);
-  ::nprpc::impl::g_orb->call(
-    nprpc::EndPoint(this->_data().ip4, this->_data().port), buf, this->get_timeout()
-  );
+  ::nprpc::impl::g_orb->call(this->get_endpoint(), buf, this->get_timeout());
   auto std_reply = nprpc::impl::handle_standart_reply(buf);
   if (std_reply != 0) {
     std::cerr << "received an unusual reply for function with no output arguments\n";
@@ -49,9 +47,7 @@ bool nprpc::Nameserver::Resolve(/*in*/const std::string& name, /*out*/Object*& o
   ::flat::nprpc_nameserver_M2_Direct _(buf,32);
   _._1(name);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size() - 4);
-  ::nprpc::impl::g_orb->call(
-    nprpc::EndPoint(this->_data().ip4, this->_data().port), buf, this->get_timeout()
-  );
+  ::nprpc::impl::g_orb->call(this->get_endpoint(), buf, this->get_timeout());
   auto std_reply = nprpc::impl::handle_standart_reply(buf);
   if (std_reply != -1) {
     std::cerr << "received an unusual reply for function with output arguments\n";

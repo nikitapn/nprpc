@@ -348,19 +348,15 @@ void Builder_Typescript::emit_accessors(const std::string& flat_name, Ast_Field_
 
 		out <<
 			"  public get " << f->name << "() {\n"
-			"    let enc = new TextDecoder(\"utf-8\");\n"
-			"    let v_begin = this.offset + " << offset_addr << ";\n"
-			"    let data_offset = v_begin + this.buffer.dv.getUint32(v_begin, true);\n"
-			"    let bn = this.buffer.array_buffer.slice(data_offset, data_offset + this.buffer.dv.getUint32(v_begin + 4, true));\n"
-			"    return enc.decode(bn);\n"
+			"    const offset = this.offset + " << offset_addr << ";\n"
+			"    const n = this.buffer.dv.getUint32(offset + 4, true);\n"
+			"    return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : \"\"\n"
 			"  }\n";
 
 		out <<
 			"  public set " << f->name << "(str: string) {\n"
-			"    let enc = new TextEncoder();\n"
-			"    let bytes = enc.encode(str);\n"
-			"    let len = bytes.length;\n"
-			"    let offset = NPRPC.Flat._alloc(this.buffer, this.offset + " << offset_addr << ", len, 1, 1);\n"
+			"    const bytes = u8enc.encode(str);\n"
+			"    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + " << offset_addr << ", bytes.length, 1, 1);\n"
 			"    new Uint8Array(this.buffer.array_buffer, offset).set(bytes);\n"
 			"  }\n";
 
@@ -1195,10 +1191,17 @@ Builder_Typescript::Builder_Typescript(Context& ctx, std::filesystem::path file_
 	filename.replace_extension(".ts");
 	out.open(out_dir / filename);
 
-	if (ctx_.is_nprpc_core()) [[unlikely]] {
+	if (ctx_.is_nprpc_base()) {
+		out << "import * as NPRPC from './base'\n\n";
+	} else if (ctx_.is_nprpc_nameserver()) {
 		out << "import * as NPRPC from './index_internal'\n\n";
 	} else {
 		out << "import * as NPRPC from './nprpc'\n\n";
 	}
+
+	out <<
+		"const u8enc = new TextEncoder();\n"
+		"const u8dec = new TextDecoder();\n\n"
+		;
 
 }

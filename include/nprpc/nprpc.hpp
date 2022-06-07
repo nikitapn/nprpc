@@ -174,6 +174,11 @@ public:
 	bool is_web_origin() const noexcept { 
 		return this->_data().flags & (1 << static_cast<int>(detail::ObjectFlag::WebObject)) ? true : false; 
 	}
+
+	EndPoint get_endpoint() const noexcept {
+		return EndPoint(_data().ip4, _data().port, is_web_origin());
+	}
+
 	NPRPC_API virtual ~Object() = default;
 protected:
 	NPRPC_API Object* create_from_object_id(detail::flat::ObjectId_Direct oid);
@@ -221,6 +226,7 @@ inline void assign_to_out(const nprpc::ObjectId& oid, detail::flat::ObjectId_Dir
 	out.poa_idx() = oid._data().poa_idx;
 	out.flags() = oid._data().flags;
 	out.class_id(oid._data().class_id);
+	out.hostname(oid._data().hostname);
 }
 
 } // namespace nprpc

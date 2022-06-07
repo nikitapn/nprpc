@@ -183,20 +183,21 @@ template<
 	};
 
 	// send response in json
-	auto const ajax_json_request = [&req](std::string val, std::string msg) {
-		std::string json = "{ \"" + val + "\": \"" + msg + "\" }";
-		auto size = json.size();
-		http::response<http::string_body> res{
-			std::piecewise_construct,
-			std::make_tuple(std::move(json)),
-			std::make_tuple(http::status::ok, req.version())
-		};
-		res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
-		res.set(http::field::content_type, "application/json");
-		res.content_length(size);
-		res.keep_alive(req.keep_alive());
-		return res;
-	};
+	
+//	auto const ajax_json_request = [&req](std::string val, std::string msg) {
+//		std::string json = "{ \"" + val + "\": \"" + msg + "\" }";
+//		auto size = json.size();
+//		http::response<http::string_body> res{
+//			std::piecewise_construct,
+//			std::make_tuple(std::move(json)),
+//			std::make_tuple(http::status::ok, req.version())
+//		};
+//		res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+//		res.set(http::field::content_type, "application/json");
+//		res.content_length(size);
+//		res.keep_alive(req.keep_alive());
+//		return res;
+//	};
 
 	// Make sure we can handle the method
 	if (req.method() != http::verb::get
@@ -288,7 +289,8 @@ beast_fail(beast::error_code ec, char const* what)
 //------------------------------------------------------------------------------
 
 template<class Derived>
-class websocket_session : public nprpc::impl::Session
+class websocket_session 
+	: public nprpc::impl::Session
 {
 	struct work {
     virtual void operator()() = 0;
@@ -297,159 +299,15 @@ class websocket_session : public nprpc::impl::Session
     virtual ~work() = default;
   };
 
-	std::deque<std::shared_ptr<work>> requests_; // change to shared_ptr in plain sockets also. will do it tomorrow...
-	std::deque<std::shared_ptr<work>> answers_; // change to unique_ptr maybe?
+	std::deque<std::shared_ptr<work>> requests_;
+	std::deque<std::unique_ptr<work>> answers_;
 
 	bool reading_ = false;
+	bool writing_ = false;
 	bool request_sended_waiting_for_answer_ = false;
 
 	Derived& derived() { return static_cast<Derived&>(*this); }
 
-	void dump(std::string_view fn) {
-		// std::cerr << fn << "(): requests_.size = " << requests_.size() << ", answers_.size = " << answers_.size() << '\n';
-	}
-protected:
-	void close() {
-		const boost::system::error_code ec{boost::asio::error::connection_aborted};
-		for (auto& r : requests_) {
-			r->on_failed(ec);
-		}
-		requests_.clear();
-		answers_.clear();
-		nprpc::impl::Session::close();
-	}
-public:
-	virtual void timeout_action() final {
-
-	}
-
-	virtual void send_receive(
-		flat_buffer& buffer,
-		uint32_t timeout_ms
-	) {
-		assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
-
-		if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-			dump_message(buffer, false);
-		}
-
-		struct work_impl : work {
-			boost::beast::flat_buffer& buffer_;
-			Derived& this_;
-			uint32_t timeout_ms;
-
-			std::promise<boost::system::error_code> promise;
-
-			void operator()() noexcept override {
-				//this_.set_timeout(timeout_ms);
-				this_.ws().text(false); // binary mode only
-				this_.dump("send_receive");
-				this_.ws().async_write(
-					buffer_.data(),
-					std::bind(
-						&websocket_session::on_write,
-						this_.shared_from_this(),
-						std::placeholders::_1,
-						std::placeholders::_2,
-						false));
-			}
-
-			void on_failed(const boost::system::error_code& ec) noexcept override {
-				promise.set_value(ec);
-			}
-
-			void on_executed(boost::beast::flat_buffer&& buffer) noexcept override {
-				buffer_ = std::move(buffer);
-				promise.set_value({});
-			}
-
-			std::future<boost::system::error_code> get_future() { return promise.get_future(); }
-
-			work_impl(Derived& _this_, boost::beast::flat_buffer& _buf, uint32_t _timeout_ms)
-				: this_(_this_)
-				, buffer_(_buf)
-				, timeout_ms(_timeout_ms)
-			{
-			}
-		};
-
-	
-		auto w = std::make_shared<work_impl>(derived(), buffer, timeout_ms);
-		auto f = w->get_future();
-		
-		add_work(w);
-
-		auto ec = f.get();
-
-		if (!ec) {
-			if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-				dump_message(buffer, true);
-			}
-		} else {
-			throw nprpc::ExceptionCommFailure();
-		}
-	}
-
-	virtual void send_receive_async(
-		flat_buffer&& buffer,
-		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
-		uint32_t timeout_ms
-	) {
-		assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
-
-		struct work_impl : work {
-			boost::beast::flat_buffer buffer_;
-			Derived& this_;
-			uint32_t timeout_ms;
-			std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)> handler;
-
-			void operator()() noexcept override {
-				//this_.set_timeout(timeout_ms);
-				this_.ws().text(false); // binary mode only
-				this_.dump("send_receive_async");
-				this_.ws().async_write(
-					buffer_.data(),
-					std::bind(
-						&websocket_session::on_write,
-						this_.shared_from_this(),
-						std::placeholders::_1,
-						std::placeholders::_2,
-						false));
-			}
-
-			void on_failed(const boost::system::error_code& ec) noexcept override {
-				handler(ec, buffer_);
-			}
-
-			void on_executed(boost::beast::flat_buffer&& buffer) noexcept override {
-				buffer_ = std::move(buffer);
-				handler(boost::system::error_code{}, buffer_);
-			}
-
-			work_impl(boost::beast::flat_buffer&& _buf,
-				Derived& _this_,
-				std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& _handler,
-				uint32_t _timeout_ms)
-				: buffer_(std::move(_buf))
-				, this_(_this_)
-				, timeout_ms(_timeout_ms)
-				, handler(std::move(_handler))
-			{
-			}
-		};
-
-		add_work(std::make_shared<work_impl>(std::move(buffer), derived(), std::move(completion_handler), timeout_ms));
-	}
-
-	void add_work(std::shared_ptr<work> w) {
-		boost::asio::post(derived().ws().get_executor(), [w, this]() mutable {
-			dump("add_work");
-			//std::cerr << "add_work() wq_.size = " << wq_.size() << '\n';
-			requests_.push_back(std::move(w));
-			if (requests_.size() == 1 && answers_.empty()) (*requests_.front())();
-		});
-	}
-private:
 	// Start the asynchronous operation
 	template<class Body, class Allocator>
 	void do_accept(http::request<Body, http::basic_fields<Allocator>> req) {
@@ -493,8 +351,9 @@ private:
 	}
 
 	void on_read(beast::error_code ec, std::size_t bytes_transferred) {
-		reading_ = false;
 		boost::ignore_unused(bytes_transferred);
+
+		reading_ = false;
 
 		// This indicates that the websocket_session was closed
 		if (ec == websocket::error::closed) {
@@ -510,7 +369,6 @@ private:
 		nprpc::impl::flat::Header_Direct header(rx_buffer_(), 0);
 
 		if (header.msg_type() == nprpc::impl::MessageType::Request) {
-			dump("on_read_req");
 			//std::cerr << "on_read_request: " << bytes_transferred << ", wq_.size = " << wq_.size() << '\n';
 			handle_request();
 
@@ -526,6 +384,7 @@ private:
 
 				virtual void operator()() final {
 					self_.ws().text(false); // binary mode only
+					self_.writing_ = true;
 					self_.ws().async_write(
 						buffer_.data(),
 						std::bind(
@@ -539,11 +398,11 @@ private:
 				virtual void on_executed(boost::beast::flat_buffer&&) noexcept {}
 			};
 
-			answers_.emplace_front(std::make_shared<work_send_reply>(derived(), std::move(rx_buffer_(true))));
-			(*answers_.front())();
+			answers_.emplace_back(std::make_unique<work_send_reply>(derived(), std::move(rx_buffer_(true))));
+
+			if (!writing_) (*answers_.front())();
 		} else { // received an answer
 			request_sended_waiting_for_answer_ = false;
-			dump("on_read_asw");
 			assert(!requests_.empty());
 			//std::cerr << "on_read_answer: " << bytes_transferred << ", wq_.size = " << wq_.size() << '\n';
 			if (!ec) {
@@ -558,14 +417,13 @@ private:
 	}
 
 	void on_write(beast::error_code ec, std::size_t bytes_transferred, bool is_answer) {
-		//std::cerr << "on_write: " << bytes_transferred << ", wq_.size = " << wq_.size() << '\n';
+		boost::ignore_unused(bytes_transferred);
+		writing_ = false;
 
 		if (ec == websocket::error::closed) {
 			close();
 			return;
 		}
-
-		boost::ignore_unused(bytes_transferred);
 
 		if (ec) {
 			close();
@@ -573,47 +431,167 @@ private:
 		}
 
 		if (is_answer) { // answer sended 
-			dump("on_write_answer_sended");
 			assert(answers_.size() >= 1);
 			answers_.pop_front();
-			if (answers_.empty() == false) (*answers_.front())();
-			else if (requests_.empty() == false && request_sended_waiting_for_answer_ == false) (*requests_.front())();
-			else do_read();
+			if (answers_.empty() == false) return (*answers_.front())();
+			if (requests_.empty() == false && request_sended_waiting_for_answer_ == false) return (*requests_.front())();
+			return do_read();
 		} else {
-			dump("on_write_request_sended");
 			request_sended_waiting_for_answer_ = true;
 			assert(requests_.size() >= 1);
 			//std::cerr << "request sent: " << bytes_transferred << '\n';
-			if (reading_ == false) do_read(); // read an answer to the request
+			if (reading_ == false) return do_read(); // read an answer to the request
 		}
 	}
+
+	void add_request(std::shared_ptr<work> w) {
+		boost::asio::post(derived().ws().get_executor(), [w, this]() mutable {
+			requests_.push_back(std::move(w));
+			if (requests_.size() == 1 && answers_.empty() && !writing_) (*requests_.front())();
+			});
+	}
+protected:
+	void close() {
+		const boost::system::error_code ec{boost::asio::error::connection_aborted};
+		for (auto& r : requests_) {
+			r->on_failed(ec);
+		}
+		requests_.clear();
+		answers_.clear();
+		nprpc::impl::Session::close();
+	}
 public:
+	virtual void timeout_action() final {}
+
+	virtual void send_receive(
+		flat_buffer& buffer,
+		uint32_t timeout_ms
+	) {
+		assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
+
+		if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
+			dump_message(buffer, false);
+		}
+
+		struct work_impl : work {
+			boost::beast::flat_buffer& buffer_;
+			Derived& this_;
+			uint32_t timeout_ms;
+
+			std::promise<boost::system::error_code> promise;
+
+			void operator()() noexcept override {
+				//this_.set_timeout(timeout_ms);
+				this_.ws().text(false); // binary mode only
+				this_.writing_ = true;
+				this_.ws().async_write(
+					buffer_.data(),
+					std::bind(
+						&websocket_session::on_write,
+						this_.shared_from_this(),
+						std::placeholders::_1,
+						std::placeholders::_2,
+						false));
+			}
+
+			void on_failed(const boost::system::error_code& ec) noexcept override {
+				promise.set_value(ec);
+			}
+
+			void on_executed(boost::beast::flat_buffer&& buffer) noexcept override {
+				buffer_ = std::move(buffer);
+				promise.set_value({});
+			}
+
+			std::future<boost::system::error_code> get_future() { return promise.get_future(); }
+
+			work_impl(Derived& _this_, boost::beast::flat_buffer& _buf, uint32_t _timeout_ms)
+				: this_(_this_)
+				, buffer_(_buf)
+				, timeout_ms(_timeout_ms)
+			{
+			}
+		};
+
+	
+		auto w = std::make_shared<work_impl>(derived(), buffer, timeout_ms);
+		auto f = w->get_future();
+		
+		add_request(w);
+
+		auto ec = f.get();
+
+		if (!ec) {
+			if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
+				dump_message(buffer, true);
+			}
+		} else {
+			throw nprpc::ExceptionCommFailure();
+		}
+	}
+
+	virtual void send_receive_async(
+		flat_buffer&& buffer,
+		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
+		uint32_t timeout_ms
+	) {
+		assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
+
+		struct work_impl : work {
+			boost::beast::flat_buffer buffer_;
+			Derived& this_;
+			uint32_t timeout_ms;
+			std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)> handler;
+
+			void operator()() noexcept override {
+				//this_.set_timeout(timeout_ms);
+				this_.ws().text(false); // binary mode only
+				this_.writing_ = true;
+				this_.ws().async_write(
+					buffer_.data(),
+					std::bind(
+						&websocket_session::on_write,
+						this_.shared_from_this(),
+						std::placeholders::_1,
+						std::placeholders::_2,
+						false));
+			}
+
+			void on_failed(const boost::system::error_code& ec) noexcept override {
+				handler(ec, buffer_);
+			}
+
+			void on_executed(boost::beast::flat_buffer&& buffer) noexcept override {
+				buffer_ = std::move(buffer);
+				handler(boost::system::error_code{}, buffer_);
+			}
+
+			work_impl(boost::beast::flat_buffer&& _buf,
+				Derived& _this_,
+				std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& _handler,
+				uint32_t _timeout_ms)
+				: buffer_(std::move(_buf))
+				, this_(_this_)
+				, timeout_ms(_timeout_ms)
+				, handler(std::move(_handler))
+			{
+			}
+		};
+
+		add_request(std::make_shared<work_impl>(std::move(buffer), derived(), std::move(completion_handler), timeout_ms));
+	}
+
 	// Start the asynchronous operation
 	template<class Body, class Allocator>
 	void run(http::request<Body, http::basic_fields<Allocator>> req) {
-		// std::cout << "upgrade: " << req.target() << std::endl;
-		/*
-		derived().ws().set_option(
-						websocket::stream_base::decorator(
-								[](http::response_header<> &hdr) {
-										hdr.set(
-												http::field::sec_websocket_protocol,
-												"binary");
-								}));
-		*/
-		// Accept the WebSocket upgrade request
 		g_orb->add_connection(derived().shared_from_this());
+		// Accept the WebSocket upgrade request
 		do_accept(std::move(req));
 	}
 
 	websocket_session(net::any_io_executor executor)
 		: Session(executor)
 	{
-	}
-
-	~websocket_session()
-	{
-		std::cerr << "~websocket_session()\n";
 	}
 };
 

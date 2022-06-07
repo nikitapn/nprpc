@@ -1,4 +1,4 @@
-import * as NPRPC from './index_internal'
+import * as NPRPC from './base'
 
 export type poa_idx_t = number/*u16*/;
 export type oid_t = bigint/*u64*/;

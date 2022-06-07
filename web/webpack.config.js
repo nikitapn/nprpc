@@ -6,6 +6,9 @@ module.exports = env => {
 	entry: './src/index.ts',
 	watch: is_debug,
 	mode: is_debug ? 'development' : 'production',
+  optimization: {
+    minimize: !is_debug,
+  },
   module: {
     rules: [
       {
@@ -25,5 +28,6 @@ module.exports = env => {
     umdNamedDefine: true,
     path: path.resolve(__dirname, 'dist'),
   },
+  
 }
 };

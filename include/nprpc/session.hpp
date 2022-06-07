@@ -17,9 +17,9 @@ protected:
 	Buffers rx_buffer_;
 	EndPoint remote_endpoint_;
 
-	boost::asio::deadline_timer inactive_timer_;
 	boost::asio::deadline_timer timeout_timer_;
-
+	boost::asio::deadline_timer inactive_timer_;
+	
 	boost::posix_time::time_duration timeout_ = boost::posix_time::milliseconds(1000);
 
 

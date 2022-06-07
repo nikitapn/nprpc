@@ -829,21 +829,17 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 	if (ifs->plist.empty()) {
 		oh << "  " << ifs->name << "(uint8_t interface_idx) : interface_idx_(interface_idx) {}\n";
 	} else {
-		oh <<
-			"  " << ifs->name << "(uint8_t interface_idx)\n"
-			"    : interface_idx_(interface_idx)\n"
-			;
+		oh <<"  " << ifs->name << "(uint8_t interface_idx)\n";
 
 		auto count_all = [](Ast_Interface_Decl* ifs_inherited, int& n) { ++n; };
 
 		int n = 1;
 		for (auto parent : ifs->plist) {
-			oh <<
-				"    , " << parent->name << "(interface_idx + " << n << ")\n"
-				;
+			oh << (n == 1 ? "    : " : "    , ") << parent->name << "(interface_idx + " << n << ")\n";
 			dfs_interface(std::bind(count_all, _1, std::ref(n)), parent);
 		}
-		oh <<
+
+		oh << "    , interface_idx_(interface_idx)\n"
 			"  {\n"
 			"  }\n"
 			;
@@ -911,9 +907,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 		oc << "  static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size() - 4);\n";
 
 		oc <<
-			"  ::nprpc::impl::g_orb->call(\n"
-			"    nprpc::EndPoint(this->_data().ip4, this->_data().port), buf, this->get_timeout()\n"
-			"  );\n"
+			"  ::nprpc::impl::g_orb->call(this->get_endpoint(), buf, this->get_timeout());\n"
 			"  auto std_reply = nprpc::impl::handle_standart_reply(buf);\n"
 			;
 
