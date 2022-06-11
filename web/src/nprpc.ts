@@ -13,7 +13,13 @@ import { sip4_to_u32, ip4tostr, MyPromise } from "./utils";
 //import { FlatBuffer } from "./flat_buffer";
 import {
 	impl, detail, oid_t, poa_idx_t,
-	ExceptionObjectNotExist, ExceptionUnknownFunctionIndex, ExceptionUnknownMessageId, ExceptionCommFailure, DebugLevel, ExceptionUnsecuredObject
+	DebugLevel, 
+	ExceptionObjectNotExist, 
+	ExceptionUnknownFunctionIndex, 
+	ExceptionUnknownMessageId, 
+	ExceptionCommFailure, 
+	ExceptionUnsecuredObject,
+	ExceptionBadAccess
 } from "./nprpc_base"
 
 const header_size = 16;
@@ -230,15 +236,13 @@ export class Rpc {
 			return value;
 		}
 
-		let info = JSON.parse(await x.text(), reviver) as HostInfo;
-	
+		let info = JSON.parse(await x.text(), reviver);
 		if (info.secured == undefined) info.secured = false;
 
-		let objects = info.objects;
-		for (let key in Object.keys(objects)) {
-			objects[key] = new ObjectProxy(objects[key]);
+		for (let key of Object.keys(info.objects)) {
+			info.objects[key] = new ObjectProxy(info.objects[key]);
 		}
-		
+
 		return info;
 	}
 
@@ -508,6 +512,8 @@ export const handle_standart_reply = (buf: FlatBuffer): number => {
 			throw new ExceptionUnknownFunctionIndex();
 		case impl.MessageId.Error_UnknownMessageId:
 			throw new ExceptionUnknownMessageId();
+			case impl.MessageId.Error_BadAccess:
+			throw new ExceptionBadAccess();
 		default:
 			return -1;
 	}

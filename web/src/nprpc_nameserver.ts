@@ -1,5 +1,8 @@
 import * as NPRPC from './index_internal'
 
+const u8enc = new TextEncoder();
+const u8dec = new TextDecoder();
+
 export class Nameserver extends NPRPC.ObjectProxy {
   public static get servant_t(): new() => _INameserver_Servant {
     return _INameserver_Servant;
@@ -121,17 +124,13 @@ export namespace Flat_nprpc_nameserver {
 export class nprpc_nameserver_M1_Direct extends NPRPC.Flat.Flat {
   public get _1() { return new NPRPC.detail.Flat_nprpc_base.ObjectId_Direct(this.buffer, this.offset + 0); }
   public get _2() {
-    let enc = new TextDecoder("utf-8");
-    let v_begin = this.offset + 40;
-    let data_offset = v_begin + this.buffer.dv.getUint32(v_begin, true);
-    let bn = this.buffer.array_buffer.slice(data_offset, data_offset + this.buffer.dv.getUint32(v_begin + 4, true));
-    return enc.decode(bn);
+    const offset = this.offset + 40;
+    const n = this.buffer.dv.getUint32(offset + 4, true);
+    return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
   }
   public set _2(str: string) {
-    let enc = new TextEncoder();
-    let bytes = enc.encode(str);
-    let len = bytes.length;
-    let offset = NPRPC.Flat._alloc(this.buffer, this.offset + 40, len, 1, 1);
+    const bytes = u8enc.encode(str);
+    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 40, bytes.length, 1, 1);
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
 }
@@ -143,17 +142,13 @@ export interface nprpc_nameserver_M2 {
 export namespace Flat_nprpc_nameserver {
 export class nprpc_nameserver_M2_Direct extends NPRPC.Flat.Flat {
   public get _1() {
-    let enc = new TextDecoder("utf-8");
-    let v_begin = this.offset + 0;
-    let data_offset = v_begin + this.buffer.dv.getUint32(v_begin, true);
-    let bn = this.buffer.array_buffer.slice(data_offset, data_offset + this.buffer.dv.getUint32(v_begin + 4, true));
-    return enc.decode(bn);
+    const offset = this.offset + 0;
+    const n = this.buffer.dv.getUint32(offset + 4, true);
+    return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
   }
   public set _1(str: string) {
-    let enc = new TextEncoder();
-    let bytes = enc.encode(str);
-    let len = bytes.length;
-    let offset = NPRPC.Flat._alloc(this.buffer, this.offset + 0, len, 1, 1);
+    const bytes = u8enc.encode(str);
+    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 0, bytes.length, 1, 1);
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
 }

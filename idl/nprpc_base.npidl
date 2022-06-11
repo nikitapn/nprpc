@@ -13,10 +13,10 @@ ExceptionTimeout : exception {}
 ExceptionObjectNotExist : exception {}
 ExceptionUnknownFunctionIndex : exception {}
 ExceptionUnknownMessageId : exception {}
-
 ExceptionUnsecuredObject : exception {
 	class_id: string;
 }
+ExceptionBadAccess : exception {}
 
 enum DebugLevel {
 	DebugLevel_Critical,
@@ -63,6 +63,7 @@ enum MessageId: u32 {
 	Error_CommFailure,
 	Error_UnknownFunctionIdx,
 	Error_UnknownMessageId,
+	Error_BadAccess,
 }
 
 enum MessageType: u32 {

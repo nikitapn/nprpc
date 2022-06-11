@@ -8,6 +8,12 @@ export class Flat {
 }
 
 export function _alloc(buffer: FlatBuffer, vector_offset: number, n: number, element_size: number, align: number): number {
+	if (n == 0) {
+		buffer.dv.setUint32(vector_offset, 0, true);
+		buffer.dv.setUint32(vector_offset + 4, 0, true);
+		return 0;
+	}
+
 	let rem = buffer.offset % align;
 	let offset = rem ? buffer.offset + (align - rem) : buffer.offset;
 	{

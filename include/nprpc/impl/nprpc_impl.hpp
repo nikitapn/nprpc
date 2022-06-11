@@ -20,7 +20,7 @@
 #include <deque>
 
 #include <nprpc/nprpc.hpp>
-#include <nprpc/session.hpp>
+#include <nprpc/impl/session.hpp>
 
 namespace nprpc::impl {
 
@@ -328,9 +328,9 @@ public:
 		return std::nullopt;
 	}
 
-	virtual ObjectId activate_object(ObjectServant* obj) override {
+	virtual ObjectId activate_object(ObjectServant* obj, const SessionContext* ctx) override {
 		obj->poa_ = this;
-		obj->activation_time_ = std::chrono::steady_clock::now();
+		obj->activation_time_ = std::chrono::system_clock::now();
 
 		ObjectId oid;
 		auto object_id_internal = object_map_.add(obj);
@@ -353,6 +353,10 @@ public:
 		if (pl_lifespan == Policy_Lifespan::Type::Transient) {
 			std::lock_guard<std::mutex> lk(g_orb->new_activated_objects_mut_);
 			g_orb->new_activated_objects_.push_back(obj);
+		}
+
+		if (ctx) {
+			obj->session_ctx_ = *ctx;
 		}
 
 		return oid;
@@ -381,7 +385,8 @@ inline void make_simple_answer(boost::beast::flat_buffer& buf, MessageId id) {
 	assert(id == MessageId::Success 
 		|| id == MessageId::Error_CommFailure 
 		|| id == MessageId::Error_ObjectNotExist 
-		|| id == MessageId::Error_UnknownMessageId);
+		|| id == MessageId::Error_UnknownMessageId
+		|| id == MessageId::Error_BadAccess);
 	buf.consume(buf.size());
 	auto mb = buf.prepare(sizeof(impl::Header));
 	static_cast<impl::Header*>(mb.data())->size = sizeof(impl::Header) - 4;
@@ -423,6 +428,8 @@ inline int handle_standart_reply(boost::beast::flat_buffer& buf) {
 		throw ExceptionUnknownFunctionIndex();
 	case MessageId::Error_UnknownMessageId:
 		throw ExceptionUnknownMessageId();
+	case MessageId::Error_BadAccess:
+		throw ExceptionBadAccess();
 	default:
 		return -1;
 	}

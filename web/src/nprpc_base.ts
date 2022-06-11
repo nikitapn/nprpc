@@ -1,5 +1,8 @@
 import * as NPRPC from './base'
 
+const u8enc = new TextEncoder();
+const u8dec = new TextDecoder();
+
 export type poa_idx_t = number/*u16*/;
 export type oid_t = bigint/*u64*/;
 export type ifs_idx_t = number/*u8*/;
@@ -63,19 +66,25 @@ export class ExceptionUnsecuredObject_Direct extends NPRPC.Flat.Flat {
   public get __ex_id() { return this.buffer.dv.getUint32(this.offset+0,true); }
   public set __ex_id(value: number) { this.buffer.dv.setUint32(this.offset+0,value,true); }
   public get class_id() {
-    let enc = new TextDecoder("utf-8");
-    let v_begin = this.offset + 4;
-    let data_offset = v_begin + this.buffer.dv.getUint32(v_begin, true);
-    let bn = this.buffer.array_buffer.slice(data_offset, data_offset + this.buffer.dv.getUint32(v_begin + 4, true));
-    return enc.decode(bn);
+    const offset = this.offset + 4;
+    const n = this.buffer.dv.getUint32(offset + 4, true);
+    return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
   }
   public set class_id(str: string) {
-    let enc = new TextEncoder();
-    let bytes = enc.encode(str);
-    let len = bytes.length;
-    let offset = NPRPC.Flat._alloc(this.buffer, this.offset + 4, len, 1, 1);
+    const bytes = u8enc.encode(str);
+    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 4, bytes.length, 1, 1);
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
+}
+} // namespace Flat 
+export class ExceptionBadAccess extends NPRPC.Exception {
+  constructor() { super("ExceptionBadAccess"); }
+}
+
+export namespace Flat_nprpc_base {
+export class ExceptionBadAccess_Direct extends NPRPC.Flat.Flat {
+  public get __ex_id() { return this.buffer.dv.getUint32(this.offset+0,true); }
+  public set __ex_id(value: number) { this.buffer.dv.setUint32(this.offset+0,value,true); }
 }
 } // namespace Flat 
 export const enum DebugLevel { //u32
@@ -130,31 +139,23 @@ export class ObjectId_Direct extends NPRPC.Flat.Flat {
   public get flags() { return this.buffer.dv.getUint32(this.offset+20,true); }
   public set flags(value: number) { this.buffer.dv.setUint32(this.offset+20,value,true); }
   public get class_id() {
-    let enc = new TextDecoder("utf-8");
-    let v_begin = this.offset + 24;
-    let data_offset = v_begin + this.buffer.dv.getUint32(v_begin, true);
-    let bn = this.buffer.array_buffer.slice(data_offset, data_offset + this.buffer.dv.getUint32(v_begin + 4, true));
-    return enc.decode(bn);
+    const offset = this.offset + 24;
+    const n = this.buffer.dv.getUint32(offset + 4, true);
+    return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
   }
   public set class_id(str: string) {
-    let enc = new TextEncoder();
-    let bytes = enc.encode(str);
-    let len = bytes.length;
-    let offset = NPRPC.Flat._alloc(this.buffer, this.offset + 24, len, 1, 1);
+    const bytes = u8enc.encode(str);
+    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 24, bytes.length, 1, 1);
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
   public get hostname() {
-    let enc = new TextDecoder("utf-8");
-    let v_begin = this.offset + 32;
-    let data_offset = v_begin + this.buffer.dv.getUint32(v_begin, true);
-    let bn = this.buffer.array_buffer.slice(data_offset, data_offset + this.buffer.dv.getUint32(v_begin + 4, true));
-    return enc.decode(bn);
+    const offset = this.offset + 32;
+    const n = this.buffer.dv.getUint32(offset + 4, true);
+    return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
   }
   public set hostname(str: string) {
-    let enc = new TextEncoder();
-    let bytes = enc.encode(str);
-    let len = bytes.length;
-    let offset = NPRPC.Flat._alloc(this.buffer, this.offset + 32, len, 1, 1);
+    const bytes = u8enc.encode(str);
+    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 32, bytes.length, 1, 1);
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
 }
@@ -173,7 +174,8 @@ export const enum MessageId { //u32
   Error_ObjectNotExist = 7,
   Error_CommFailure = 8,
   Error_UnknownFunctionIdx = 9,
-  Error_UnknownMessageId = 10
+  Error_UnknownMessageId = 10,
+  Error_BadAccess = 11
 }
 export const enum MessageType { //u32
   Request = 0,
@@ -257,6 +259,12 @@ function nprpc_base_throw_exception(buf: NPRPC.FlatBuffer): void {
     let ex_flat = new Flat_nprpc_base.ExceptionUnsecuredObject_Direct(buf, 16);
     let ex = new ExceptionUnsecuredObject();
   ex.class_id = ex_flat.class_id;
+    throw ex;
+  }
+  case 6:
+  {
+    let ex_flat = new Flat_nprpc_base.ExceptionBadAccess_Direct(buf, 16);
+    let ex = new ExceptionBadAccess();
     throw ex;
   }
   default:

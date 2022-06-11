@@ -190,6 +190,34 @@ public:
 };
 } // namespace flat
 
+class ExceptionBadAccess : public ::nprpc::Exception {
+public:
+  ExceptionBadAccess() : ::nprpc::Exception("ExceptionBadAccess") {} 
+};
+
+namespace flat {
+struct ExceptionBadAccess {
+  uint32_t __ex_id;
+};
+
+class ExceptionBadAccess_Direct {
+  boost::beast::flat_buffer& buffer_;
+  const size_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<ExceptionBadAccess*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const ExceptionBadAccess*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  void* __data() noexcept { return (void*)&base(); }
+  ExceptionBadAccess_Direct(boost::beast::flat_buffer& buffer, size_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& __ex_id() const noexcept { return base().__ex_id;}
+  uint32_t& __ex_id() noexcept { return base().__ex_id;}
+};
+} // namespace flat
+
 enum class DebugLevel : uint32_t {
   DebugLevel_Critical,
   DebugLevel_InactiveTimeout = 1,
@@ -309,7 +337,8 @@ enum class MessageId : uint32_t {
   Error_ObjectNotExist = 7,
   Error_CommFailure = 8,
   Error_UnknownFunctionIdx = 9,
-  Error_UnknownMessageId = 10
+  Error_UnknownMessageId = 10,
+  Error_BadAccess = 11
 };
 enum class MessageType : uint32_t {
   Request = 0,

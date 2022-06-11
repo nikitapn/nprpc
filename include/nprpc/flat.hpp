@@ -72,6 +72,9 @@ struct Span<char> : public TSpan<char> {
 	operator std::string_view() const noexcept {
 		return { this->first, this->size() };
 	}
+	operator std::string() const noexcept {
+		return std::string{ this->first, this->size() };
+	}
 };
 
 template<>

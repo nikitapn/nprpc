@@ -1,6 +1,6 @@
 #include "nprpc_nameserver.hpp"
 #include "nprpc_nameserver_m.hpp"
-#include <nprpc/nprpc_impl.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
 
 void nprpc_nameserver_throw_exception(boost::beast::flat_buffer& buf);
 

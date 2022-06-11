@@ -21,7 +21,7 @@
 #include <nprpc/object_ptr.hpp>
 #include <nprpc/utils.hpp>
 #include <nprpc/endpoint.hpp>
-
+#include <nprpc/session_context.h>
 #include <nprpc/serialization/serialization.h>
 
 namespace nprpc {
@@ -118,7 +118,7 @@ public:
 class NPRPC_API Poa {
 	poa_idx_t idx_;
 public:
-	virtual ObjectId activate_object(ObjectServant* obj) = 0;
+	virtual ObjectId activate_object(ObjectServant* obj, const SessionContext* ctx = nullptr) = 0;
 	virtual void deactivate_object(oid_t object_id) = 0;
 	poa_idx_t get_index() const noexcept { return idx_; }
 	Poa(poa_idx_t idx) : idx_{ idx } {}
@@ -135,7 +135,8 @@ class ObjectServant {
 	std::atomic_uint32_t ref_cnt_{ 0 };
 	std::atomic_uint32_t in_use_cnt_{ 0 };
 	std::atomic_bool to_delete_{false};
-	std::chrono::steady_clock::time_point activation_time_;
+	std::chrono::system_clock::time_point activation_time_;
+	std::optional<SessionContext> session_ctx_;
 public:
 	virtual std::string_view get_class() const noexcept = 0;
 	virtual void dispatch(Buffers& bufs, EndPoint remote_endpoint, bool from_parent, ReferenceList& ref_list) = 0;
@@ -148,6 +149,10 @@ public:
 	auto activation_time() const noexcept { return activation_time_; }
 	bool is_unused() const noexcept { return ref_cnt_.load() == 0; }
 	bool is_deleted() const noexcept { return to_delete_.load(); }
+	bool validate_session(SessionContext& ctx) const noexcept { 
+		return !session_ctx_.has_value() ||
+			session_ctx_.value() == ctx;
+	}
 	uint32_t release() noexcept;
 	virtual ~ObjectServant() = default;
 };

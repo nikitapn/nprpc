@@ -1,5 +1,6 @@
 // Copyright (c) 2021 nikitapnn1@gmail.com
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// Based on an example from boost.beast library.
 
 #include <algorithm>
 #include <cstdlib>
@@ -28,8 +29,8 @@
 #include <boost/optional.hpp>
 #include <openssl/sha.h>
 
-#include <nprpc/nprpc_impl.hpp>
-#include <nprpc/session.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/session.hpp>
 #include <nprpc/nprpc_base.hpp>
 
 namespace nprpc::impl {
@@ -325,6 +326,11 @@ class websocket_session
 						std::string(BOOST_BEAST_VERSION_STRING));
 				}));
 
+		websocket::permessage_deflate opt;
+		opt.client_enable = true;
+		opt.server_enable = true;
+		derived().ws().set_option(opt);
+
 		// Accept the websocket handshake
 		derived().ws().async_accept(
 			req,
@@ -447,8 +453,9 @@ class websocket_session
 	void add_request(std::shared_ptr<work> w) {
 		boost::asio::post(derived().ws().get_executor(), [w, this]() mutable {
 			requests_.push_back(std::move(w));
-			if (requests_.size() == 1 && answers_.empty() && !writing_) (*requests_.front())();
-			});
+			if (requests_.size() == 1 && answers_.empty() && !writing_) 
+				(*requests_.front())();
+		});
 	}
 protected:
 	void close() {
@@ -611,10 +618,8 @@ public:
 		: websocket_session<plain_websocket_session>(stream.get_executor())
 		, ws_(std::move(stream)) {
 		auto endpoint = ws().next_layer().socket().remote_endpoint();
-		remote_endpoint_.ip4 = endpoint.address().to_v4().to_uint();
-		remote_endpoint_.port = endpoint.port();
-
-		//std::cerr << "ip4: " << remote_endpoint_.ip4 << "port: " << remote_endpoint_.port << '\n';
+		ctx_.remote_endpoint.ip4 = endpoint.address().to_v4().to_uint();
+		ctx_.remote_endpoint.port = endpoint.port();
 	}
 
 	// Called by the base class
@@ -636,8 +641,8 @@ public:
 		: websocket_session<ssl_websocket_session>(stream.get_executor())
 		, ws_(std::move(stream)) {
 		auto endpoint = ws().next_layer().next_layer().socket().remote_endpoint();
-		remote_endpoint_.ip4 = endpoint.address().to_v4().to_uint();
-		remote_endpoint_.port = endpoint.port();
+		ctx_.remote_endpoint.ip4 = endpoint.address().to_v4().to_uint();
+		ctx_.remote_endpoint.port = endpoint.port();
 	}
 
 	// Called by the base class

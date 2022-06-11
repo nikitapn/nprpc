@@ -1,7 +1,7 @@
 // Copyright (c) 2021 nikitapnn1@gmail.com
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 
-#include <nprpc/nprpc_impl.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/asio.hpp>
 #include <iostream>
 #include <future>
@@ -135,7 +135,7 @@ void SocketConnection::reconnect() {
 	socket_ = std::move(net::ip::tcp::socket(socket_.get_executor()));
 
 	boost::system::error_code ec;
-	socket_.connect(tcp::endpoint(net::ip::address_v4(this->remote_endpoint_.ip4), this->remote_endpoint_.port), ec);
+	socket_.connect(tcp::endpoint(net::ip::address_v4(this->ctx_.remote_endpoint.ip4), this->ctx_.remote_endpoint.port), ec);
 
 	if (ec) {
 		close();
@@ -222,10 +222,10 @@ SocketConnection::SocketConnection(const EndPoint& endpoint, boost::asio::ip::tc
 	: Session(socket.get_executor())
 	, socket_{std::move(socket)}
 {
-	remote_endpoint_ = endpoint;
+	ctx_.remote_endpoint = endpoint;
 	timeout_timer_.expires_at(boost::posix_time::pos_infin);
 	boost::system::error_code ec;
-	socket_.connect(tcp::endpoint(net::ip::address_v4(remote_endpoint_.ip4), remote_endpoint_.port), ec);
+	socket_.connect(tcp::endpoint(net::ip::address_v4(ctx_.remote_endpoint.ip4), ctx_.remote_endpoint.port), ec);
 	if (ec) throw nprpc::Exception(("Could not connect to the socket: " + ec.message()).c_str());
 	check_timeout();
 }

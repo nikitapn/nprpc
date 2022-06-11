@@ -1237,7 +1237,7 @@ Builder_Cpp::Builder_Cpp(Context& ctx, std::filesystem::path file_path,
 	oc <<
 		"#include \"" << ctx_.base_name << ".hpp\"\n"
 		"#include \"" << ctx_.base_name << "_m.hpp\"\n"
-		"#include <nprpc/nprpc_impl.hpp>\n\n"
+		"#include <nprpc/impl/nprpc_impl.hpp>\n\n"
 		"void " << ctx_.base_name << "_throw_exception(boost::beast::flat_buffer& buf);\n\n"
 		;
 }
