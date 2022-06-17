@@ -41,8 +41,6 @@ namespace beast = boost::beast;
 namespace http = boost::beast::http;
 namespace websocket = boost::beast::websocket;
 
-using beast::flat_buffer;
-
 using tcp = net::ip::tcp;
 using error_code = boost::system::error_code;
 
@@ -401,7 +399,7 @@ class websocket_session
 							true));
 				}
 				virtual void on_failed(const boost::system::error_code& ec) noexcept {}
-				virtual void on_executed(boost::beast::flat_buffer&&) noexcept {}
+				virtual void on_executed(flat_buffer&&) noexcept {}
 			};
 
 			answers_.emplace_back(std::make_unique<work_send_reply>(derived(), std::move(rx_buffer_(true))));
@@ -481,7 +479,7 @@ public:
 		}
 
 		struct work_impl : work {
-			boost::beast::flat_buffer& buffer_;
+			flat_buffer& buffer_;
 			Derived& this_;
 			uint32_t timeout_ms;
 
@@ -505,14 +503,14 @@ public:
 				promise.set_value(ec);
 			}
 
-			void on_executed(boost::beast::flat_buffer&& buffer) noexcept override {
+			void on_executed(flat_buffer&& buffer) noexcept override {
 				buffer_ = std::move(buffer);
 				promise.set_value({});
 			}
 
 			std::future<boost::system::error_code> get_future() { return promise.get_future(); }
 
-			work_impl(Derived& _this_, boost::beast::flat_buffer& _buf, uint32_t _timeout_ms)
+			work_impl(Derived& _this_, flat_buffer& _buf, uint32_t _timeout_ms)
 				: this_(_this_)
 				, buffer_(_buf)
 				, timeout_ms(_timeout_ms)
@@ -545,10 +543,10 @@ public:
 		assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
 		struct work_impl : work {
-			boost::beast::flat_buffer buffer_;
+			flat_buffer buffer_;
 			Derived& this_;
 			uint32_t timeout_ms;
-			std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)> handler;
+			std::function<void(const boost::system::error_code&, flat_buffer&)> handler;
 
 			void operator()() noexcept override {
 				//this_.set_timeout(timeout_ms);
@@ -568,14 +566,14 @@ public:
 				handler(ec, buffer_);
 			}
 
-			void on_executed(boost::beast::flat_buffer&& buffer) noexcept override {
+			void on_executed(flat_buffer&& buffer) noexcept override {
 				buffer_ = std::move(buffer);
 				handler(boost::system::error_code{}, buffer_);
 			}
 
-			work_impl(boost::beast::flat_buffer&& _buf,
+			work_impl(flat_buffer&& _buf,
 				Derived& _this_,
-				std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& _handler,
+				std::function<void(const boost::system::error_code&, flat_buffer&)>&& _handler,
 				uint32_t _timeout_ms)
 				: buffer_(std::move(_buf))
 				, this_(_this_)

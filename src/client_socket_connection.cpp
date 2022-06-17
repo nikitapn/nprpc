@@ -8,7 +8,7 @@
 
 namespace nprpc::impl {
 
-void SocketConnection::send_receive(boost::beast::flat_buffer& buffer, uint32_t timeout_ms) {
+void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
 	assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
 	if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
@@ -16,7 +16,7 @@ void SocketConnection::send_receive(boost::beast::flat_buffer& buffer, uint32_t 
 	}
 
 	struct work_impl : work {
-		boost::beast::flat_buffer& buf;
+		flat_buffer& buf;
 		SocketConnection& this_;
 		uint32_t timeout_ms;
 
@@ -43,10 +43,10 @@ void SocketConnection::send_receive(boost::beast::flat_buffer& buffer, uint32_t 
 			promise.set_value({});
 		}
 
-		boost::beast::flat_buffer& buffer() noexcept override { return buf; };
+		flat_buffer& buffer() noexcept override { return buf; };
 		std::future<boost::system::error_code> get_future() { return promise.get_future(); }
 
-		work_impl(boost::beast::flat_buffer& _buf, SocketConnection& _this_, uint32_t _timeout_ms)
+		work_impl(flat_buffer& _buf, SocketConnection& _this_, uint32_t _timeout_ms)
 			: buf(_buf)
 			, this_(_this_)
 			, timeout_ms(_timeout_ms)
@@ -81,17 +81,17 @@ void SocketConnection::send_receive(boost::beast::flat_buffer& buffer, uint32_t 
 	}
 }
 
-void SocketConnection::send_receive_async(boost::beast::flat_buffer&& buffer,
-	std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler,
+void SocketConnection::send_receive_async(flat_buffer&& buffer,
+	std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
 	uint32_t timeout_ms) 
 {
 	assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
 	struct work_impl : work {
-		boost::beast::flat_buffer buf;
+		flat_buffer buf;
 		SocketConnection& this_;
 		uint32_t timeout_ms;
-		std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)> handler;
+		std::function<void(const boost::system::error_code&, flat_buffer&)> handler;
 		
 		void operator()() noexcept override {
 			this_.set_timeout(timeout_ms);
@@ -114,11 +114,11 @@ void SocketConnection::send_receive_async(boost::beast::flat_buffer&& buffer,
 			handler(boost::system::error_code{}, buf);
 		}
 
-		boost::beast::flat_buffer& buffer() noexcept override { return buf; };
+		flat_buffer& buffer() noexcept override { return buf; };
 
-		work_impl(boost::beast::flat_buffer&& _buf, 
+		work_impl(flat_buffer&& _buf, 
 			SocketConnection& _this_, 
-			std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& _handler,
+			std::function<void(const boost::system::error_code&, flat_buffer&)>&& _handler,
 			uint32_t _timeout_ms)
 			: buf(std::move(_buf))
 			, this_(_this_)

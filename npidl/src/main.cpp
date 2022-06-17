@@ -119,7 +119,7 @@ class Lexer {
 		switch (c) {
 		case ' ': case '\0': case '\n': case '\t':
 		case '{': case '}': case '<': case '>': case '[': case ']': case '(': case ')':
-		case ':': case ',': case ';': case '/': case '=':
+		case ':': case ',': case ';': case '/': case '=': case '?':
 			return true;
 		default:
 			return false;
@@ -211,8 +211,6 @@ class Lexer {
 			{ "vector"sv, TokenId::Vector},
 			{ "string"sv, TokenId::String},
 			{ "flat"sv, TokenId::Flat},
-			{ "message"sv, TokenId::Message},
-			{ "of"sv, TokenId::Of},
 			{ "namespace"sv, TokenId::Namespace},
 			{ "interface"sv, TokenId::Interface},
 			{ "object"sv, TokenId::Object},
@@ -224,8 +222,6 @@ class Lexer {
 			{ "exception"sv, TokenId::Exception },
 			{ "raises"sv, TokenId::Raises },
 			{ "direct"sv, TokenId::OutDirect },
-			{ "class"sv, TokenId::Class },
-			{ "extends"sv, TokenId::Extends },
 			{ "helper"sv, TokenId::Helper }
 		};
 
@@ -255,18 +251,11 @@ public:
 				return Token{ TokenId::DoubleColon };
 			}
 			return Token{ TokenId::Colon };
-		case ';': next(); return Token{ TokenId::Semicolon };
-		case '{': next(); return Token{ TokenId::BracketOpen };
-		case '}': next(); return Token{ TokenId::BracketClose };
-		case '#': next(); return Token{ TokenId::Hash };
-		case '<': next(); return Token{ TokenId::Less };
-		case '>': next(); return Token{ TokenId::Greater };
-		case '[': next(); return Token{ TokenId::SquareBracketOpen };
-		case ']': next(); return Token{ TokenId::SquareBracketClose };
-		case '(': next(); return Token{ TokenId::RoundBracketOpen };
-		case ')': next(); return Token{ TokenId::RoundBracketClose };
-		case ',': next(); return Token{ TokenId::Comma };
-		case '=': next(); return Token{ TokenId::Assignment };
+
+#define TOKEN_FUNC(x, y) case y: next(); return Token{ TokenId::x };
+			ONE_CHAR_TOKENS()
+#undef TOKEN_FUNC
+
 		case '/':
 			next();
 			if (cur() == '/') {
@@ -431,6 +420,20 @@ class Parser {
 		tokens_.clear();
 	}
 
+	template<class MemFn, typename... Args>
+	bool check(MemFn Pm, Args&&... args) {
+		size_t saved = tokens_looked_;
+		if (std::invoke(Pm, this, std::forward<Args>(args)...)) return true;
+		tokens_looked_ = saved;
+		return false;
+	}
+
+	template<class MemFn, typename... Args>
+	bool maybe(bool& result, MemFn Pm, Args&&... args) {
+		result = check(Pm, std::forward<Args>(args)...);
+		return true;
+	}
+
 	void throw_error(const char* msg) {
 		throw parser_error(lex_.line(), lex_.col(), msg);
 	}
@@ -478,14 +481,6 @@ class Parser {
 			}
 			return Ast_Number{ i64, NumberFormat::Decimal };
 		}
-	}
-
-	template<typename T, typename... Args>
-	bool check(T f, Args&&... args) {
-		size_t saved = tokens_looked_;
-		if (std::mem_fn(f)(this, std::forward<Args>(args)...)) return true;
-		tokens_looked_ = saved;
-		return false;
 	}
 
 	bool array_decl(Ast_Type_Decl*& type) {
@@ -602,26 +597,27 @@ class Parser {
 	bool field_decl(Ast_Field_Decl*& field) {
 		Token field_name;
 		Ast_Type_Decl* type;
+		bool optional;
 
 		if (!(
-			(field_name = peek()) == TokenId::Name &&
-			peek() == TokenId::Colon &&
-			check(&Parser::type_decl, std::ref(type)))) {
+			(field_name = peek()) == TokenId::Name && maybe(optional, &Parser::one, TokenId::Optional) &&
+			peek() == TokenId::Colon && check(&Parser::type_decl, std::ref(type))
+			)) {
 			return false;
 		}
 
 		field = new Ast_Field_Decl();
-
 		field->name = std::move(field_name.name);
-		field->type = type;
+		field->type = optional ? new Ast_Optional_Decl(type) : type;
 
 		return true;
 	}
 
 	bool arg_decl(Ast_Function_Argument& arg) {
 		Token arg_name;
+		bool optional;
 
-		if (!((arg_name = peek()) == TokenId::Name && peek() == TokenId::Colon)) return false;
+		if (!((arg_name = peek()) == TokenId::Name && maybe(optional, &Parser::one, TokenId::Optional) && peek() == TokenId::Colon)) return false;
 
 		if (check(&Parser::one, TokenId::In)) arg.modifier = ArgumentModifier::In;
 		else if (check(&Parser::one, TokenId::Out)) arg.modifier = ArgumentModifier::Out;
@@ -633,9 +629,13 @@ class Parser {
 			arg.direct = true;
 		}
 
-		if (!check(&Parser::type_decl, std::ref(arg.type))) return false;
+
+		Ast_Type_Decl* type;
+
+		if (!check(&Parser::type_decl, std::ref(type))) return false;
 
 		arg.name = arg_name.name;
+		arg.type = optional ? new Ast_Optional_Decl(type) : type;
 
 		return true;
 	}
@@ -851,14 +851,7 @@ class Parser {
 		return true;
 	}
 
-	bool class_decl() {
-		if (peek() != TokenId::Class) return false;
-		flush();
 
-		auto ifs = new Ast_Interface_Decl();
-		ifs->name = match(TokenId::Name).name;
-
-	}
 
 	bool one(TokenId id) {
 		if (peek() == id) { flush(); return true; }
@@ -868,44 +861,6 @@ class Parser {
 	bool eof() {
 		if (peek() == TokenId::Eof) { flush(); return (done_ = true); }
 		return false;
-	}
-
-	bool message_descriptor_decl(std::uint32_t& message_id_last) {
-		Token t_name;
-
-		if (!(
-			(t_name = peek()) == TokenId::Name &&
-			peek() == TokenId::Colon &&
-			peek() == TokenId::Message &&
-			peek() == TokenId::Of)) {
-			return false;
-		}
-
-		auto m = new Ast_MessageDescriptor_Decl;
-		m->message_id = message_id_last++;
-		m->name = t_name.name;
-
-		flush();
-
-		auto s_name = match(TokenId::Name).name;
-		auto type = ctx_.nm_cur()->find_type(s_name, true);
-
-		if (!type) {
-			throw_error("Unknown type '" + s_name + "'");
-		}
-
-		if (type->id != FieldType::Struct) {
-			throw_error("Error: type of message is not a flat");
-		}
-
-		m->s = static_cast<Ast_Struct_Decl*>(type);
-
-		match(';');
-
-		//builder_.emit_msg_class(m);
-		//ctx_.decl_messages.push_back(m);
-
-		return true;
 	}
 
 	bool using_decl() {
@@ -1015,9 +970,7 @@ class Parser {
 			check(&Parser::interface_decl) ||
 			check(&Parser::struct_decl) ||
 			check(&Parser::enum_decl) ||
-			check(&Parser::message_descriptor_decl, std::ref(ctx_.message_id_last)) ||
 			check(&Parser::using_decl) ||
-			check(&Parser::class_decl) ||
 			check(&Parser::one, TokenId::Semicolon)
 			);
 	}
@@ -1081,7 +1034,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	try {
-		//input_file = std::filesystem::path("c:\\projects\\cpp\\npk-calculator\\server\\idl\\npkcalc.npidl");
+		//input_file = std::filesystem::path("c:\\projects\\cpp\\nscalc\\server\\idl\\npkcalc.npidl");
 
 		Context ctx(input_file);
 

@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <atomic>
 #include <chrono>
+#include <optional>
 
 #include <boost/asio/io_context.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
@@ -172,10 +173,13 @@ public:
 
 	NPRPC_API uint32_t add_ref();
 	NPRPC_API uint32_t release();
+	
 	uint32_t set_timeout(uint32_t timeout_ms) noexcept { 
 		return boost::exchange(timeout_ms_, timeout_ms); 
 	}
+	
 	uint32_t get_timeout() const noexcept { return timeout_ms_; }
+	
 	bool is_web_origin() const noexcept { 
 		return this->_data().flags & (1 << static_cast<int>(detail::ObjectFlag::WebObject)) ? true : false; 
 	}
@@ -192,7 +196,6 @@ protected:
 class NPRPC_API Rpc {
 public:
 	virtual Poa* create_poa(uint32_t objects_max, std::initializer_list<Policy*> policy_list = {}) = 0;
-	virtual void start() = 0;
 	virtual void destroy() = 0;
 	virtual ObjectPtr<Nameserver> get_nameserver(std::string_view nameserver_ip) = 0;
 	virtual ~Rpc() = default;

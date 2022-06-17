@@ -29,12 +29,12 @@ protected:
 	virtual void timeout_action() = 0;
 public:
 	virtual void send_receive(
-		boost::beast::flat_buffer& buffer,
+		flat_buffer& buffer,
 		uint32_t timeout_ms) = 0;
 
 	virtual void send_receive_async(
-		boost::beast::flat_buffer&& buffer,
-		std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler,
+		flat_buffer&& buffer,
+		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
 		uint32_t timeout_ms) = 0;
 
 	void set_timeout(uint32_t timeout_ms) {

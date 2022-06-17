@@ -51,9 +51,6 @@
     <ClInclude Include="include\nprpc\exception.hpp">
       <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="include\nprpc\nprpc_nameserver_m.hpp">
-      <Filter>include</Filter>
-    </ClInclude>
     <ClInclude Include="include\nprpc\utils.hpp">
       <Filter>include</Filter>
     </ClInclude>

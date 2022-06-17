@@ -13,20 +13,27 @@
 constexpr int fundamental_type_first = 256;
 constexpr int fundamental_type_last = fundamental_type_first + 16;
 
+#define ONE_CHAR_TOKENS() \
+	TOKEN_FUNC(Hash, '#') \
+	TOKEN_FUNC(RoundBracketOpen, '(') \
+	TOKEN_FUNC(RoundBracketClose, ')') \
+	TOKEN_FUNC(Comma, ',') \
+	TOKEN_FUNC(Semicolon, ';') \
+	TOKEN_FUNC(Assignment, '=') \
+	TOKEN_FUNC(Optional, '?') \
+	TOKEN_FUNC(Less, '<') \
+	TOKEN_FUNC(Greater, '>') \
+	TOKEN_FUNC(SquareBracketOpen, '[') \
+	TOKEN_FUNC(SquareBracketClose, ']') \
+	TOKEN_FUNC(BracketOpen, '{') \
+	TOKEN_FUNC(BracketClose, '}')
+
 enum class TokenId {
-	Hash = '#',
-	RoundBracketOpen = '(',
-	RoundBracketClose = ')',
-	Comma = ',',
 	Colon = ':',
-	Semicolon = ';',
-	Less = '<',
-	Assignment = '=',
-	Greater = '>',
-	SquareBracketOpen = '[',
-	SquareBracketClose = ']',
-	BracketOpen = '{',
-	BracketClose = '}',
+
+#define TOKEN_FUNC(x, y) x = y,
+	ONE_CHAR_TOKENS()
+#undef TOKEN_FUNC
 
 	Boolean = fundamental_type_first,
 	Int8,
@@ -48,8 +55,6 @@ enum class TokenId {
 	Exception,
 	Eof,
 	DoubleColon,
-	Message,
-	Of,
 	Namespace,
 	Interface,
 	Object,
@@ -60,8 +65,6 @@ enum class TokenId {
 	Using,
 	Raises,
 	OutDirect,
-	Class,
-	Extends,
 	Helper,
 };
 
@@ -97,13 +100,12 @@ enum class FieldType {
 	Vector,
 	String,
 	Struct,
+	Optional,
 	Void,
 	Object,
 	Interface,
 	Alias,
 	Enum,
-	Message,
-	Class,
 };
 
 enum class NumberFormat { Decimal, Hex, Scientific };
@@ -184,6 +186,8 @@ struct Ast_Fundamental_Type : Ast_Type_Decl {
 struct Ast_Wrap_Type : Ast_Type_Decl {
 	Ast_Type_Decl* type;
 	Ast_Wrap_Type(Ast_Type_Decl* _type) : type(_type) {}
+
+	Ast_Type_Decl* real_type();
 };
 
 struct Ast_Array_Decl : Ast_Wrap_Type {
@@ -240,17 +244,6 @@ struct Ast_Interface_Decl : Ast_Type_Decl {
 	}
 };
 
-
-struct Ast_Class_Decl : Ast_Type_Decl {
-	Ast_Class_Decl* parent = nullptr;
-	std::string name;
-	
-
-	Ast_Class_Decl() {
-		id = FieldType::Class;
-	}
-};
-
 struct Ast_Enum_Decl : Ast_Fundamental_Type {
 	std::string name;
 	Namespace* nm;
@@ -270,6 +263,10 @@ struct Ast_Field_Decl {
 	bool input_function_argument;
 	std::string_view function_name;
 	std::string_view function_argument_name;
+	
+	bool is_optional() const noexcept {
+		return type->id == FieldType::Optional;
+	}
 };
 
 struct Ast_Struct_Decl : Ast_Type_Decl {
@@ -290,15 +287,11 @@ struct Ast_Struct_Decl : Ast_Type_Decl {
 	}
 };
 
-struct Ast_MessageDescriptor_Decl : Ast_Type_Decl {
-	std::uint32_t message_id;
-	std::string name;
-	Ast_Struct_Decl* s;
-
-//	bool is_flat() const noexcept override { return s->is_flat(); }
-
-	Ast_MessageDescriptor_Decl() {
-		id = FieldType::Message;
+struct Ast_Optional_Decl : Ast_Wrap_Type {
+	Ast_Optional_Decl(Ast_Type_Decl* _type)
+		: Ast_Wrap_Type(_type)
+	{
+		id = FieldType::Optional;
 	}
 };
 
@@ -369,6 +362,18 @@ constexpr auto calias(const Ast_Type_Decl* type) noexcept {
 constexpr auto cifs(Ast_Type_Decl* type) noexcept {
 	assert(type->id == FieldType::Interface);
 	return static_cast<Ast_Interface_Decl*>(type);
+}
+
+constexpr auto copt(Ast_Type_Decl* type) noexcept {
+	assert(type->id == FieldType::Optional);
+	return static_cast<Ast_Optional_Decl*>(type);
+}
+
+
+inline Ast_Type_Decl* Ast_Wrap_Type::real_type() {
+	auto wt = type;
+	if (wt->id == FieldType::Alias) wt = calias(wt)->get_real_type();
+	return wt;
 }
 
 enum class ArgumentModifier { In, Out };
@@ -500,7 +505,6 @@ public:
 	int m_struct_n_ = 0;
 	std::vector<Ast_Struct_Decl*> exceptions;
 	std::vector<Ast_Interface_Decl*> interfaces;
-	uint32_t message_id_last = 0;
 
 	uint32_t next_exception_id () noexcept { return ++exception_id_last; }
 

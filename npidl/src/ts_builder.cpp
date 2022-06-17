@@ -299,10 +299,10 @@ void Builder_Typescript::emit_accessors(const std::string& flat_name, Ast_Field_
 		for (;;) {
 			if (utype->id == FieldType::Fundamental || utype->id == FieldType::Enum) {
 				out << 
-					"  public " << f->name << "_vd() { return new NPRPC.Flat.Vector_Direct1_" << toktype << cft(utype)->token_id <<
+					"  public " << f->name << "_d() { return new NPRPC.Flat.Vector_Direct1_" << toktype << cft(utype)->token_id <<
 				 "(this.buffer, this.offset + " << vec_offset << "); }\n";
 			} else if (utype->id == FieldType::Struct) {
-				out << "  public " << f->name << "_vd() { return new NPRPC.Flat.Vector_Direct2<"; emit_flat_type(utype, out); out << "_Direct>"
+				out << "  public " << f->name << "_d() { return new NPRPC.Flat.Vector_Direct2<"; emit_flat_type(utype, out); out << "_Direct>"
 					"(this.buffer, this.offset + " << vec_offset << ", " << ut_size << ", "; emit_flat_type(utype, out); out << "_Direct); }\n";
 			} else if (utype->id == FieldType::Alias) {
 				utype = calias(utype)->get_real_type();
@@ -326,10 +326,10 @@ void Builder_Typescript::emit_accessors(const std::string& flat_name, Ast_Field_
 		for (;;) {
 			if (utype->id == FieldType::Fundamental || utype->id == FieldType::Enum) {
 				out << 
-					"  public " << f->name << "_vd() { return new NPRPC.Flat.Array_Direct1_" << toktype << cft(utype)->token_id <<
+					"  public " << f->name << "_d() { return new NPRPC.Flat.Array_Direct1_" << toktype << cft(utype)->token_id <<
 				 "(this.buffer, this.offset + " << vec_offset << ", " << arr_length <<"); }\n";
 			} else if (utype->id == FieldType::Struct) {
-				out << "  public " << f->name << "_vd() { return new NPRPC.Flat.Array_Direct2<"; emit_flat_type(utype, out); out << "_Direct>"
+				out << "  public " << f->name << "_d() { return new NPRPC.Flat.Array_Direct2<"; emit_flat_type(utype, out); out << "_Direct>"
 					"(this.buffer, this.offset + " << vec_offset << ", " << ut_size << ", "; emit_flat_type(utype, out); out << "_Direct" << ", " << arr_length << "); }\n";
 			} else if (utype->id == FieldType::Alias) {
 				utype = calias(utype)->get_real_type();
@@ -553,11 +553,11 @@ void Builder_Typescript::assign_from_ts_type(Ast_Type_Decl* type, std::string op
 		auto utype = cwt(type);
 		if (is_fundamental(utype)) {
 			auto [size, align] = get_type_size_align(utype);
-			out << "  " << op1 << "_vd().copy_from_ts_array(" << op2 << "); \n";
+			out << "  " << op1 << "_d().copy_from_ts_array(" << op2 << "); \n";
 		} else {
 			out <<
 				"  {\n"
-				"  let vv = " << op1 << "_vd(), index = 0;\n"
+				"  let vv = " << op1 << "_d(), index = 0;\n"
 				"  for (let e of vv) {\n"
 				"    "; assign_from_ts_type(utype, "    e", op2 + "[index]", true); out <<
 				"    ++index;\n"
@@ -614,14 +614,14 @@ void Builder_Typescript::assign_from_flat_type(Ast_Type_Decl* type, std::string 
 
 		if (top_object && direct) {
 			// expecting out passed by reference
-			out << "  " << op1 << ".value = " << op2 << "_vd();\n";
+			out << "  " << op1 << ".value = " << op2 << "_d();\n";
 			break;
 		}
 
 		auto idxs = "index_" + std::to_string(_idx++);
 		out <<
 			"  {\n"
-			"  let vv = " << op2 << "_vd(), " << idxs << " = 0;\n";
+			"  let vv = " << op2 << "_d(), " << idxs << " = 0;\n";
 		if (top_object) out << "  " << op1 << ".length = vv.elements_size;\n";
 		else out << "  (" << op1 << " as Array<any>) = new Array<any>(vv.elements_size)\n";
 		out <<
@@ -757,7 +757,7 @@ void Builder_Typescript::emit_enum(Ast_Enum_Decl* e) {
 	for (size_t i = 0; i < e->items.size(); ++i) {
 		out << "  " << e->items[i].first;
 		auto const n = e->items[i].second;
-		if (n.second || ix != n.second) { // explicit
+		if (n.second || ix != n.first) { // explicit
 			out << " = " << n.first;
 			ix = n.first.decimal() + 1;
 		} else {
@@ -1056,7 +1056,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 				if (!fn->out_s->flat) {
 					out << "oa._" << ++out_ix;
 					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::Array || arg->type->id == FieldType::String) {
-						out << "_vd";
+						out << "_d";
 					}
 				} else {
 					out << "_out_" << ++out_ix;
@@ -1066,7 +1066,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 					out << "NPRPC.create_object_from_flat(ia._" << ++in_ix << ", remote_endpoint.ip4)";
 				} else {
 					out << "ia._" << ++in_ix;
-					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::Array) out << "_vd()";
+					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::Array) out << "_d()";
 				}
 			}
 			if (++idx != fn->args.size()) out << ", ";

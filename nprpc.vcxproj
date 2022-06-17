@@ -49,7 +49,6 @@
     <ClInclude Include="include\nprpc\nprpc.hpp" />
     <ClInclude Include="include\nprpc\nprpc_base.hpp" />
     <ClInclude Include="include\nprpc\nprpc_nameserver.hpp" />
-    <ClInclude Include="include\nprpc\nprpc_nameserver_m.hpp" />
     <ClInclude Include="include\nprpc\object_ptr.hpp" />
     <ClInclude Include="include\nprpc\serialization\iarchive.h" />
     <ClInclude Include="include\nprpc\serialization\nvp.hpp" />

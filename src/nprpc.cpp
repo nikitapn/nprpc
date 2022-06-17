@@ -3,7 +3,7 @@
 
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/nprpc_nameserver.hpp>
-
+#include <boost/bind.hpp>
 
 using namespace nprpc;
 
@@ -12,7 +12,9 @@ namespace nprpc::impl {
 extern void init_socket(boost::asio::io_context& ioc);
 extern void init_web_socket(boost::asio::io_context& ioc);
 
-void RpcImpl::check_unclaimed_objects() {
+void RpcImpl::check_unclaimed_objects(boost::system::error_code ec) {
+	if (ec) return;
+
 	if (timer1_.expires_at() <= boost::asio::deadline_timer::traits_type::now()) {
 		std::lock_guard<std::mutex> lk(new_activated_objects_mut_);
 		auto now = std::chrono::system_clock::now();
@@ -28,26 +30,24 @@ void RpcImpl::check_unclaimed_objects() {
 			}
 		}
 	}
+
 	timer1_.expires_from_now(boost::posix_time::milliseconds(2500));
-	timer1_.async_wait(std::bind(&RpcImpl::check_unclaimed_objects, this));
+	timer1_.async_wait(boost::bind(&RpcImpl::check_unclaimed_objects, this, std::placeholders::_1));
 }
 
 Config g_cfg;
 NPRPC_API RpcImpl* g_orb;
 
-void RpcImpl::start() {
-	init_socket(ioc_);
-	init_web_socket(ioc_);
-}
-
 void RpcImpl::destroy() {
+	timer1_.cancel();
 	delete this;
 	g_orb = nullptr;
 }
 
 Poa* RpcImpl::create_poa(uint32_t objects_max, std::initializer_list<Policy*> policy_list) {
-	auto poa = new PoaImpl(objects_max, poa_size_);
-	poas_[poa_size_++] = poa;
+	auto idx = poa_size_.fetch_add(1);
+	auto poa = new PoaImpl(objects_max, idx);
+	poas_[idx] = std::unique_ptr<PoaImpl>(poa);
 	for (auto policy : policy_list) {
 		policy->apply_policy(poa);
 	}
@@ -80,13 +80,13 @@ NPRPC_API std::shared_ptr<Session> RpcImpl::get_session(const EndPoint& endpoint
 
 NPRPC_API void RpcImpl::call(
 	const EndPoint& endpoint,
-	boost::beast::flat_buffer& buffer,
+	flat_buffer& buffer,
 	uint32_t timeout_ms) {
 	get_session(endpoint)->send_receive(buffer, timeout_ms);
 }
 
-NPRPC_API void RpcImpl::call_async(const EndPoint& endpoint, boost::beast::flat_buffer&& buffer,
-	std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler, uint32_t timeout_ms) {
+NPRPC_API void RpcImpl::call_async(const EndPoint& endpoint, flat_buffer&& buffer,
+	std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler, uint32_t timeout_ms) {
 	get_session(endpoint)->send_receive_async(std::move(buffer), std::move(completion_handler), timeout_ms);
 }
 
@@ -132,7 +132,10 @@ RpcImpl::RpcImpl(boost::asio::io_context& ioc)
 	, timer1_{ioc}
 {
 	timer1_.expires_from_now(boost::posix_time::milliseconds(2500));
-	check_unclaimed_objects();
+	check_unclaimed_objects(boost::system::error_code{});
+
+	init_socket(ioc_);
+	init_web_socket(ioc_);
 }
 
 class ReferenceListImpl {
@@ -204,7 +207,7 @@ NPRPC_API uint32_t Object::add_ref() {
 	auto const cnt = local_ref_cnt_.fetch_add(1, std::memory_order_release);
 	if (policy_lifespan() == Policy_Lifespan::Persistent || cnt) return cnt + 1;
 
-	boost::beast::flat_buffer buf;
+	flat_buffer buf;
 
 	auto constexpr msg_size = sizeof(impl::Header) + sizeof(::nprpc::detail::flat::ObjectIdLocal);
 	auto mb = buf.prepare(msg_size);
@@ -221,7 +224,7 @@ NPRPC_API uint32_t Object::add_ref() {
 	::nprpc::impl::g_orb->call_async(
 		get_endpoint(),
 		std::move(buf),
-		[](const boost::system::error_code& ec, boost::beast::flat_buffer& buf) {
+		[](const boost::system::error_code& ec, flat_buffer& buf) {
 			//if (!ec) {
 				//auto std_reply = nprpc::impl::handle_standart_reply(buf);
 				//if (std_reply == false) {
@@ -243,7 +246,7 @@ NPRPC_API uint32_t Object::release() {
 		if (is_web_origin() && ::nprpc::impl::g_orb->has_session(endpoint) == false) {
 			// websocket session was closed.
 		} else {
-			boost::beast::flat_buffer buf;
+			flat_buffer buf;
 
 			auto constexpr msg_size = sizeof(impl::Header) + sizeof(::nprpc::detail::flat::ObjectIdLocal);
 			auto mb = buf.prepare(msg_size);
@@ -261,7 +264,7 @@ NPRPC_API uint32_t Object::release() {
 				::nprpc::impl::g_orb->call_async(
 					endpoint,
 					std::move(buf),
-					[](const boost::system::error_code& ec, boost::beast::flat_buffer& buf) {
+					[](const boost::system::error_code& ec, flat_buffer& buf) {
 						//if (!ec) {
 							//auto std_reply = nprpc::impl::handle_standart_reply(buf);
 							//if (std_reply == false) {

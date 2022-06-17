@@ -12,8 +12,8 @@ public:
   static std::string_view _get_class() noexcept { return "nprpc_nameserver/nprpc.Nameserver"; }
   std::string_view get_class() const noexcept override { return INameserver_Servant::_get_class(); }
   void dispatch(nprpc::Buffers& bufs, nprpc::EndPoint remote_endpoint, bool from_parent, nprpc::ReferenceList& ref_list) override;
-  virtual void Bind (nprpc::Object* obj, ::flat::Span<char> name) = 0;
-  virtual bool Resolve (::flat::Span<char> name, nprpc::detail::flat::ObjectId_Direct obj) = 0;
+  virtual void Bind (nprpc::Object* obj, ::nprpc::flat::Span<char> name) = 0;
+  virtual bool Resolve (::nprpc::flat::Span<char> name, nprpc::detail::flat::ObjectId_Direct obj) = 0;
 };
 
 class Nameserver

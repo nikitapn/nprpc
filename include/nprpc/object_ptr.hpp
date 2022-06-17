@@ -48,11 +48,13 @@ public:
 	{
 		obj_ = other.obj_;
 		safe_add_ref();
+		return *this;
 	}
 
 	ObjectPtr<T>& operator=(ObjectPtr<T>&& other) noexcept
 	{
 		obj_ = boost::exchange(other.obj_, nullptr);
+		return *this;
 	}
 
 	void reset(T* obj = nullptr) noexcept

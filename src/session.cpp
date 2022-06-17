@@ -11,7 +11,7 @@ extern void set_context(impl::Session& session);
 
 namespace nprpc::impl {
 
-std::optional<ObjectGuard> get_object(boost::beast::flat_buffer& buf, uint16_t poa_idx, uint64_t object_id) {
+std::optional<ObjectGuard> get_object(flat_buffer& buf, uint16_t poa_idx, uint64_t object_id) {
 	do {
 		auto poa = g_orb->get_poa(poa_idx);
 		if (!poa) {
@@ -28,8 +28,6 @@ std::optional<ObjectGuard> get_object(boost::beast::flat_buffer& buf, uint16_t p
 
 	return std::nullopt;
 }
-
-
 
 void Session::handle_request() {
 	auto validate = [this](ObjectServant& obj) {

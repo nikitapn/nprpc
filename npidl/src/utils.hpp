@@ -29,3 +29,4 @@ inline constexpr uint32_t  get_arguments_offset() {
 }
 
 void dfs_interface(std::function<void(Ast_Interface_Decl*)> fn, Ast_Interface_Decl* start);
+

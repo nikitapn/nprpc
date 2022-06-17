@@ -38,15 +38,15 @@ public:
     assert(false);
   }
   virtual void send_receive(
-		boost::beast::flat_buffer& buffer,
+		flat_buffer& buffer,
 		uint32_t timeout_ms
 	) {
     assert(false);
 	}
 
 	virtual void send_receive_async(
-		boost::beast::flat_buffer&& buffer,
-		std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler,
+		flat_buffer&& buffer,
+		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
 		uint32_t timeout_ms
 	) {
     assert(false);
