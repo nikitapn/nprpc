@@ -95,6 +95,26 @@ public:
   auto _2() noexcept { return ::nprpc::flat::Optional_Direct<test::flat::AAA, test::flat::AAA_Direct>(buffer_, offset_ + offsetof(test_M4, _2));  }
 };
 
+struct test_M5 {
+  ::nprpc::flat::Optional<test::flat::BBB> _1;
+};
+
+class test_M5_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const size_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<test_M5*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const test_M5*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  void* __data() noexcept { return (void*)&base(); }
+  test_M5_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  auto _1() noexcept { return ::nprpc::flat::Optional_Direct<test::flat::BBB, test::flat::BBB_Direct>(buffer_, offset_ + offsetof(test_M5, _1));  }
+};
+
 } // 
 
 
@@ -427,6 +447,90 @@ void test::ITestOptional_Servant::dispatch(nprpc::Buffers& bufs, nprpc::EndPoint
       obuf.prepare(148);
       obuf.commit(20);
       test_M3_Direct oa(obuf,16);
+      Out(oa._1());
+      static_cast<::nprpc::impl::Header*>(obuf.data().data())->size = static_cast<uint32_t>(obuf.size() - 4);
+      static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_id = ::nprpc::impl::MessageId::BlockResponse;
+      static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_type = ::nprpc::impl::MessageType::Answer;
+      break;
+    }
+    default:
+      nprpc::impl::make_simple_answer(bufs(), nprpc::impl::MessageId::Error_UnknownFunctionIdx);
+  }
+}
+
+void test::TestNested::Out(/*out*/std::optional<test::BBB>& a) {
+  ::nprpc::flat_buffer buf;
+  {
+    auto mb = buf.prepare(32);
+    buf.commit(32);
+    static_cast<::nprpc::impl::Header*>(mb.data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
+    static_cast<::nprpc::impl::Header*>(mb.data())->msg_type = ::nprpc::impl::MessageType::Request;
+  }
+  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));
+  __ch.object_id() = this->_data().object_id;
+  __ch.poa_idx() = this->_data().poa_idx;
+  __ch.interface_idx() = interface_idx_;
+  __ch.function_idx() = 0;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size() - 4);
+  ::nprpc::impl::g_orb->call(this->get_endpoint(), buf, this->get_timeout());
+  auto std_reply = nprpc::impl::handle_standart_reply(buf);
+  if (std_reply != -1) {
+    std::cerr << "received an unusual reply for function with output arguments\n";
+    throw nprpc::Exception("Unknown Error");
+  }
+  test_M5_Direct out(buf, sizeof(::nprpc::impl::Header));
+    {
+      auto opt = out._1();
+      if (opt.has_value()) {
+        a = std::decay<decltype(a)>::type::value_type{};
+        auto& value_to = a.value();
+        auto value_from = opt.value();
+        {
+          auto span = value_from.a();
+          value_to.a.resize(span.size());
+          auto it = std::begin(value_to.a);
+          for (auto e : span) {
+            (*it).a = e.a();
+            (*it).b = (std::string_view)e.b();
+            (*it).c = (std::string_view)e.c();
+            ++it;
+          }
+        }
+        {
+          auto span = value_from.b();
+          value_to.b.resize(span.size());
+          auto it = std::begin(value_to.b);
+          for (auto e : span) {
+            (*it).a = (std::string_view)e.a();
+            (*it).b = (std::string_view)e.b();
+            {
+              auto opt = e.c();
+              if (opt.has_value()) {
+                (*it).c = std::decay<decltype((*it).c)>::type::value_type{};
+                auto& value_to = (*it).c.value();
+                value_to = (bool)opt.value();
+              } else { 
+                (*it).c = std::nullopt;
+              }
+            }
+            ++it;
+          }
+        }
+      } else { 
+        a = std::nullopt;
+      }
+    }
+}
+
+void test::ITestNested_Servant::dispatch(nprpc::Buffers& bufs, nprpc::EndPoint remote_endpoint, bool from_parent, nprpc::ReferenceList& ref_list) {
+  nprpc::impl::flat::CallHeader_Direct __ch(bufs(), sizeof(::nprpc::impl::Header));
+  switch(__ch.function_idx()) {
+    case 0: {
+      auto& obuf = bufs.flip();
+      obuf.consume(obuf.size());
+      obuf.prepare(148);
+      obuf.commit(20);
+      test_M5_Direct oa(obuf,16);
       Out(oa._1());
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->size = static_cast<uint32_t>(obuf.size() - 4);
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_id = ::nprpc::impl::MessageId::BlockResponse;

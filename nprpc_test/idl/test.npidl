@@ -19,9 +19,24 @@ interface TestOptional {
 	boolean InEmpty(a?: in u32);
 	boolean In(a?: in u32, b?: in AAA);
 
-	
 	void OutEmpty(a?: out u32);
 	void Out(a?: out u32);
+}
+
+
+CCC : flat {
+	a: string;
+	b: string;
+	c?: boolean;
+}
+
+BBB : flat {
+	a: vector<AAA>;
+	b: vector<CCC>;
+}
+
+interface TestNested {
+	void Out(a?: out BBB);
 }
 
 }

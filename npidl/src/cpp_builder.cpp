@@ -448,6 +448,9 @@ void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f
 }
 
 void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std::string op2, std::ostream& os, bool from_iterator, bool top_type) {
+	using namespace std::string_view_literals;
+	auto accessor = top_type ? "."sv : "()."sv;
+
 	switch (type->id) {
 	case FieldType::Fundamental:
 		assert(top_type == false);
@@ -512,19 +515,19 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 		auto bd0 = bd++;
 
 		os << bd0 << "if (" << op2 << ") {\n";
-		os << bd << op1 << "().alloc();\n";
+		os << bd << op1 << accessor << "alloc();\n";
 
 		auto wt = copt(type)->real_type();
 
 		if (wt->id == FieldType::Struct) {
-			os << bd << "auto value = " << op1 << "().value();\n";
+			os << bd << "auto value = " << op1 << accessor << "value();\n";
 			assign_from_cpp_type(copt(type)->type, "value", op2 + ".value()", os, false, true);
 		} else {
-			assign_from_cpp_type(copt(type)->type, op1 + "().value", op2 + ".value()", os, false, false);
+			assign_from_cpp_type(copt(type)->type, op1 + std::string(accessor) + "value", op2 + ".value()", os, false, false);
 		}
 
 		os << bd0 << "} else { \n";
-		os << bd << op1 << "().set_nullopt();\n";
+		os << bd << op1 << accessor << "set_nullopt();\n";
 		os << bd0 << "}\n"
 			;
 
@@ -569,7 +572,8 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 	case FieldType::Array:
 	case FieldType::Vector:
 	{
-		auto const size = std::get<0>(get_type_size_align(static_cast<Ast_Wrap_Type*>(type)->type));
+		auto wt = static_cast<Ast_Wrap_Type*>(type)->type;
+		auto const size = std::get<0>(get_type_size_align(wt));
 		os << bd << "{\n"
 			<< bd + 1 <<"auto span = " << op2 << "();\n";
 		
@@ -577,14 +581,19 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 			os << bd + 1 << op1 << ".resize(span.size());\n";
 		}
 
-		if (is_flat(static_cast<Ast_Wrap_Type*>(type)->type)) {
+		if (is_flat(wt)) {
 			os << bd + 1 << "memcpy(" << op1 << ".data(), span.data(), " << size << " * span.size());\n";
 		} else {
-			//std::cerr << "not implemented\n";
-			//assert(false);
-			//oc <<
-			//	"    memcpy(" << op1 << ".data(), span.data(), " << size << " * span.size());\n"
-			//	;
+
+			os << bd + 1 << "auto it = " << "std::begin(" << op1 << ");\n";
+			os << bd + 1 << "for (auto e : span) {\n";
+
+			auto bd0 = bd;
+			bd = bd + 2;
+			assign_from_flat_type(wt, "(*it)", "e", os, true, false);
+			bd = bd0;
+			os << bd + 2 << "++it;\n";
+			os << bd + 1 << "}\n";
 		}
 		
 		os << bd << "}\n";

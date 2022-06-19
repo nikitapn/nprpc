@@ -89,10 +89,10 @@ export class ExceptionBadAccess_Direct extends NPRPC.Flat.Flat {
 } // namespace Flat 
 export const enum DebugLevel { //u32
   DebugLevel_Critical,
-  DebugLevel_InactiveTimeout = 1,
-  DebugLevel_EveryCall = 2,
-  DebugLevel_EveryMessageContent = 3,
-  DebugLevel_TraceAll = 4
+  DebugLevel_InactiveTimeout,
+  DebugLevel_EveryCall,
+  DebugLevel_EveryMessageContent,
+  DebugLevel_TraceAll
 }
 export namespace detail { 
 export interface ObjectIdLocal {
@@ -165,21 +165,21 @@ export class ObjectId_Direct extends NPRPC.Flat.Flat {
 export namespace impl { 
 export const enum MessageId { //u32
   FunctionCall = 0,
-  BlockResponse = 1,
-  AddReference = 2,
-  ReleaseObject = 3,
-  Success = 4,
-  Exception = 5,
-  Error_PoaNotExist = 6,
-  Error_ObjectNotExist = 7,
-  Error_CommFailure = 8,
-  Error_UnknownFunctionIdx = 9,
-  Error_UnknownMessageId = 10,
-  Error_BadAccess = 11
+  BlockResponse,
+  AddReference,
+  ReleaseObject,
+  Success,
+  Exception,
+  Error_PoaNotExist,
+  Error_ObjectNotExist,
+  Error_CommFailure,
+  Error_UnknownFunctionIdx,
+  Error_UnknownMessageId,
+  Error_BadAccess
 }
 export const enum MessageType { //u32
   Request = 0,
-  Answer = 1
+  Answer
 }
 export interface Header {
   size: number/*u32*/;

@@ -1,6 +1,6 @@
 {
   "name": "nprpc",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A Simple Javascript Rpc Client",
 	"repository": "https://github.com/nikitapn/nprpc.git",
   "main": "dist/index.js",

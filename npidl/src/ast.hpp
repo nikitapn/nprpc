@@ -309,9 +309,10 @@ constexpr auto cwt(Ast_Type_Decl* type) noexcept {
 	assert(
 		type->id == FieldType::Array ||
 		type->id == FieldType::Vector ||
-		type->id == FieldType::Alias
+		type->id == FieldType::Alias ||
+		type->id == FieldType::Optional
 	);
-	return static_cast<Ast_Wrap_Type*>(type)->type;
+	return static_cast<Ast_Wrap_Type*>(type);
 }
 
 constexpr auto car(Ast_Type_Decl* type) noexcept {

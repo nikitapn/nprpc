@@ -171,7 +171,12 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="data.hpp" />
     <ClInclude Include="proxy\test.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="idl\make.bat" />
+    <None Include="idl\test.npidl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

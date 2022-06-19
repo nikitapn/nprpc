@@ -26,5 +26,14 @@
     <ClInclude Include="proxy\test.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="data.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="idl\make.bat">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="idl\test.npidl" />
   </ItemGroup>
 </Project>
