@@ -168,20 +168,21 @@ void get_type_id(const Ast_Type_Decl* type, struct_id_t& id, std::string* field_
 	}
 }
 
-struct_id_t get_function_struct_id(const Ast_Struct_Decl* s) {
-	std::string id;
+const struct_id_t& Ast_Struct_Decl::get_function_struct_id() {
+	if (unique_id.length() > 0) return unique_id;
+	
 	int param_n = 0;
-	for (auto f : s->fields) {
-		id += std::to_string(++param_n);
-		get_type_id(f->type, id, &f->name);
+	for (auto f : fields) {
+		unique_id += std::to_string(++param_n);
+		get_type_id(f->type, unique_id, &f->name);
 	}
-	return id;
+
+	return unique_id;
 }
 
 bool is_flat(Ast_Type_Decl* type) {
 	switch (type->id) {
 	case FieldType::Fundamental:
-		return cft(type)->token_id != TokenId::Boolean;
 	case FieldType::Enum:
 		return true;
 	case FieldType::Struct:

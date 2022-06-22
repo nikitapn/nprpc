@@ -17,6 +17,7 @@ ExceptionUnsecuredObject : exception {
 	class_id: string;
 }
 ExceptionBadAccess : exception {}
+ExceptionBadInput : exception {}
 
 enum DebugLevel {
 	DebugLevel_Critical,
@@ -64,6 +65,7 @@ enum MessageId: u32 {
 	Error_UnknownFunctionIdx,
 	Error_UnknownMessageId,
 	Error_BadAccess,
+	Error_BadInput
 }
 
 enum MessageType: u32 {

@@ -389,16 +389,19 @@ public:
 
 inline void make_simple_answer(flat_buffer& buf, MessageId id) {
 	assert(id == MessageId::Success 
+		|| id == MessageId::Error_ObjectNotExist
 		|| id == MessageId::Error_CommFailure 
-		|| id == MessageId::Error_ObjectNotExist 
+		|| id == MessageId::Error_UnknownFunctionIdx
 		|| id == MessageId::Error_UnknownMessageId
-		|| id == MessageId::Error_BadAccess);
+		|| id == MessageId::Error_BadAccess
+		|| id == MessageId::Error_BadInput
+	);
 	buf.consume(buf.size());
 	auto mb = buf.prepare(sizeof(impl::Header));
-	static_cast<impl::Header*>(mb.data())->size = sizeof(impl::Header) - 4;
-	static_cast<impl::Header*>(mb.data())->msg_id = id;
-	static_cast<impl::Header*>(mb.data())->msg_type = impl::MessageType::Answer;
-	buf.commit(sizeof(impl::Header));
+	static_cast<impl::flat::Header*>(mb.data())->size = sizeof(impl::flat::Header) - 4;
+	static_cast<impl::flat::Header*>(mb.data())->msg_id = id;
+	static_cast<impl::flat::Header*>(mb.data())->msg_type = impl::MessageType::Answer;
+	buf.commit(sizeof(impl::flat::Header));
 }
 
 inline void dump_message(flat_buffer& buffer, bool rx) {
@@ -436,6 +439,8 @@ inline int handle_standart_reply(flat_buffer& buf) {
 		throw ExceptionUnknownMessageId();
 	case MessageId::Error_BadAccess:
 		throw ExceptionBadAccess();
+	case MessageId::Error_BadInput:
+		throw ExceptionBadInput();
 	default:
 		return -1;
 	}

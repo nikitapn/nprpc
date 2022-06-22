@@ -92,6 +92,17 @@ public:
 		tmp.depth_ -= depth;
 		return tmp;
 	}
+
+	BlockDepth& operator -=(size_t depth) {
+		assert(depth_ > depth);
+		depth_ -= depth;
+		return *this;
+	}
+
+	BlockDepth& operator +=(size_t depth) {
+		depth_ += depth;
+		return *this;
+	}
 };
 
 inline std::ostream& operator<<(std::ostream& os, const BlockDepth& block) {

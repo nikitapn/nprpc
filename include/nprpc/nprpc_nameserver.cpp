@@ -11,13 +11,14 @@ struct nprpc_nameserver_M1 {
 
 class nprpc_nameserver_M1_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<nprpc_nameserver_M1*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const nprpc_nameserver_M1*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  nprpc_nameserver_M1_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  nprpc_nameserver_M1_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -36,13 +37,14 @@ struct nprpc_nameserver_M2 {
 
 class nprpc_nameserver_M2_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<nprpc_nameserver_M2*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const nprpc_nameserver_M2*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  nprpc_nameserver_M2_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  nprpc_nameserver_M2_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -61,13 +63,14 @@ struct nprpc_nameserver_M3 {
 
 class nprpc_nameserver_M3_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<nprpc_nameserver_M3*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const nprpc_nameserver_M3*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  nprpc_nameserver_M3_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  nprpc_nameserver_M3_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -77,8 +80,8 @@ public:
   auto _2() noexcept { return nprpc::detail::flat::ObjectId_Direct(buffer_, offset_ + offsetof(nprpc_nameserver_M3, _2)); }
 };
 
-} // 
 
+} // 
 
 namespace nprpc { 
 void nprpc::Nameserver::Bind(/*in*/const ObjectId& obj, /*in*/const std::string& name) {

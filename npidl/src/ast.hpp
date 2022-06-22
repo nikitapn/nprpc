@@ -66,6 +66,7 @@ enum class TokenId {
 	Raises,
 	OutDirect,
 	Helper,
+	Trusted,
 };
 
 struct Ast_Struct_Decl;
@@ -74,12 +75,13 @@ struct Ast_Interface_Decl;
 struct Ast_Function_Decl;
 
 class Namespace {
-	std::vector<Namespace*> childs_;
 	Namespace* parent_;
 	std::string name_;
+
+	std::vector<Namespace*> children_;
 	std::vector<std::pair<std::string, Ast_Type_Decl*>> types_;
+
 	std::string construct_path(const std::string& delim, bool omit_root = false) const noexcept;
-	
 public:
 	Namespace();
 	Namespace(Namespace* parent, std::string&& name);
@@ -141,7 +143,7 @@ inline std::ostream& operator << (std::ostream& os, const Ast_Number& n) {
 			if (n.format == NumberFormat::Hex) {
 				os << "0x" << std::hex;
 				if (n.max_size) {
-					os << std::setfill('0') << std::setw(n.max_size * 2);
+					os << std::setfill('0') << std::setw(static_cast<std::streamsize>(n.max_size) * 2);
 				}
 				os << x;
 				os << std::dec;
@@ -238,6 +240,8 @@ struct Ast_Interface_Decl : Ast_Type_Decl {
 	std::string name;
 	std::vector<Ast_Function_Decl*> fns;
 	std::vector<Ast_Interface_Decl*> plist;
+	bool trusted = true;
+
 
 	Ast_Interface_Decl() {
 		id = FieldType::Interface;
@@ -269,10 +273,13 @@ struct Ast_Field_Decl {
 	}
 };
 
+using struct_id_t = std::string;
+
 struct Ast_Struct_Decl : Ast_Type_Decl {
 	int version = -1;
 	Namespace* nm;
 	std::string name;
+	struct_id_t unique_id;
 	std::vector<Ast_Field_Decl*> fields;
 	int size = -1;
 	int align = -1;
@@ -281,6 +288,7 @@ struct Ast_Struct_Decl : Ast_Type_Decl {
 	uint32_t exception_id;
 
 	bool is_exception() const noexcept { return exception_id != -1; }
+	const struct_id_t& get_function_struct_id();
 
 	Ast_Struct_Decl() {
 		id = FieldType::Struct;
@@ -398,8 +406,6 @@ struct Ast_Function_Decl {
 };
 
 
-using struct_id_t = std::string;
-
 template<typename IdType, typename T>
 class List {
 	static_assert(std::is_pointer_v<T>);
@@ -427,8 +433,8 @@ inline const std::string& Namespace::name() const noexcept { return name_; }
 inline Namespace* Namespace::parent() const noexcept { return parent_; }
 
 inline auto Namespace::push(std::string&& s) noexcept {
-	childs_.push_back(new Namespace(this, std::move(s)));
-	return childs_.back();
+	children_.push_back(new Namespace(this, std::move(s)));
+	return children_.back();
 }
 
 inline Ast_Type_Decl* Namespace::find_type(const std::string& str, bool only_this_namespace) {
@@ -443,8 +449,8 @@ inline Ast_Type_Decl* Namespace::find_type(const std::string& str, bool only_thi
 }
 
 inline Namespace* Namespace::find_child(const std::string& str) {
-	if (auto it = std::find_if(childs_.begin(), childs_.end(),
-		[&str](auto nm) {return nm->name() == str; }); it != childs_.end()) {
+	if (auto it = std::find_if(children_.begin(), children_.end(),
+		[&str](auto nm) {return nm->name() == str; }); it != children_.end()) {
 		return *it;
 	}
 	return nullptr;

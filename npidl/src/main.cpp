@@ -20,6 +20,7 @@
 #include "ts_builder.hpp"
 #include "utils.hpp"
 #include <boost/program_options.hpp>
+#include <boost/container/small_vector.hpp>
 
 #include <charconv>
 #include <variant>
@@ -31,6 +32,10 @@ struct Token {
 	
 	bool operator == (TokenId id) const noexcept {
 		return this->id == id;
+	}
+
+	bool operator == (char id) const noexcept {
+		return this->id == static_cast<TokenId>(id);
 	}
 
 	bool is_fundamental_type() const noexcept {
@@ -222,7 +227,8 @@ class Lexer {
 			{ "exception"sv, TokenId::Exception },
 			{ "raises"sv, TokenId::Raises },
 			{ "direct"sv, TokenId::OutDirect },
-			{ "helper"sv, TokenId::Helper }
+			{ "helper"sv, TokenId::Helper },
+			{ "trusted"sv, TokenId::Trusted }
 		};
 
 		static constexpr Map<std::string_view, TokenId,
@@ -233,6 +239,9 @@ class Lexer {
 		if (auto o = map.find(str); o) {
 			return Token{ o.value().second, {}, o.value().first };
 		}
+
+		if (str == "true") return Token{ TokenId::Number, "1" };
+		if (str == "false") return Token{ TokenId::Number, "0" };
 
 		return Token{ TokenId::Name, std::string(str) };
 	}
@@ -738,7 +747,7 @@ class Parser {
 				break;
 			}
 			if (!check(&Parser::stmt_decl)) {
-				throw_error("Expected tokens: struct, message descriptor, semicolon, }");
+				throw_error("Expected tokens: struct, semicolon, }");
 			}
 		}
 		return true;
@@ -796,12 +805,58 @@ class Parser {
 		return true;
 	}
 
+	bool attributes_decl(boost::container::small_vector<std::pair<std::string, std::string>, 2>& attr) {
+		if (peek() != '[') return false;
+		flush();
+
+		{
+			PeekGuard pg(*this);
+			if (peek() == ']') {
+				pg.flush();
+				goto attributes_decl_next;
+			}
+		}
+
+		{
+			PeekGuard pg(*this);
+
+			if (peek() == TokenId::Trusted) {
+				pg.flush();
+				match('=');
+
+				auto b = match(TokenId::Number);
+				if (!(b.name == "0" || b.name == "1"))
+					throw_error("the values that define trusted attribute are 'true' or 'false'");
+
+				match(']');
+
+				attr.emplace_back("trusted", b.name);
+				goto attributes_decl_next;
+			}
+		}
+
+		throw_unexpected_token(peek());
+
+	attributes_decl_next:
+		check(&Parser::attributes_decl, std::ref(attr));
+
+		return true;
+	}
+
 	bool interface_decl() {
+		boost::container::small_vector<std::pair<std::string, std::string>, 2> attr;
+		check(&Parser::attributes_decl, std::ref(attr));
+
 		if (peek() != TokenId::Interface) return false;
 		flush();
 
 		auto ifs = new Ast_Interface_Decl();
 		ifs->name = match(TokenId::Name).name;
+
+		for (const auto& a : attr) {
+			if (a.first == "trusted") ifs->trusted = (a.second == "1");
+			// other attributes...
+		}
 
 		{
 			PeekGuard pg(*this);

@@ -21,13 +21,14 @@ struct ExceptionCommFailure {
 
 class ExceptionCommFailure_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<ExceptionCommFailure*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const ExceptionCommFailure*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  ExceptionCommFailure_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  ExceptionCommFailure_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -49,13 +50,14 @@ struct ExceptionTimeout {
 
 class ExceptionTimeout_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<ExceptionTimeout*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const ExceptionTimeout*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  ExceptionTimeout_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  ExceptionTimeout_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -77,13 +79,14 @@ struct ExceptionObjectNotExist {
 
 class ExceptionObjectNotExist_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<ExceptionObjectNotExist*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const ExceptionObjectNotExist*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  ExceptionObjectNotExist_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  ExceptionObjectNotExist_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -105,13 +108,14 @@ struct ExceptionUnknownFunctionIndex {
 
 class ExceptionUnknownFunctionIndex_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<ExceptionUnknownFunctionIndex*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const ExceptionUnknownFunctionIndex*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  ExceptionUnknownFunctionIndex_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  ExceptionUnknownFunctionIndex_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -133,13 +137,14 @@ struct ExceptionUnknownMessageId {
 
 class ExceptionUnknownMessageId_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<ExceptionUnknownMessageId*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const ExceptionUnknownMessageId*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  ExceptionUnknownMessageId_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  ExceptionUnknownMessageId_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -169,13 +174,14 @@ struct ExceptionUnsecuredObject {
 
 class ExceptionUnsecuredObject_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<ExceptionUnsecuredObject*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const ExceptionUnsecuredObject*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  ExceptionUnsecuredObject_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  ExceptionUnsecuredObject_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -202,13 +208,43 @@ struct ExceptionBadAccess {
 
 class ExceptionBadAccess_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<ExceptionBadAccess*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const ExceptionBadAccess*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  ExceptionBadAccess_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  ExceptionBadAccess_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& __ex_id() const noexcept { return base().__ex_id;}
+  uint32_t& __ex_id() noexcept { return base().__ex_id;}
+};
+} // namespace flat
+
+class ExceptionBadInput : public ::nprpc::Exception {
+public:
+  ExceptionBadInput() : ::nprpc::Exception("ExceptionBadInput") {} 
+};
+
+namespace flat {
+struct ExceptionBadInput {
+  uint32_t __ex_id;
+};
+
+class ExceptionBadInput_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<ExceptionBadInput*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const ExceptionBadInput*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  ExceptionBadInput_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -239,13 +275,14 @@ struct ObjectIdLocal {
 
 class ObjectIdLocal_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<ObjectIdLocal*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const ObjectIdLocal*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  ObjectIdLocal_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  ObjectIdLocal_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -287,13 +324,14 @@ struct ObjectId {
 
 class ObjectId_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<ObjectId*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const ObjectId*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  ObjectId_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  ObjectId_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -338,7 +376,8 @@ enum class MessageId : uint32_t {
   Error_CommFailure,
   Error_UnknownFunctionIdx,
   Error_UnknownMessageId,
-  Error_BadAccess
+  Error_BadAccess,
+  Error_BadInput
 };
 enum class MessageType : uint32_t {
   Request = 0,
@@ -361,13 +400,14 @@ struct Header {
 
 class Header_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<Header*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const Header*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  Header_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  Header_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -400,13 +440,14 @@ struct CallHeader {
 
 class CallHeader_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<CallHeader*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const CallHeader*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  CallHeader_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  CallHeader_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {

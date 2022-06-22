@@ -9,6 +9,7 @@
 #include "utils.hpp"
 #include <iostream>
 #include <stack>
+#include <set>
 #include <boost/container/small_vector.hpp>
 
 using std::placeholders::_1;
@@ -60,7 +61,7 @@ void Builder::make_arguments_structs(Ast_Function_Decl* fn) {
 		});
 
 		calc_struct_size_align(s);
-		auto const id = get_function_struct_id(s);
+		auto const id = s->get_function_struct_id();
 
 		if (auto p = ctx_.affa_list.get(id); p) {
 			--ctx_.m_struct_n_;
@@ -355,6 +356,58 @@ void Builder_Cpp::emit_parameter_type_for_servant_callback(Ast_Function_Argument
 	}
 }
 
+void Builder_Cpp::emit_direct_type(Ast_Type_Decl* type, std::ostream& os) {
+	switch (type->id) {
+	case FieldType::Fundamental:
+		os << "void";
+		break;
+
+	case FieldType::String:
+		os << "::nprpc::flat::String_Direct1";
+		break;
+
+	case FieldType::Array:
+	case FieldType::Vector: {
+		auto wt = cwt(type)->real_type();
+
+		if (type->id == FieldType::Array) 
+			os << "::nprpc::flat::Array_Direct";
+		else if (type->id == FieldType::Vector)
+			os << "::nprpc::flat::Vector_Direct";
+
+		auto const is_primitive = (
+			wt->id == FieldType::Fundamental || 
+			wt->id == FieldType::Enum);
+
+		os << (is_primitive ? '1' : '2');
+		os << '<';
+		emit_flat_type(wt, os); 
+		if (!is_primitive) {
+			os << ','; emit_direct_type(wt, os);
+		}
+		os << '>';
+		break;
+	}
+
+	case FieldType::Struct: {
+		auto s = cflat(type);
+		os << s->nm->to_cpp17_namespace() << "::flat::" << s->name << "_Direct";
+		break;
+	}
+
+	case FieldType::Optional: {
+		auto wt = cwt(type)->real_type();
+		os << "::nprpc::flat::Optional_Direct<";
+		emit_flat_type(wt, os); os << ','; emit_direct_type(wt, os); os << '>';
+		break;
+	}
+
+	default:
+		assert(false);
+		break;
+	}
+}
+
 void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f, std::ostream& os) {
 	switch (f->type->id) {
 	case FieldType::Fundamental: {
@@ -365,37 +418,35 @@ void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f
 			<< f->name << ";}\n";
 		break;
 	}
+
 	case FieldType::Struct: {
 		auto s = cflat(f->type);
 		os << "  auto " << f->name << "() noexcept { return " << s->nm->to_cpp17_namespace() << "::flat::" << s->name
 			<< "_Direct(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
 		break;
 	}
-	case FieldType::Vector: {
-		auto wt = static_cast<Ast_Wrap_Type*>(f->type)->real_type();
-		os << "  void " << f->name << "(size_t elements_size) { new (&base()." << f->name << ") ::nprpc::flat::Vector<";
+
+	case FieldType::Vector: 
+		os << "  void " << f->name << "(std::uint32_t elements_size) { new (&base()." << f->name << ") ::nprpc::flat::Vector<";
 		emit_flat_type(static_cast<Ast_Wrap_Type*>(f->type)->type, os); os << ">(buffer_, elements_size); }\n";
 
-		if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
-			os << "  auto " << f->name << "_d() noexcept { return ::nprpc::flat::Vector_Direct1<";
-			emit_flat_type(wt, os); os << ">(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
-		} else if (wt->id == FieldType::Struct) {
-			os << "  auto " << f->name << "_d() noexcept { return ::nprpc::flat::Vector_Direct2<";
-			emit_flat_type(wt, os); os << ", "; emit_flat_type(wt, os); os << "_Direct>(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
-		}
-	}
+		os << "  auto " << f->name << "_d() noexcept { return "; 
+		emit_direct_type(f->type, os);
+		os << "(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
 	[[fallthrough]];
 	case FieldType::Array: {
-		auto wt = static_cast<Ast_Wrap_Type*>(f->type)->real_type();
+		auto wt = cwt(f->type)->real_type();
 		if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
 			os << "  auto " << f->name << "() noexcept { return (::nprpc::flat::Span<";
 			emit_flat_type(wt, os); os << ">)base()." << f->name << "; }\n";
 		} else if (wt->id == FieldType::Struct) {
 			os << "  auto " << f->name << "() noexcept { return ::nprpc::flat::Span_ref<";
-			emit_flat_type(wt, os); os << ", "; emit_flat_type(wt, os); os << "_Direct"; os << ">(buffer_, base()." << f->name << ".range(buffer_.data().data())); }\n";
+			emit_flat_type(wt, os); os << ", "; emit_direct_type(wt, os);
+			os << ">(buffer_, base()." << f->name << ".range(buffer_.data().data())); }\n";
 		} 
 		break;
 	}
+
 	case FieldType::String:
 		os << "  void " << f->name << "(const char* str) { new (&base()." << f->name << ") ::nprpc::flat::String(buffer_, str); }\n";
 		os << "  void " << f->name << "(const std::string& str) { new (&base()." << f->name << ") ::nprpc::flat::String(buffer_, str); }\n";
@@ -406,26 +457,20 @@ void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f
 			"    return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << "));"
 			"  }\n";
 		break;
+
 	case FieldType::Optional: {
-		auto wt = static_cast<Ast_Wrap_Type*>(f->type)->real_type();
-		if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
-			os <<
-				"  auto " << f->name << "() noexcept { return ::nprpc::flat::Optional_Direct<";
-			emit_flat_type(wt, os);
-			os << ">(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << "));"
+		os <<
+			"  auto " << f->name << "() noexcept { return "; emit_direct_type(f->type, os);
+			os << "(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << "));"
 				"  }\n";
-		} else if (wt->id == FieldType::Struct) {
-			os << "  auto " << f->name << "() noexcept { return ::nprpc::flat::Optional_Direct<";
-			emit_flat_type(wt, os); os << ", "; emit_flat_type(wt, os); os << "_Direct";
-			os << ">(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << "));"
-				"  }\n";
-		}
 		break;
 	}
+
 	case FieldType::Object:
 		os << "  auto " << f->name << "() noexcept { return "
 			"nprpc::detail::flat::ObjectId_Direct(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
 		break;
+
 	case FieldType::Alias: {
 		auto temp = std::make_unique<Ast_Field_Decl>();
 		temp->name = f->name;
@@ -433,6 +478,7 @@ void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f
 		emit_accessors(flat_name, temp.get(), os);
 		break;
 	}
+
 	case FieldType::Enum: {
 		auto e = cenum(f->type);
 		os << "  const " << ns(e->nm) << e->name << "& " << f->name << "() const noexcept { return base()."
@@ -447,7 +493,10 @@ void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f
 	}
 }
 
-void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std::string op2, std::ostream& os, bool from_iterator, bool top_type) {
+void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std::string op2, std::ostream& os, 
+	bool from_iterator, 
+	bool top_type,
+	bool direct_typ) {
 	using namespace std::string_view_literals;
 	auto accessor = top_type ? "."sv : "()."sv;
 
@@ -456,6 +505,7 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 		assert(top_type == false);
 		os << bd << op1 << "() = " << op2 << ";\n";
 		break;
+
 	case FieldType::Struct: {
 		auto s = cflat(type);
 		if (s->flat) {
@@ -470,47 +520,53 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 		}
 		break;
 	}
+
 	case FieldType::Vector:
 		if (top_type) {
-			os << bd << op1 << ".length(" << op2 << ".size());\n";
+			os << bd << op1 << ".length(static_cast<uint32_t>(" << op2 << ".size()));\n";
 		} else {
-			os << bd << op1 << '(' << op2 << ".size());\n";
+			os << bd << op1 << "(static_cast<uint32_t>(" << op2 << ".size()));\n";
 		}
 		[[fallthrough]];
 	case FieldType::Array: {
-		auto utype = static_cast<Ast_Wrap_Type*>(type)->type;
-		if (is_flat(utype)) {
-			auto [size, align] = get_type_size_align(utype);
+		auto wt = cwt(type)->type;
+		if (is_flat(wt)) {
+			auto [size, align] = get_type_size_align(wt);
 			os << bd << "memcpy(" << op1 << "().data(), " << op2 << ".data(), " << op2 << ".size() * " << size << ");\n";
 		} else {
-			auto bd0 = ++bd;
 			os <<
-				bd0 << "auto span = " << op1 << "();\n" <<
-				bd0 << "auto it = " << op2 << ".begin();\n" <<
-				bd0 << "for (auto e : span) {\n";
+				bd << "{\n" <<
+				(bd += 1) << "auto span = " << op1 << "();\n" <<
+				bd << "auto it = " << op2 << ".begin();\n" <<
+				bd << "for (auto e : span) {\n";
 			
-				os << bd << "auto __ptr = ::nprpc::make_wrapper1(*it);\n"
+				os << (bd += 1) << "auto __ptr = ::nprpc::make_wrapper1(*it);\n"
 				;
 
-			assign_from_cpp_type(utype, "  e", "__ptr", os, true);
+			assign_from_cpp_type(wt, "  e", "__ptr", os, true);
 
-			os << bd << "++it;\n";
-			os << bd0 <<	"}\n";
-			bd = bd0;
+			os << 
+				bd << "++it;\n" << 
+				(bd -= 1) << "}\n" <<
+				(bd -= 1) << "}\n";
 		}
 		break;
 	}
+
 	case FieldType::Enum:
 		assert(top_type == false);
 		os << bd << op1 << "() = " << op2 << ";\n";
 		break;
+
 	case FieldType::Alias:
 		assign_from_cpp_type(calias(type)->type, op1, op2, os, from_iterator);
 		break;
+
 	case FieldType::String:
 		assert(top_type == false);
 		os << bd << op1 << '(' << op2 << ");\n";
 		break;
+
 	case FieldType::Optional: {
 		auto bd0 = bd++;
 
@@ -519,9 +575,9 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 
 		auto wt = copt(type)->real_type();
 
-		if (wt->id == FieldType::Struct) {
+		if (wt->id == FieldType::Struct || wt->id == FieldType::Vector || wt->id == FieldType::Array) {
 			os << bd << "auto value = " << op1 << accessor << "value();\n";
-			assign_from_cpp_type(copt(type)->type, "value", op2 + ".value()", os, false, true);
+			assign_from_cpp_type(copt(type)->type, "value", op2 + ".value()", os, false, true, true);
 		} else {
 			assign_from_cpp_type(copt(type)->type, op1 + std::string(accessor) + "value", op2 + ".value()", os, false, false);
 		}
@@ -535,12 +591,14 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 
 		break;
 	}
+
 	case FieldType::Object:
 		assert(top_type == false);
 		os << bd << "memcpy(" << op1 << "().__data(), &" << op2 << "._data(), " << size_of_object_without_class_id << ");\n";
 		os << bd << op1 << "().class_id(" << op2 << "._data().class_id);\n";
 		os << bd << op1 << "().hostname(" << op2 << "._data().hostname);\n";
 		break;
+
 	default:
 		assert(false);
 		break;
@@ -555,6 +613,7 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 		os << bd << op1 << " = " << (ft->token_id == TokenId::Boolean ? "(bool)" : "") << op2 << "();\n";
 		break;
 	}
+
 	case FieldType::Struct: {
 		auto s = cflat(type);
 		if (s->flat) {
@@ -569,9 +628,9 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 		}
 		break;
 	}
+
 	case FieldType::Array:
-	case FieldType::Vector:
-	{
+	case FieldType::Vector: {
 		auto wt = static_cast<Ast_Wrap_Type*>(type)->type;
 		auto const size = std::get<0>(get_type_size_align(wt));
 		os << bd << "{\n"
@@ -599,9 +658,11 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 		os << bd << "}\n";
 		break;
 	}
+
 	case FieldType::String:
 		os << bd << op1 << " = (std::string_view)" << op2 << "();\n";
 		break;
+
 	case FieldType::Optional: {
 		auto wt = copt(type)->type;
 		auto wtr = copt(type)->real_type();
@@ -616,7 +677,7 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 		os << bd + 2 << "auto& value_to = " << op1 << ".value();\n";
 		
 		bd = bd + 2;
-		if (wt->id == FieldType::Struct) {
+		if (wt->id == FieldType::Struct || wt->id == FieldType::Vector || wt->id == FieldType::Array) {
 			os << bd << "auto value_from = opt.value();\n";
 			assign_from_flat_type(wt, "value_to", "value_from", os, false, true);
 		} else {
@@ -634,12 +695,15 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 		
 		break;
 	}
+
 	case FieldType::Enum:
 		os << bd << op1 << " = " << op2 << "();\n";
 		break;
+
 	case FieldType::Alias:
 		assign_from_flat_type(calias(type)->get_real_type(), op1, op2, oc, from_iterator);
 		break;
+
 	case FieldType::Object:
 		if (top_object) {
 			os << bd << op1 << " = this->create_from_object_id(" << op2 << "());\n";
@@ -647,6 +711,7 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 			os << bd << op1 << ".assign_from_direct(" << op2 << "());\n";
 		}
 		break;
+
 	default:
 		assert(false);
 		break;
@@ -718,14 +783,15 @@ void Builder_Cpp::emit_struct2(Ast_Struct_Decl* s, std::ostream& os, Target targ
 
 	os << "class " << accessor_name << " {\n"
 		"  ::nprpc::flat_buffer& buffer_;\n"
-		"  const size_t offset_;\n\n"
+		"  const std::uint32_t offset_;\n\n"
 		"  auto& base() noexcept { return *reinterpret_cast<" << s->name <<
 		"*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }\n"
 		"  auto const& base() const noexcept { return *reinterpret_cast<const " << s->name <<
 		"*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }\n"
 		"public:\n"
+		"  uint32_t offset() const noexcept { return offset_; }\n"
 		"  void* __data() noexcept { return (void*)&base(); }\n"
-		"  " << accessor_name << "(::nprpc::flat_buffer& buffer, size_t offset)\n"
+		"  " << accessor_name << "(::nprpc::flat_buffer& buffer, std::uint32_t offset)\n"
 		"    : buffer_(buffer)\n"
 		"    , offset_(offset)\n"
 		"  {\n"
@@ -801,11 +867,125 @@ void Builder_Cpp::emit_file_footer() {
 
 	ss << "namespace {\n";
 	emit_arguments_structs(std::bind(&Builder_Cpp::emit_struct2, this, _1, std::ref(ss), Target::FunctionArgument));
-	ss << "} // \n\n";
-
-	ocpp << ss.str() << "\n" << oc.str();
+	ocpp << ss.str() << "\n";
+	emit_safety_checks();
+	ocpp << "} // \n\n" << oc.str();
 	
 	oh << "\n#endif";
+}
+
+void Builder_Cpp::emit_safety_checks_r(Ast_Type_Decl* type, std::string op, std::ostream& os, bool from_iterator, bool top_type) {
+	switch (type->id) {
+	case FieldType::Struct: {
+		auto s = cflat(type);
+		
+		if (top_type) {
+			os <<
+				"  if (static_cast<std::uint32_t>(buf.size()) < " << op << ".offset() + " << s->size << ") goto check_failed;\n"
+				;
+		}
+
+		if (s->flat) break;
+
+		for (auto field : s->fields) {
+			auto ftr = field->type;
+			if (ftr->id == FieldType::Alias) ftr = calias(ftr)->get_real_type();
+			if (
+				ftr->id == FieldType::Vector ||
+				ftr->id == FieldType::Optional ||
+				ftr->id == FieldType::Struct ||
+				ftr->id == FieldType::String
+				) {
+				os << bd << "{\n";
+				auto str = op + "." + field->name + (ftr->id == FieldType::Vector || ftr->id == FieldType::String ? "_d()" : "()");
+				bd += 1;
+				emit_safety_checks_r(field->type, str, os, false, ftr->id != FieldType::Struct);
+				bd -= 1;
+				os << bd << "}\n";
+			}
+			else if (
+				ftr->id == FieldType::Array
+				) {
+				if ( is_flat(car(ftr)->type) ) break;
+			}
+		}
+
+		break;
+	}
+
+	case FieldType::String:
+		os << bd << "if(!" << op << "._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;\n";
+		break;
+
+	case FieldType::Vector: {
+		auto wt = cwt(type)->type;
+		
+		os << bd << "if(!" << op << "._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;\n";
+		
+		if (is_flat(wt)) break;
+
+		os << bd << "{\n"
+			<< bd + 1 << "auto span = " << op << "();\n"
+			<< bd + 1 << "for (auto e : span) {\n";
+		emit_safety_checks_r(wt, "e", os, true, true);
+		os << bd + 1 << "}\n"
+			<< bd << "}\n";
+
+		break;
+	}
+
+	case FieldType::Optional: {
+		auto wt = cwt(type)->type;
+		os << bd << "if(!" << op << "._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;\n";
+		
+		if (is_flat(wt)) break;
+
+		os << bd << "if ( " << op << ".has_value() ) {\n"
+			<< bd + 1 << "auto value = " << op << ".value();\n";
+		emit_safety_checks_r(wt, "value", os, true, true);
+		os << bd << "}\n";
+
+		break;
+	}
+
+	case FieldType::Array:
+		break;
+
+	default:
+		break;
+		//assert(false);
+	}
+}
+
+void Builder_Cpp::emit_safety_checks() {
+	std::set<struct_id_t> set;
+
+	for (auto ifs : ctx_.interfaces) {
+		if (ifs->trusted) continue;
+
+		for (auto fn : ifs->fns) {
+			auto s = fn->in_s;
+			
+			if (!s) continue;
+			
+			auto const name = s->get_function_struct_id();
+			if (set.find(name) != set.end()) continue;
+			set.emplace(name);
+
+			ocpp << "bool check_" << name << "(nprpc::flat_buffer& buf, " << fn->in_s->name << "_Direct& ia" << ") {\n";
+
+			emit_safety_checks_r(s, "ia", ocpp, false, true);
+		
+			ocpp <<
+					"  return true;\n"
+					"check_failed:\n"
+					"  nprpc::impl::make_simple_answer(buf, nprpc::impl::MessageId::Error_BadInput);\n"
+					"  return false;\n"
+					"}\n"
+					;
+
+		}
+	}
 }
 
 void Builder_Cpp::emit_namespace_begin() {
@@ -1113,6 +1293,12 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 			oc <<
 				"      " << fn->in_s->name << "_Direct ia(bufs(), " << get_arguments_offset() << ");\n"
 				;
+			if (ifs->trusted == false) {
+				const auto fixed_size = get_arguments_offset() + fn->in_s->size;
+				oc <<
+					"      if ( !check_" << fn->in_s->get_function_struct_id() << "(bufs(), ia) ) break;\n"
+					;
+			}
 		}
 
 		if (fn->out_s && !fn->out_s->flat) {

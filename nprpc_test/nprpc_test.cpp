@@ -249,5 +249,31 @@ public:
 		}
 
 	}
+
+	TEST_METHOD(TestBadInput)
+	{
+		class TestBadInputlImpl
+			: public test::ITestBadInput_Servant {
+		public:
+			virtual void In(test::flat::DDD_Direct a) {}
+		} servant;
+
+		try {
+			auto obj = make_stuff_happen<test::TestBadInput>(servant);
+
+			test::DDD a;
+			//a.b.push_back(test::DDD{});
+			//a.b[0].a = "string";
+
+			obj->In(a);
+
+			Assert::Fail(L"Check did not happen");
+		} catch (nprpc::ExceptionBadInput&) {
+			// ok
+		} catch (nprpc::Exception& ex) {
+			Assert::Fail(wide(ex.what()).c_str());
+		}
+
+	}
 };
 }

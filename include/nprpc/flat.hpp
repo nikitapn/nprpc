@@ -63,8 +63,8 @@ struct TSpan {
 		return last;
 	}
 
-	size_t size() const noexcept {
-		return last - first;
+	auto size() const noexcept {
+		return static_cast<uint32_t>(last - first);
 	}
 
 	T& operator[](int i) {
@@ -118,12 +118,12 @@ inline std::ostream& operator << (std::ostream& os, const Span<char>& span) {
 template<class T, class TD>
 struct Span_ref {
 	flat_buffer& buffer;
-	const size_t first; // absolute
-	const size_t last; // absolute
+	const std::uint32_t first; // absolute
+	const std::uint32_t last; // absolute
 
 	struct Ptr_ref {
 		flat_buffer& buffer;
-		size_t offset;
+		std::uint32_t offset;
 
 		Ptr_ref& operator++() {
 			offset += sizeof(T);
@@ -144,7 +144,7 @@ struct Span_ref {
 		bool operator==(const Ptr_ref& other) const noexcept { return offset == other.offset; }
 		bool operator!=(const Ptr_ref& other) const noexcept { return offset != other.offset; }
 
-		Ptr_ref(flat_buffer& b, size_t o)
+		Ptr_ref(flat_buffer& b, std::uint32_t o)
 			: buffer(b), offset(o)
 		{
 			assert(offset % alignof(T) == 0);
@@ -162,9 +162,9 @@ struct Span_ref {
 	Ptr_ref begin() { return { buffer, first }; }
 	Ptr_ref end() { return { buffer, last }; }
 
-	size_t size() const noexcept { return (last - first) / sizeof(T); }
+	auto size() const noexcept { return (last - first) / sizeof(T); }
 
-	Span_ref(flat_buffer& b, const std::tuple<size_t, size_t>& range)
+	Span_ref(flat_buffer& b, const std::tuple<std::uint32_t, std::uint32_t>& range)
 		: buffer(b), first(std::get<0>(range)), last(std::get<1>(range))
 	{
 		assert(first % alignof(T) == 0);
@@ -189,17 +189,17 @@ public:
 
 	operator Span<T>() { return { begin(), end() }; }
 
-	std::tuple<size_t, size_t> range(void* base_ptr) const noexcept {
+	std::tuple<std::uint32_t, std::uint32_t> range(void* base_ptr) const noexcept {
 		auto data_offset_abs = ((std::byte*)this - (std::byte*)base_ptr);
 		assert(data_offset_abs % alignof(T) == 0);
-		return { data_offset_abs, data_offset_abs + Size * sizeof(T) };
+		return { static_cast<uint32_t>(data_offset_abs), static_cast<uint32_t>(data_offset_abs + Size * sizeof(T)) };
 	}
 };
 
 
-// returns new 'this' if buffer is rellocated, and offset to allocated space from that 'this'
+// returns a new 'this' if the buffer is rellocated and an offset to allocated space from that 'this'
 template<typename T>
-[[nodiscard]] std::tuple<void*, std::uint32_t> _alloc(void* This, flat_buffer& buffer, size_t size) {
+[[nodiscard]] std::tuple<void*, std::uint32_t> _alloc(void* This, flat_buffer& buffer, uint32_t size) {
 	if (!size) return std::make_tuple(This, 0u);
 
 	auto this_ = reinterpret_cast<std::byte*>(This);
@@ -227,13 +227,17 @@ class Vector {
 	uint32_t offset_; // in bytes from this pointer
 	uint32_t size_; // in elements
 protected:
-		[[nodiscard]] auto alloc(flat_buffer& buffer, size_t size) {
+		[[nodiscard]] auto alloc(flat_buffer& buffer, uint32_t size) {
 			auto [this_, offset] = _alloc<T>(this, buffer, size);
 			static_cast<Vector<T>*>(this_)->offset_ = offset;
-			static_cast<Vector<T>*>(this_)->size_ = static_cast<uint32_t>(size);
+			static_cast<Vector<T>*>(this_)->size_ = size;
 			return static_cast<Vector<T>*>(this_);
 		}
 public:
+	auto size() const noexcept {
+		return size_;
+	}
+
 	auto begin() noexcept {
 		return (T*)(reinterpret_cast<std::byte*>(this) + offset_);
 	}
@@ -253,14 +257,24 @@ public:
 	operator Span<T>() noexcept { return { begin(), end() }; }
 	operator Span<const T>() const noexcept { return { begin(), end() }; }
 
-	std::tuple<size_t, size_t> range(void* base_ptr) const noexcept {
+	template<bool UseAssert = true>
+	std::tuple<std::uint32_t, std::uint32_t> range(void* base_ptr) const noexcept {
 		auto data_offset_abs = ((std::byte*)this - (std::byte*)base_ptr) + offset_;
-		assert(data_offset_abs % alignof(T) == 0);
-		return { data_offset_abs, data_offset_abs + size_ * sizeof(T) };
+		
+		if constexpr (UseAssert) {
+			assert(data_offset_abs % alignof(T) == 0);
+		}
+
+		return { static_cast<uint32_t>(data_offset_abs), static_cast<uint32_t>(data_offset_abs + size_ * sizeof(T)) };
+	}
+
+	bool check_size_align(void* base_ptr, uint32_t max_buffer_size) const noexcept {
+		const auto [a, b] = range<false>(base_ptr);
+		return (a % alignof(T) == 0 && b <= max_buffer_size);
 	}
 
 	Vector() = default;
-	Vector(flat_buffer& buffer, size_t elements_size) {
+	Vector(flat_buffer& buffer, std::uint32_t elements_size) {
 		[[maybe_unused]] auto this_ = alloc(buffer, elements_size);
 	}
 };
@@ -269,15 +283,20 @@ template<typename T>
 class Vector_Direct {
 protected:
 	flat_buffer& buffer_;
-	size_t offset_;
+	std::uint32_t offset_;
 	
-	Vector<T>& v() noexcept {
+	auto& v() noexcept {
 		return *reinterpret_cast<Vector<T>*>((std::byte*)buffer_.data().data() + offset_);
 	}
+	auto& v() const noexcept {
+		return *reinterpret_cast<const Vector<T>*>((const std::byte*)buffer_.data().data() + offset_);
+	}
 public:
-	void length(size_t length) noexcept { new (&v()) Vector<T>(buffer_, length);}
+	std::uint32_t size() const noexcept { return v().size(); }
+	void length(size_t length) noexcept { new (&v()) Vector<T>(buffer_, static_cast<std::uint32_t>(length));}
+	bool _check_size_align(uint32_t max_buffer_size) const noexcept { return v().check_size_align(buffer_.data().data(), max_buffer_size); }
 
-	Vector_Direct(flat_buffer& buffer, size_t offset)
+	Vector_Direct(flat_buffer& buffer, std::uint32_t offset)
 		: buffer_(buffer), offset_(offset) {}
 };
 
@@ -286,7 +305,7 @@ class Vector_Direct1 : public Vector_Direct<T> {
 public:
 	auto operator ()() noexcept { return (Span<T>)this->v(); }
 	
-	Vector_Direct1(flat_buffer& buffer, size_t offset)
+	Vector_Direct1(flat_buffer& buffer, std::uint32_t offset)
 		: Vector_Direct<T>(buffer, offset) {}
 };
 
@@ -295,7 +314,7 @@ class Vector_Direct2 : public Vector_Direct<T> {
 public:
 	auto operator ()() noexcept { return Span_ref<T, TD>(this->buffer_, this->v().range(this->buffer_.data().data())); }
 	
-	Vector_Direct2(flat_buffer& buffer, size_t offset)
+	Vector_Direct2(flat_buffer& buffer, std::uint32_t offset)
 		: Vector_Direct<T>(buffer, offset) {}
 };
 
@@ -303,7 +322,7 @@ class String
 	: public Vector<char> {
 public:
 	String(flat_buffer& buffer, std::string_view str) {
-		auto this_ = alloc(buffer, str.length());
+		auto this_ = alloc(buffer, static_cast<std::uint32_t>(str.length()));
 		std::memcpy(this_->begin(), str.data(), str.length());
 	}
 
@@ -317,18 +336,18 @@ public:
 class String_Direct1 : public Vector_Direct1<char> {
 public:
 	void operator=(std::string_view str) noexcept {
-		length(str.length());
+		length(static_cast<std::uint32_t>(str.length()));
 		auto span = this->operator()();
 		std::copy(str.begin(), str.end(), span.begin());
 	}
 
-	String_Direct1(flat_buffer& buffer, size_t offset)
+	String_Direct1(flat_buffer& buffer, std::uint32_t offset)
 		: Vector_Direct1<char>(buffer, offset) {}
 };
 
 template<typename T>
 class Optional {
-	std::uint32_t offset_;
+	std::uint32_t offset_; // from this pointer
 public:
 	std::uint32_t offset() const noexcept {
 		assert(has_value());
@@ -342,6 +361,12 @@ public:
 	T& value() noexcept {
 		assert(has_value());
 		return *reinterpret_cast<T*>(reinterpret_cast<std::byte*>(this) + offset_);
+	}
+
+	bool check_size_align(void* base_ptr, uint32_t max_buffer_size) const noexcept {
+		if (!offset_) return true;
+		auto const data_offset_abs = ((std::byte*)this - (std::byte*)base_ptr) + offset_;
+		return ((data_offset_abs % alignof(T) == 0) && (data_offset_abs + sizeof(T) <= max_buffer_size));
 	}
 
 	Optional() = default;
@@ -359,7 +384,7 @@ public:
 template<typename T, typename TD = void>
 class Optional_Direct {
 	flat_buffer& buffer_;
-	size_t offset_;
+	std::uint32_t offset_;
 
 	Optional<T>& opt() noexcept {
 		return *reinterpret_cast<Optional<T>*>((std::byte*)buffer_.data().data() + offset_);
@@ -369,6 +394,8 @@ class Optional_Direct {
 		return *reinterpret_cast<const Optional<T>*>((std::byte*)buffer_.data().data() + offset_);
 	}
 public:
+	bool _check_size_align(uint32_t max_buffer_size) const noexcept { return opt().check_size_align(buffer_.data().data(), max_buffer_size); }
+
 	void alloc() noexcept { new (&opt()) Optional<T>(buffer_); }
 	void set_nullopt() noexcept { new (&opt()) Optional<T>(0); }
 	bool has_value() const noexcept { return opt().has_value(); }
@@ -384,7 +411,7 @@ public:
 		}
 	}
 
-	Optional_Direct(flat_buffer& buffer, size_t offset)
+	Optional_Direct(flat_buffer& buffer, std::uint32_t offset)
 		: buffer_(buffer)
 		, offset_(offset)
 	{
@@ -403,7 +430,7 @@ inline const Span<const T> make_read_only_span(const std::vector<T, Alloc>& v) n
 
 template<typename T>
 inline const Span<const T> make_read_only_span(const T* data, const size_t size) noexcept  {
-	return {data, data + size};
+	return {data, data + static_cast<std::uint32_t>(size)};
 }
 
 template<typename T>

@@ -20,13 +20,14 @@ struct AAA {
 
 class AAA_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<AAA*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const AAA*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  AAA_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  AAA_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -113,13 +114,14 @@ struct CCC {
 
 class CCC_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<CCC*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const CCC*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  CCC_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  CCC_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -134,7 +136,7 @@ public:
   auto b() noexcept { return (::nprpc::flat::Span<char>)base().b; }
   auto b() const noexcept { return (::nprpc::flat::Span<const char>)base().b; }
   auto b_d() noexcept {     return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(CCC, b));  }
-  auto c() noexcept { return ::nprpc::flat::Optional_Direct<::nprpc::flat::Boolean>(buffer_, offset_ + offsetof(CCC, c));  }
+  auto c() noexcept { return ::nprpc::flat::Optional_Direct<::nprpc::flat::Boolean,void>(buffer_, offset_ + offsetof(CCC, c));  }
 };
 } // namespace flat
 
@@ -151,22 +153,23 @@ struct BBB {
 
 class BBB_Direct {
   ::nprpc::flat_buffer& buffer_;
-  const size_t offset_;
+  const std::uint32_t offset_;
 
   auto& base() noexcept { return *reinterpret_cast<BBB*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
   auto const& base() const noexcept { return *reinterpret_cast<const BBB*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
 public:
+  uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
-  BBB_Direct(::nprpc::flat_buffer& buffer, size_t offset)
+  BBB_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
   }
-  void a(size_t elements_size) { new (&base().a) ::nprpc::flat::Vector<test::flat::AAA>(buffer_, elements_size); }
-  auto a_d() noexcept { return ::nprpc::flat::Vector_Direct2<test::flat::AAA, test::flat::AAA_Direct>(buffer_, offset_ + offsetof(BBB, a)); }
+  void a(std::uint32_t elements_size) { new (&base().a) ::nprpc::flat::Vector<test::flat::AAA>(buffer_, elements_size); }
+  auto a_d() noexcept { return ::nprpc::flat::Vector_Direct2<test::flat::AAA,test::flat::AAA_Direct>(buffer_, offset_ + offsetof(BBB, a)); }
   auto a() noexcept { return ::nprpc::flat::Span_ref<test::flat::AAA, test::flat::AAA_Direct>(buffer_, base().a.range(buffer_.data().data())); }
-  void b(size_t elements_size) { new (&base().b) ::nprpc::flat::Vector<test::flat::CCC>(buffer_, elements_size); }
-  auto b_d() noexcept { return ::nprpc::flat::Vector_Direct2<test::flat::CCC, test::flat::CCC_Direct>(buffer_, offset_ + offsetof(BBB, b)); }
+  void b(std::uint32_t elements_size) { new (&base().b) ::nprpc::flat::Vector<test::flat::CCC>(buffer_, elements_size); }
+  auto b_d() noexcept { return ::nprpc::flat::Vector_Direct2<test::flat::CCC,test::flat::CCC_Direct>(buffer_, offset_ + offsetof(BBB, b)); }
   auto b() noexcept { return ::nprpc::flat::Span_ref<test::flat::CCC, test::flat::CCC_Direct>(buffer_, base().b.range(buffer_.data().data())); }
 };
 } // namespace flat
@@ -192,42 +195,142 @@ public:
   void Out (/*out*/std::optional<test::BBB>& a);
 };
 
+struct DDD {
+  std::vector<AAA> a;
+  std::optional<std::vector<CCC>> b;
+};
+
+namespace flat {
+struct DDD {
+  ::nprpc::flat::Vector<test::flat::AAA> a;
+  ::nprpc::flat::Optional<::nprpc::flat::Vector<test::flat::CCC>> b;
+};
+
+class DDD_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<DDD*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const DDD*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  DDD_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  void a(std::uint32_t elements_size) { new (&base().a) ::nprpc::flat::Vector<test::flat::AAA>(buffer_, elements_size); }
+  auto a_d() noexcept { return ::nprpc::flat::Vector_Direct2<test::flat::AAA,test::flat::AAA_Direct>(buffer_, offset_ + offsetof(DDD, a)); }
+  auto a() noexcept { return ::nprpc::flat::Span_ref<test::flat::AAA, test::flat::AAA_Direct>(buffer_, base().a.range(buffer_.data().data())); }
+  auto b() noexcept { return ::nprpc::flat::Optional_Direct<::nprpc::flat::Vector<test::flat::CCC>,::nprpc::flat::Vector_Direct2<test::flat::CCC,test::flat::CCC_Direct>>(buffer_, offset_ + offsetof(DDD, b));  }
+};
+} // namespace flat
+
+class ITestBadInput_Servant
+  : public virtual nprpc::ObjectServant
+{
+public:
+  static std::string_view _get_class() noexcept { return "test/test.TestBadInput"; }
+  std::string_view get_class() const noexcept override { return ITestBadInput_Servant::_get_class(); }
+  void dispatch(nprpc::Buffers& bufs, nprpc::EndPoint remote_endpoint, bool from_parent, nprpc::ReferenceList& ref_list) override;
+  virtual void In (test::flat::DDD_Direct a) = 0;
+};
+
+class TestBadInput
+  : public virtual nprpc::Object
+{
+  const uint8_t interface_idx_;
+public:
+  using servant_t = ITestBadInput_Servant;
+
+  TestBadInput(uint8_t interface_idx) : interface_idx_(interface_idx) {}
+  void In (/*in*/const test::DDD& a);
+};
+
 } // namespace test
 
 namespace test::helper {
 template<::nprpc::IterableCollection T>
 void assign_from_cpp_Out_a(::nprpc::flat::Optional_Direct<test::flat::BBB, test::flat::BBB_Direct>& dest, const T & src) {
-    if (src) {
-      dest.alloc();
-      auto value = dest.value();
-      value.a(src.value().a.size());
-        auto span = value.a();
-        auto it = src.value().a.begin();
-        for (auto e : span) {
+  if (src) {
+    dest.alloc();
+    auto value = dest.value();
+    value.a(static_cast<uint32_t>(src.value().a.size()));
+    {
+      auto span = value.a();
+      auto it = src.value().a.begin();
+      for (auto e : span) {
         auto __ptr = ::nprpc::make_wrapper1(*it);
           e.a() = __ptr->a;
           e.b(__ptr->b);
           e.c(__ptr->c);
         ++it;
+      }
+    }
+    value.b(static_cast<uint32_t>(src.value().b.size()));
+    {
+      auto span = value.b();
+      auto it = src.value().b.begin();
+      for (auto e : span) {
+        auto __ptr = ::nprpc::make_wrapper1(*it);
+          e.a(__ptr->a);
+          e.b(__ptr->b);
+        if (__ptr->c) {
+            e.c().alloc();
+            e.c().value() = __ptr->c.value();
+        } else { 
+            e.c().set_nullopt();
         }
-        value.b(src.value().b.size());
-          auto span = value.b();
-          auto it = src.value().b.begin();
-          for (auto e : span) {
-          auto __ptr = ::nprpc::make_wrapper1(*it);
-            e.a(__ptr->a);
-            e.b(__ptr->b);
-          if (__ptr->c) {
-              e.c().alloc();
-              e.c().value() = __ptr->c.value();
-          } else { 
-              e.c().set_nullopt();
+        ++it;
+      }
+    }
+  } else { 
+    dest.set_nullopt();
+  }
+}
+inline void assign_from_flat_In_a(test::flat::DDD_Direct& src, test::DDD& dest) {
+  {
+    auto span = src.a();
+    dest.a.resize(span.size());
+    auto it = std::begin(dest.a);
+    for (auto e : span) {
+      (*it).a = e.a();
+      (*it).b = (std::string_view)e.b();
+      (*it).c = (std::string_view)e.c();
+      ++it;
+    }
+  }
+  {
+    auto opt = src.b();
+    if (opt.has_value()) {
+      dest.b = std::decay<decltype(dest.b)>::type::value_type{};
+      auto& value_to = dest.b.value();
+      auto value_from = opt.value();
+      {
+        auto span = value_from();
+        value_to.resize(span.size());
+        auto it = std::begin(value_to);
+        for (auto e : span) {
+          (*it).a = (std::string_view)e.a();
+          (*it).b = (std::string_view)e.b();
+          {
+            auto opt = e.c();
+            if (opt.has_value()) {
+              (*it).c = std::decay<decltype((*it).c)>::type::value_type{};
+              auto& value_to = (*it).c.value();
+              value_to = (bool)opt.value();
+            } else { 
+              (*it).c = std::nullopt;
+            }
           }
           ++it;
-          }
+        }
+      }
     } else { 
-          dest.set_nullopt();
+      dest.b = std::nullopt;
     }
+  }
 }
 } // namespace test::helper
 
