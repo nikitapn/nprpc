@@ -33,6 +33,7 @@
     <ClCompile Include="src\nprpc.cpp" />
     <ClCompile Include="src\session.cpp" />
     <ClCompile Include="src\client_socket_connection.cpp" />
+    <ClCompile Include="src\session_context.cpp" />
     <ClCompile Include="win\dllmain.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -43,13 +44,17 @@
     <ClInclude Include="include\nprpc\exception.hpp" />
     <ClInclude Include="include\nprpc\export.hpp" />
     <ClInclude Include="include\nprpc\flat.hpp" />
+    <ClInclude Include="include\nprpc\impl\nprpc_impl.hpp" />
+    <ClInclude Include="include\nprpc\impl\session.hpp" />
     <ClInclude Include="include\nprpc\nprpc.hpp" />
     <ClInclude Include="include\nprpc\nprpc_base.hpp" />
-    <ClInclude Include="include\nprpc\nprpc_impl.hpp" />
     <ClInclude Include="include\nprpc\nprpc_nameserver.hpp" />
-    <ClInclude Include="include\nprpc\nprpc_nameserver_m.hpp" />
     <ClInclude Include="include\nprpc\object_ptr.hpp" />
-    <ClInclude Include="include\nprpc\session.hpp" />
+    <ClInclude Include="include\nprpc\serialization\iarchive.h" />
+    <ClInclude Include="include\nprpc\serialization\nvp.hpp" />
+    <ClInclude Include="include\nprpc\serialization\oarchive.h" />
+    <ClInclude Include="include\nprpc\serialization\serialization.h" />
+    <ClInclude Include="include\nprpc\session_context.h" />
     <ClInclude Include="include\nprpc\utils.hpp" />
     <ClInclude Include="src\framework.h" />
   </ItemGroup>
@@ -64,26 +69,26 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -119,7 +124,7 @@
     <ReferencePath>$(VC_ReferencesPath_x64);</ReferencePath>
     <LibraryPath>$(OPENSSL_DIR)\lib;$(BOOST_DIR)\stage_x64\lib;$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64)</LibraryPath>
     <OutDir>c:\opt\x64\</OutDir>
-    <IncludePath>$(OPENSSL_DIR)\include;$(VC_IncludePath);$(WindowsSDK_IncludePath);</IncludePath>
+    <IncludePath>$(BOOST_DIR);$(OPENSSL_DIR)\include;$(VC_IncludePath);$(WindowsSDK_IncludePath);</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
@@ -171,8 +176,8 @@
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\npidl\include;.\include;$(BOOST_DIR);C:\Program Files (x86)\Visual Leak Detector\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <AdditionalIncludeDirectories>..\npidl\include;.\include;C:\Program Files (x86)\Visual Leak Detector\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp20</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
@@ -193,7 +198,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <AdditionalIncludeDirectories>..\npidl\include;.\include;$(BOOST_DIR);C:\Program Files (x86)\Visual Leak Detector\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <LanguageStandard>stdcpp20</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>

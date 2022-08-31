@@ -6,6 +6,9 @@ module.exports = env => {
 	entry: './src/index.ts',
 	watch: is_debug,
 	mode: is_debug ? 'development' : 'production',
+  optimization: {
+    minimize: !is_debug,
+  },
   module: {
     rules: [
       {
@@ -23,7 +26,8 @@ module.exports = env => {
 		libraryTarget: 'umd',
     library: 'nprpc_runtime',
     umdNamedDefine: true,
-    path: path.resolve(__dirname, 'nprpc'),
+    path: path.resolve(__dirname, 'dist'),
   },
+  
 }
 };

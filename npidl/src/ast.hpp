@@ -13,20 +13,27 @@
 constexpr int fundamental_type_first = 256;
 constexpr int fundamental_type_last = fundamental_type_first + 16;
 
+#define ONE_CHAR_TOKENS() \
+	TOKEN_FUNC(Hash, '#') \
+	TOKEN_FUNC(RoundBracketOpen, '(') \
+	TOKEN_FUNC(RoundBracketClose, ')') \
+	TOKEN_FUNC(Comma, ',') \
+	TOKEN_FUNC(Semicolon, ';') \
+	TOKEN_FUNC(Assignment, '=') \
+	TOKEN_FUNC(Optional, '?') \
+	TOKEN_FUNC(Less, '<') \
+	TOKEN_FUNC(Greater, '>') \
+	TOKEN_FUNC(SquareBracketOpen, '[') \
+	TOKEN_FUNC(SquareBracketClose, ']') \
+	TOKEN_FUNC(BracketOpen, '{') \
+	TOKEN_FUNC(BracketClose, '}')
+
 enum class TokenId {
-	Hash = '#',
-	RoundBracketOpen = '(',
-	RoundBracketClose = ')',
-	Comma = ',',
 	Colon = ':',
-	Semicolon = ';',
-	Less = '<',
-	Assignment = '=',
-	Greater = '>',
-	SquareBracketOpen = '[',
-	SquareBracketClose = ']',
-	BracketOpen = '{',
-	BracketClose = '}',
+
+#define TOKEN_FUNC(x, y) x = y,
+	ONE_CHAR_TOKENS()
+#undef TOKEN_FUNC
 
 	Boolean = fundamental_type_first,
 	Int8,
@@ -48,8 +55,6 @@ enum class TokenId {
 	Exception,
 	Eof,
 	DoubleColon,
-	Message,
-	Of,
 	Namespace,
 	Interface,
 	Object,
@@ -60,8 +65,8 @@ enum class TokenId {
 	Using,
 	Raises,
 	OutDirect,
-	Class,
-	Extends
+	Helper,
+	Trusted,
 };
 
 struct Ast_Struct_Decl;
@@ -70,12 +75,13 @@ struct Ast_Interface_Decl;
 struct Ast_Function_Decl;
 
 class Namespace {
-	std::vector<Namespace*> childs_;
 	Namespace* parent_;
 	std::string name_;
+
+	std::vector<Namespace*> children_;
 	std::vector<std::pair<std::string, Ast_Type_Decl*>> types_;
+
 	std::string construct_path(const std::string& delim, bool omit_root = false) const noexcept;
-	
 public:
 	Namespace();
 	Namespace(Namespace* parent, std::string&& name);
@@ -96,13 +102,12 @@ enum class FieldType {
 	Vector,
 	String,
 	Struct,
+	Optional,
 	Void,
 	Object,
 	Interface,
 	Alias,
 	Enum,
-	Message,
-	Class,
 };
 
 enum class NumberFormat { Decimal, Hex, Scientific };
@@ -138,7 +143,7 @@ inline std::ostream& operator << (std::ostream& os, const Ast_Number& n) {
 			if (n.format == NumberFormat::Hex) {
 				os << "0x" << std::hex;
 				if (n.max_size) {
-					os << std::setfill('0') << std::setw(n.max_size * 2);
+					os << std::setfill('0') << std::setw(static_cast<std::streamsize>(n.max_size) * 2);
 				}
 				os << x;
 				os << std::dec;
@@ -183,6 +188,8 @@ struct Ast_Fundamental_Type : Ast_Type_Decl {
 struct Ast_Wrap_Type : Ast_Type_Decl {
 	Ast_Type_Decl* type;
 	Ast_Wrap_Type(Ast_Type_Decl* _type) : type(_type) {}
+
+	Ast_Type_Decl* real_type();
 };
 
 struct Ast_Array_Decl : Ast_Wrap_Type {
@@ -233,20 +240,11 @@ struct Ast_Interface_Decl : Ast_Type_Decl {
 	std::string name;
 	std::vector<Ast_Function_Decl*> fns;
 	std::vector<Ast_Interface_Decl*> plist;
+	bool trusted = true;
+
 
 	Ast_Interface_Decl() {
 		id = FieldType::Interface;
-	}
-};
-
-
-struct Ast_Class_Decl : Ast_Type_Decl {
-	Ast_Class_Decl* parent = nullptr;
-	std::string name;
-	
-
-	Ast_Class_Decl() {
-		id = FieldType::Class;
 	}
 };
 
@@ -269,12 +267,19 @@ struct Ast_Field_Decl {
 	bool input_function_argument;
 	std::string_view function_name;
 	std::string_view function_argument_name;
+	
+	bool is_optional() const noexcept {
+		return type->id == FieldType::Optional;
+	}
 };
+
+using struct_id_t = std::string;
 
 struct Ast_Struct_Decl : Ast_Type_Decl {
 	int version = -1;
 	Namespace* nm;
 	std::string name;
+	struct_id_t unique_id;
 	std::vector<Ast_Field_Decl*> fields;
 	int size = -1;
 	int align = -1;
@@ -283,21 +288,18 @@ struct Ast_Struct_Decl : Ast_Type_Decl {
 	uint32_t exception_id;
 
 	bool is_exception() const noexcept { return exception_id != -1; }
+	const struct_id_t& get_function_struct_id();
 
 	Ast_Struct_Decl() {
 		id = FieldType::Struct;
 	}
 };
 
-struct Ast_MessageDescriptor_Decl : Ast_Type_Decl {
-	std::uint32_t message_id;
-	std::string name;
-	Ast_Struct_Decl* s;
-
-//	bool is_flat() const noexcept override { return s->is_flat(); }
-
-	Ast_MessageDescriptor_Decl() {
-		id = FieldType::Message;
+struct Ast_Optional_Decl : Ast_Wrap_Type {
+	Ast_Optional_Decl(Ast_Type_Decl* _type)
+		: Ast_Wrap_Type(_type)
+	{
+		id = FieldType::Optional;
 	}
 };
 
@@ -315,9 +317,10 @@ constexpr auto cwt(Ast_Type_Decl* type) noexcept {
 	assert(
 		type->id == FieldType::Array ||
 		type->id == FieldType::Vector ||
-		type->id == FieldType::Alias
+		type->id == FieldType::Alias ||
+		type->id == FieldType::Optional
 	);
-	return static_cast<Ast_Wrap_Type*>(type)->type;
+	return static_cast<Ast_Wrap_Type*>(type);
 }
 
 constexpr auto car(Ast_Type_Decl* type) noexcept {
@@ -370,6 +373,18 @@ constexpr auto cifs(Ast_Type_Decl* type) noexcept {
 	return static_cast<Ast_Interface_Decl*>(type);
 }
 
+constexpr auto copt(Ast_Type_Decl* type) noexcept {
+	assert(type->id == FieldType::Optional);
+	return static_cast<Ast_Optional_Decl*>(type);
+}
+
+
+inline Ast_Type_Decl* Ast_Wrap_Type::real_type() {
+	auto wt = type;
+	if (wt->id == FieldType::Alias) wt = calias(wt)->get_real_type();
+	return wt;
+}
+
 enum class ArgumentModifier { In, Out };
 
 struct Ast_Function_Argument : Ast_Field_Decl {
@@ -390,8 +405,6 @@ struct Ast_Function_Decl {
 	bool is_void() const noexcept { return ret_value->id == FieldType::Void; }
 };
 
-
-using struct_id_t = std::string;
 
 template<typename IdType, typename T>
 class List {
@@ -420,8 +433,8 @@ inline const std::string& Namespace::name() const noexcept { return name_; }
 inline Namespace* Namespace::parent() const noexcept { return parent_; }
 
 inline auto Namespace::push(std::string&& s) noexcept {
-	childs_.push_back(new Namespace(this, std::move(s)));
-	return childs_.back();
+	children_.push_back(new Namespace(this, std::move(s)));
+	return children_.back();
 }
 
 inline Ast_Type_Decl* Namespace::find_type(const std::string& str, bool only_this_namespace) {
@@ -436,8 +449,8 @@ inline Ast_Type_Decl* Namespace::find_type(const std::string& str, bool only_thi
 }
 
 inline Namespace* Namespace::find_child(const std::string& str) {
-	if (auto it = std::find_if(childs_.begin(), childs_.end(),
-		[&str](auto nm) {return nm->name() == str; }); it != childs_.end()) {
+	if (auto it = std::find_if(children_.begin(), children_.end(),
+		[&str](auto nm) {return nm->name() == str; }); it != children_.end()) {
 		return *it;
 	}
 	return nullptr;
@@ -499,7 +512,6 @@ public:
 	int m_struct_n_ = 0;
 	std::vector<Ast_Struct_Decl*> exceptions;
 	std::vector<Ast_Interface_Decl*> interfaces;
-	uint32_t message_id_last = 0;
 
 	uint32_t next_exception_id () noexcept { return ++exception_id_last; }
 
@@ -518,6 +530,10 @@ public:
 
 	bool is_nprpc_base() const noexcept {
 		return base_name == "nprpc_base";
+	}
+
+	bool is_nprpc_nameserver() const noexcept {
+		return base_name == "nprpc_nameserver";
 	}
 
 	Context(const std::filesystem::path& file_path) {

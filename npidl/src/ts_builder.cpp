@@ -140,8 +140,8 @@ static std::ostream& operator << (std::ostream& os, const TokenId& token_id) {
 		case TokenId::UInt32:		os << "u32"; break;
 		case TokenId::Int64:		os << "i64"; break;
 		case TokenId::UInt64:		os << "u64"; break;
-		case TokenId::Float32:	os << "float32"; break;
-		case TokenId::Float64:	os << "float64"; break;
+		case TokenId::Float32:	os << "f32"; break;
+		case TokenId::Float64:	os << "f64"; break;
 		default: assert(false);
 		}
 
@@ -195,7 +195,7 @@ void Builder_Typescript::emit_type(Ast_Type_Decl* type, std::ostream& os) {
 		break;
 	case FieldType::Vector:
 	case FieldType::Array:
-		os << "Array<";  emit_type(cwt(type), os); os << ">";
+		os << "Array<";  emit_type(cwt(type)->type, os); os << ">";
 		break;
 	case FieldType::String:
 		os << "string";
@@ -211,6 +211,9 @@ void Builder_Typescript::emit_type(Ast_Type_Decl* type, std::ostream& os) {
 		break;
 	case FieldType::Enum:
 		os << ns(cenum(type)->nm) << cenum(type)->name;
+		break;
+	case FieldType::Optional:
+		emit_type(cwt(type)->type, os);
 		break;
 	default:
 		assert(false);
@@ -228,25 +231,23 @@ void Builder_Typescript::emit_flat_type(Ast_Type_Decl* type, std::ostream& os) {
 		break;
 	}
 	case FieldType::Vector:
-		os << "NPRPC.Flat.Vector<";
-		emit_flat_type(cvec(type)->type, os);
-		os << ">";
+		assert(false);
 		break;
 	case FieldType::String:
-		os << "NPRPC.Flat.String";
+		assert(false);
 		break;
 	case FieldType::Array:
-		os << "NPRPC.Flat.Array<";
-		emit_flat_type(car(type)->type, os);
-		os << ',' << car(type)->length << '>';
+		assert(false);
+		break;
+	case FieldType::Optional:
+		assert(false);
 		break;
 	case FieldType::Object:
 		os << "NPRPC.detail.Flat_nprpc_base.ObjectId";
 		break;
-	case FieldType::Alias: {
+	case FieldType::Alias: 
 		emit_flat_type(calias(type)->get_real_type(), os);
 		break;
-	}
 	case FieldType::Enum:
 		os << ns(cenum(type)->nm) << cenum(type)->name;
 		break;
@@ -281,63 +282,64 @@ void Builder_Typescript::emit_accessors(const std::string& flat_name, Ast_Field_
 			<< "_Direct(this.buffer, this.offset + " 
 			<< align_offset(cflat(f->type)->align, last_field_ended, cflat(f->type)->size) << "); }\n";
 		break;
-	
-	case FieldType::Vector:
-	{
-		auto utype = cwt(f->type);
+
+	case FieldType::Vector: {
+		auto wt = cwt(f->type)->real_type();
 		auto [v_size, v_align] = get_type_size_align(f->type);
-		auto [ut_size, ut_align] = get_type_size_align(utype);
+		auto [ut_size, ut_align] = get_type_size_align(wt);
 		auto const vec_offset = align_offset(v_align, last_field_ended, v_size);
 
-		// _alloc(buffer: FlatBuffer, vector_offset: number, n: number, element_size: number, align: number)
-		out << 
+		out <<
 			"  public " << f->name << "(elements_size: number): void { \n"
 			"    NPRPC.Flat._alloc(this.buffer, this.offset + " << vec_offset << ", elements_size, " << ut_size << ", " << ut_align << ");\n"
 			"  }\n";
 
-		
-		for (;;) {
-			if (utype->id == FieldType::Fundamental || utype->id == FieldType::Enum) {
-				out << 
-					"  public " << f->name << "_vd() { return new NPRPC.Flat.Vector_Direct1_" << toktype << cft(utype)->token_id <<
-				 "(this.buffer, this.offset + " << vec_offset << "); }\n";
-			} else if (utype->id == FieldType::Struct) {
-				out << "  public " << f->name << "_vd() { return new NPRPC.Flat.Vector_Direct2<"; emit_flat_type(utype, out); out << "_Direct>"
-					"(this.buffer, this.offset + " << vec_offset << ", " << ut_size << ", "; emit_flat_type(utype, out); out << "_Direct); }\n";
-			} else if (utype->id == FieldType::Alias) {
-				utype = calias(utype)->get_real_type();
-				continue;
-			} else {
-				assert(false);
-			}
-			break;
+		if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
+			out <<
+				"  public " << f->name << "_d() { return new NPRPC.Flat.Vector_Direct1_" << toktype << cft(wt)->token_id <<
+				"(this.buffer, this.offset + " << vec_offset << "); }\n";
+		} else if (wt->id == FieldType::Struct) {
+			out << "  public " << f->name << "_d() { return new NPRPC.Flat.Vector_Direct2<"; emit_flat_type(wt, out); out << "_Direct>"
+				"(this.buffer, this.offset + " << vec_offset << ", " << ut_size << ", "; emit_flat_type(wt, out); out << "_Direct); }\n";
 		}
-		
+
 		break;
 	}
-	case FieldType::Array:
-	{
-		auto utype = cwt(f->type);
+	case FieldType::Array: {
+		auto wt = cwt(f->type)->real_type();
 		auto [v_size, v_align] = get_type_size_align(f->type);
-		auto [ut_size, ut_align] = get_type_size_align(utype);
+		auto [ut_size, ut_align] = get_type_size_align(wt);
 		auto const vec_offset = align_offset(v_align, last_field_ended, v_size);
 		auto const arr_length = car(f->type)->length;
 
-		for (;;) {
-			if (utype->id == FieldType::Fundamental || utype->id == FieldType::Enum) {
-				out << 
-					"  public " << f->name << "_vd() { return new NPRPC.Flat.Array_Direct1_" << toktype << cft(utype)->token_id <<
-				 "(this.buffer, this.offset + " << vec_offset << ", " << arr_length <<"); }\n";
-			} else if (utype->id == FieldType::Struct) {
-				out << "  public " << f->name << "_vd() { return new NPRPC.Flat.Array_Direct2<"; emit_flat_type(utype, out); out << "_Direct>"
-					"(this.buffer, this.offset + " << vec_offset << ", " << ut_size << ", "; emit_flat_type(utype, out); out << "_Direct" << ", " << arr_length << "); }\n";
-			} else if (utype->id == FieldType::Alias) {
-				utype = calias(utype)->get_real_type();
-				continue;
-			} else {
-				assert(false);
-			}
-			break;
+		if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
+			out << "  public " << f->name << "_d() { return new NPRPC.Flat.Array_Direct1_" << toktype << cft(wt)->token_id <<
+				"(this.buffer, this.offset + " << vec_offset << ", " << arr_length <<"); }\n";
+		} else if (wt->id == FieldType::Struct) {
+			out << "  public " << f->name << "_d() { return new NPRPC.Flat.Array_Direct2<"; emit_flat_type(wt, out); out << "_Direct>"
+				"(this.buffer, this.offset + " << vec_offset << ", " << ut_size << ", "; emit_flat_type(wt, out); out << "_Direct" << ", " << arr_length << "); }\n";
+		} 
+		
+		break;
+	}
+	case FieldType::Optional: {
+		auto wt = cwt(f->type)->real_type();
+		auto [v_size, v_align] = get_type_size_align(f->type);
+		auto [ut_size, ut_align] = get_type_size_align(wt);
+		auto const optional_offset = align_offset(v_align, last_field_ended, v_size);
+
+		if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
+			out <<
+				"  public " << f->name << "() {\n"
+				"    return new NPRPC.Flat.Optional_Direct1_" << toktype << cft(wt)->token_id <<
+				"(this.buffer, this.offset + " << optional_offset << ", " << ut_size << ", " << ut_align <<");\n"
+				"  }\n";
+		} else if (wt->id == FieldType::Struct) {
+			out <<
+				"  public " << f->name << "() {\n"
+				"    return new NPRPC.Flat.Optional_Direct2<"; emit_flat_type(wt, out); out << "_Direct>"
+				"(this.buffer, this.offset + " << optional_offset << ", " << ut_size << ", " << ut_align << ", "; emit_flat_type(wt, out); out << "_Direct);\n"
+				"  }\n";
 		}
 		
 		break;
@@ -348,19 +350,15 @@ void Builder_Typescript::emit_accessors(const std::string& flat_name, Ast_Field_
 
 		out <<
 			"  public get " << f->name << "() {\n"
-			"    let enc = new TextDecoder(\"utf-8\");\n"
-			"    let v_begin = this.offset + " << offset_addr << ";\n"
-			"    let data_offset = v_begin + this.buffer.dv.getUint32(v_begin, true);\n"
-			"    let bn = this.buffer.array_buffer.slice(data_offset, data_offset + this.buffer.dv.getUint32(v_begin + 4, true));\n"
-			"    return enc.decode(bn);\n"
+			"    const offset = this.offset + " << offset_addr << ";\n"
+			"    const n = this.buffer.dv.getUint32(offset + 4, true);\n"
+			"    return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : \"\"\n"
 			"  }\n";
 
 		out <<
 			"  public set " << f->name << "(str: string) {\n"
-			"    let enc = new TextEncoder();\n"
-			"    let bytes = enc.encode(str);\n"
-			"    let len = bytes.length;\n"
-			"    let offset = NPRPC.Flat._alloc(this.buffer, this.offset + " << offset_addr << ", len, 1, 1);\n"
+			"    const bytes = u8enc.encode(str);\n"
+			"    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + " << offset_addr << ", bytes.length, 1, 1);\n"
 			"    new Uint8Array(this.buffer.array_buffer, offset).set(bytes);\n"
 			"  }\n";
 
@@ -394,36 +392,29 @@ void Builder_Typescript::emit_parameter_type_for_servant_callback_r(Ast_Type_Dec
 		emit_flat_type(type, os); os << "_Direct";
 		break;
 	case FieldType::Array: {
-		auto utype = cwt(type);
-		for (;;) {
-			if (utype->id == FieldType::Fundamental || utype->id == FieldType::Enum) {
-				out << "NPRPC.Flat.Array_Direct1_" << toktype << cft(utype)->token_id;
-			} else if (utype->id == FieldType::Struct) {
-				out << "NPRPC.Flat.Array_Direct2<"; emit_parameter_type_for_servant_callback_r(utype, out, input); out << ">";
-			} else if (utype->id == FieldType::Alias) {
-				utype = calias(utype)->get_real_type();
-				continue;
-			} else {
-				assert(false);
-			}
-			break;
+		auto wt = cwt(type)->real_type();
+		if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
+			out << "typeof NPRPC.Flat.Array_Direct1_" << toktype << cft(wt)->token_id;
+		} else if (wt->id == FieldType::Struct) {
+			out << "NPRPC.Flat.Array_Direct2<"; emit_parameter_type_for_servant_callback_r(wt, out, input); out << ">";
 		}
 		break;
 	}
 	case FieldType::Vector: {
-		auto utype = cwt(type);
-		for (;;) {
-			if (utype->id == FieldType::Fundamental || utype->id == FieldType::Enum) {
-				out << "NPRPC.Flat.Vector_Direct1_" << toktype << cft(utype)->token_id;
-			} else if (utype->id == FieldType::Struct) {
-				out << "NPRPC.Flat.Vector_Direct2<"; emit_parameter_type_for_servant_callback_r(utype, out, input); out << ">";
-			} else if (utype->id == FieldType::Alias) {
-				utype = calias(utype)->get_real_type();
-				continue;
-			} else {
-				assert(false);
-			}
-			break;
+		auto wt = cwt(type)->real_type();
+		if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
+			out << "typeof NPRPC.Flat.Vector_Direct1_" << toktype << cft(wt)->token_id;
+		} else if (wt->id == FieldType::Struct) {
+			out << "NPRPC.Flat.Vector_Direct2<"; emit_parameter_type_for_servant_callback_r(wt, out, input); out << ">";
+		}
+		break;
+	}
+	case FieldType::Optional: {
+		auto wt = cwt(type)->real_type();
+		if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
+			out << "typeof NPRPC.Flat.Optional_Direct1_" << toktype << cft(wt)->token_id;
+		} else if (wt->id == FieldType::Struct) {
+			out << "NPRPC.Flat.Optional_Direct2<"; emit_parameter_type_for_servant_callback_r(wt, out, input); out << ">";
 		}
 		break;
 	}
@@ -490,12 +481,15 @@ void Builder_Typescript::emit_parameter_type_for_proxy_call_r(Ast_Type_Decl* typ
 	case FieldType::Array:
 	case FieldType::Vector:
 		os << "Array<";
-		emit_parameter_type_for_proxy_call_r(cwt(type), os, input);
+		emit_parameter_type_for_proxy_call_r(cwt(type)->type, os, input);
 		os << ">";
 		if (type->id == FieldType::Array) os << "/*" << car(type)->length << "*/";
 		break;
 	case FieldType::String:
 		os << "string";
+		break;
+	case FieldType::Optional:
+		emit_parameter_type_for_proxy_call_r(copt(type)->type, os, input);
 		break;
 	case FieldType::Enum:
 		os << ns(cenum(type)->nm) << cenum(type)->name;
@@ -554,18 +548,50 @@ void Builder_Typescript::assign_from_ts_type(Ast_Type_Decl* type, std::string op
 		out << "  " << op1 << '(' << op2 << ".length);\n";
 		[[fallthrough]];
 	case FieldType::Array: {
-		auto utype = cwt(type);
-		if (is_fundamental(utype)) {
-			auto [size, align] = get_type_size_align(utype);
-			out << "  " << op1 << "_vd().copy_from_ts_array(" << op2 << "); \n";
+		auto wt = cwt(type)->real_type();
+		if (is_fundamental(wt)) {
+			auto [size, align] = get_type_size_align(wt);
+			out << "  " << op1 << "_d().copy_from_ts_array(" << op2 << "); \n";
 		} else {
 			out <<
 				"  {\n"
-				"  let vv = " << op1 << "_vd(), index = 0;\n"
+				"  let vv = " << op1 << "_d(), index = 0;\n"
 				"  for (let e of vv) {\n"
-				"    "; assign_from_ts_type(utype, "    e", op2 + "[index]", true); out <<
+				"    "; assign_from_ts_type(wt, "    e", op2 + "[index]", true); out <<
 				"    ++index;\n"
 				"  }\n"
+				"  }\n"
+				;
+		}
+		break;
+	}
+	case FieldType::Optional: {
+		auto wt = cwt(type)->real_type();
+		if (is_fundamental(wt)) {
+			auto [size, align] = get_type_size_align(wt);
+			out << 
+				"  {\n"
+				"    let opt = " << op1 << "();\n"
+				"    if (" << op2 <<") {\n"
+				"      opt.alloc();\n"
+				"      opt.value = " << op2 << "\n"
+				"    } else {\n"
+				"      opt.set_nullopt();\n"
+				"    }\n"
+				"  }\n"
+				;
+		} else {
+			out <<
+				"  {\n"
+				"    let opt = " << op1 << "();\n"
+				"    if (" << op2 << ") {\n"
+				"      let opt = " << op1 << "();\n"
+				"      opt.alloc();\n"
+				"      let value = opt.value;\n"
+				"      "; assign_from_ts_type(wt, "value", op2, true); out <<
+				"    } else {\n"
+				"      opt.set_nullopt();\n"
+				"    }\n"
 				"  }\n"
 				;
 		}
@@ -583,6 +609,7 @@ void Builder_Typescript::assign_from_ts_type(Ast_Type_Decl* type, std::string op
 			"  " << op1 << ".poa_idx = " << op2 << ".poa_idx;\n"
 			"  " << op1 << ".flags = " << op2 << ".flags;\n"
 			"  " << op1 << ".class_id = " << op2 << ".class_id;\n"
+			"  " << op1 << ".hostname = " << op2 << ".hostname;\n"
 			;
 		
 		//out << "  memcpy(&" << op1 << "().ip4(), &" << op2 << "._data().ip4, " << size_of_object_without_class_id <<");\n";
@@ -611,31 +638,58 @@ void Builder_Typescript::assign_from_flat_type(Ast_Type_Decl* type, std::string 
 		break;
 	}
 	case FieldType::Array:
-	case FieldType::Vector:
-	{
-		auto utype = cwt(type);
+	case FieldType::Vector: {
+		auto wt = cwt(type)->real_type();
 
 		if (top_object && direct) {
 			// expecting out passed by reference
-			out << "  " << op1 << ".value = " << op2 << "_vd();\n";
+			out << "  " << op1 << ".value = " << op2 << "_d();\n";
 			break;
 		}
 
 		auto idxs = "index_" + std::to_string(_idx++);
 		out <<
 			"  {\n"
-			"  let vv = " << op2 << "_vd(), " << idxs << " = 0;\n";
+			"  let vv = " << op2 << "_d(), " << idxs << " = 0;\n";
 		if (top_object) out << "  " << op1 << ".length = vv.elements_size;\n";
 		else out << "  (" << op1 << " as Array<any>) = new Array<any>(vv.elements_size)\n";
 		out <<
 			"  for (let e of vv) {\n";
-		if (!is_fundamental(utype)) out << "    (" << op1 << '[' << idxs << "] as any) = new Object();\n";
-		assign_from_flat_type(utype, op1 + '[' + idxs + ']', "e", true, false);
+		if (!is_fundamental(wt)) out << "    (" << op1 << '[' << idxs << "] as any) = new Object();\n";
+		assign_from_flat_type(wt, op1 + '[' + idxs + ']', "e", true, false);
 		out <<
 			"    ++" << idxs << ";\n"
 			"  }\n"
 			"  }\n"
 			;
+		break;
+	}
+	case FieldType::Optional: {
+		auto wt = cwt(type)->real_type();
+		if (is_fundamental(wt)) {
+			auto [size, align] = get_type_size_align(wt);
+			out <<
+				"  {\n"
+				"    if (" << op2 << ".has_value) {\n"
+				"      " << op1 << " = " << op2 << ".value\n"
+				"    } else {\n"
+				"      " << op1 << " = null\n"
+				"    }\n"
+				"  }\n"
+				;
+		} else {
+			out <<
+				"  {\n"
+				"    let opt = " << op2 << "();\n"
+				"    if (opt.has_value) {\n"
+				"      let value = opt.value;\n"
+				"      "; assign_from_flat_type(wt, op1, "value", true); out <<
+				"    } else {\n"
+				"      " << op1 << " = null\n"
+				"    }\n"
+				"  }\n"
+				;
+		}
 		break;
 	}
 	case FieldType::Alias:
@@ -662,7 +716,7 @@ void Builder_Typescript::emit_struct2(Ast_Struct_Decl* s, bool is_exception) {
 	if (!is_exception) {
 		out << "export interface " << s->name << " {\n";
 		for (auto const f : s->fields) {
-			out << "  " << f->name << ": "; emit_type(f->type, out); out << ";\n";
+			out << "  " << f->name << (!f->is_optional() ? ": " : "?: "); emit_type(f->type, out); out << ";\n";
 		}
 	} else {
 		out <<
@@ -760,7 +814,7 @@ void Builder_Typescript::emit_enum(Ast_Enum_Decl* e) {
 	for (size_t i = 0; i < e->items.size(); ++i) {
 		out << "  " << e->items[i].first;
 		auto const n = e->items[i].second;
-		if (n.second || ix != n.second) { // explicit
+		if (n.second || ix != n.first) { // explicit
 			out << " = " << n.first;
 			ix = n.first.decimal() + 1;
 		} else {
@@ -785,12 +839,14 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 	auto const flat_nm = "Flat_" + ctx_.base_name;
 	const auto servant_iname = 'I' + ifs->name + "_Servant";
 
-	auto emit_function_arguments = [](Ast_Function_Decl* fn, std::ostream& os,
+	auto emit_function_arguments = [](bool ts, Ast_Function_Decl* fn, std::ostream& os,
 		std::function<void(Ast_Function_Argument*, std::ostream& os)> emitter) {
 			os << "(";
 			size_t ix = 0;
 			for (auto arg : fn->args) {
-				os << arg->name << ": "; 
+				os << arg->name;
+				if (!ts) os << ": ";
+				else os << (!arg->is_optional() ? ": " : "?: ");
 				emitter(arg, os);
 				if (++ix != fn->args.size()) os << ", ";
 			}
@@ -835,7 +891,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 		}
 		for (auto& fn : inherited_ifs.first->fns) {
 			out << "  public async " << fn->name;
-			emit_function_arguments(fn, out,
+			emit_function_arguments(false, fn, out,
 				std::bind(&Builder_Typescript::emit_parameter_type_for_proxy_call, this, _1, _2)
 			);
 			out << ": Promise<"; emit_type(fn->ret_value, out);  out << "> {\n";
@@ -851,7 +907,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 	for (auto& fn : ifs->fns) {
 		make_arguments_structs(fn);
 		out << "  public async " << fn->name;
-		emit_function_arguments(fn, out,
+		emit_function_arguments(true, fn, out,
 			std::bind(&Builder_Typescript::emit_parameter_type_for_proxy_call, this, _1, _2)
 		);
 		out << ": Promise<"; emit_type(fn->ret_value, out);  out << "> {\n"
@@ -890,7 +946,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 
 		out <<
 			"    await NPRPC.rpc.call(\n"
-			"      {ip4: this.data.ip4, port: this.data.websocket_port}, buf, this.timeout\n"
+			"      this.endpoint(), buf, this.timeout\n"
 			"    );\n"
 			"    let std_reply = NPRPC.handle_standart_reply(buf);\n"
 			;
@@ -951,7 +1007,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 
 	for (auto fn : ifs->fns) {
 		out << "  " << fn->name;
-		emit_function_arguments(fn, out,
+		emit_function_arguments(false, fn, out,
 			std::bind(&Builder_Typescript::emit_parameter_type_for_servant_callback, this, _1, _2)
 		);
 		out << ": "; emit_type(fn->ret_value, out); out << ";\n";
@@ -1059,7 +1115,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 				if (!fn->out_s->flat) {
 					out << "oa._" << ++out_ix;
 					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::Array || arg->type->id == FieldType::String) {
-						out << "_vd";
+						out << "_d";
 					}
 				} else {
 					out << "_out_" << ++out_ix;
@@ -1069,7 +1125,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 					out << "NPRPC.create_object_from_flat(ia._" << ++in_ix << ", remote_endpoint.ip4)";
 				} else {
 					out << "ia._" << ++in_ix;
-					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::Array) out << "_vd()";
+					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::Array) out << "_d()";
 				}
 			}
 			if (++idx != fn->args.size()) out << ", ";
@@ -1194,10 +1250,17 @@ Builder_Typescript::Builder_Typescript(Context& ctx, std::filesystem::path file_
 	filename.replace_extension(".ts");
 	out.open(out_dir / filename);
 
-	if (!ctx_.is_nprpc_base()) {
-		out << "import * as NPRPC from './nprpc'\n\n";
+	if (ctx_.is_nprpc_base()) {
+		out << "import * as NPRPC from './base'\n\n";
+	} else if (ctx_.is_nprpc_nameserver()) {
+		out << "import * as NPRPC from './index_internal'\n\n";
 	} else {
-		out << "import * as NPRPC from './nprpc'\n\n";
+		out << "import * as NPRPC from 'nprpc'\n\n";
 	}
+
+	out <<
+		"const u8enc = new TextEncoder();\n"
+		"const u8dec = new TextDecoder();\n\n"
+		;
 
 }

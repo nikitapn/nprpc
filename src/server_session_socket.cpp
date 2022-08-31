@@ -15,8 +15,8 @@
 #include <boost/beast/core/flat_buffer.hpp>
 
 #include <nprpc/nprpc.hpp>
-#include <nprpc/nprpc_impl.hpp>
-#include <nprpc/session.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/session.hpp>
 
 #include <nprpc/asio.hpp>
 
@@ -38,15 +38,15 @@ public:
     assert(false);
   }
   virtual void send_receive(
-		boost::beast::flat_buffer& buffer,
+		flat_buffer& buffer,
 		uint32_t timeout_ms
 	) {
     assert(false);
 	}
 
 	virtual void send_receive_async(
-		boost::beast::flat_buffer&& buffer,
-		std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler,
+		flat_buffer&& buffer,
+		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
 		uint32_t timeout_ms
 	) {
     assert(false);
@@ -132,8 +132,8 @@ public:
     , socket_(std::move(socket))
   {
     auto remote_endpoint = socket_.remote_endpoint();
-    remote_endpoint_.ip4 = remote_endpoint.address().to_v4().to_uint();
-    remote_endpoint_.port = remote_endpoint.port();
+    ctx_.remote_endpoint.ip4 = remote_endpoint.address().to_v4().to_uint();
+    ctx_.remote_endpoint.port = remote_endpoint.port();
   }
 };
 

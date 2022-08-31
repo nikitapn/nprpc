@@ -53,3 +53,65 @@ public:
 
 	BuildGroup(Context& ctx) : ctx_{ ctx }, size_{ 0 } {}
 };
+
+class BlockDepth {
+	friend std::ostream& operator<<(std::ostream&, const BlockDepth&);
+	size_t depth_ = 0;
+public:
+
+	std::string str() const noexcept {
+		return std::to_string(depth_);
+	}
+
+	BlockDepth& operator =(size_t n) {
+		depth_ = n;
+		return *this;
+	}
+
+	BlockDepth& operator --() {
+		assert(depth_);
+		--depth_;
+		return *this;
+	}
+
+	BlockDepth& operator ++() {
+		++depth_;
+		return *this;
+	}
+
+	BlockDepth operator ++(int) {
+		BlockDepth tmp = *this;
+		++depth_;
+		return tmp;
+	}
+
+	BlockDepth operator +(size_t depth) {
+		BlockDepth tmp = *this;
+		tmp.depth_ += depth;
+		return tmp;
+	}
+
+	BlockDepth operator -(size_t depth) {
+		assert(depth_ > depth);
+		BlockDepth tmp = *this;
+		tmp.depth_ -= depth;
+		return tmp;
+	}
+
+	BlockDepth& operator -=(size_t depth) {
+		assert(depth_ > depth);
+		depth_ -= depth;
+		return *this;
+	}
+
+	BlockDepth& operator +=(size_t depth) {
+		depth_ += depth;
+		return *this;
+	}
+};
+
+inline std::ostream& operator<<(std::ostream& os, const BlockDepth& block) {
+	for (size_t i = 0; i < block.depth_; ++i) os << "  ";
+	return os;
+}
+

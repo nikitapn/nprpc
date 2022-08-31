@@ -13,6 +13,11 @@ ExceptionTimeout : exception {}
 ExceptionObjectNotExist : exception {}
 ExceptionUnknownFunctionIndex : exception {}
 ExceptionUnknownMessageId : exception {}
+ExceptionUnsecuredObject : exception {
+	class_id: string;
+}
+ExceptionBadAccess : exception {}
+ExceptionBadInput : exception {}
 
 enum DebugLevel {
 	DebugLevel_Critical,
@@ -29,7 +34,9 @@ ObjectIdLocal : flat {
 }
 
 enum ObjectFlag {
-	Policy_Lifespan, WebObject
+	Policy_Lifespan 	= 0,
+	WebObject 			= 1,
+	Secured 			= 2,
 }
 
 ObjectId : flat {
@@ -40,6 +47,7 @@ ObjectId : flat {
 	poa_idx: poa_idx_t;
 	flags: u32;
 	class_id: string; // must be the first vector field
+	hostname: string;
 }
 }
 
@@ -56,6 +64,8 @@ enum MessageId: u32 {
 	Error_CommFailure,
 	Error_UnknownFunctionIdx,
 	Error_UnknownMessageId,
+	Error_BadAccess,
+	Error_BadInput
 }
 
 enum MessageType: u32 {

@@ -1,5 +1,6 @@
 // Copyright (c) 2021 nikitapnn1@gmail.com
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// Based on an example from boost.beast library.
 
 #include <algorithm>
 #include <cstdlib>
@@ -28,8 +29,8 @@
 #include <boost/optional.hpp>
 #include <openssl/sha.h>
 
-#include <nprpc/nprpc_impl.hpp>
-#include <nprpc/session.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/session.hpp>
 #include <nprpc/nprpc_base.hpp>
 
 namespace nprpc::impl {
@@ -39,8 +40,6 @@ namespace ssl = boost::asio::ssl;
 namespace beast = boost::beast;
 namespace http = boost::beast::http;
 namespace websocket = boost::beast::websocket;
-
-using beast::flat_buffer;
 
 using tcp = net::ip::tcp;
 using error_code = boost::system::error_code;
@@ -79,6 +78,7 @@ beast::string_view mime_type(beast::string_view path)
 	}();
 	if (iequals(ext, ".htm"))  return "text/html";
 	if (iequals(ext, ".html")) return "text/html";
+	if (iequals(ext, ".woff2")) return "font/woff2";
 	if (iequals(ext, ".php"))  return "text/html";
 	if (iequals(ext, ".css"))  return "text/css";
 	if (iequals(ext, ".txt"))  return "text/plain";
@@ -183,20 +183,21 @@ template<
 	};
 
 	// send response in json
-	auto const ajax_json_request = [&req](std::string val, std::string msg) {
-		std::string json = "{ \"" + val + "\": \"" + msg + "\" }";
-		auto size = json.size();
-		http::response<http::string_body> res{
-			std::piecewise_construct,
-			std::make_tuple(std::move(json)),
-			std::make_tuple(http::status::ok, req.version())
-		};
-		res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
-		res.set(http::field::content_type, "application/json");
-		res.content_length(size);
-		res.keep_alive(req.keep_alive());
-		return res;
-	};
+	
+//	auto const ajax_json_request = [&req](std::string val, std::string msg) {
+//		std::string json = "{ \"" + val + "\": \"" + msg + "\" }";
+//		auto size = json.size();
+//		http::response<http::string_body> res{
+//			std::piecewise_construct,
+//			std::make_tuple(std::move(json)),
+//			std::make_tuple(http::status::ok, req.version())
+//		};
+//		res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+//		res.set(http::field::content_type, "application/json");
+//		res.content_length(size);
+//		res.keep_alive(req.keep_alive());
+//		return res;
+//	};
 
 	// Make sure we can handle the method
 	if (req.method() != http::verb::get
@@ -213,10 +214,20 @@ template<
 		req.target().find("..") != beast::string_view::npos)
 		return send(bad_request("Illegal request-target"));
 
-	// std::cout << "target: " << req.target() << std::endl;
+	std::string path;
 
-	std::string path = path_cat(doc_root, req.target());
-	if (req.target().length() == 1 && req.target().back() == '/') path.append("index.html");
+	if (req.target().length() == 1 && req.target().back() == '/') {
+		path = path_cat(doc_root, "/index.html");
+	} else if (
+		!g_cfg.spa_links.empty() && 
+		req.target().find('.') == std::string::npos
+		) {
+		if (std::find(std::begin(g_cfg.spa_links), std::end(g_cfg.spa_links), req.target()) 
+			== g_cfg.spa_links.end()) return send(not_found(req.target()));
+		path = path_cat(doc_root, "/index.html");
+	} else {
+		path = path_cat(doc_root, req.target());
+	}
 
 	// Attempt to open the file
 	beast::error_code ec;
@@ -228,8 +239,7 @@ template<
 		return send(not_found(req.target()));
 
 	// Handle an unknown error
-	if (ec)
-		return send(server_error(ec.message()));
+	if (ec) return send(server_error(ec.message()));
 
 	// Cache the size since we need it after the move
 	auto const size = body.size();
@@ -281,14 +291,15 @@ beast_fail(beast::error_code ec, char const* what)
 	// after the message has been completed, so it is safe to ignore it.
 
 	if (ec == net::ssl::error::stream_truncated) return;
-
-	std::cerr << what << ": " << ec.message() << "\n";
+	if (g_cfg.debug_level > DebugLevel::DebugLevel_Critical)
+		std::cerr << what << ": " << ec.message() << "\n";
 }
 
 //------------------------------------------------------------------------------
 
 template<class Derived>
-class websocket_session : public nprpc::impl::Session
+class websocket_session 
+	: public nprpc::impl::Session
 {
 	struct work {
     virtual void operator()() = 0;
@@ -297,159 +308,15 @@ class websocket_session : public nprpc::impl::Session
     virtual ~work() = default;
   };
 
-	std::deque<std::shared_ptr<work>> requests_; // change to shared_ptr in plain sockets also. will do it tomorrow...
-	std::deque<std::shared_ptr<work>> answers_; // change to unique_ptr maybe?
+	std::deque<std::shared_ptr<work>> requests_;
+	std::deque<std::unique_ptr<work>> answers_;
 
 	bool reading_ = false;
+	bool writing_ = false;
 	bool request_sended_waiting_for_answer_ = false;
 
 	Derived& derived() { return static_cast<Derived&>(*this); }
 
-	void dump(std::string_view fn) {
-		// std::cerr << fn << "(): requests_.size = " << requests_.size() << ", answers_.size = " << answers_.size() << '\n';
-	}
-protected:
-	void close() {
-		const boost::system::error_code ec{boost::asio::error::connection_aborted};
-		for (auto& r : requests_) {
-			r->on_failed(ec);
-		}
-		requests_.clear();
-		answers_.clear();
-		nprpc::impl::Session::close();
-	}
-public:
-	virtual void timeout_action() final {
-
-	}
-
-	virtual void send_receive(
-		flat_buffer& buffer,
-		uint32_t timeout_ms
-	) {
-		assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
-
-		if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-			dump_message(buffer, false);
-		}
-
-		struct work_impl : work {
-			boost::beast::flat_buffer& buffer_;
-			Derived& this_;
-			uint32_t timeout_ms;
-
-			std::promise<boost::system::error_code> promise;
-
-			void operator()() noexcept override {
-				//this_.set_timeout(timeout_ms);
-				this_.ws().text(false); // binary mode only
-				this_.dump("send_receive");
-				this_.ws().async_write(
-					buffer_.data(),
-					std::bind(
-						&websocket_session::on_write,
-						this_.shared_from_this(),
-						std::placeholders::_1,
-						std::placeholders::_2,
-						false));
-			}
-
-			void on_failed(const boost::system::error_code& ec) noexcept override {
-				promise.set_value(ec);
-			}
-
-			void on_executed(boost::beast::flat_buffer&& buffer) noexcept override {
-				buffer_ = std::move(buffer);
-				promise.set_value({});
-			}
-
-			std::future<boost::system::error_code> get_future() { return promise.get_future(); }
-
-			work_impl(Derived& _this_, boost::beast::flat_buffer& _buf, uint32_t _timeout_ms)
-				: this_(_this_)
-				, buffer_(_buf)
-				, timeout_ms(_timeout_ms)
-			{
-			}
-		};
-
-	
-		auto w = std::make_shared<work_impl>(derived(), buffer, timeout_ms);
-		auto f = w->get_future();
-		
-		add_work(w);
-
-		auto ec = f.get();
-
-		if (!ec) {
-			if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-				dump_message(buffer, true);
-			}
-		} else {
-			throw nprpc::ExceptionCommFailure();
-		}
-	}
-
-	virtual void send_receive_async(
-		flat_buffer&& buffer,
-		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
-		uint32_t timeout_ms
-	) {
-		assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
-
-		struct work_impl : work {
-			boost::beast::flat_buffer buffer_;
-			Derived& this_;
-			uint32_t timeout_ms;
-			std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)> handler;
-
-			void operator()() noexcept override {
-				//this_.set_timeout(timeout_ms);
-				this_.ws().text(false); // binary mode only
-				this_.dump("send_receive_async");
-				this_.ws().async_write(
-					buffer_.data(),
-					std::bind(
-						&websocket_session::on_write,
-						this_.shared_from_this(),
-						std::placeholders::_1,
-						std::placeholders::_2,
-						false));
-			}
-
-			void on_failed(const boost::system::error_code& ec) noexcept override {
-				handler(ec, buffer_);
-			}
-
-			void on_executed(boost::beast::flat_buffer&& buffer) noexcept override {
-				buffer_ = std::move(buffer);
-				handler(boost::system::error_code{}, buffer_);
-			}
-
-			work_impl(boost::beast::flat_buffer&& _buf,
-				Derived& _this_,
-				std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& _handler,
-				uint32_t _timeout_ms)
-				: buffer_(std::move(_buf))
-				, this_(_this_)
-				, timeout_ms(_timeout_ms)
-				, handler(std::move(_handler))
-			{
-			}
-		};
-
-		add_work(std::make_shared<work_impl>(std::move(buffer), derived(), std::move(completion_handler), timeout_ms));
-	}
-
-	void add_work(std::shared_ptr<work> w) {
-		boost::asio::post(derived().ws().get_executor(), [w, this]() mutable {
-			dump("add_work");
-			//std::cerr << "add_work() wq_.size = " << wq_.size() << '\n';
-			requests_.push_back(std::move(w));
-			if (requests_.size() == 1 && answers_.empty()) (*requests_.front())();
-		});
-	}
-private:
 	// Start the asynchronous operation
 	template<class Body, class Allocator>
 	void do_accept(http::request<Body, http::basic_fields<Allocator>> req) {
@@ -466,6 +333,11 @@ private:
 					res.set(http::field::server,
 						std::string(BOOST_BEAST_VERSION_STRING));
 				}));
+
+		websocket::permessage_deflate opt;
+		opt.client_enable = true;
+		opt.server_enable = true;
+		derived().ws().set_option(opt);
 
 		// Accept the websocket handshake
 		derived().ws().async_accept(
@@ -493,8 +365,9 @@ private:
 	}
 
 	void on_read(beast::error_code ec, std::size_t bytes_transferred) {
-		reading_ = false;
 		boost::ignore_unused(bytes_transferred);
+
+		reading_ = false;
 
 		// This indicates that the websocket_session was closed
 		if (ec == websocket::error::closed) {
@@ -510,7 +383,6 @@ private:
 		nprpc::impl::flat::Header_Direct header(rx_buffer_(), 0);
 
 		if (header.msg_type() == nprpc::impl::MessageType::Request) {
-			dump("on_read_req");
 			//std::cerr << "on_read_request: " << bytes_transferred << ", wq_.size = " << wq_.size() << '\n';
 			handle_request();
 
@@ -526,6 +398,7 @@ private:
 
 				virtual void operator()() final {
 					self_.ws().text(false); // binary mode only
+					self_.writing_ = true;
 					self_.ws().async_write(
 						buffer_.data(),
 						std::bind(
@@ -536,14 +409,14 @@ private:
 							true));
 				}
 				virtual void on_failed(const boost::system::error_code& ec) noexcept {}
-				virtual void on_executed(boost::beast::flat_buffer&&) noexcept {}
+				virtual void on_executed(flat_buffer&&) noexcept {}
 			};
 
-			answers_.emplace_front(std::make_shared<work_send_reply>(derived(), std::move(rx_buffer_(true))));
-			(*answers_.front())();
+			answers_.emplace_back(std::make_unique<work_send_reply>(derived(), std::move(rx_buffer_(true))));
+
+			if (!writing_) (*answers_.front())();
 		} else { // received an answer
 			request_sended_waiting_for_answer_ = false;
-			dump("on_read_asw");
 			assert(!requests_.empty());
 			//std::cerr << "on_read_answer: " << bytes_transferred << ", wq_.size = " << wq_.size() << '\n';
 			if (!ec) {
@@ -558,14 +431,13 @@ private:
 	}
 
 	void on_write(beast::error_code ec, std::size_t bytes_transferred, bool is_answer) {
-		//std::cerr << "on_write: " << bytes_transferred << ", wq_.size = " << wq_.size() << '\n';
+		boost::ignore_unused(bytes_transferred);
+		writing_ = false;
 
 		if (ec == websocket::error::closed) {
 			close();
 			return;
 		}
-
-		boost::ignore_unused(bytes_transferred);
 
 		if (ec) {
 			close();
@@ -573,47 +445,168 @@ private:
 		}
 
 		if (is_answer) { // answer sended 
-			dump("on_write_answer_sended");
 			assert(answers_.size() >= 1);
 			answers_.pop_front();
-			if (answers_.empty() == false) (*answers_.front())();
-			else if (requests_.empty() == false && request_sended_waiting_for_answer_ == false) (*requests_.front())();
-			else do_read();
+			if (answers_.empty() == false) return (*answers_.front())();
+			if (requests_.empty() == false && request_sended_waiting_for_answer_ == false) return (*requests_.front())();
+			return do_read();
 		} else {
-			dump("on_write_request_sended");
 			request_sended_waiting_for_answer_ = true;
 			assert(requests_.size() >= 1);
 			//std::cerr << "request sent: " << bytes_transferred << '\n';
-			if (reading_ == false) do_read(); // read an answer to the request
+			if (reading_ == false) return do_read(); // read an answer to the request
 		}
 	}
+
+	void add_request(std::shared_ptr<work> w) {
+		boost::asio::post(derived().ws().get_executor(), [w, this]() mutable {
+			requests_.push_back(std::move(w));
+			if (requests_.size() == 1 && answers_.empty() && !writing_) 
+				(*requests_.front())();
+		});
+	}
+protected:
+	void close() {
+		const boost::system::error_code ec{boost::asio::error::connection_aborted};
+		for (auto& r : requests_) {
+			r->on_failed(ec);
+		}
+		requests_.clear();
+		answers_.clear();
+		nprpc::impl::Session::close();
+	}
 public:
+	virtual void timeout_action() final {}
+
+	virtual void send_receive(
+		flat_buffer& buffer,
+		uint32_t timeout_ms
+	) {
+		assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
+
+		if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
+			dump_message(buffer, false);
+		}
+
+		struct work_impl : work {
+			flat_buffer& buffer_;
+			Derived& this_;
+			uint32_t timeout_ms;
+
+			std::promise<boost::system::error_code> promise;
+
+			void operator()() noexcept override {
+				//this_.set_timeout(timeout_ms);
+				this_.ws().text(false); // binary mode only
+				this_.writing_ = true;
+				this_.ws().async_write(
+					buffer_.data(),
+					std::bind(
+						&websocket_session::on_write,
+						this_.shared_from_this(),
+						std::placeholders::_1,
+						std::placeholders::_2,
+						false));
+			}
+
+			void on_failed(const boost::system::error_code& ec) noexcept override {
+				promise.set_value(ec);
+			}
+
+			void on_executed(flat_buffer&& buffer) noexcept override {
+				buffer_ = std::move(buffer);
+				promise.set_value({});
+			}
+
+			std::future<boost::system::error_code> get_future() { return promise.get_future(); }
+
+			work_impl(Derived& _this_, flat_buffer& _buf, uint32_t _timeout_ms)
+				: this_(_this_)
+				, buffer_(_buf)
+				, timeout_ms(_timeout_ms)
+			{
+			}
+		};
+
+	
+		auto w = std::make_shared<work_impl>(derived(), buffer, timeout_ms);
+		auto f = w->get_future();
+		
+		add_request(w);
+
+		auto ec = f.get();
+
+		if (!ec) {
+			if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
+				dump_message(buffer, true);
+			}
+		} else {
+			throw nprpc::ExceptionCommFailure();
+		}
+	}
+
+	virtual void send_receive_async(
+		flat_buffer&& buffer,
+		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
+		uint32_t timeout_ms
+	) {
+		assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
+
+		struct work_impl : work {
+			flat_buffer buffer_;
+			Derived& this_;
+			uint32_t timeout_ms;
+			std::function<void(const boost::system::error_code&, flat_buffer&)> handler;
+
+			void operator()() noexcept override {
+				//this_.set_timeout(timeout_ms);
+				this_.ws().text(false); // binary mode only
+				this_.writing_ = true;
+				this_.ws().async_write(
+					buffer_.data(),
+					std::bind(
+						&websocket_session::on_write,
+						this_.shared_from_this(),
+						std::placeholders::_1,
+						std::placeholders::_2,
+						false));
+			}
+
+			void on_failed(const boost::system::error_code& ec) noexcept override {
+				handler(ec, buffer_);
+			}
+
+			void on_executed(flat_buffer&& buffer) noexcept override {
+				buffer_ = std::move(buffer);
+				handler(boost::system::error_code{}, buffer_);
+			}
+
+			work_impl(flat_buffer&& _buf,
+				Derived& _this_,
+				std::function<void(const boost::system::error_code&, flat_buffer&)>&& _handler,
+				uint32_t _timeout_ms)
+				: buffer_(std::move(_buf))
+				, this_(_this_)
+				, timeout_ms(_timeout_ms)
+				, handler(std::move(_handler))
+			{
+			}
+		};
+
+		add_request(std::make_shared<work_impl>(std::move(buffer), derived(), std::move(completion_handler), timeout_ms));
+	}
+
 	// Start the asynchronous operation
 	template<class Body, class Allocator>
 	void run(http::request<Body, http::basic_fields<Allocator>> req) {
-		// std::cout << "upgrade: " << req.target() << std::endl;
-		/*
-		derived().ws().set_option(
-						websocket::stream_base::decorator(
-								[](http::response_header<> &hdr) {
-										hdr.set(
-												http::field::sec_websocket_protocol,
-												"binary");
-								}));
-		*/
-		// Accept the WebSocket upgrade request
 		g_orb->add_connection(derived().shared_from_this());
+		// Accept the WebSocket upgrade request
 		do_accept(std::move(req));
 	}
 
 	websocket_session(net::any_io_executor executor)
 		: Session(executor)
 	{
-	}
-
-	~websocket_session()
-	{
-		std::cerr << "~websocket_session()\n";
 	}
 };
 
@@ -633,10 +626,8 @@ public:
 		: websocket_session<plain_websocket_session>(stream.get_executor())
 		, ws_(std::move(stream)) {
 		auto endpoint = ws().next_layer().socket().remote_endpoint();
-		remote_endpoint_.ip4 = endpoint.address().to_v4().to_uint();
-		remote_endpoint_.port = endpoint.port();
-
-		//std::cerr << "ip4: " << remote_endpoint_.ip4 << "port: " << remote_endpoint_.port << '\n';
+		ctx_.remote_endpoint.ip4 = endpoint.address().to_v4().to_uint();
+		ctx_.remote_endpoint.port = endpoint.port();
 	}
 
 	// Called by the base class
@@ -658,8 +649,8 @@ public:
 		: websocket_session<ssl_websocket_session>(stream.get_executor())
 		, ws_(std::move(stream)) {
 		auto endpoint = ws().next_layer().next_layer().socket().remote_endpoint();
-		remote_endpoint_.ip4 = endpoint.address().to_v4().to_uint();
-		remote_endpoint_.port = endpoint.port();
+		ctx_.remote_endpoint.ip4 = endpoint.address().to_v4().to_uint();
+		ctx_.remote_endpoint.port = endpoint.port();
 	}
 
 	// Called by the base class
@@ -1161,15 +1152,15 @@ void init_web_socket(boost::asio::io_context& ioc) {
 
 	if (nprpc::impl::g_cfg.use_ssl) {
 		auto read_file_to_string = [](std::string const file) {
-			std::ifstream is(file);
-			if (is.bad()) { throw std::runtime_error("could not open certificate file: \"" + file + "\""); }
+			std::ifstream is(file, std::ios_base::in);
+			if (!is) { throw std::runtime_error("could not open certificate file: \"" + file + "\""); }
 			return std::string(std::istreambuf_iterator<char>(is),
 				std::istreambuf_iterator<char>());
 		};
 
 		std::string const cert = read_file_to_string(nprpc::impl::g_cfg.ssl_public_key);
 		std::string const key = read_file_to_string(nprpc::impl::g_cfg.ssl_secret_key);
-
+		
 		ctx.set_password_callback(
 			[](std::size_t,
 				boost::asio::ssl::context_base::password_purpose)
@@ -1179,8 +1170,10 @@ void init_web_socket(boost::asio::io_context& ioc) {
 
 		ctx.set_options(
 			boost::asio::ssl::context::default_workarounds |
-			boost::asio::ssl::context::no_sslv2 |
-			boost::asio::ssl::context::single_dh_use);
+			boost::asio::ssl::context::no_sslv2 | 
+			boost::asio::ssl::context::no_sslv3 |
+			(nprpc::impl::g_cfg.ssl_dh_params.size() > 0 ? boost::asio::ssl::context::single_dh_use : 0)
+		);
 
 		ctx.use_certificate_chain(
 			boost::asio::buffer(cert.data(), cert.size()));
@@ -1189,8 +1182,12 @@ void init_web_socket(boost::asio::io_context& ioc) {
 			boost::asio::buffer(key.data(), key.size()),
 			boost::asio::ssl::context::file_format::pem);
 
-		//ctx.use_tmp_dh(
-		//	boost::asio::buffer(dh.data(), dh.size()));
+		if (nprpc::impl::g_cfg.ssl_dh_params.size() > 0) {
+			std::string const dh = read_file_to_string(nprpc::impl::g_cfg.ssl_dh_params);
+			ctx.use_tmp_dh(
+				boost::asio::buffer(dh.data(), dh.size())
+			);
+		}
 	}
 
 	// Create and launch a listening port

@@ -19,6 +19,9 @@
     <ClCompile Include="src\nprpc.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="src\session_context.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\nprpc\nprpc.hpp">
@@ -39,9 +42,6 @@
     <ClInclude Include="src\framework.h">
       <Filter>src</Filter>
     </ClInclude>
-    <ClInclude Include="include\nprpc\nprpc_impl.hpp">
-      <Filter>include</Filter>
-    </ClInclude>
     <ClInclude Include="include\nprpc\buffer.hpp">
       <Filter>include</Filter>
     </ClInclude>
@@ -51,22 +51,37 @@
     <ClInclude Include="include\nprpc\exception.hpp">
       <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="include\nprpc\object_ptr.hpp">
-      <Filter>include</Filter>
-    </ClInclude>
-    <ClInclude Include="include\nprpc\nprpc_nameserver_m.hpp">
-      <Filter>include</Filter>
-    </ClInclude>
     <ClInclude Include="include\nprpc\utils.hpp">
       <Filter>include</Filter>
     </ClInclude>
     <ClInclude Include="include\nprpc\endpoint.hpp">
       <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="include\nprpc\session.hpp">
+    <ClInclude Include="include\nprpc\asio.hpp">
       <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="include\nprpc\asio.hpp">
+    <ClInclude Include="include\nprpc\serialization\iarchive.h">
+      <Filter>include\serialization</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\serialization\oarchive.h">
+      <Filter>include\serialization</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\serialization\serialization.h">
+      <Filter>include\serialization</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\serialization\nvp.hpp">
+      <Filter>include\serialization</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\impl\nprpc_impl.hpp">
+      <Filter>include\impl</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\impl\session.hpp">
+      <Filter>include\impl</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\object_ptr.hpp">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nprpc\session_context.h">
       <Filter>include</Filter>
     </ClInclude>
   </ItemGroup>
@@ -94,6 +109,12 @@
     </Filter>
     <Filter Include="idl">
       <UniqueIdentifier>{01324650-62b0-41b6-8381-d9e781d06399}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\serialization">
+      <UniqueIdentifier>{f63a3b5c-0024-4cdb-bb9c-07fefc1b6bed}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\impl">
+      <UniqueIdentifier>{dca23c07-2090-4fd6-a29d-3081448934da}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

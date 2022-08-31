@@ -4,7 +4,7 @@
 		"sourceMap": true,
 		"esModuleInterop": true,
 		"experimentalDecorators": true,
-		"outDir": "nprpc",
+		"outDir": "dist",
 		"noImplicitAny": true,
 		"module": "commonjs",
 		"target": "esnext",

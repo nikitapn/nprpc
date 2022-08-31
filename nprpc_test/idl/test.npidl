@@ -1,0 +1,53 @@
+// Copyright (c) 2022 nikitapnn1@gmail.com
+// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+
+namespace test {
+
+AAA: flat {
+	a: u32;
+	b: string;
+	c: string;
+}
+
+interface TestBasic {
+	boolean ReturnBoolean();
+	boolean In(a: in u32, b: in boolean, c: in vector<u8>);
+	void Out(a: out u32, b: out boolean, c: out vector<u8>);
+}
+
+interface TestOptional {
+	boolean InEmpty(a?: in u32);
+	boolean In(a?: in u32, b?: in AAA);
+
+	void OutEmpty(a?: out u32);
+	void Out(a?: out u32);
+}
+
+
+CCC : flat {
+	a: string;
+	b: string;
+	c?: boolean;
+}
+
+BBB : flat {
+	a: vector<AAA>;
+	b: vector<CCC>;
+}
+
+interface TestNested {
+	void Out(a?: out BBB);
+}
+
+
+DDD : flat {
+	a: vector<AAA>;
+	b?: vector<CCC>;
+}
+
+[trusted=false]
+interface TestBadInput {
+	void In(a: in DDD);
+}
+
+}

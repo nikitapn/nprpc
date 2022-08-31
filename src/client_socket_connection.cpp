@@ -1,14 +1,14 @@
 // Copyright (c) 2021 nikitapnn1@gmail.com
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 
-#include <nprpc/nprpc_impl.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/asio.hpp>
 #include <iostream>
 #include <future>
 
 namespace nprpc::impl {
 
-void SocketConnection::send_receive(boost::beast::flat_buffer& buffer, uint32_t timeout_ms) {
+void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
 	assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
 	if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
@@ -16,7 +16,7 @@ void SocketConnection::send_receive(boost::beast::flat_buffer& buffer, uint32_t 
 	}
 
 	struct work_impl : work {
-		boost::beast::flat_buffer& buf;
+		flat_buffer& buf;
 		SocketConnection& this_;
 		uint32_t timeout_ms;
 
@@ -43,10 +43,10 @@ void SocketConnection::send_receive(boost::beast::flat_buffer& buffer, uint32_t 
 			promise.set_value({});
 		}
 
-		boost::beast::flat_buffer& buffer() noexcept override { return buf; };
+		flat_buffer& buffer() noexcept override { return buf; };
 		std::future<boost::system::error_code> get_future() { return promise.get_future(); }
 
-		work_impl(boost::beast::flat_buffer& _buf, SocketConnection& _this_, uint32_t _timeout_ms)
+		work_impl(flat_buffer& _buf, SocketConnection& _this_, uint32_t _timeout_ms)
 			: buf(_buf)
 			, this_(_this_)
 			, timeout_ms(_timeout_ms)
@@ -81,17 +81,17 @@ void SocketConnection::send_receive(boost::beast::flat_buffer& buffer, uint32_t 
 	}
 }
 
-void SocketConnection::send_receive_async(boost::beast::flat_buffer&& buffer,
-	std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler,
+void SocketConnection::send_receive_async(flat_buffer&& buffer,
+	std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
 	uint32_t timeout_ms) 
 {
 	assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
 	struct work_impl : work {
-		boost::beast::flat_buffer buf;
+		flat_buffer buf;
 		SocketConnection& this_;
 		uint32_t timeout_ms;
-		std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)> handler;
+		std::function<void(const boost::system::error_code&, flat_buffer&)> handler;
 		
 		void operator()() noexcept override {
 			this_.set_timeout(timeout_ms);
@@ -114,11 +114,11 @@ void SocketConnection::send_receive_async(boost::beast::flat_buffer&& buffer,
 			handler(boost::system::error_code{}, buf);
 		}
 
-		boost::beast::flat_buffer& buffer() noexcept override { return buf; };
+		flat_buffer& buffer() noexcept override { return buf; };
 
-		work_impl(boost::beast::flat_buffer&& _buf, 
+		work_impl(flat_buffer&& _buf, 
 			SocketConnection& _this_, 
-			std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& _handler,
+			std::function<void(const boost::system::error_code&, flat_buffer&)>&& _handler,
 			uint32_t _timeout_ms)
 			: buf(std::move(_buf))
 			, this_(_this_)
@@ -135,7 +135,7 @@ void SocketConnection::reconnect() {
 	socket_ = std::move(net::ip::tcp::socket(socket_.get_executor()));
 
 	boost::system::error_code ec;
-	socket_.connect(tcp::endpoint(net::ip::address_v4(this->remote_endpoint_.ip4), this->remote_endpoint_.port), ec);
+	socket_.connect(tcp::endpoint(net::ip::address_v4(this->ctx_.remote_endpoint.ip4), this->ctx_.remote_endpoint.port), ec);
 
 	if (ec) {
 		close();
@@ -222,10 +222,10 @@ SocketConnection::SocketConnection(const EndPoint& endpoint, boost::asio::ip::tc
 	: Session(socket.get_executor())
 	, socket_{std::move(socket)}
 {
-	remote_endpoint_ = endpoint;
+	ctx_.remote_endpoint = endpoint;
 	timeout_timer_.expires_at(boost::posix_time::pos_infin);
 	boost::system::error_code ec;
-	socket_.connect(tcp::endpoint(net::ip::address_v4(remote_endpoint_.ip4), remote_endpoint_.port), ec);
+	socket_.connect(tcp::endpoint(net::ip::address_v4(ctx_.remote_endpoint.ip4), ctx_.remote_endpoint.port), ec);
 	if (ec) throw nprpc::Exception(("Could not connect to the socket: " + ec.message()).c_str());
 	check_timeout();
 }

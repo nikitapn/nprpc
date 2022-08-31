@@ -56,6 +56,10 @@ void calc_struct_size_align(Ast_Struct_Decl* s, Ast_Type_Decl* t, int& offset, i
 			if (s->align < 4) s->align = 4;
 			align_offset(4, offset, 8, elements_size);
 			break;
+		case FieldType::Optional:
+			if (s->align < 4) s->align = 4;
+			align_offset(4, offset, 4, elements_size);
+			break;
 		case FieldType::Object: // nprpc::detail::flat::ObjectId
 			if (s->align < align_of_object) s->align = align_of_object;
 			align_offset(align_of_object, offset, size_of_object, elements_size);
@@ -94,6 +98,8 @@ std::tuple<int, int> get_type_size_align(Ast_Type_Decl* type) {
 		case FieldType::Vector:
 		case FieldType::String:
 			return { 8, 4 };
+		case FieldType::Optional:
+			return { 4, 4 };
 		case FieldType::Enum: {
 			const auto size = get_fundamental_size(cenum(type)->token_id);
 			return { size, size };
@@ -143,6 +149,10 @@ void get_type_id(const Ast_Type_Decl* type, struct_id_t& id, std::string* field_
 	case FieldType::String:
 		id += 'S';
 		break;
+	case FieldType::Optional:
+		id += '?';
+		get_type_id(static_cast<const Ast_Wrap_Type*>(type)->type, id, nullptr);
+		break;
 	case FieldType::Object:
 		id += 'O';
 		break;
@@ -158,14 +168,16 @@ void get_type_id(const Ast_Type_Decl* type, struct_id_t& id, std::string* field_
 	}
 }
 
-struct_id_t get_function_struct_id(const Ast_Struct_Decl* s) {
-	std::string id;
+const struct_id_t& Ast_Struct_Decl::get_function_struct_id() {
+	if (unique_id.length() > 0) return unique_id;
+	
 	int param_n = 0;
-	for (auto f : s->fields) {
-		id += std::to_string(++param_n);
-		get_type_id(f->type, id, &f->name);
+	for (auto f : fields) {
+		unique_id += std::to_string(++param_n);
+		get_type_id(f->type, unique_id, &f->name);
 	}
-	return id;
+
+	return unique_id;
 }
 
 bool is_flat(Ast_Type_Decl* type) {
@@ -181,6 +193,7 @@ bool is_flat(Ast_Type_Decl* type) {
 		return is_flat(car(type)->type);
 	case FieldType::Vector:
 	case FieldType::String:
+	case FieldType::Optional:
 	case FieldType::Object:
 	case FieldType::Interface:
 		return false;
@@ -196,7 +209,7 @@ bool is_fundamental(Ast_Type_Decl* type) {
 	case FieldType::Enum:
 		return true;
 	case FieldType::Alias:
-		return is_flat(calias(type)->type);
+		return is_fundamental(calias(type)->type);
 	default:
 		return false;
 	}

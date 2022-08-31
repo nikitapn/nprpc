@@ -7,20 +7,23 @@
 #include <boost/beast/core/flat_buffer.hpp>
 
 namespace nprpc {
+
+using flat_buffer = boost::beast::flat_buffer;
+
 class Buffers {
-	std::array<boost::beast::flat_buffer, 2> bufs_;
+	std::array<flat_buffer, 2> bufs_;
 	size_t ix_ = 0;
 public:
-	boost::beast::flat_buffer& flip() noexcept {
+	flat_buffer& flip() noexcept {
 		ix_ ^= 1;
 		return bufs_[ix_];
 	}
 
-	boost::beast::flat_buffer& operator()() noexcept {
+	flat_buffer& operator()() noexcept {
 		return bufs_[ix_];
 	}
 
-	boost::beast::flat_buffer&& operator()(bool) noexcept {
+	flat_buffer&& operator()(bool) noexcept {
 		return std::move(bufs_[ix_]);
 	}
 

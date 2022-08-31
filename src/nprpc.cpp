@@ -1,9 +1,9 @@
 // Copyright (c) 2021 nikitapnn1@gmail.com
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 
-#include <nprpc/nprpc_impl.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/nprpc_nameserver.hpp>
-
+#include <boost/bind.hpp>
 
 using namespace nprpc;
 
@@ -11,11 +11,13 @@ namespace nprpc::impl {
 
 extern void init_socket(boost::asio::io_context& ioc);
 extern void init_web_socket(boost::asio::io_context& ioc);
+/*
+void RpcImpl::check_unclaimed_objects(boost::system::error_code ec) {
+	if (ec) return;
 
-void RpcImpl::check_unclaimed_objects() {
 	if (timer1_.expires_at() <= boost::asio::deadline_timer::traits_type::now()) {
 		std::lock_guard<std::mutex> lk(new_activated_objects_mut_);
-		auto now = std::chrono::steady_clock::now();
+		auto now = std::chrono::system_clock::now();
 		for (auto it = begin(new_activated_objects_); it != end(new_activated_objects_);) {
 			auto obj = (*it);
 			if (obj->activation_time() + std::chrono::milliseconds(5000) <= now) {
@@ -28,26 +30,25 @@ void RpcImpl::check_unclaimed_objects() {
 			}
 		}
 	}
+
 	timer1_.expires_from_now(boost::posix_time::milliseconds(2500));
-	timer1_.async_wait(std::bind(&RpcImpl::check_unclaimed_objects, this));
+	timer1_.async_wait(boost::bind(&RpcImpl::check_unclaimed_objects, this, std::placeholders::_1));
 }
+*/
 
 Config g_cfg;
 NPRPC_API RpcImpl* g_orb;
 
-void RpcImpl::start() {
-	init_socket(ioc_);
-	init_web_socket(ioc_);
-}
-
 void RpcImpl::destroy() {
+//	timer1_.cancel();
 	delete this;
 	g_orb = nullptr;
 }
 
 Poa* RpcImpl::create_poa(uint32_t objects_max, std::initializer_list<Policy*> policy_list) {
-	auto poa = new PoaImpl(objects_max, poa_size_);
-	poas_[poa_size_++] = poa;
+	auto idx = poa_size_.fetch_add(1);
+	auto poa = new PoaImpl(objects_max, idx);
+	poas_[idx] = std::unique_ptr<PoaImpl>(poa);
 	for (auto policy : policy_list) {
 		policy->apply_policy(poa);
 	}
@@ -63,6 +64,7 @@ NPRPC_API std::shared_ptr<Session> RpcImpl::get_session(const EndPoint& endpoint
 			founded != opened_sessions_.end()) {
 			con = (*founded);
 		} else {
+			if (endpoint.websocket) throw nprpc::ExceptionCommFailure();
 			if (endpoint.is_local()) {
 				// not impl
 			} else {
@@ -79,13 +81,13 @@ NPRPC_API std::shared_ptr<Session> RpcImpl::get_session(const EndPoint& endpoint
 
 NPRPC_API void RpcImpl::call(
 	const EndPoint& endpoint,
-	boost::beast::flat_buffer& buffer,
+	flat_buffer& buffer,
 	uint32_t timeout_ms) {
 	get_session(endpoint)->send_receive(buffer, timeout_ms);
 }
 
-NPRPC_API void RpcImpl::call_async(const EndPoint& endpoint, boost::beast::flat_buffer&& buffer,
-	std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler, uint32_t timeout_ms) {
+NPRPC_API void RpcImpl::call_async(const EndPoint& endpoint, flat_buffer&& buffer,
+	std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler, uint32_t timeout_ms) {
 	get_session(endpoint)->send_receive_async(std::move(buffer), std::move(completion_handler), timeout_ms);
 }
 
@@ -122,35 +124,39 @@ ObjectPtr<Nameserver> RpcImpl::get_nameserver(std::string_view nameserver_ip) {
 	obj->_data().object_id = 0;
 	obj->_data().flags = (Policy_Lifespan::Persistent << static_cast<int>(detail::ObjectFlag::Policy_Lifespan));
 	obj->_data().class_id = INameserver_Servant::_get_class();
-	obj->add_ref();
 	return obj;
 }
 
 RpcImpl::RpcImpl(boost::asio::io_context& ioc)
 	: ioc_{ioc}
-	, timer1_{ioc}
+//	, timer1_{ioc}
 {
-	timer1_.expires_from_now(boost::posix_time::milliseconds(2500));
-	check_unclaimed_objects();
+//	timer1_.expires_from_now(boost::posix_time::milliseconds(2500));
+//	check_unclaimed_objects(boost::system::error_code{});
+
+	init_socket(ioc_);
+	init_web_socket(ioc_);
 }
 
 class ReferenceListImpl {
 	std::vector<std::pair<nprpc::detail::ObjectIdLocal, ObjectServant*>> refs_;
 public:
 	void add_ref(ObjectServant* obj) {
-#if defined(DEBUG) || defined(_DEBUG) 
 		if (auto it = std::find_if(begin(refs_), end(refs_),
 			[obj](auto& pair) { return pair.second == obj; }); it != end(refs_)) {
-			assert(false);
+			std::cerr << "duplicate reference: " << obj->get_class() << '\n';
+			return;
 		}
-#endif
-		refs_.push_back({{obj->poa_index() ,obj->oid(),}, obj});
+
+		refs_.push_back({{obj->poa_index(), obj->oid()}, obj});
 		obj->add_ref();
 	}
 
 	bool remove_ref(poa_idx_t poa_idx, oid_t oid) {
-		if (auto it = std::find_if(begin(refs_), end(refs_), 
-			[poa_idx, oid](auto& pair) { return pair.first.poa_idx == poa_idx && pair.first.object_id == oid; }); it != end(refs_)) 
+		if (auto it = std::find_if(begin(refs_), end(refs_), [poa_idx, oid](auto& pair) { 
+				return pair.first.poa_idx == poa_idx && pair.first.object_id == oid; 
+			}); 
+			it != end(refs_)) 
 		{
 			auto ptr = (*it).second;
 			refs_.erase(it);
@@ -166,6 +172,47 @@ public:
 		}
 	}
 };
+
+NPRPC_API Object* create_object_from_flat(detail::flat::ObjectId_Direct oid, EndPoint remote_endpoint) {
+	if (oid.object_id() == invalid_object_id) return nullptr;
+
+	auto obj = new Object();
+	obj->local_ref_cnt_ = 1;
+
+	assert(oid.ip4());
+
+	if (oid.flags() & (1 << static_cast<int>(detail::ObjectFlag::WebObject))) {
+		// std::cerr << "remote_endpoint.port: " << remote_endpoint.port << '\n';
+		obj->_data().port = remote_endpoint.port;
+		obj->_data().websocket_port = remote_endpoint.port;
+	} else {
+		assert(oid.port());
+		obj->_data().port = oid.port();
+		obj->_data().websocket_port = oid.websocket_port();
+	}
+
+	obj->_data().object_id = oid.object_id();
+
+	if (remote_endpoint.ip4 == localhost_ip4) {
+		// could be the object on the same machine or from any other location
+		obj->_data().ip4 = oid.ip4();
+	} else {
+		if (oid.ip4() == localhost_ip4) {
+			// remote object has localhost ip converting to endpoint ip
+			obj->_data().ip4 = remote_endpoint.ip4;
+		} else {
+			// remote object with ip != localhost
+			obj->_data().ip4 = oid.ip4();
+		}
+	}
+
+	obj->_data().poa_idx = oid.poa_idx();
+	obj->_data().flags = oid.flags();
+	obj->_data().class_id = (std::string_view)oid.class_id();
+	obj->_data().hostname = (std::string_view)oid.hostname();
+
+	return obj;
+}
 
 } // namespace nprpc::impl
 
@@ -190,7 +237,7 @@ uint32_t ObjectServant::release() noexcept {
 
 	assert(is_unused() == false);
 
-	auto cnt = ref_cnt_.fetch_add(-1, std::memory_order_acquire) - 1;
+	auto cnt = ref_cnt_.fetch_sub(1, std::memory_order_acquire) - 1;
 	if (cnt == 0) {
 		static_cast<impl::PoaImpl*>(poa_)->deactivate_object(object_id_);
 		impl::PoaImpl::delete_object(this);
@@ -203,7 +250,7 @@ NPRPC_API uint32_t Object::add_ref() {
 	auto const cnt = local_ref_cnt_.fetch_add(1, std::memory_order_release);
 	if (policy_lifespan() == Policy_Lifespan::Persistent || cnt) return cnt + 1;
 
-	boost::beast::flat_buffer buf;
+	flat_buffer buf;
 
 	auto constexpr msg_size = sizeof(impl::Header) + sizeof(::nprpc::detail::flat::ObjectIdLocal);
 	auto mb = buf.prepare(msg_size);
@@ -218,9 +265,9 @@ NPRPC_API uint32_t Object::add_ref() {
 	msg.poa_idx() = this->_data().poa_idx;
 
 	::nprpc::impl::g_orb->call_async(
-		nprpc::EndPoint(this->_data().ip4, this->_data().port), 
+		get_endpoint(),
 		std::move(buf),
-		[](const boost::system::error_code& ec, boost::beast::flat_buffer& buf) {
+		[](const boost::system::error_code& ec, flat_buffer& buf) {
 			//if (!ec) {
 				//auto std_reply = nprpc::impl::handle_standart_reply(buf);
 				//if (std_reply == false) {
@@ -232,17 +279,18 @@ NPRPC_API uint32_t Object::add_ref() {
 
 	return cnt + 1;
 }
+
 NPRPC_API uint32_t Object::release() {
 	auto cnt = --local_ref_cnt_;
 	if (cnt != 0) return cnt;
 
 	if (policy_lifespan() == Policy_Lifespan::Transient) {
-		const nprpc::EndPoint endpoint(this->_data().ip4, this->_data().port);
+		const auto endpoint = get_endpoint();
 
 		if (is_web_origin() && ::nprpc::impl::g_orb->has_session(endpoint) == false) {
 			// websocket session was closed.
 		} else {
-			boost::beast::flat_buffer buf;
+			flat_buffer buf;
 
 			auto constexpr msg_size = sizeof(impl::Header) + sizeof(::nprpc::detail::flat::ObjectIdLocal);
 			auto mb = buf.prepare(msg_size);
@@ -260,7 +308,7 @@ NPRPC_API uint32_t Object::release() {
 				::nprpc::impl::g_orb->call_async(
 					endpoint,
 					std::move(buf),
-					[](const boost::system::error_code& ec, boost::beast::flat_buffer& buf) {
+					[](const boost::system::error_code& ec, flat_buffer& buf) {
 						//if (!ec) {
 							//auto std_reply = nprpc::impl::handle_standart_reply(buf);
 							//if (std_reply == false) {
@@ -283,11 +331,11 @@ NPRPC_API uint32_t Object::release() {
 NPRPC_API uint32_t ObjectServant::add_ref() noexcept { 
 	auto cnt = ref_cnt_.fetch_add(1, std::memory_order_release) + 1;
 
-	if (cnt == 1 && static_cast<impl::PoaImpl*>(poa())->pl_lifespan == Policy_Lifespan::Transient) {
-		std::lock_guard<std::mutex> lk(impl::g_orb->new_activated_objects_mut_);
-		auto& list = impl::g_orb->new_activated_objects_;
-		list.erase(std::find(begin(list), end(list), this));
-	}
+//	if (cnt == 1 && static_cast<impl::PoaImpl*>(poa())->pl_lifespan == Policy_Lifespan::Transient) {
+//		std::lock_guard<std::mutex> lk(impl::g_orb->new_activated_objects_mut_);
+//		auto& list = impl::g_orb->new_activated_objects_;
+//		list.erase(std::find(begin(list), end(list), this));
+//	}
 
 	return cnt;
 }
@@ -308,32 +356,6 @@ bool ReferenceList::remove_ref(poa_idx_t poa_idx, oid_t oid) {
 	return impl_->remove_ref(poa_idx, oid);
 }
 
-NPRPC_API Object* Object::create_from_object_id(detail::flat::ObjectId_Direct oid) {
-		if (oid.object_id() == invalid_object_id) return nullptr;
-
-		auto obj = new Object();
-		assert(oid.ip4() && oid.port());
-		
-		obj->_data().object_id = oid.object_id();
-
-		if (this->_data().ip4 == oid.ip4()) {
-			obj->_data().ip4 = oid.ip4();
-		} else if (oid.ip4() == localhost_ip4) {
-			obj->_data().ip4 = this->_data().ip4;
-		} else {
-			obj->_data().ip4 = oid.ip4();
-		}
-		
-		obj->_data().port = oid.port();
-		obj->_data().websocket_port = oid.websocket_port();
-
-		obj->_data().poa_idx = oid.poa_idx();
-		
-		obj->_data().flags = oid.flags();
-		obj->_data().class_id = (std::string_view)oid.class_id();
-
-		return obj;
-	}
-
 } // namespace nprpc
 
+#include <nprpc/serialization/nvp.hpp>

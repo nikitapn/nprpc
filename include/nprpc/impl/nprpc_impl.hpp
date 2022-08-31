@@ -20,7 +20,7 @@
 #include <deque>
 
 #include <nprpc/nprpc.hpp>
-#include <nprpc/session.hpp>
+#include <nprpc/impl/session.hpp>
 
 namespace nprpc::impl {
 
@@ -47,14 +47,14 @@ class SocketConnection : public Session {
     virtual void operator()() = 0;
 		virtual void on_failed(const boost::system::error_code& ec) noexcept = 0;
     virtual void on_executed() noexcept = 0;
-		virtual boost::beast::flat_buffer& buffer() noexcept = 0;
+		virtual flat_buffer& buffer() noexcept = 0;
     virtual ~work() = default;
   };
 	std::deque<std::unique_ptr<work>> wq_;
 	void add_work(std::unique_ptr<work>&& w);
 	void reconnect();
 
-	boost::beast::flat_buffer& current_rx_buffer() noexcept {
+	flat_buffer& current_rx_buffer() noexcept {
 		assert(wq_.size() > 0);
 		return wq_.front()->buffer();
 	}
@@ -70,11 +70,11 @@ protected:
 		if (ec) fail(ec, "socket::cancel()");
 	}
 public:
-	void send_receive(boost::beast::flat_buffer& buffer, uint32_t timeout_ms) override;
+	void send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
 
 	void send_receive_async(
-		boost::beast::flat_buffer&& buffer,
-		std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler,
+		flat_buffer&& buffer,
+		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
 		uint32_t timeout_ms) override;
 
 	void on_read_size(const boost::system::error_code& ec, size_t len);
@@ -83,7 +83,7 @@ public:
 	void do_read_body();
 
 	template<typename WriteHandler>
-	void write_async(const boost::beast::flat_buffer& buf, WriteHandler&& handler) {
+	void write_async(const flat_buffer& buf, WriteHandler&& handler) {
 		timeout_timer_.expires_from_now(timeout_);
 		socket_.async_send(buf.cdata(), std::forward<WriteHandler>(handler));
 	}
@@ -96,16 +96,16 @@ class RpcImpl : public Rpc {
 
 	boost::asio::io_context& ioc_;
 
-	std::array<PoaImpl*, 10> poas_;
-	poa_idx_t poa_size_ = 0;
+	std::array<std::unique_ptr<PoaImpl>, 10> poas_;
+	std::atomic<poa_idx_t> poa_size_ = 0;
 
 	mutable std::mutex connections_mut_;
 	std::vector<std::shared_ptr<Session>> opened_sessions_;
 
-	boost::asio::deadline_timer timer1_;
+	//boost::asio::deadline_timer timer1_;
 public:
-	std::mutex new_activated_objects_mut_;
-	std::vector<ObjectServant*> new_activated_objects_;
+	//std::mutex new_activated_objects_mut_;
+	//std::vector<ObjectServant*> new_activated_objects_;
 
 	uint16_t port() const noexcept { return g_cfg.port; }
 	uint16_t websocket_port() const noexcept { return g_cfg.websocket_port; }
@@ -116,65 +116,26 @@ public:
 
 	bool has_session(const EndPoint& endpoint) const noexcept;
 	NPRPC_API std::shared_ptr<Session> get_session(const EndPoint& endpoint);
-	NPRPC_API void call(const EndPoint& endpoint, boost::beast::flat_buffer& buffer, uint32_t timeout_ms = 2500);
+	NPRPC_API void call(const EndPoint& endpoint, flat_buffer& buffer, uint32_t timeout_ms = 2500);
 	
 	NPRPC_API void call_async(
-		const EndPoint& endpoint, boost::beast::flat_buffer&& buffer, 
-		std::function<void(const boost::system::error_code&, boost::beast::flat_buffer&)>&& completion_handler, 
+		const EndPoint& endpoint, flat_buffer&& buffer, 
+		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler, 
 		uint32_t timeout_ms = 2500);
 
 	NPRPC_API std::optional<ObjectGuard> get_object(poa_idx_t poa_idx, oid_t oid);
 
 	boost::asio::io_context& ioc() noexcept { return ioc_; }
-	void start() override;
+	//void start() override;
 	void destroy() override;
 	Poa* create_poa(uint32_t objects_max, std::initializer_list<Policy*> policy_list) override;
 	bool close_session(Session* con);
 	virtual ObjectPtr<Nameserver> get_nameserver(std::string_view nameserver_ip) override;
-	void check_unclaimed_objects();
-
-	Object* create_object_from_flat(detail::flat::ObjectId_Direct oid, EndPoint remote_endpoint) {
-		if (oid.object_id() == invalid_object_id) return nullptr;
-
-		auto obj = new Object();
-
-		assert(oid.ip4());
-		
-		if (oid.flags() & (1 << static_cast<int>(detail::ObjectFlag::WebObject))) {
-			std::cerr << "remote_endpoint.port: " << remote_endpoint.port << '\n';
-			obj->_data().port = remote_endpoint.port;
-			obj->_data().websocket_port = remote_endpoint.port;
-		} else {
-			assert(oid.port());
-			obj->_data().port = oid.port();
-			obj->_data().websocket_port = oid.websocket_port();
-		}
-
-		obj->_data().object_id = oid.object_id();
-
-		if (remote_endpoint.ip4 == localhost_ip4) {
-			// could be the object on the same machine or from any other location
-			obj->_data().ip4 = oid.ip4();
-		} else {
-			if (oid.ip4() == localhost_ip4) {
-				// remote object has localhost ip converting to endpoint ip
-				obj->_data().ip4 = remote_endpoint.ip4;
-			} else {
-				// remote object with ip != localhost
-				obj->_data().ip4 = oid.ip4();
-			}
-		}
-
-		obj->_data().poa_idx = oid.poa_idx();
-		obj->_data().flags = oid.flags();
-		obj->_data().class_id = (std::string_view)oid.class_id();
-
-		return obj;
-	}
+//	void check_unclaimed_objects(boost::system::error_code ec);
 
 	PoaImpl* get_poa(uint16_t idx) noexcept {
 		assert(idx < 10);
-		return poas_[idx];
+		return poas_[idx].get();
 	}
 
 	RpcImpl(boost::asio::io_context& ioc);
@@ -321,15 +282,21 @@ class PoaImpl : public Poa {
 public:
 	Policy_Lifespan::Type pl_lifespan = Policy_Lifespan::Type::Transient;
 
+	virtual ~PoaImpl() {
+		if (pl_lifespan == Policy_Lifespan::Type::Persistent) return;
+
+		// remove references
+	}
+
 	std::optional<ObjectGuard> get_object(oid_t oid) noexcept {
 		auto obj = object_map_.get(oid);
 		if (obj) return ObjectGuard(obj);
 		return std::nullopt;
 	}
 
-	virtual ObjectId activate_object(ObjectServant* obj) override {
+	virtual ObjectId activate_object(ObjectServant* obj, SessionContext* ctx, bool session_specific) override {
 		obj->poa_ = this;
-		obj->activation_time_ = std::chrono::steady_clock::now();
+		obj->activation_time_ = std::chrono::system_clock::now();
 
 		ObjectId oid;
 		auto object_id_internal = object_map_.add(obj);
@@ -342,12 +309,23 @@ public:
 		
 		oid.poa_idx = get_index();
 		
-		oid.flags = (pl_lifespan << static_cast<int>(detail::ObjectFlag::Policy_Lifespan));
-		oid.class_id = obj->get_class();
+		oid.flags = 
+			(pl_lifespan << static_cast<int>(detail::ObjectFlag::Policy_Lifespan)) |
+			(g_cfg.use_ssl << static_cast<int>(detail::ObjectFlag::Secured));
 		
+		oid.class_id = obj->get_class();
+		oid.hostname = g_cfg.hostname;
+
 		if (pl_lifespan == Policy_Lifespan::Type::Transient) {
-			std::lock_guard<std::mutex> lk(g_orb->new_activated_objects_mut_);
-			g_orb->new_activated_objects_.push_back(obj);
+			// std::lock_guard<std::mutex> lk(g_orb->new_activated_objects_mut_);
+			// g_orb->new_activated_objects_.push_back(obj);
+			if (!ctx) throw std::runtime_error("Object created with transient policy requires session context for activation");
+
+			ctx->ref_list.add_ref(obj);
+		}
+
+		if (session_specific) {
+			obj->session_ctx_ = ctx;
 		}
 
 		return oid;
@@ -372,20 +350,24 @@ public:
 	}
 };
 
-inline void make_simple_answer(boost::beast::flat_buffer& buf, MessageId id) {
+inline void make_simple_answer(flat_buffer& buf, MessageId id) {
 	assert(id == MessageId::Success 
+		|| id == MessageId::Error_ObjectNotExist
 		|| id == MessageId::Error_CommFailure 
-		|| id == MessageId::Error_ObjectNotExist 
-		|| id == MessageId::Error_UnknownMessageId);
+		|| id == MessageId::Error_UnknownFunctionIdx
+		|| id == MessageId::Error_UnknownMessageId
+		|| id == MessageId::Error_BadAccess
+		|| id == MessageId::Error_BadInput
+	);
 	buf.consume(buf.size());
 	auto mb = buf.prepare(sizeof(impl::Header));
-	static_cast<impl::Header*>(mb.data())->size = sizeof(impl::Header) - 4;
-	static_cast<impl::Header*>(mb.data())->msg_id = id;
-	static_cast<impl::Header*>(mb.data())->msg_type = impl::MessageType::Answer;
-	buf.commit(sizeof(impl::Header));
+	static_cast<impl::flat::Header*>(mb.data())->size = sizeof(impl::flat::Header) - 4;
+	static_cast<impl::flat::Header*>(mb.data())->msg_id = id;
+	static_cast<impl::flat::Header*>(mb.data())->msg_type = impl::MessageType::Answer;
+	buf.commit(sizeof(impl::flat::Header));
 }
 
-inline void dump_message(boost::beast::flat_buffer& buffer, bool rx) {
+inline void dump_message(flat_buffer& buffer, bool rx) {
 	auto cb = buffer.cdata();
 	auto size = cb.size();
 	auto data = (unsigned char*)cb.data();
@@ -401,7 +383,7 @@ inline void dump_message(boost::beast::flat_buffer& buffer, bool rx) {
 //  0 - Success
 //  1 - exception
 // -1 - not handled
-inline int handle_standart_reply(boost::beast::flat_buffer& buf) {
+inline int handle_standart_reply(flat_buffer& buf) {
 	if (buf.size() < sizeof(impl::Header)) throw ExceptionCommFailure();
 	auto header = static_cast<const impl::Header*>(buf.cdata().data());
 	assert(header->size == buf.size() - 4);
@@ -418,6 +400,10 @@ inline int handle_standart_reply(boost::beast::flat_buffer& buf) {
 		throw ExceptionUnknownFunctionIndex();
 	case MessageId::Error_UnknownMessageId:
 		throw ExceptionUnknownMessageId();
+	case MessageId::Error_BadAccess:
+		throw ExceptionBadAccess();
+	case MessageId::Error_BadInput:
+		throw ExceptionBadInput();
 	default:
 		return -1;
 	}

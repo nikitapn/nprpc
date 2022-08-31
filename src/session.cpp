@@ -1,13 +1,17 @@
 // Copyright (c) 2021 nikitapnn1@gmail.com
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 
-#include <nprpc/nprpc_impl.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
 #include <iostream>
 #include <optional>
 
+namespace nprpc {
+extern void set_context(impl::Session& session);
+}
+
 namespace nprpc::impl {
 
-std::optional<ObjectGuard> get_object(boost::beast::flat_buffer& buf, uint16_t poa_idx, uint64_t object_id) {
+std::optional<ObjectGuard> get_object(flat_buffer& buf, uint16_t poa_idx, uint64_t object_id) {
 	do {
 		auto poa = g_orb->get_poa(poa_idx);
 		if (!poa) {
@@ -26,6 +30,14 @@ std::optional<ObjectGuard> get_object(boost::beast::flat_buffer& buf, uint16_t p
 }
 
 void Session::handle_request() {
+	auto validate = [this](ObjectServant& obj) {
+		if (obj.validate_session(this->ctx_)) return true;
+
+		std::cerr << remote_endpoint() << " is trying to access secured object: " << obj.get_class() << '\n';
+		make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Error_BadAccess);
+		return false;
+	};
+
 	if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
 		std::cout << "received a message:\n";
 		dump_message(rx_buffer_(), true);
@@ -43,7 +55,9 @@ void Session::handle_request() {
 		bool not_found = true;
 		if (auto obj = get_object(rx_buffer_(), ch.poa_idx(), ch.object_id()); obj) {
 			if (auto real_obj = (*obj).get(); real_obj) {
-				real_obj->dispatch(rx_buffer_, remote_endpoint_, false, ref_list_);
+				if (!validate(*real_obj)) return;
+				set_context(*this);
+				real_obj->dispatch(rx_buffer_, ctx_.remote_endpoint, false, ctx_.ref_list);
 				not_found = false;
 			}
 		}
@@ -65,8 +79,9 @@ void Session::handle_request() {
 		bool success = false;
 		if (auto obj = get_object(rx_buffer_(), msg.poa_idx(), msg.object_id()); obj) {
 			if (auto real_obj = (*obj).get(); real_obj) {
+				if (!validate(*real_obj)) return;
 				success = true;
-				ref_list_.add_ref(real_obj);
+				ctx_.ref_list.add_ref(real_obj);
 			}
 		}
 		
@@ -92,7 +107,7 @@ void Session::handle_request() {
 			std::cout << "ReleaseObject. " << "poa_idx: " << oid.poa_idx << ", oid: " << oid.object_id << std::endl;
 		}
 
-		if (ref_list_.remove_ref(msg.poa_idx(), msg.object_id())) {
+		if (ctx_.ref_list.remove_ref(msg.poa_idx(), msg.object_id())) {
 			make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Success);
 		} else {
 			make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Error_ObjectNotExist);

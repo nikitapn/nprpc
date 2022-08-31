@@ -1,4 +1,3 @@
-
 import * as Flat from './flat';
 import { FlatBuffer } from './flat_buffer';
 
@@ -10,51 +9,42 @@ export * from "./nprpc";
 export * from "./nprpc_base";
 
 import { Exception } from "./exception";
+import { sip4_to_u32, ip4tostr, MyPromise } from "./utils";
 //import { FlatBuffer } from "./flat_buffer";
 import {
 	impl, detail, oid_t, poa_idx_t,
-	ExceptionObjectNotExist, ExceptionUnknownFunctionIndex, ExceptionUnknownMessageId, ExceptionCommFailure, DebugLevel
+	DebugLevel, 
+	ExceptionObjectNotExist, 
+	ExceptionUnknownFunctionIndex, 
+	ExceptionUnknownMessageId, 
+	ExceptionCommFailure, 
+	ExceptionUnsecuredObject,
+	ExceptionBadAccess
 } from "./nprpc_base"
 
 const header_size = 16;
+const invalid_object_id = 0xFFFFFFFFFFFFFFFFn;
+const localhost_ip4 = 0x7F000001;
+
+export let rpc: Rpc;
 
 let g_debug_level: DebugLevel = DebugLevel.DebugLevel_Critical;
 
-export interface EndPoint {
-	ip4: number;
-	port: number;
+export class EndPoint {
+	constructor(public ip4: number, public port: number, public hostname: string, public secured: boolean) {}
+
+	public equal(other: EndPoint): boolean {
+		if (this.secured === false) {
+			return this.ip4 === other.ip4 && this.port === other.port;
+		} else {
+			return this.hostname === other.hostname && this.port === other.port;
+		}
+	}
 };
 
-
-export interface ref<T> {
-	value: T;
-}
-
-export function make_ref<T = any>(): ref<T> {
-	return { value: undefined };
-}
-
-class MyPromise<T, E extends Exception>  {
-	private actual_promise_: Promise<T>
-	private resolve_: (x: T) => void;
-	private reject_: (e: E) => void;
-
-	constructor() {
-		this.actual_promise_ = new Promise<T>((resolve, reject) => {
-			this.resolve_ = (x) => { resolve(x) };
-			this.reject_ = (x) => { reject(x) };
-		});
-	}
-
-	public get $() { return this.actual_promise_; }
-
-	public set_promise(value: T): void {
-		this.resolve_(value);
-	}
-
-	public set_exception(ec: E): void {
-		this.reject_(ec);
-	}
+interface HostInfo {
+	secured: boolean;
+	objects: any;
 }
 
 interface Work {
@@ -123,7 +113,7 @@ export class Connection {
 			
 					let obj = get_object(buf, ch.poa_idx, ch.object_id)
 					if (obj) {
-						console.log(obj);
+						//console.log(obj);
 						obj.dispatch(buf, this.endpoint, false);
 					}
 					break;
@@ -188,9 +178,12 @@ export class Connection {
 		this.endpoint = endpoint;
 		this.queue = new Array<Work>();
 
-		let ip4tostr = (ip4: number): string => (ip4 >> 24 & 0xFF) + '.' + (ip4 >> 16 & 0xFF) + '.' + (ip4 >> 8 & 0xFF) + '.' + (ip4 & 0xFF);
+		if (rpc.host_info.secured) {
+			this.ws = new WebSocket('wss://' + this.endpoint.hostname + ':' + this.endpoint.port.toString(10));
+		} else {
+			this.ws = new WebSocket('ws://' + ip4tostr(this.endpoint.ip4) + ':' + this.endpoint.port.toString(10));
+		}
 
-		this.ws = new WebSocket('ws://' + ip4tostr(this.endpoint.ip4) + ':' + this.endpoint.port.toString(10));
 		this.ws.binaryType = 'arraybuffer';
 		this.ws.onopen = this.on_open.bind(this);
 		this.ws.onclose = this.on_close.bind(this);
@@ -200,15 +193,16 @@ export class Connection {
 }
 
 export class Rpc {
+	public host_info: HostInfo;
 	/** @internal */
 	private last_poa_id_: number;
 	/** @internal */
 	private opened_connections_: Connection[];
 	/** @internal */
 	private poa_list_: Poa[];
-
+	
 	get_connection(endpoint: EndPoint): Connection {
-		let founded: Connection = this.opened_connections_.find(c => c.endpoint.ip4 === endpoint.ip4 && c.endpoint.port == endpoint.port);
+		let founded: Connection = this.opened_connections_.find(c => c.endpoint.equal(endpoint));
 		if (founded) return founded;
 
 		let con = new Connection(endpoint);
@@ -231,10 +225,32 @@ export class Rpc {
 		return this.get_connection(endpoint).send_receive(buffer, timeout_ms);
 	}
 
-	constructor() {
+	public static async read_host(): Promise<HostInfo> {
+		let x = await fetch("./host.json");
+		if (!x.ok) throw "read_host error: " + x.statusText;
+	
+		const reviver = (key:string, value: any) => {
+			if (key === 'object_id') {
+				return BigInt(value);
+			}
+			return value;
+		}
+
+		let info = JSON.parse(await x.text(), reviver);
+		if (info.secured == undefined) info.secured = false;
+
+		for (let key of Object.keys(info.objects)) {
+			info.objects[key] = new ObjectProxy(info.objects[key]);
+		}
+
+		return info;
+	}
+
+	constructor(host_info: HostInfo) {
 		this.last_poa_id_ = 0;
 		this.opened_connections_ = new Array<Connection>();
 		this.poa_list_ = new Array<Poa>();
+		this.host_info = host_info;
 	}
 }
 
@@ -310,8 +326,6 @@ export class Poa {
 		return this.object_map_.get(oid);
 	}
 	public activate_object(obj: ObjectServant): detail.ObjectId {
-		//console.log({obj: obj});
-
 		obj.poa_ = this;
 		obj.activation_time_ = Date.now();
 
@@ -327,7 +341,8 @@ export class Poa {
 			websocket_port: 0,
 			poa_idx: this.index,
 			flags: (1 << detail.ObjectFlag.WebObject), // + policy
-			class_id: obj.get_class()
+			class_id: obj.get_class(),
+			hostname: "" // clients doesn't have a hostname
 		};
 
 		//if (pl_lifespan == Policy_Lifespan::Type::Transient) {
@@ -360,12 +375,23 @@ export class ObjectProxy {
 	local_ref_cnt_: number;
 	/** @internal */
 	timeout_ms_: number;
+	/** @internal */
+	endpoint_: EndPoint;
 
 	constructor(data?: detail.ObjectId) {
 		if (!data) (this.data as any) = new Object()
 		else this.data = data;
 		this.timeout_ms_ = 1000;
 		this.local_ref_cnt_ = 0;
+	}
+
+	public endpoint(): EndPoint {
+		if (this.endpoint_ !== undefined) return this.endpoint_;
+		return (this.endpoint_ = new EndPoint(this.data.ip4, 
+			this.data.websocket_port, 
+			this.data.hostname, 
+			(this.data.flags & (1 << detail.ObjectFlag.Secured)) == 0 ? false : true 
+			));
 	}
 
 	public get timeout() { return this.timeout_ms_; }
@@ -384,9 +410,7 @@ export class ObjectProxy {
 		msg.object_id = this.data.object_id;
 		buf.commit(msg_size);
 
-		rpc.call(
-			{ ip4: this.data.ip4, port: this.data.websocket_port }, buf, this.timeout
-		).then().catch();
+		rpc.call(this.endpoint(), buf, this.timeout).then().catch();
 
 		return this.local_ref_cnt_;
 	}
@@ -404,9 +428,7 @@ export class ObjectProxy {
 		msg.object_id = this.data.object_id;
 		buf.commit(msg_size);
 
-		rpc.call(
-			{ ip4: this.data.ip4, port: this.data.websocket_port }, buf, this.timeout
-		).then().catch();
+		rpc.call(this.endpoint(), buf, this.timeout).then().catch();
 
 		return 0;
 	}
@@ -442,7 +464,7 @@ export abstract class ObjectServant {
 	}
 };
 
-export function make_simple_answer(buf: FlatBuffer, message_id: impl.MessageId) {
+export const make_simple_answer = (buf: FlatBuffer, message_id: impl.MessageId): void => {
 	buf.consume(buf.size);
 	buf.prepare(header_size);
 	buf.write_len(header_size - 4);
@@ -475,7 +497,7 @@ export class ReferenceList {
 //  0 - Success
 //  1 - exception
 // -1 - not handled
-export function handle_standart_reply(buf: FlatBuffer): number {
+export const handle_standart_reply = (buf: FlatBuffer): number => {
 	//if (buf.size < 8) throw new ExceptionCommFailure();
 	switch (buf.read_msg_id()) {
 		case impl.MessageId.Success:
@@ -490,12 +512,14 @@ export function handle_standart_reply(buf: FlatBuffer): number {
 			throw new ExceptionUnknownFunctionIndex();
 		case impl.MessageId.Error_UnknownMessageId:
 			throw new ExceptionUnknownMessageId();
+			case impl.MessageId.Error_BadAccess:
+			throw new ExceptionBadAccess();
 		default:
 			return -1;
 	}
 }
 
-export function oid_create_from_flat(o: detail.Flat_nprpc_base.ObjectId_Direct): detail.ObjectId {
+export const oid_create_from_flat = (o: detail.Flat_nprpc_base.ObjectId_Direct): detail.ObjectId => {
 	return {
 		object_id: o.object_id,
 		ip4: o.ip4,
@@ -503,11 +527,12 @@ export function oid_create_from_flat(o: detail.Flat_nprpc_base.ObjectId_Direct):
 		websocket_port: o.websocket_port,
 		poa_idx: o.poa_idx,
 		flags: o.flags,
-		class_id: o.class_id
+		class_id: o.class_id,
+		hostname: o.hostname
 	}
 }
 
-export function narrow<T extends ObjectProxy>(from: ObjectProxy, to: new () => T): T {
+export const narrow = <T extends ObjectProxy>(from: ObjectProxy, to: new () => T): T => {
 	if (from.data.class_id !== (to as any).servant_t._get_class()) return null;
 	let obj = new to();
 
@@ -522,49 +547,49 @@ export function narrow<T extends ObjectProxy>(from: ObjectProxy, to: new () => T
 	return obj;
 }
 
-const invalid_object_id = 0xFFFFFFFFFFFFFFFFn;
-const localhost_ip4 = 0x7F000001;
+export const convert_object_ip = (oid: detail.ObjectId, remote_ip: number): detail.ObjectId => {
+	if (remote_ip == localhost_ip4) {
+		// could be the object on the same machine or from any other location
+	} else {
+		if (oid.ip4 == localhost_ip4) {
+			// remote object has localhost ip converting to endpoint ip
+			oid.ip4 = remote_ip;
+		} else {
+			// remote object with ip != localhost
+		}
+	}
 
-export function create_object_from_flat(
-	oid: detail.Flat_nprpc_base.ObjectId_Direct,
-	remote_ip: number): ObjectProxy {
+	if (rpc.host_info.secured && !(oid.flags & (1 << detail.ObjectFlag.Secured))) { //received unsecured object under the ssl context
+		throw new ExceptionUnsecuredObject(oid.class_id);
+	}
+
+	return oid;
+}
+
+export const create_object_from_flat = (oid: detail.Flat_nprpc_base.ObjectId_Direct, remote_ip: number): ObjectProxy => {
 	if (oid.object_id == invalid_object_id) return null;
 
 	let obj = new ObjectProxy();
 
 	obj.data.object_id = oid.object_id;
-
-	if (remote_ip == localhost_ip4) {
-		// could be the object on the same machine or from any other location
-		obj.data.ip4 = oid.ip4;
-	} else {
-		if (oid.ip4 == localhost_ip4) {
-			// remote object has localhost ip converting to endpoint ip
-			obj.data.ip4 = remote_ip;
-		} else {
-			// remote object with ip != localhost
-			obj.data.ip4 = oid.ip4;
-		}
-	}
-
+	obj.data.ip4 = oid.ip4;
 	obj.data.port = oid.port;
 	obj.data.websocket_port = oid.websocket_port;
-
 	obj.data.poa_idx = oid.poa_idx;
 	obj.data.flags = oid.flags;
 	obj.data.class_id = oid.class_id;
+	obj.data.hostname = oid.hostname;
+
+	convert_object_ip(obj.data, remote_ip);
 
 	return obj;
 }
 
-
-export let rpc: Rpc;
-
-export function init(): Rpc {
-	rpc = new Rpc();
-	return rpc;
+export const init = async (): Promise<Rpc> => {
+	if (rpc !== undefined) return rpc;
+	return (rpc = new Rpc(await Rpc.read_host()));
 }
 
-export function set_debug_level(debug_level: DebugLevel) {
+export const set_debug_level = (debug_level: DebugLevel): void => {
 	g_debug_level = debug_level;
 }

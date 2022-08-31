@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <atomic>
 #include <chrono>
+#include <optional>
 
 #include <boost/asio/io_context.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
@@ -21,12 +22,15 @@
 #include <nprpc/object_ptr.hpp>
 #include <nprpc/utils.hpp>
 #include <nprpc/endpoint.hpp>
+#include <nprpc/session_context.h>
+#include <nprpc/serialization/serialization.h>
 
 namespace nprpc {
 
 class Nameserver;
 class Poa;
 class ObjectServant;
+class Object;
 
 constexpr uint32_t localhost_ip4 = 0x7F'00'00'01;
 constexpr nprpc::oid_t invalid_object_id = (uint64_t)-1;
@@ -35,22 +39,25 @@ namespace impl {
 class PoaImpl;
 class RpcImpl;
 class ObjectGuard;
+
+NPRPC_API Object* create_object_from_flat(detail::flat::ObjectId_Direct oid, EndPoint remote_endpoint);
 }
 
 class ObjectId : private detail::ObjectId {
 	friend impl::PoaImpl;
 public:
-	ObjectId() {
-		this->object_id = invalid_object_id;
+	template<typename Archive>
+	void serialize(Archive& ar) {
+		ar & NVP2("object_id", this->object_id);
+		ar & NVP2("ip4", this->ip4);
+		ar & NVP2("port", this->port);
+		ar & NVP2("websocket_port", this->websocket_port);
+		ar & NVP2("poa_idx", this->poa_idx);
+		ar & NVP2("flags", this->flags);
+		ar & NVP2("class_id", this->class_id);
+		ar & NVP2("hostname", this->hostname);
 	}
 
-	ObjectId(const ObjectId&) = default;
-
-	ObjectId(const detail::ObjectId& other) :
-		detail::ObjectId(other) {}
-
-	ObjectId(ObjectId&&) = default;
-	
 	detail::ObjectId& _data() noexcept { return static_cast<detail::ObjectId&>(*this); }
 	const detail::ObjectId& _data() const noexcept { return static_cast<const detail::ObjectId&>(*this); }
 
@@ -75,12 +82,24 @@ public:
 		_data().poa_idx = other.poa_idx();
 		_data().flags = other.flags();
 		_data().class_id = (std::string_view)other.class_id();
+		_data().hostname = (std::string_view)other.hostname();
 	}
 
 	ObjectId& operator=(ObjectId&& other) noexcept {
 		_data() = std::move(other._data());
 		return *this;
 	}
+
+	ObjectId() {
+		this->object_id = invalid_object_id;
+	}
+
+	ObjectId(const ObjectId&) = default;
+
+	ObjectId(const detail::ObjectId& other) :
+		detail::ObjectId(other) {}
+
+	ObjectId(ObjectId&&) = default;
 };
 
 class NPRPC_API Policy {
@@ -103,7 +122,7 @@ public:
 class NPRPC_API Poa {
 	poa_idx_t idx_;
 public:
-	virtual ObjectId activate_object(ObjectServant* obj) = 0;
+	virtual ObjectId activate_object(ObjectServant* obj, SessionContext* ctx = nullptr, bool session_specific = false) = 0;
 	virtual void deactivate_object(oid_t object_id) = 0;
 	poa_idx_t get_index() const noexcept { return idx_; }
 	Poa(poa_idx_t idx) : idx_{ idx } {}
@@ -120,7 +139,8 @@ class ObjectServant {
 	std::atomic_uint32_t ref_cnt_{ 0 };
 	std::atomic_uint32_t in_use_cnt_{ 0 };
 	std::atomic_bool to_delete_{false};
-	std::chrono::steady_clock::time_point activation_time_;
+	std::chrono::system_clock::time_point activation_time_;
+	SessionContext* session_ctx_ = nullptr;
 public:
 	virtual std::string_view get_class() const noexcept = 0;
 	virtual void dispatch(Buffers& bufs, EndPoint remote_endpoint, bool from_parent, ReferenceList& ref_list) = 0;
@@ -133,6 +153,9 @@ public:
 	auto activation_time() const noexcept { return activation_time_; }
 	bool is_unused() const noexcept { return ref_cnt_.load() == 0; }
 	bool is_deleted() const noexcept { return to_delete_.load(); }
+	bool validate_session(SessionContext& ctx) const noexcept { 
+		return (!session_ctx_ || session_ctx_ == &ctx);
+	}
 	uint32_t release() noexcept;
 	virtual ~ObjectServant() = default;
 };
@@ -141,6 +164,8 @@ class Object : public ObjectId {
 	friend impl::RpcImpl;
 	template<typename T>
 	friend T* narrow(Object*&) noexcept;
+	friend NPRPC_API Object* impl::create_object_from_flat(detail::flat::ObjectId_Direct oid, EndPoint remote_endpoint);
+
 	std::atomic_uint32_t local_ref_cnt_{ 0 };
 	uint32_t timeout_ms_= 1000;
 public:
@@ -152,22 +177,29 @@ public:
 
 	NPRPC_API uint32_t add_ref();
 	NPRPC_API uint32_t release();
+	
 	uint32_t set_timeout(uint32_t timeout_ms) noexcept { 
 		return boost::exchange(timeout_ms_, timeout_ms); 
 	}
+	
 	uint32_t get_timeout() const noexcept { return timeout_ms_; }
+	
 	bool is_web_origin() const noexcept { 
 		return this->_data().flags & (1 << static_cast<int>(detail::ObjectFlag::WebObject)) ? true : false; 
 	}
+
+	EndPoint get_endpoint() const noexcept {
+		return EndPoint(_data().ip4, _data().port, is_web_origin());
+	}
+
 	NPRPC_API virtual ~Object() = default;
 protected:
-	NPRPC_API Object* create_from_object_id(detail::flat::ObjectId_Direct oid);
+	Object() = default;
 };
 
 class NPRPC_API Rpc {
 public:
 	virtual Poa* create_poa(uint32_t objects_max, std::initializer_list<Policy*> policy_list = {}) = 0;
-	virtual void start() = 0;
 	virtual void destroy() = 0;
 	virtual ObjectPtr<Nameserver> get_nameserver(std::string_view nameserver_ip) = 0;
 	virtual ~Rpc() = default;
@@ -175,12 +207,15 @@ public:
 
 struct Config {
 	DebugLevel debug_level = DebugLevel::DebugLevel_Critical;
+	std::string hostname;
 	uint16_t port;
 	uint16_t websocket_port = 0;
 	std::string http_root_dir;
 	bool use_ssl = false;
 	std::string ssl_public_key;
 	std::string ssl_secret_key;
+	std::string ssl_dh_params;
+	std::vector<std::string> spa_links;
 };
 
 NPRPC_API Rpc* init(boost::asio::io_context& ioc, Config&& cfg);
@@ -188,11 +223,18 @@ NPRPC_API Rpc* init(boost::asio::io_context& ioc, Config&& cfg);
 template<typename T>
 T* narrow(Object*& obj) noexcept {
 	static_assert(std::is_base_of_v<Object, T>);
+	
 	if (obj->get_class() != T::servant_t::_get_class()) return nullptr;
+	
 	auto t = new T(0);
+	
+	t->local_ref_cnt_ = obj->local_ref_cnt_.load();
+	t->timeout_ms_ = obj->timeout_ms_;
 	static_cast<ObjectId&>(*t) = static_cast<ObjectId&&>(*obj);
+	
 	delete obj;
 	obj = nullptr;
+	
 	return t;
 }
 
@@ -204,6 +246,7 @@ inline void assign_to_out(const nprpc::ObjectId& oid, detail::flat::ObjectId_Dir
 	out.poa_idx() = oid._data().poa_idx;
 	out.flags() = oid._data().flags;
 	out.class_id(oid._data().class_id);
+	out.hostname(oid._data().hostname);
 }
 
 } // namespace nprpc
