@@ -24,15 +24,20 @@ template<typename T>
 concept JsonArchive = std::is_same_v<T, json_iarchive> || std::is_same_v<T, json_oarchive>;
 
 template<typename Archive, typename T>
+void serialize(Archive& ar, T& obj) { 
+	obj.serialize(ar); 
+}
+
+template<typename Archive, typename T>
 void serialize_free(Archive& ar, T& obj) {
-	obj.serialize(ar);
+	serialize(ar, obj);
 }
 
 template<JsonArchive Archive, typename T>
 void serialize_free(Archive& ar, T& obj) {
 	if (Archive::is_saving::value) {
 		ar.bracket_open();
-		obj.serialize(ar);
+		serialize(ar, obj);
 		ar.bracket_close();
 	}
 }
@@ -54,9 +59,9 @@ void serialize_free(Archive& ar, std::string& obj) {
 template<JsonArchive Archive>
 void serialize_free(Archive& ar, std::string& obj) {
 	if constexpr (Archive::is_saving::value) {
-		ar.save_fundamental('\"');
+		ar.put_char('\"');
 		ar.save_fundamental(obj);
-		ar.save_fundamental('\"');
+		ar.put_char('\"');
 	} else {
 		ar.load_fundamental(obj);
 	}
@@ -75,6 +80,17 @@ void serialize_free(Archive& ar, std::vector<T, Alloc>& obj) {
 			obj.emplace_back();
 			ar >> obj.back();
 		}
+	}
+}
+
+template<JsonArchive Archive, typename T, typename Alloc>
+void serialize_free(Archive& ar, std::vector<T, Alloc>& obj) {
+	if constexpr (Archive::is_saving::value) {
+		ar.put_char('[');
+		ar.save_sequence(obj.data(), static_cast<unsigned int>(obj.size()));
+		ar.put_char(']');
+	} else {
+		static_assert("not implemented");
 	}
 }
 

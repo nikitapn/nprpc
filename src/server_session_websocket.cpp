@@ -547,7 +547,7 @@ public:
 
 	virtual void send_receive_async(
 		flat_buffer&& buffer,
-		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
+		std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& completion_handler,
 		uint32_t timeout_ms
 	) {
 		assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
@@ -556,7 +556,7 @@ public:
 			flat_buffer buffer_;
 			Derived& this_;
 			uint32_t timeout_ms;
-			std::function<void(const boost::system::error_code&, flat_buffer&)> handler;
+			std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>> handler;
 
 			void operator()() noexcept override {
 				//this_.set_timeout(timeout_ms);
@@ -573,17 +573,17 @@ public:
 			}
 
 			void on_failed(const boost::system::error_code& ec) noexcept override {
-				handler(ec, buffer_);
+				if (handler) (*handler)(ec, buffer_);
 			}
 
 			void on_executed(flat_buffer&& buffer) noexcept override {
 				buffer_ = std::move(buffer);
-				handler(boost::system::error_code{}, buffer_);
+				if (handler) (*handler)(boost::system::error_code{}, buffer_);
 			}
 
 			work_impl(flat_buffer&& _buf,
 				Derived& _this_,
-				std::function<void(const boost::system::error_code&, flat_buffer&)>&& _handler,
+				std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& _handler,
 				uint32_t _timeout_ms)
 				: buffer_(std::move(_buf))
 				, this_(_this_)

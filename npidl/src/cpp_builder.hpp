@@ -22,6 +22,8 @@ private:
 
 	std::filesystem::path file_path_;
 
+	std::unordered_map<Ast_Function_Decl*, std::string> proxy_arguments_;
+
 	BlockDepth bd;
 
 	void emit_parameter_type_for_proxy_call_r(Ast_Type_Decl* type, std::ostream& os, bool input);
@@ -46,6 +48,15 @@ private:
 	void emit_safety_checks();
 	void emit_safety_checks_r(Ast_Type_Decl* type, std::string op, std::ostream& os, bool from_iterator = false, bool top_type = false);
 	
+
+	void proxy_call(Ast_Function_Decl* fn);
+	void proxy_async_call(Ast_Function_Decl* fn);
+	std::string_view proxy_arguments(Ast_Function_Decl* fn);
+	static void emit_function_arguments(
+		Ast_Function_Decl* fn,
+		std::ostream& os,
+		std::function<void(Ast_Function_Argument*, std::ostream& os)> emitter
+	);
 
 	_ns ns(Namespace* nm);
 public:

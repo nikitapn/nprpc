@@ -40,17 +40,18 @@ public:
 */
 
 class SocketConnection : public Session {
+	struct work {
+		virtual void operator()() = 0;
+		virtual void on_failed(const boost::system::error_code& ec) noexcept = 0;
+		virtual void on_executed() noexcept = 0;
+		virtual flat_buffer& buffer() noexcept = 0;
+		virtual ~work() = default;
+	};
+	
 	boost::asio::ip::tcp::socket socket_;
 	uint32_t rx_size_ = 0;
-
-	struct work {
-    virtual void operator()() = 0;
-		virtual void on_failed(const boost::system::error_code& ec) noexcept = 0;
-    virtual void on_executed() noexcept = 0;
-		virtual flat_buffer& buffer() noexcept = 0;
-    virtual ~work() = default;
-  };
 	std::deque<std::unique_ptr<work>> wq_;
+	
 	void add_work(std::unique_ptr<work>&& w);
 	void reconnect();
 
@@ -74,7 +75,7 @@ public:
 
 	void send_receive_async(
 		flat_buffer&& buffer,
-		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
+		std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& completion_handler,
 		uint32_t timeout_ms) override;
 
 	void on_read_size(const boost::system::error_code& ec, size_t len);
@@ -120,8 +121,9 @@ public:
 	
 	NPRPC_API void call_async(
 		const EndPoint& endpoint, flat_buffer&& buffer, 
-		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler, 
-		uint32_t timeout_ms = 2500);
+		std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& completion_handler, 
+		uint32_t timeout_ms = 2500
+	);
 
 	NPRPC_API std::optional<ObjectGuard> get_object(poa_idx_t poa_idx, oid_t oid);
 

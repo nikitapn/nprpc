@@ -228,7 +228,8 @@ class Lexer {
 			{ "raises"sv, TokenId::Raises },
 			{ "direct"sv, TokenId::OutDirect },
 			{ "helper"sv, TokenId::Helper },
-			{ "trusted"sv, TokenId::Trusted }
+			{ "trusted"sv, TokenId::Trusted },
+			{ "async"sv, TokenId::Async }
 		};
 
 		static constexpr Map<std::string_view, TokenId,
@@ -357,6 +358,13 @@ public:
 	Queue() { clear(); }
 };
 
+#define throw_error(msg) \
+	throw parser_error(lex_.line(), lex_.col(), msg);
+
+#define throw_unexpected_token(tok) \
+	throw parser_error(lex_.line(), lex_.col(), \
+		"Unexpected token: '" + std::string(tok.to_string_view()) + '\'');
+
 class Parser {
 	friend struct PeekGuard;
 	Lexer lex_;
@@ -441,19 +449,6 @@ class Parser {
 	bool maybe(bool& result, MemFn Pm, Args&&... args) {
 		result = check(Pm, std::forward<Args>(args)...);
 		return true;
-	}
-
-	void throw_error(const char* msg) {
-		throw parser_error(lex_.line(), lex_.col(), msg);
-	}
-
-	void throw_error(const std::string& msg) {
-		throw parser_error(lex_.line(), lex_.col(), msg);
-	}
-
-	void throw_unexpected_token(const Token& tok) {
-		throw parser_error(lex_.line(), lex_.col(), 
-			"Unexpected token: '" + std::string(tok.to_string_view()) + '\'');
 	}
 
 	Ast_Number parse_number(const Token& tok) {
@@ -754,14 +749,19 @@ class Parser {
 	}
 
 	bool function_decl(Ast_Function_Decl*& f) {
-		{
-			Ast_Type_Decl* ret_type;
-			if (!check(&Parser::type_decl, std::ref(ret_type))) return false;
-			f = new Ast_Function_Decl();
-			f->ret_value = ret_type;
-		}
-
+		bool is_async;
+		Ast_Type_Decl* ret_type = nullptr;
+		
+		if (!(is_async = check(&Parser::one, TokenId::Async)) && 
+			!check(&Parser::type_decl, std::ref(ret_type))) return false;
+		
+		if (!ret_type) ret_type = new Ast_Void_Decl();
+		
+		f = new Ast_Function_Decl();
+		f->ret_value = ret_type ;
+		f->is_async = is_async;
 		f->name = match(TokenId::Name).name;
+
 		match('(');
 
 		Ast_Function_Argument arg;
@@ -782,14 +782,13 @@ class Parser {
 		if (tok == TokenId::Semicolon) {
 			flush();
 		} else if (tok == TokenId::Raises) {
+			if (f->is_async) throw_error("function declared as async cannot throw exceptions");
+			
 			flush();
 			match('(');
 			
 			auto type = ctx_.nm_cur()->find_type(match(TokenId::Name).name, false);
-			
-			if (!type) {
-				throw_error("unknown exception type");
-			} 
+			if (!type) throw_error("unknown exception type");
 				
 			if (type->id != FieldType::Struct && cflat(type)->is_exception()) {
 				throw_error("class is not an exception");

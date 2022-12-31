@@ -26,7 +26,8 @@ void Builder::emit_arguments_structs(std::function<void(Ast_Struct_Decl*)> emitt
 void Builder::make_arguments_structs(Ast_Function_Decl* fn) {
 	if (fn->arguments_structs_have_been_made) return;
 
-	std::vector<Ast_Function_Argument*> in_args, out_args;
+	auto& in_args = fn->in_args;
+	auto& out_args = fn->out_args;
 
 	if (!fn->is_void()) {
 		auto ret = new Ast_Function_Argument();
@@ -256,7 +257,6 @@ void Builder_Cpp::emit_parameter_type_for_proxy_call_r(Ast_Type_Decl* type, std:
 void Builder_Cpp::emit_parameter_type_for_proxy_call(Ast_Function_Argument* arg, std::ostream& os) {
 	const bool input = (arg->modifier == ArgumentModifier::In);
 
-	os << (input ? "/*in*/" : "/*out*/");
 	if (input && arg->type->id != FieldType::Fundamental && arg->type->id != FieldType::Vector) {
 		os << "const ";
 	}
@@ -617,7 +617,7 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 	case FieldType::Struct: {
 		auto s = cflat(type);
 		if (s->flat) {
-			os << bd <<"memcpy(&" << op1 << ", " << op2 << "().__data(), " << s->size << ");\n";
+			os << bd <<"memcpy(&" << op1 << ", " << op2 << (top_object ? "." : "().") << "__data(), " << s->size << ");\n";
 		} else {
 			for (auto field : s->fields) {
 				assign_from_flat_type(field->type, 
@@ -1039,19 +1039,129 @@ void Builder_Cpp::emit_helpers() {
 	always_full_namespace(false);
 }
 
-void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
-	auto emit_function_arguments = [](Ast_Function_Decl* fn, std::ostream& os,
-		std::function<void(Ast_Function_Argument*, std::ostream& os)> emitter) {
-			os << "(";
-			size_t ix = 0;
-			for (auto arg : fn->args) {
-				emitter(arg, os);
-				os << " " << arg->name;
-				if (++ix != fn->args.size()) os << ", ";
-			}
-			os << ')';
-	};
+void Builder_Cpp::emit_function_arguments(
+	Ast_Function_Decl* fn,
+	std::ostream& os,
+	std::function<void(Ast_Function_Argument*, std::ostream& os)> emitter
+) {
+	os << "(";
+	size_t ix = 0;
+	for (auto arg : fn->args) {
+		emitter(arg, os);
+		os << " " << arg->name;
+		if (++ix != fn->args.size()) os << ", ";
+	}
+	os << ')';
+};
 
+void Builder_Cpp::proxy_call(Ast_Function_Decl* fn) {
+	oc <<
+		"  ::nprpc::impl::g_orb->call(this->get_endpoint(), buf, this->get_timeout());\n"
+		"  auto std_reply = nprpc::impl::handle_standart_reply(buf);\n"
+		;
+
+	if (fn->ex) 
+		oc << "  if (std_reply == 1) " << ctx_.base_name << "_throw_exception(buf);\n";
+	
+	if (!fn->out_s) {
+//		oc <<
+//			"  if (std_reply != 0) {\n"
+//			"    std::cerr << \"received an unusual reply for function with no output arguments\\n\";\n"
+//			"    assert(false);\n"
+//			"  }\n"
+//			;
+	} else {
+//		oc <<
+//			"  if (std_reply != -1) {\n"
+//			"    std::cerr << \"received an unusual reply for function with output arguments\\n\";\n"
+//			"    assert(false);\n"
+//			"    throw nprpc::Exception(\"Unknown Error\");\n"
+//			"  }\n"
+//			;
+
+		oc << "  " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
+
+		int ix = fn->is_void() ? 0 : 1;
+		bd = 2;
+		for (auto out : fn->args) {
+			if (out->modifier == ArgumentModifier::In) continue;
+			assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), oc, false,
+				out->type->id == FieldType::Object && out->direct == false);
+		}
+
+		if (!fn->is_void()) {
+			oc << bd; emit_type(fn->ret_value, oc); oc << " __ret_value;\n";
+			assign_from_flat_type(fn->ret_value, "__ret_value", "out._1", oc, false,
+				fn->ret_value->id == FieldType::Object);
+			oc << "  return __ret_value;\n";
+		}
+	}
+}
+
+void Builder_Cpp::proxy_async_call(Ast_Function_Decl* fn) {
+	oc <<
+		"  ::nprpc::impl::g_orb->call_async(this->get_endpoint(), std::move(buf), !handler ? std::nullopt : std::make_optional([handler = move(handler)] (\n"
+		"    const boost::system::error_code& ec, nprpc::flat_buffer& buf) {\n"
+		;
+
+		if (fn->out_args.empty() == false) { 
+			// not implemented for now...
+			assert(false);
+
+			bd = 4;
+	
+			oc << 
+				"    " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n"
+				;
+	
+			for (auto arg : fn->out_args) {
+				oc << bd; emit_parameter_type_for_proxy_call_r(arg->type, oc, false); oc << " " << arg->name << ";\n";
+			}
+	
+			size_t ix = 0;
+			for (auto out : fn->out_args) {
+				assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), oc, false,
+					out->type->id == FieldType::Object && out->direct == false);
+			}
+		} else {
+			oc << bd << "(*handler)();\n";
+		}
+
+		oc << "}), get_timeout());\n";
+}
+
+std::string_view Builder_Cpp::proxy_arguments(Ast_Function_Decl* fn) {
+	if (auto it = proxy_arguments_.find(fn); it != proxy_arguments_.end()) 
+		return it->second;
+
+	std::stringstream ss;
+	if (!fn->is_async) {
+		emit_function_arguments(fn, ss,
+			std::bind(&Builder_Cpp::emit_parameter_type_for_proxy_call, this, _1, _2)
+		);
+	} else {
+		size_t out_args_size = fn->out_args.size();
+		ss << "(std::optional<std::function<void(";
+		for (auto arg : fn->out_args) {
+			emit_parameter_type_for_proxy_call(arg, ss);
+			if (--out_args_size) ss << ", ";
+		}
+		ss << ")>> handler";
+		
+		size_t in_args_size = fn->in_args.size();
+		if (in_args_size) ss << ", ";
+		for (auto arg : fn->in_args) {
+			emit_parameter_type_for_proxy_call(arg, ss);
+			ss << ' ' << arg->name;
+			if (--in_args_size) ss << ", ";
+		}
+		ss << ')';
+	}
+
+	return proxy_arguments_.emplace(fn, ss.str()).first->second;
+}
+
+void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 	// Servant definition
 	oh <<
 		"class I" << ifs->name << "_Servant\n";
@@ -1122,15 +1232,12 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 			;
 	}
 
-
 	// functions definitions
 	for (auto& fn : ifs->fns) {
+		make_arguments_structs(fn);
 		oh << "  "; emit_type(fn->ret_value, oh);
 		oh << ' ' << fn->name << " ";
-		emit_function_arguments(fn, oh,
-			std::bind(&Builder_Cpp::emit_parameter_type_for_proxy_call, this, _1, _2)
-		);
-		oh << ";\n";
+		oh << proxy_arguments(fn) << ";\n";
 	}
 
 	oh << "};\n\n";
@@ -1140,16 +1247,9 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 	auto const nm = ctx_.nm_cur()->to_cpp17_namespace();
 
 	for (auto fn : ifs->fns) {
-		make_arguments_structs(fn);
-
 		emit_type(fn->ret_value, oc);
 		oc << ' ' << nm << "::" << ifs->name << "::" << fn->name;
-		emit_function_arguments(fn, oc,
-			std::bind(&Builder_Cpp::emit_parameter_type_for_proxy_call, this, _1, _2)
-		);
-		oc << " {\n";
-
-
+		oc << proxy_arguments(fn) << " {\n";
 		oc << "  ::nprpc::flat_buffer buf;\n";
 
 		const auto fixed_size = get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
@@ -1184,52 +1284,8 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 
 		oc << "  static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size() - 4);\n";
 
-		oc <<
-			"  ::nprpc::impl::g_orb->call(this->get_endpoint(), buf, this->get_timeout());\n"
-			"  auto std_reply = nprpc::impl::handle_standart_reply(buf);\n"
-			;
-
-		if (fn->ex) {
-			oc <<
-				"  if (std_reply == 1) {\n"
-				"    " << ctx_.base_name << "_throw_exception(buf);\n"
-				"  }\n"
-				;
-		}
-
-		if (!fn->out_s) {
-			oc <<
-				"  if (std_reply != 0) {\n"
-				"    std::cerr << \"received an unusual reply for function with no output arguments\\n\";\n"
-				//"    assert(false);\n"
-				"  }\n"
-				;
-		} else {
-			oc <<
-				"  if (std_reply != -1) {\n"
-				"    std::cerr << \"received an unusual reply for function with output arguments\\n\";\n"
-				//"    assert(false);\n"
-				"    throw nprpc::Exception(\"Unknown Error\");\n"
-				"  }\n"
-				;
-
-			oc << "  " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
-
-			int ix = fn->is_void() ? 0 : 1;
-			bd = 2;
-			for (auto out : fn->args) {
-				if (out->modifier == ArgumentModifier::In) continue;
-				assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), oc, false, 
-					out->type->id == FieldType::Object && out->direct == false);
-			}
-
-			if (!fn->is_void()) {
-				oc << bd; emit_type(fn->ret_value, oc); oc << " __ret_value;\n";
-				assign_from_flat_type(fn->ret_value, "__ret_value", "out._1", oc, false, 
-					fn->ret_value->id == FieldType::Object);
-				oc << "  return __ret_value;\n";
-			}
-		}
+		if (!fn->is_async) proxy_call(fn);
+		else proxy_async_call(fn);
 
 		oc << "}\n\n";
 	}

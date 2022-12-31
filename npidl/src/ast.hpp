@@ -67,6 +67,7 @@ enum class TokenId {
 	OutDirect,
 	Helper,
 	Trusted,
+	Async,
 };
 
 struct Ast_Struct_Decl;
@@ -400,7 +401,8 @@ struct Ast_Function_Decl {
 	Ast_Struct_Decl* out_s = nullptr;
 	bool arguments_structs_have_been_made = false;
 	Ast_Struct_Decl* ex = nullptr;
-	std::vector<Ast_Function_Argument*> args;
+	std::vector<Ast_Function_Argument*> args, in_args, out_args;
+	bool is_async;
 
 	bool is_void() const noexcept { return ret_value->id == FieldType::Void; }
 };

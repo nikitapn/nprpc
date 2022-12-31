@@ -33,7 +33,7 @@ public:
 
 	virtual void send_receive_async(
 		flat_buffer&& buffer,
-		std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
+		std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& completion_handler,
 		uint32_t timeout_ms) = 0;
 
 	void set_timeout(uint32_t timeout_ms) {

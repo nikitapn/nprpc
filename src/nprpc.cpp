@@ -86,8 +86,12 @@ NPRPC_API void RpcImpl::call(
 	get_session(endpoint)->send_receive(buffer, timeout_ms);
 }
 
-NPRPC_API void RpcImpl::call_async(const EndPoint& endpoint, flat_buffer&& buffer,
-	std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler, uint32_t timeout_ms) {
+NPRPC_API void RpcImpl::call_async(
+	const EndPoint& endpoint, 
+	flat_buffer&& buffer,
+	std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& completion_handler, 
+	uint32_t timeout_ms
+) {
 	get_session(endpoint)->send_receive_async(std::move(buffer), std::move(completion_handler), timeout_ms);
 }
 
@@ -264,18 +268,7 @@ NPRPC_API uint32_t Object::add_ref() {
 	msg.object_id() = this->_data().object_id;
 	msg.poa_idx() = this->_data().poa_idx;
 
-	::nprpc::impl::g_orb->call_async(
-		get_endpoint(),
-		std::move(buf),
-		[](const boost::system::error_code& ec, flat_buffer& buf) {
-			//if (!ec) {
-				//auto std_reply = nprpc::impl::handle_standart_reply(buf);
-				//if (std_reply == false) {
-				//	std::cerr << "received an unusual reply for function with no output arguments" << std::endl;
-				//}
-			//}
-		}
-	);
+	nprpc::impl::g_orb->call_async(get_endpoint(), std::move(buf), std::nullopt);
 
 	return cnt + 1;
 }

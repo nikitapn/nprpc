@@ -81,17 +81,18 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
 	}
 }
 
-void SocketConnection::send_receive_async(flat_buffer&& buffer,
-	std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
-	uint32_t timeout_ms) 
-{
+void SocketConnection::send_receive_async(
+	flat_buffer&& buffer,
+	std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& completion_handler,
+	uint32_t timeout_ms
+) {
 	assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
 	struct work_impl : work {
 		flat_buffer buf;
 		SocketConnection& this_;
 		uint32_t timeout_ms;
-		std::function<void(const boost::system::error_code&, flat_buffer&)> handler;
+		std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>> handler;
 		
 		void operator()() noexcept override {
 			this_.set_timeout(timeout_ms);
@@ -107,18 +108,18 @@ void SocketConnection::send_receive_async(flat_buffer&& buffer,
 		}
 
 		void on_failed(const boost::system::error_code& ec) noexcept override {
-			handler(ec, buf);
+			if (handler) handler.value()(ec, buf);
 		}
 
 		void on_executed() noexcept override {
-			handler(boost::system::error_code{}, buf);
+			if (handler) handler.value()(boost::system::error_code{}, buf);
 		}
 
 		flat_buffer& buffer() noexcept override { return buf; };
 
 		work_impl(flat_buffer&& _buf, 
 			SocketConnection& _this_, 
-			std::function<void(const boost::system::error_code&, flat_buffer&)>&& _handler,
+			std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& _handler,
 			uint32_t _timeout_ms)
 			: buf(std::move(_buf))
 			, this_(_this_)

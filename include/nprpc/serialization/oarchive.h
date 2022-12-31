@@ -67,7 +67,28 @@ public:
 
 	template<typename U>
 	void save_fundamental(const U& obj) {
-		os_ << obj;
+		if constexpr(std::is_same_v<unsigned char, U>) {
+			os_ << static_cast<unsigned short>(obj);
+		} else if constexpr (std::is_same_v<char, U>) {
+			os_ << static_cast<short>(obj);
+		} else {
+			os_ << obj;
+		}
+	}
+
+	void put_char(char c) {
+			os_ << c;
+	}
+
+	template<typename T>
+	void save_sequence(const T* data, unsigned int size) {
+		if (size == 0) return;
+
+		for (unsigned int i = 0; i < size - 1; ++i) {
+			This()->operator<<(data[i]);
+			os_ << ',';
+		}
+		This()->operator<<(data[size - 1]);
 	}
 
 	void save_byte_sequence(const char* data, unsigned int size) {
