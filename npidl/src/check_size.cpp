@@ -1,9 +1,9 @@
 // Copyright (c) 2021 nikitapnn1@gmail.com
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 
-// #define BROKEN
+// #define CHECK_AGAINST_GENERATED
 
-#ifndef BROKEN
+#ifdef CHECK_AGAINST_GENERATED
 # include "../../include/nprpc/nprpc_base.hpp"
 # include "utils.hpp"
 

@@ -1051,7 +1051,7 @@ public:
 
 
 int main(int argc, char* argv[]) {
-	namespace po = boost::program_options;
+  namespace po = boost::program_options;
 	
 	std::filesystem::path out_inc_dir, out_src_dir, out_ts_dir, input_file;
 	bool generate_typescript;

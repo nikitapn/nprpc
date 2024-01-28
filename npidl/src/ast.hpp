@@ -9,6 +9,7 @@
 #include <cassert>
 #include <filesystem>
 #include <variant>
+#include <algorithm>
 
 constexpr int fundamental_type_first = 256;
 constexpr int fundamental_type_last = fundamental_type_first + 16;
