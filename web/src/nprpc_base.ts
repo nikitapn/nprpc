@@ -87,6 +87,16 @@ export class ExceptionBadAccess_Direct extends NPRPC.Flat.Flat {
   public set __ex_id(value: number) { this.buffer.dv.setUint32(this.offset+0,value,true); }
 }
 } // namespace Flat 
+export class ExceptionBadInput extends NPRPC.Exception {
+  constructor() { super("ExceptionBadInput"); }
+}
+
+export namespace Flat_nprpc_base {
+export class ExceptionBadInput_Direct extends NPRPC.Flat.Flat {
+  public get __ex_id() { return this.buffer.dv.getUint32(this.offset+0,true); }
+  public set __ex_id(value: number) { this.buffer.dv.setUint32(this.offset+0,value,true); }
+}
+} // namespace Flat 
 export const enum DebugLevel { //u32
   DebugLevel_Critical,
   DebugLevel_InactiveTimeout,
@@ -175,7 +185,8 @@ export const enum MessageId { //u32
   Error_CommFailure,
   Error_UnknownFunctionIdx,
   Error_UnknownMessageId,
-  Error_BadAccess
+  Error_BadAccess,
+  Error_BadInput
 }
 export const enum MessageType { //u32
   Request = 0,
@@ -265,6 +276,12 @@ function nprpc_base_throw_exception(buf: NPRPC.FlatBuffer): void {
   {
     let ex_flat = new Flat_nprpc_base.ExceptionBadAccess_Direct(buf, 16);
     let ex = new ExceptionBadAccess();
+    throw ex;
+  }
+  case 7:
+  {
+    let ex_flat = new Flat_nprpc_base.ExceptionBadInput_Direct(buf, 16);
+    let ex = new ExceptionBadInput();
     throw ex;
   }
   default:

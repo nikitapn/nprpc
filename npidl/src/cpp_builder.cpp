@@ -1556,9 +1556,7 @@ Builder_Cpp::Builder_Cpp(Context& ctx, std::filesystem::path file_path,
 		return r + '_';
 	};
 
-
 	auto h1 = make_guard(ctx_.base_name);
-	auto h2 = make_guard(ctx_.base_name + "_M");
 
 	oh <<
 		"#ifndef " << h1 << "\n"
@@ -1571,9 +1569,19 @@ Builder_Cpp::Builder_Cpp(Context& ctx, std::filesystem::path file_path,
 		oh << "#include <nprpc/exception.hpp>\n\n";
 	}
 
-	ocpp <<
-		"#include \"" << ctx_.base_name << ".hpp\"\n"
-		"#include <nprpc/impl/nprpc_impl.hpp>\n\n"
+  if (ctx_.is_nprpc_base()) {
+  	ocpp <<
+		  "#include <nprpc/nprpc_base.hpp>\n";
+  } else if (ctx_.is_nprpc_nameserver()) {
+    ocpp <<
+		  "#include <nprpc/nprpc_nameserver.hpp>\n";
+  } else {
+    ocpp <<
+		  "#include \"" << ctx_.base_name << ".hpp\"\n";
+  }
+
+  ocpp <<
+    "#include <nprpc/impl/nprpc_impl.hpp>\n\n"
 		"void " << ctx_.base_name << "_throw_exception(::nprpc::flat_buffer& buf);\n\n"
 		;
 }
