@@ -10,7 +10,7 @@ foreach(file ${IDL_FILES_LIST})
   add_custom_command(
     OUTPUT ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc/${filename_hpp} 
       ${CMAKE_SOURCE_DIR}/nprpc/nprpcst/${filename_cpp}
-    COMMAND npidl/npidl 
+    COMMAND npidl 
       --out-inc-dir ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc 
       --out-src-dir ${CMAKE_SOURCE_DIR}/nprpc/nprpcst
       --out-ts-dir ${CMAKE_SOURCE_DIR}/nprpc/web/src
@@ -51,26 +51,39 @@ add_library(nprpc SHARED
   include/nprpc/utils.hpp
 )
 
-target_link_libraries(nprpc PUBLIC 
-  /usr/lib/libboost_system.a
-  -lpthread
-  -lssl
-  -lcrypto
-)
-
 target_include_directories(nprpc PRIVATE ./include)
-target_compile_options(nprpc PRIVATE -fPIC)
+
+if(WIN32)
+  target_link_libraries(nprpc PUBLIC
+    libssl
+    libcrypto
+  )
+  target_compile_definitions(nprpc PRIVATE -DNPRPC_EXPORTS)
+else()
+  target_link_libraries(nprpc PUBLIC 
+    /usr/lib/libboost_system.a
+    pthread
+    ssl
+    crypto
+  )
+  target_compile_options(nprpc PRIVATE -fPIC)
+endif()
 
 add_library(nprpcst STATIC
   include/nprpc/nprpc_nameserver.hpp
   nprpcst/nprpc_nameserver.cpp
 )
-target_include_directories(nprpcst PRIVATE ../include)
+
+if(UNIX)
+  target_compile_options(nprpcst PRIVATE -fPIC)
+endif()
+
+target_include_directories(nprpcst PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
 
 add_executable(npnameserver 
   npnameserver/npnameserver.cpp
 )
-target_include_directories(npnameserver PRIVATE ../include)
+target_include_directories(npnameserver PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
 
 target_link_libraries(npnameserver PUBLIC nprpc nprpcst)
 

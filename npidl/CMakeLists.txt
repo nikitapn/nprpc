@@ -12,4 +12,6 @@ add_executable(npidl
   src/utils.hpp
 )
 
-target_link_libraries(npidl PUBLIC -lboost_program_options)
+if(UNIX)
+  target_link_libraries(npidl PUBLIC boost_program_options)
+endif()
