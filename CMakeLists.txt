@@ -1,6 +1,10 @@
 add_subdirectory(npidl)
 
-list(APPEND IDL_FILES_LIST idl/nprpc_base.npidl idl/nprpc_nameserver.npidl)
+list(APPEND IDL_FILES_LIST 
+  idl/nprpc_base.npidl 
+  idl/nprpc_nameserver.npidl
+)
+
 foreach(file ${IDL_FILES_LIST})
   string(REPLACE "/" "_" tmp ${file})
   string(REPLACE "idl/" "" filename ${file})
@@ -8,19 +12,21 @@ foreach(file ${IDL_FILES_LIST})
   string(REPLACE ".npidl" ".hpp" filename_hpp ${filename})
   string(REPLACE ".npidl" ".ts" filename_ts ${filename})
   add_custom_command(
-    OUTPUT ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc/${filename_hpp} 
+    OUTPUT 
+      ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc/${filename_hpp}
       ${CMAKE_SOURCE_DIR}/nprpc/nprpcst/${filename_cpp}
-    COMMAND npidl 
-      --out-inc-dir ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc 
+      ${CMAKE_SOURCE_DIR}/nprpc/web/src/${filename_ts}
+    COMMAND
+      npidl
+      --out-inc-dir ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc
       --out-src-dir ${CMAKE_SOURCE_DIR}/nprpc/nprpcst
       --out-ts-dir ${CMAKE_SOURCE_DIR}/nprpc/web/src
       ${CMAKE_SOURCE_DIR}/nprpc/idl/${filename}
-    DEPENDS npidl ${CMAKE_SOURCE_DIR}/nprpc/idl/${filename}
-    BYPRODUCTS ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc/${filename_hpp} 
-      ${CMAKE_SOURCE_DIR}/nprpc/nprpcst/${filename_cpp}
-      ${CMAKE_SOURCE_DIR}/nprpc/web/src/${filename_ts} 
+    DEPENDS  
+      ${file}
   )
 endforeach()
+
 
 add_library(nprpc SHARED
   src/client_socket_connection.cpp
@@ -60,7 +66,7 @@ if(WIN32)
   )
   target_compile_definitions(nprpc PRIVATE -DNPRPC_EXPORTS)
 else()
-  target_link_libraries(nprpc PUBLIC 
+  target_link_libraries(nprpc PUBLIC
     /usr/lib/libboost_system.a
     pthread
     ssl
@@ -80,7 +86,7 @@ endif()
 
 target_include_directories(nprpcst PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
 
-add_executable(npnameserver 
+add_executable(npnameserver
   npnameserver/npnameserver.cpp
 )
 target_include_directories(npnameserver PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
@@ -89,9 +95,7 @@ target_link_libraries(npnameserver PUBLIC nprpc nprpcst)
 
 add_custom_target(npm_library
   COMMAND cd ${CMAKE_SOURCE_DIR}/nprpc/web && npm install && npm run build
-  DEPENDS npidl 
-    ${CMAKE_SOURCE_DIR}/nprpc/web/src/nprpc_base.ts 
-    ${CMAKE_SOURCE_DIR}/nprpc/web/src/nprpc_nameserver.ts 
+  DEPENDS
+    ${CMAKE_SOURCE_DIR}/nprpc/web/src/nprpc_base.ts
+    ${CMAKE_SOURCE_DIR}/nprpc/web/src/nprpc_nameserver.ts
 )
-
-#add_dependencies(nprpc npm_library)
