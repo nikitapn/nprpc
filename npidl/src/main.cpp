@@ -10,9 +10,7 @@
 #include <algorithm>
 #include <exception>
 #include <cassert>
-#include <array>
 #include <utility>
-#include <stack>
 #include <type_traits>
 #include <functional>
 #include "ast.hpp"

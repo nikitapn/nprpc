@@ -22,7 +22,8 @@ foreach(file ${IDL_FILES_LIST})
       --out-src-dir ${CMAKE_SOURCE_DIR}/nprpc/nprpcst
       --out-ts-dir ${CMAKE_SOURCE_DIR}/nprpc/web/src
       ${CMAKE_SOURCE_DIR}/nprpc/idl/${filename}
-    DEPENDS  
+    DEPENDS
+      npidl
       ${file}
   )
 endforeach()
@@ -67,7 +68,7 @@ if(WIN32)
   target_compile_definitions(nprpc PRIVATE -DNPRPC_EXPORTS)
 else()
   target_link_libraries(nprpc PUBLIC
-    /usr/lib/libboost_system.a
+  ${BOOST_LIB_PREFIX}/libboost_system.a
     pthread
     ssl
     crypto

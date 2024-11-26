@@ -8,14 +8,11 @@
 #include <sstream>
 #include "utils.hpp"
 #include <iostream>
-#include <stack>
 #include <set>
 #include <boost/container/small_vector.hpp>
 
 using std::placeholders::_1;
 using std::placeholders::_2;
-using std::placeholders::_3;
-using std::placeholders::_4;
 
 void Builder::emit_arguments_structs(std::function<void(Ast_Struct_Decl*)> emitter) {
 	always_full_namespace(true);

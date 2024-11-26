@@ -181,7 +181,9 @@ export class Connection {
 		if (rpc.host_info.secured) {
 			this.ws = new WebSocket('wss://' + this.endpoint.hostname + ':' + this.endpoint.port.toString(10));
 		} else {
-			this.ws = new WebSocket('ws://' + ip4tostr(this.endpoint.ip4) + ':' + this.endpoint.port.toString(10));
+			// prefer hostname over ip address
+			const name_or_ip = this.endpoint.hostname ?? ip4tostr(this.endpoint.ip4); 
+			this.ws = new WebSocket('ws://' + name_or_ip + ':' + this.endpoint.port.toString(10));
 		}
 
 		this.ws.binaryType = 'arraybuffer';
