@@ -1,8 +1,10 @@
 // Copyright (c) 2021 nikitapnn1@gmail.com
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 
+#include <cstdint>
 #include <iostream>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <optional>
@@ -227,7 +229,8 @@ class Lexer {
 			{ "direct"sv, TokenId::OutDirect },
 			{ "helper"sv, TokenId::Helper },
 			{ "trusted"sv, TokenId::Trusted },
-			{ "async"sv, TokenId::Async }
+			{ "async"sv, TokenId::Async },
+			{ "const"sv, TokenId::Const },
 		};
 
 		static constexpr Map<std::string_view, TokenId,
@@ -489,9 +492,21 @@ class Parser {
 		if (peek() == TokenId::SquareBracketOpen) {
 			flush();
 
-			auto length = std::atoi(match(TokenId::Number).name.c_str());
-			match(TokenId::SquareBracketClose);
+			int64_t length = -1;
+			if (auto tok = peek(); tok == TokenId::Name) {
+				flush();
+				auto value = ctx_.nm_cur()->find_constant(tok.name);
+				if (!value) {
+					throw_error("Unknown variable: \"" + tok.name + "\"");
+				} else if (!value->is_decimal()) {
+					throw_error("\"" + tok.name + "\" is not a decimal constant" );
+				}
+				length = value->decimal();
+			} else {
+				length = std::atoi(match(TokenId::Number).name.c_str());
+			}
 
+			match(TokenId::SquareBracketClose);
 			type = new Ast_Array_Decl(type, length);
 
 			return true;
@@ -721,6 +736,16 @@ class Parser {
 		builder_.emit((!s->is_exception() ? &Builder::emit_struct : &Builder::emit_exception), s);
 		ctx_.nm_cur()->add(s->name, s);
 
+		return true;
+	}
+
+	bool const_decl() {
+		if (peek() != TokenId::Const) return false;
+		flush();
+		auto var_name = match(TokenId::Name); match('=');
+		auto var_value = parse_number(match(TokenId::Number)); match(';');
+		builder_.emit(&Builder::emit_constant, var_name.name, &var_value);
+		ctx_.nm_cur()->add_constant(std::move(var_name.name), std::move(var_value));
 		return true;
 	}
 
@@ -1018,6 +1043,7 @@ class Parser {
 
 	bool stmt_decl() {
 		return (
+			check(&Parser::const_decl) ||
 			check(&Parser::namespace_decl) ||
 			check(&Parser::interface_decl) ||
 			check(&Parser::struct_decl) ||

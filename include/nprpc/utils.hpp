@@ -55,7 +55,7 @@ auto make_wrapper1(const T& t) {
 template<typename T>
 concept IterableCollection = requires(T a) {
 	typename T::iterator;
-	std::forward_iterator<typename T::iterator>;
+	requires std::forward_iterator<typename T::iterator>;
 	{ a.size() }; { a.begin() }; { a.end() };
 };
 

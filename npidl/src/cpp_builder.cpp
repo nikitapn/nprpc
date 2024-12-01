@@ -3,6 +3,7 @@
 
 #include "cpp_builder.hpp"
 #include <cassert>
+#include <ios>
 #include <string_view>
 #include <algorithm>
 #include <sstream>
@@ -805,6 +806,19 @@ void Builder_Cpp::emit_struct2(Ast_Struct_Decl* s, std::ostream& os, Target targ
 		os << "} // namespace flat\n";
 
 	os << '\n';
+}
+
+void Builder_Cpp::emit_constant(const std::string& name, Ast_Number* number) {
+	oh << "constexpr auto " << name << " = ";
+	std::visit(overloaded{
+	[&](int64_t x) { 
+		oh << x;
+	},
+	[&](float x) { oh << x << 'f'; },
+	[&](double x) { oh << x; },
+	[&](bool x) { oh << std::ios::boolalpha << x << std::ios::dec; },
+	}, number->value);
+	oh << ";\n";
 }
 
 void Builder_Cpp::emit_struct(Ast_Struct_Decl* s) {

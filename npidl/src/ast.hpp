@@ -4,6 +4,7 @@
 #pragma once
 
 #include <string>
+#include <tuple>
 #include <vector>
 #include <optional>
 #include <cassert>
@@ -69,12 +70,14 @@ enum class TokenId {
 	Helper,
 	Trusted,
 	Async,
+	Const,
 };
 
 struct Ast_Struct_Decl;
 struct Ast_Type_Decl;
 struct Ast_Interface_Decl;
 struct Ast_Function_Decl;
+struct Ast_Number;
 
 class Namespace {
 	Namespace* parent_;
@@ -82,6 +85,7 @@ class Namespace {
 
 	std::vector<Namespace*> children_;
 	std::vector<std::pair<std::string, Ast_Type_Decl*>> types_;
+	std::vector<std::pair<std::string, Ast_Number>> constants_;
 
 	std::string construct_path(const std::string& delim, bool omit_root = false) const noexcept;
 public:
@@ -91,6 +95,10 @@ public:
 	Ast_Type_Decl* find_type(const std::string& str, bool only_this_namespace);
 	Namespace* find_child(const std::string& str);
 	void add(const std::string& name, Ast_Type_Decl* type);
+	
+	void add_constant(std::string&& name, Ast_Number&& number);
+	Ast_Number* find_constant(const std::string& name);
+	
 	const std::string& name() const noexcept;
 	Namespace* parent() const noexcept;
 	std::string to_cpp17_namespace() const noexcept;
@@ -122,6 +130,10 @@ struct Ast_Number {
 	std::int64_t decimal() const noexcept {
 		assert(std::holds_alternative<std::int64_t>(value));
 		return std::get<std::int64_t>(value);
+	}
+
+	bool is_decimal() const noexcept {
+		return std::holds_alternative<std::int64_t>(value);
 	}
 };
 
@@ -287,7 +299,7 @@ struct Ast_Struct_Decl : Ast_Type_Decl {
 	int align = -1;
 	bool flat = true;
 	bool has_span_class = false;
-	uint32_t exception_id;
+	int exception_id;
 
 	bool is_exception() const noexcept { return exception_id != -1; }
 	const struct_id_t& get_function_struct_id();
@@ -505,10 +517,24 @@ inline Namespace::Namespace(Namespace* parent, std::string&& name)
 {
 }
 
+inline void Namespace::add_constant(std::string&& name, Ast_Number&& number) {
+	if (std::find_if(std::begin(constants_), std::end(constants_), 
+		[&name](const auto& pair) { return pair.first == name; }) != std::end(constants_)) {
+		throw std::runtime_error("constant redefinition");
+	}
+	constants_.emplace_back(std::move(name), std::move(number));
+}
+
+inline Ast_Number* Namespace::find_constant(const std::string& name) {
+	auto it = std::find_if(std::begin(constants_), std::end(constants_),
+		[&name](const auto& pair) { return pair.first == name; });
+	return it != std::end(constants_) ? &it->second : nullptr;
+}
+
 class Context {
 	Namespace* nm_root_;
 	Namespace* nm_cur_;
-	uint32_t exception_id_last = -1;
+	int exception_id_last = -1;
 public:
 	std::string base_name;
 	AFFAList affa_list;
@@ -516,7 +542,7 @@ public:
 	std::vector<Ast_Struct_Decl*> exceptions;
 	std::vector<Ast_Interface_Decl*> interfaces;
 
-	uint32_t next_exception_id () noexcept { return ++exception_id_last; }
+	int next_exception_id () noexcept { return ++exception_id_last; }
 
 	auto push_namespace(std::string&& s) {
 		nm_cur_ = nm_cur_->push(std::move(s));

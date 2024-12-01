@@ -3,7 +3,6 @@
 
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/nprpc_nameserver.hpp>
-#include <boost/bind.hpp>
 
 using namespace nprpc;
 

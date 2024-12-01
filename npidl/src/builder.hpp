@@ -18,6 +18,7 @@ protected:
 	void make_arguments_structs(Ast_Function_Decl* fn);
 	void emit_arguments_structs(std::function<void(Ast_Struct_Decl*)> fn);
 public:
+	virtual void emit_constant(const std::string& name, Ast_Number* number) = 0;
 	virtual void emit_struct(Ast_Struct_Decl* s) = 0;
 	virtual void emit_exception(Ast_Struct_Decl* s) = 0;
 	virtual void emit_namespace_begin() = 0;

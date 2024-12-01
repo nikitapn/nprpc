@@ -60,6 +60,7 @@ private:
 
 	_ns ns(Namespace* nm);
 public:
+	virtual void emit_constant(const std::string& name, Ast_Number* number);
 	virtual void emit_struct(Ast_Struct_Decl* s);	
 	virtual void emit_exception(Ast_Struct_Decl* s);	
 	virtual void emit_using(Ast_Alias_Decl* u);	
@@ -68,6 +69,7 @@ public:
 	virtual void emit_namespace_end();
 	virtual void emit_interface(Ast_Interface_Decl* ifs);
 	virtual void emit_file_footer();
+	
 
 	Builder_Cpp(Context& ctx, std::filesystem::path file_path, std::filesystem::path out_inc_path, std::filesystem::path out_src_path);
 };

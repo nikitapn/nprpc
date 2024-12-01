@@ -747,6 +747,19 @@ void Builder_Typescript::emit_struct2(Ast_Struct_Decl* s, bool is_exception) {
 	out << "}\n} // namespace Flat \n";
 }
 
+void Builder_Typescript::emit_constant(const std::string& name, Ast_Number* number) {
+	out << "const " << name << " = ";
+	std::visit(overloaded{
+	[&](int64_t x) { 
+		out << x;
+	},
+	[&](float x) { out << x; },
+	[&](double x) { out << x; },
+	[&](bool x) { out << std::ios::boolalpha << x << std::ios::dec; },
+	}, number->value);
+	out << ";\n";
+}
+
 void Builder_Typescript::emit_struct(Ast_Struct_Decl* s) {
 	emit_struct2(s, false);
 }

@@ -38,6 +38,7 @@ private:
 
 	_ns ns(Namespace* nm);
 public:
+	virtual void emit_constant(const std::string& name, Ast_Number* number);
 	virtual void emit_struct(Ast_Struct_Decl* s);
 	virtual void emit_exception(Ast_Struct_Decl* s);
 	virtual void emit_namespace_begin();
