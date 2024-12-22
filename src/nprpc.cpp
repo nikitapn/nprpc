@@ -10,36 +10,11 @@ namespace nprpc::impl {
 
 extern void init_socket(boost::asio::io_context& ioc);
 extern void init_web_socket(boost::asio::io_context& ioc);
-/*
-void RpcImpl::check_unclaimed_objects(boost::system::error_code ec) {
-	if (ec) return;
-
-	if (timer1_.expires_at() <= boost::asio::deadline_timer::traits_type::now()) {
-		std::lock_guard<std::mutex> lk(new_activated_objects_mut_);
-		auto now = std::chrono::system_clock::now();
-		for (auto it = begin(new_activated_objects_); it != end(new_activated_objects_);) {
-			auto obj = (*it);
-			if (obj->activation_time() + std::chrono::milliseconds(5000) <= now) {
-				std::cout << "Nobody claimed '" << obj->get_class() << "', id: " << obj->oid() << " cleaning up..." << std::endl;
-				obj->poa()->deactivate_object(obj->oid());
-				obj->destroy();
-				it = new_activated_objects_.erase(it);
-			} else {
-				++it;
-			}
-		}
-	}
-
-	timer1_.expires_from_now(boost::posix_time::milliseconds(2500));
-	timer1_.async_wait(boost::bind(&RpcImpl::check_unclaimed_objects, this, std::placeholders::_1));
-}
-*/
 
 Config g_cfg;
 NPRPC_API RpcImpl* g_orb;
 
 void RpcImpl::destroy() {
-//	timer1_.cancel();
 	delete this;
 	g_orb = nullptr;
 }
