@@ -748,7 +748,7 @@ void Builder_Typescript::emit_struct2(Ast_Struct_Decl* s, bool is_exception) {
 }
 
 void Builder_Typescript::emit_constant(const std::string& name, Ast_Number* number) {
-	out << "const " << name << " = ";
+	out << "export const " << name << " = ";
 	std::visit(overloaded{
 	[&](int64_t x) { 
 		out << x;
