@@ -13,5 +13,5 @@ add_executable(npidl
 )
 
 if(UNIX)
-  target_link_libraries(npidl PUBLIC boost_program_options)
+  target_link_libraries(npidl PRIVATE boost_program_options)
 endif()
