@@ -494,7 +494,7 @@ void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f
 void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std::string op2, std::ostream& os, 
 	bool from_iterator, 
 	bool top_type,
-	bool direct_typ) {
+	bool/* direct_type */) {
 	using namespace std::string_view_literals;
 	auto accessor = top_type ? "."sv : "()."sv;
 
@@ -663,7 +663,7 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 
 	case FieldType::Optional: {
 		auto wt = copt(type)->type;
-		auto wtr = copt(type)->real_type();
+		// auto wtr = copt(type)->real_type();
 
 		auto const bd0 = bd;
 
@@ -748,7 +748,7 @@ void Builder_Cpp::emit_struct2(Ast_Struct_Decl* s, std::ostream& os, Target targ
 
 		if (s->fields.size() > 1) {
 			os << "  " << s->name << '('; std::for_each(next(begin(s->fields)), end(s->fields), 
-				[this, &os, ix = 1, size = s->fields.size()](auto f) mutable {
+				[this, &os, ix = 1ul, size = s->fields.size()](auto f) mutable {
 				emit_type(f->type, os); os << " _" << f->name;
 				if (++ix < size) os << ", ";
 			});
@@ -885,7 +885,7 @@ void Builder_Cpp::emit_file_footer() {
 	oh << "\n#endif";
 }
 
-void Builder_Cpp::emit_safety_checks_r(Ast_Type_Decl* type, std::string op, std::ostream& os, bool from_iterator, bool top_type) {
+void Builder_Cpp::emit_safety_checks_r(Ast_Type_Decl* type, std::string op, std::ostream& os, bool /* from_iterator */, bool top_type) {
 	switch (type->id) {
 	case FieldType::Struct: {
 		auto s = cflat(type);
@@ -1075,20 +1075,17 @@ void Builder_Cpp::proxy_call(Ast_Function_Decl* fn) {
 		oc << "  if (std_reply == 1) " << ctx_.base_name << "_throw_exception(buf);\n";
 	
 	if (!fn->out_s) {
-//		oc <<
-//			"  if (std_reply != 0) {\n"
-//			"    std::cerr << \"received an unusual reply for function with no output arguments\\n\";\n"
-//			"    assert(false);\n"
-//			"  }\n"
-//			;
+		oc <<
+			"  if (std_reply != 0) {\n"
+			"    throw nprpc::Exception(\"Unknown Error\");\n"
+			"  }\n"
+			;
 	} else {
-//		oc <<
-//			"  if (std_reply != -1) {\n"
-//			"    std::cerr << \"received an unusual reply for function with output arguments\\n\";\n"
-//			"    assert(false);\n"
-//			"    throw nprpc::Exception(\"Unknown Error\");\n"
-//			"  }\n"
-//			;
+		oc <<
+			"  if (std_reply != -1) {\n"
+			"    throw nprpc::Exception(\"Unknown Error\");\n"
+			"  }\n"
+			;
 
 		oc << "  " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
 
@@ -1229,7 +1226,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 	} else {
 		oh <<"  " << ifs->name << "(uint8_t interface_idx)\n";
 
-		auto count_all = [](Ast_Interface_Decl* ifs_inherited, int& n) { ++n; };
+		auto count_all = [](Ast_Interface_Decl* /* ifs_inherited */, int& n) { ++n; };
 
 		int n = 1;
 		for (auto parent : ifs->plist) {
@@ -1361,7 +1358,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 				"      " << fn->in_s->name << "_Direct ia(bufs(), " << get_arguments_offset() << ");\n"
 				;
 			if (ifs->trusted == false) {
-				const auto fixed_size = get_arguments_offset() + fn->in_s->size;
+				// const auto fixed_size = get_arguments_offset() + fn->in_s->size;
 				oc <<
 					"      if ( !check_" << fn->in_s->get_function_struct_id() << "(bufs(), ia) ) break;\n"
 					;
@@ -1391,7 +1388,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 			(fn->is_void() ? "" : "__ret_val = ") << fn->name << "("
 			;
 
-		int in_ix = 0, idx = 0; out_ix = fn->is_void() ? 0 : 1;
+		size_t in_ix = 0, idx = 0; out_ix = fn->is_void() ? 0 : 1;
 		for (auto arg : fn->args) {
 			if (arg->modifier == ArgumentModifier::Out) {
 				assert(fn->out_s);
@@ -1450,7 +1447,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 				;
 			always_full_namespace(false);
 
-			for (auto i = 1; i < fn->ex->fields.size(); ++i) {
+			for (size_t i = 1; i < fn->ex->fields.size(); ++i) {
 				auto mb = fn->ex->fields[i];
 				assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name, oc);
 			}

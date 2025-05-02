@@ -2,7 +2,7 @@
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 // Based on libs/beast/example/advanced/server-flex/advanced_server_flex.cpp
 
-#define BOOST_ASIO_NO_DEPRECATED
+// #define BOOST_ASIO_NO_DEPRECATED
 
 #include <iostream>
 #include <fstream>
@@ -373,7 +373,7 @@ class websocket_session
                   std::placeholders::_2,
                   true));
         }
-        virtual void on_failed(const boost::system::error_code &ec) noexcept {}
+        virtual void on_failed(const boost::system::error_code&) noexcept {}
         virtual void on_executed(flat_buffer &&) noexcept {}
       };
 

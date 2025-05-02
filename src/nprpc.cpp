@@ -96,7 +96,7 @@ bool RpcImpl::close_session(Session* session) {
 
 ObjectPtr<Nameserver> RpcImpl::get_nameserver(std::string_view nameserver_ip) {
 	ObjectPtr<Nameserver> obj(new Nameserver(0));
-	obj->_data().ip4 = boost::asio::ip::address_v4::from_string(nameserver_ip.data()).to_uint();
+	obj->_data().ip4 = boost::asio::ip::make_address_v4(nameserver_ip.data()).to_uint();
 	obj->_data().port = 15000;
 	obj->_data().poa_idx = 0;
 	obj->_data().object_id = 0;
@@ -275,7 +275,7 @@ NPRPC_API uint32_t Object::release() {
 				::nprpc::impl::g_orb->call_async(
 					endpoint,
 					std::move(buf),
-					[](const boost::system::error_code& ec, flat_buffer& buf) {
+					[](const boost::system::error_code&, flat_buffer&) {
 						//if (!ec) {
 							//auto std_reply = nprpc::impl::handle_standart_reply(buf);
 							//if (std_reply == false) {

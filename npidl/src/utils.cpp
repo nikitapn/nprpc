@@ -61,7 +61,7 @@ void calc_struct_size_align(Ast_Struct_Decl* s, Ast_Type_Decl* t, int& offset, i
 			align_offset(4, offset, 4, elements_size);
 			break;
 		case FieldType::Object: // nprpc::detail::flat::ObjectId
-			if (s->align < align_of_object) s->align = align_of_object;
+			if (s->align < static_cast<int>(align_of_object)) s->align = align_of_object;
 			align_offset(align_of_object, offset, size_of_object, elements_size);
 			break;
 		default:

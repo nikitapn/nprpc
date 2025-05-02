@@ -237,8 +237,8 @@ struct Ast_Alias_Decl : Ast_Wrap_Type {
 
 	Ast_Alias_Decl(std::string&& _name,Namespace* _nm, Ast_Type_Decl* _type)
 		: Ast_Wrap_Type(_type)
+		, nm(_nm)
 		, name(_name)
-		,	nm(_nm)
 	{
 		id = FieldType::Alias;
 	}
@@ -537,6 +537,12 @@ class Context {
 	int exception_id_last = -1;
 public:
 	std::string base_name;
+
+	const std::string& current_file() const noexcept {
+		return base_name;
+	}
+
+
 	AFFAList affa_list;
 	int m_struct_n_ = 0;
 	std::vector<Ast_Struct_Decl*> exceptions;
@@ -565,7 +571,7 @@ public:
 		return base_name == "nprpc_nameserver";
 	}
 
-	Context(const std::filesystem::path& file_path) {
+	void open(std::filesystem::path file_path) {
 		base_name = file_path.filename().replace_extension().string();
 		std::transform(base_name.begin(), base_name.end(), base_name.begin(), [](char c) {
 			return c == '.' ? '_' : ::tolower(c); });

@@ -159,13 +159,13 @@ export class ObjectId_Direct extends NPRPC.Flat.Flat {
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
   public get hostname() {
-    const offset = this.offset + 32;
+    const offset = this.offset + 28;
     const n = this.buffer.dv.getUint32(offset + 4, true);
     return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
   }
   public set hostname(str: string) {
     const bytes = u8enc.encode(str);
-    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 32, bytes.length, 1, 1);
+    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 28, bytes.length, 1, 1);
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
 }

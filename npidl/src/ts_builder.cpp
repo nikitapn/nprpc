@@ -30,7 +30,7 @@ struct read_write_field : token_os_mod<_Write> {
 };
 
 template<int _Mod>
-static std::ostream& operator << (std::ostream& os, const token_os_mod<_Mod>& field) {
+static std::ostream& operator << (std::ostream& os, const token_os_mod<_Mod>& /* field */) {
 	os.iword(token_mod_addr) = token_os_mod<_Mod>::_mod;
 	return os;
 }
@@ -346,7 +346,7 @@ void Builder_Typescript::emit_accessors(const std::string& flat_name, Ast_Field_
 	}
 	case FieldType::String: {
 		const int offset_addr = align_offset(4, last_field_ended, 4);
-		const int n_addr = align_offset(4, last_field_ended, 4);
+		// const int n_addr = align_offset(4, last_field_ended, 4);
 
 		out <<
 			"  public get " << f->name << "() {\n"
@@ -550,7 +550,7 @@ void Builder_Typescript::assign_from_ts_type(Ast_Type_Decl* type, std::string op
 	case FieldType::Array: {
 		auto wt = cwt(type)->real_type();
 		if (is_fundamental(wt)) {
-			auto [size, align] = get_type_size_align(wt);
+			// auto [size, align] = get_type_size_align(wt);
 			out << "  " << op1 << "_d().copy_from_ts_array(" << op2 << "); \n";
 		} else {
 			out <<
@@ -568,7 +568,7 @@ void Builder_Typescript::assign_from_ts_type(Ast_Type_Decl* type, std::string op
 	case FieldType::Optional: {
 		auto wt = cwt(type)->real_type();
 		if (is_fundamental(wt)) {
-			auto [size, align] = get_type_size_align(wt);
+			// auto [size, align] = get_type_size_align(wt);
 			out << 
 				"  {\n"
 				"    let opt = " << op1 << "();\n"
@@ -667,7 +667,7 @@ void Builder_Typescript::assign_from_flat_type(Ast_Type_Decl* type, std::string 
 	case FieldType::Optional: {
 		auto wt = cwt(type)->real_type();
 		if (is_fundamental(wt)) {
-			auto [size, align] = get_type_size_align(wt);
+			// auto [size, align] = get_type_size_align(wt);
 			out <<
 				"  {\n"
 				"    if (" << op2 << ".has_value) {\n"
@@ -1121,7 +1121,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 			(fn->is_void() ? "      " : "      __ret_val = ") << "(obj as any)." << fn->name << "("
 			;
 
-		int in_ix = 0, idx = 0; out_ix = fn->is_void() ? 0 : 1;
+		size_t in_ix = 0, idx = 0; out_ix = fn->is_void() ? 0 : 1;
 		for (auto arg : fn->args) {
 			if (arg->modifier == ArgumentModifier::Out) {
 				assert(fn->out_s);
@@ -1179,7 +1179,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 				;
 			always_full_namespace(false);
 
-			for (auto i = 1; i < fn->ex->fields.size(); ++i) {
+			for (size_t i = 1; i < fn->ex->fields.size(); ++i) {
 				auto mb = fn->ex->fields[i];
 				assign_from_ts_type(mb->type, "oa." + mb->name, "e." + mb->name);
 			}

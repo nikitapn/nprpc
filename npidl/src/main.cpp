@@ -29,6 +29,26 @@ struct Token {
 	TokenId id;
 	std::string name;
 	std::string_view static_name;
+
+	Token() = default;
+
+    Token(TokenId _id)
+		: id(_id)
+	{
+	}
+
+	Token(TokenId _id, std::string_view _name)
+		: id(_id)
+		, name(_name)
+	{
+    }
+
+	Token(TokenId _id, std::string_view _name, std::string_view _static_name)
+		: id(_id)
+		, name(_name)
+		, static_name(_static_name)
+	{
+	}
 	
 	bool operator == (TokenId id) const noexcept {
 		return this->id == id;
@@ -38,18 +58,27 @@ struct Token {
 		return this->id == static_cast<TokenId>(id);
 	}
 
+    bool operator != (TokenId id) const noexcept {
+		return !(operator==(id));
+	}
+
+    bool operator != (char id) const noexcept {
+		return !(operator==(id));
+	}
+
 	bool is_fundamental_type() const noexcept {
 		return static_cast<int>(id) >= fundamental_type_first && 
 			static_cast<int>(id) <= fundamental_type_last;
 	}
 
 	std::string_view to_string_view() const noexcept {
-		if (id == TokenId::Name) return std::string_view(name);
-		if (static_cast<int>(id) < fundamental_type_first) {
-			return std::string_view((char*)&id, 1);
-		} else {
-			return static_name;
-		}
+      if (id == TokenId::Name || id == TokenId::Number)
+        return std::string_view(name);
+      if (static_cast<int>(id) < fundamental_type_first) {
+        return std::string_view((char*)&id, 1);
+      } else {
+        return static_name;
+	  }
 	}
 };
 
@@ -239,31 +268,31 @@ class Lexer {
 		auto const str = std::string_view(begin, ptr_);
 
 		if (auto o = map.find(str); o) {
-			return Token{ o.value().second, {}, o.value().first };
+			return Token(o.value().second, {}, o.value().first);
 		}
 
-		if (str == "true") return Token{ TokenId::Number, "1" };
-		if (str == "false") return Token{ TokenId::Number, "0" };
+		if (str == "true") return Token(TokenId::Number, "1");
+		if (str == "false") return Token(TokenId::Number, "0");
 
-		return Token{ TokenId::Name, std::string(str) };
+		return Token(TokenId::Name, std::string(str));
 	}
 public:
 	int col() const noexcept { return col_; }
 	int line() const noexcept { return line_; }
 
-	Token	tok() {
+	Token tok() {
 		skip_wp();
 		switch (cur()) {
-		case '\0': return Token{ TokenId::Eof };
+		case '\0': return Token(TokenId::Eof);
 		case ':':
 			next();
 			if (cur() == ':') {
 				next();
-				return Token{ TokenId::DoubleColon };
+				return Token(TokenId::DoubleColon);
 			}
-			return Token{ TokenId::Colon };
+			return Token(TokenId::Colon);
 
-#define TOKEN_FUNC(x, y) case y: next(); return Token{ TokenId::x };
+#define TOKEN_FUNC(x, y) case y: next(); return Token(TokenId::x);
 			ONE_CHAR_TOKENS()
 #undef TOKEN_FUNC
 
@@ -280,7 +309,7 @@ public:
 			return tok();
 		default:
 			if (is_digit(cur())) {
-				return Token{ TokenId::Number, read_number() };
+				return Token(TokenId::Number, read_number());
 			} else if (is_letter_or_underscore(cur())) {
 				return read_string();
 			} else {
@@ -289,6 +318,7 @@ public:
 			}
 		};
 	}
+
 	Lexer(std::filesystem::path file_path) {
 		if (!std::filesystem::exists(file_path)) {
 			throw std::runtime_error((const char*)(file_path.u8string() + u8" does not exist").c_str());
@@ -493,8 +523,8 @@ class Parser {
 			flush();
 
 			int64_t length = -1;
-			if (auto tok = peek(); tok == TokenId::Name) {
-				flush();
+			auto tok = peek();
+			if (tok == TokenId::Name) {
 				auto value = ctx_.nm_cur()->find_constant(tok.name);
 				if (!value) {
 					throw_error("Unknown variable: \"" + tok.name + "\"");
@@ -502,9 +532,13 @@ class Parser {
 					throw_error("\"" + tok.name + "\" is not a decimal constant" );
 				}
 				length = value->decimal();
-			} else {
+			} else if (tok == TokenId::Number) {
 				length = std::atoi(match(TokenId::Number).name.c_str());
-			}
+            } else {
+              throw_error("Expected a number or a constant name");
+            }
+
+			flush();
 
 			match(TokenId::SquareBracketClose);
 			type = new Ast_Array_Decl(type, length);
@@ -765,7 +799,7 @@ class Parser {
 				break;
 			}
 			if (!check(&Parser::stmt_decl)) {
-				throw_error("Expected tokens: struct, semicolon, }");
+				throw_error("expected statement declaration inside namespace");
 			}
 		}
 		return true;
@@ -1111,11 +1145,10 @@ int main(int argc, char* argv[]) {
 		return -1;
 	}
 
-	try {
-		//input_file = std::filesystem::path("c:\\projects\\cpp\\nscalc\\server\\idl\\npkcalc.npidl");
+	Context ctx;
 
-		Context ctx(input_file);
-
+    try {
+	    ctx.open(input_file);
 		BuildGroup builder(ctx);
 		builder.add<Builder_Cpp>(input_file, out_inc_dir, out_src_dir);
 		if (generate_typescript) {
@@ -1129,9 +1162,9 @@ int main(int argc, char* argv[]) {
 
 		return 0;
 	} catch (parser_error& e) {
-		std::cerr << "Parser error in line: " << e.line << " column: " << e.col << " : " << e.what() << '\n';
+		std::cerr << "In file " << ctx.current_file() << "\n\tParser error in line: " << e.line << " column: " << e.col << " : " << e.what() << '\n';
 	} catch (lexical_error& e) {
-		std::cerr << "Lexical error in line: " << e.line << " column: " << e.col << " : " << e.what() << '\n';
+		std::cerr << "In file " << ctx.current_file() << "\n\tLexical error in line: " << e.line << " column: " << e.col << " : " << e.what() << '\n';
 	} catch (std::exception& ex) {
 		std::cerr << ex.what() << '\n';
 	}

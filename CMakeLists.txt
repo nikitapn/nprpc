@@ -28,7 +28,6 @@ foreach(file ${IDL_FILES_LIST})
   )
 endforeach()
 
-
 add_library(nprpc SHARED
   src/client_socket_connection.cpp
   src/framework.h

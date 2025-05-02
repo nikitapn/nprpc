@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <boost/date_time/posix_time/ptime.hpp>
 #include <nprpc/basic.hpp>
 #include <nprpc/buffer.hpp>
 #include <nprpc/asio.hpp>
