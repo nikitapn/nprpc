@@ -255,7 +255,7 @@ inline void assign_to_out(const nprpc::ObjectId& oid, detail::flat::ObjectId_Dir
 #include <iomanip>
 
 inline std::ostream& operator<<(std::ostream& os, const nprpc::Object& obj) {
-	os << 
+	os <<
 		"  class_id: " << obj._data().class_id << "\n"
 		"  ip4: " << std::hex << std::setw(8) << std::setfill('0') << obj._data().ip4 << std::dec << "\n"
 		"  port: " << obj._data().port << "\n"
