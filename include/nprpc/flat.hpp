@@ -178,6 +178,10 @@ class Array {
 	T* data() noexcept {
 		return std::launder(reinterpret_cast<T*>(&storage_[0]));
 	}
+	
+	const T* data() const noexcept {
+		return std::launder(reinterpret_cast<const T*>(&storage_[0]));
+	}
 public:
 	auto begin() noexcept {
 		return data();
@@ -187,7 +191,16 @@ public:
 		return data() + Size;
 	}
 
-	operator Span<T>() { return { begin(), end() }; }
+	const auto begin() const noexcept {
+		return data();
+	}
+
+	const auto end() const noexcept {
+		return data() + Size;
+	}
+
+	operator Span<T>() noexcept { return { begin(), end() }; }
+	operator Span<const T>() const noexcept { return { begin(), end() }; }
 
 	std::tuple<std::uint32_t, std::uint32_t> range(void* base_ptr) const noexcept {
 		auto data_offset_abs = ((std::byte*)this - (std::byte*)base_ptr);

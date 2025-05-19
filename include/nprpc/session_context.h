@@ -1,3 +1,7 @@
+// Copyright (c) 2021-2025 nikitapnn1@gmail.com
+// This file is a part of npsystem (Distributed Control System) and covered by
+// LICENSING file in the topmost directory
+
 #pragma once
 
 #include <nprpc/nprpc_base.hpp>
@@ -26,10 +30,6 @@ public:
 struct SessionContext {
 	EndPoint remote_endpoint;
 	ReferenceList ref_list;
-
-	bool operator==(const SessionContext& other) const noexcept { 
-		return remote_endpoint == other.remote_endpoint; 
-	}
 };
 
 NPRPC_API SessionContext& get_context();

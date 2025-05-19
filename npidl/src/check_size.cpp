@@ -4,7 +4,7 @@
 // #define CHECK_AGAINST_GENERATED
 
 #ifdef CHECK_AGAINST_GENERATED
-# include "../../include/nprpc/nprpc_base.hpp"
+# include <nprpc/nprpc_base.hpp>
 # include "utils.hpp"
 
 static_assert(sizeof(nprpc::impl::flat::CallHeader) == size_of_call_header);
@@ -12,6 +12,5 @@ static_assert(alignof(nprpc::impl::flat::CallHeader) == align_of_call_header);
 
 static_assert(sizeof(nprpc::detail::flat::ObjectId) == size_of_object);
 static_assert(alignof(nprpc::detail::flat::ObjectId) == align_of_object);
-static_assert(offsetof(nprpc::detail::flat::ObjectId, class_id) == size_of_object_without_class_id);
 
 #endif

@@ -7,7 +7,6 @@
 #include <thread>
 #include <utility>
 #include <memory>
-#include <boost/asio.hpp>
 #include <functional>
 #include <string_view>
 #include <deque>
@@ -18,7 +17,7 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/session.hpp>
 
-#include <nprpc/asio.hpp>
+#include <nprpc/common.hpp>
 
 namespace nprpc::impl {
 class Session_Socket
@@ -131,15 +130,17 @@ public:
     : Session(socket.get_executor())
     , socket_(std::move(socket))
   {
-    auto remote_endpoint = socket_.remote_endpoint();
-    ctx_.remote_endpoint.ip4 = remote_endpoint.address().to_v4().to_uint();
-    ctx_.remote_endpoint.port = remote_endpoint.port();
+    auto endpoint = socket_.remote_endpoint();
+    ctx_.remote_endpoint = EndPoint(
+      EndPointType::TcpTethered,
+      endpoint.address().to_v4().to_string(), 
+      endpoint.port());
   }
 };
 
 
 class Acceptor : public std::enable_shared_from_this<Acceptor> {
-  io_context& ioc_;
+  net::io_context& ioc_;
   tcp::acceptor acceptor_;
 public:
   void on_accept(const boost::system::error_code& ec, tcp::socket socket) {
@@ -156,7 +157,7 @@ public:
     );
   }
 
-  Acceptor(io_context& ioc, unsigned short port)
+  Acceptor(net::io_context& ioc, unsigned short port)
     : ioc_(ioc)
     , acceptor_(ioc, tcp::endpoint(tcp::v4(), port))
   {
@@ -164,7 +165,11 @@ public:
 };
 
 void init_socket(net::io_context& ioc) {
-  std::make_shared<Acceptor>(ioc, nprpc::impl::g_cfg.port)->do_accept();
+  if (g_cfg.listen_tcp_port == 0) {
+    std::cout << "TCP listen port is not set, skipping socket server initialization." << std::endl;
+    return;
+  }
+  std::make_shared<Acceptor>(ioc, g_cfg.listen_tcp_port)->do_accept();
 }
 
 } // namespace nprpc::impl

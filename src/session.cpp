@@ -57,7 +57,7 @@ void Session::handle_request() {
 			if (auto real_obj = (*obj).get(); real_obj) {
 				if (!validate(*real_obj)) return;
 				set_context(*this);
-				real_obj->dispatch(rx_buffer_, ctx_.remote_endpoint, false, ctx_.ref_list);
+				real_obj->dispatch(rx_buffer_, ctx_, false);
 				not_found = false;
 			}
 		}

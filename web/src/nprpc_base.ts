@@ -3,8 +3,10 @@ import * as NPRPC from './base'
 const u8enc = new TextEncoder();
 const u8dec = new TextDecoder();
 
-export type poa_idx_t = number/*u16*/;
 export type oid_t = bigint/*u64*/;
+export type poa_idx_t = number/*u16*/;
+export type oflags_t = number/*u16*/;
+export type uuid_t = Array<number/*u8*/>;
 export type ifs_idx_t = number/*u8*/;
 export type fn_idx_t = number/*u8*/;
 export class ExceptionCommFailure extends NPRPC.Exception {
@@ -119,53 +121,45 @@ export class ObjectIdLocal_Direct extends NPRPC.Flat.Flat {
 }
 } // namespace Flat 
 export const enum ObjectFlag { //u32
-  Policy_Lifespan = 0,
-  WebObject = 1,
-  Secured = 2
+  Lifespan = 0,
+  Tethered = 1
 }
 export interface ObjectId {
   object_id: oid_t;
-  ip4: number/*u32*/;
-  port: number/*u16*/;
-  websocket_port: number/*u16*/;
   poa_idx: poa_idx_t;
-  flags: number/*u32*/;
+  flags: oflags_t;
+  origin: uuid_t;
   class_id: string;
-  hostname: string;
+  urls: string;
 }
 
 export namespace Flat_nprpc_base {
 export class ObjectId_Direct extends NPRPC.Flat.Flat {
   public get object_id() { return this.buffer.dv.getBigUint64(this.offset+0,true); }
   public set object_id(value: bigint) { this.buffer.dv.setBigUint64(this.offset+0,value,true); }
-  public get ip4() { return this.buffer.dv.getUint32(this.offset+8,true); }
-  public set ip4(value: number) { this.buffer.dv.setUint32(this.offset+8,value,true); }
-  public get port() { return this.buffer.dv.getUint16(this.offset+12,true); }
-  public set port(value: number) { this.buffer.dv.setUint16(this.offset+12,value,true); }
-  public get websocket_port() { return this.buffer.dv.getUint16(this.offset+14,true); }
-  public set websocket_port(value: number) { this.buffer.dv.setUint16(this.offset+14,value,true); }
-  public get poa_idx() { return this.buffer.dv.getUint16(this.offset+16,true); }
-  public set poa_idx(value: number) { this.buffer.dv.setUint16(this.offset+16,value,true); }
-  public get flags() { return this.buffer.dv.getUint32(this.offset+20,true); }
-  public set flags(value: number) { this.buffer.dv.setUint32(this.offset+20,value,true); }
+  public get poa_idx() { return this.buffer.dv.getUint16(this.offset+8,true); }
+  public set poa_idx(value: number) { this.buffer.dv.setUint16(this.offset+8,value,true); }
+  public get flags() { return this.buffer.dv.getUint16(this.offset+10,true); }
+  public set flags(value: number) { this.buffer.dv.setUint16(this.offset+10,value,true); }
+  public origin_d() { return new NPRPC.Flat.Array_Direct1_u8(this.buffer, this.offset + 12, 16); }
   public get class_id() {
-    const offset = this.offset + 24;
+    const offset = this.offset + 28;
     const n = this.buffer.dv.getUint32(offset + 4, true);
     return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
   }
   public set class_id(str: string) {
     const bytes = u8enc.encode(str);
-    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 24, bytes.length, 1, 1);
+    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 28, bytes.length, 1, 1);
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
-  public get hostname() {
-    const offset = this.offset + 28;
+  public get urls() {
+    const offset = this.offset + 32;
     const n = this.buffer.dv.getUint32(offset + 4, true);
     return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
   }
-  public set hostname(str: string) {
+  public set urls(str: string) {
     const bytes = u8enc.encode(str);
-    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 28, bytes.length, 1, 1);
+    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 32, bytes.length, 1, 1);
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
 }

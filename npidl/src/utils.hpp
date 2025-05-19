@@ -13,14 +13,12 @@ std::tuple<int, int> get_type_size_align(Ast_Type_Decl* type);
 bool is_flat(Ast_Type_Decl* type);
 bool is_fundamental(Ast_Type_Decl* type);
 
-constexpr uint32_t size_of_header = 16;
-constexpr uint32_t size_of_call_header = 16;
+constexpr uint32_t size_of_header       = 16;
+constexpr uint32_t size_of_call_header  = 16;
 constexpr uint32_t align_of_call_header = 8;
 
-constexpr size_t size_of_object = 40;
+constexpr size_t size_of_object  = 48;
 constexpr size_t align_of_object = 8;
-constexpr size_t size_of_object_without_class_id = 24;
-
 
 inline constexpr uint32_t  get_arguments_offset() {
 	static_assert(( size_of_header + align_of_call_header ) % 8 == 0);

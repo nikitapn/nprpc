@@ -72,7 +72,7 @@ struct Token {
 	}
 
 	std::string_view to_string_view() const noexcept {
-      if (id == TokenId::Name || id == TokenId::Number)
+      if (id == TokenId::Identifier || id == TokenId::Number)
         return std::string_view(name);
       if (static_cast<int>(id) < fundamental_type_first) {
         return std::string_view((char*)&id, 1);
@@ -257,7 +257,6 @@ class Lexer {
 			{ "raises"sv, TokenId::Raises },
 			{ "direct"sv, TokenId::OutDirect },
 			{ "helper"sv, TokenId::Helper },
-			{ "trusted"sv, TokenId::Trusted },
 			{ "async"sv, TokenId::Async },
 			{ "const"sv, TokenId::Const },
 		};
@@ -274,7 +273,7 @@ class Lexer {
 		if (str == "true") return Token(TokenId::Number, "1");
 		if (str == "false") return Token(TokenId::Number, "0");
 
-		return Token(TokenId::Name, std::string(str));
+		return Token(TokenId::Identifier, std::string(str));
 	}
 public:
 	int col() const noexcept { return col_; }
@@ -408,6 +407,8 @@ class Parser {
 	Context& ctx_;
 	BuildGroup& builder_;
 
+  using attributes_t = boost::container::small_vector<std::pair<std::string, std::string>, 2>;
+	
 	class PeekGuard {
 		Parser& parser_;
 		size_t saved_;
@@ -524,7 +525,7 @@ class Parser {
 
 			int64_t length = -1;
 			auto tok = peek();
-			if (tok == TokenId::Name) {
+			if (tok == TokenId::Identifier) {
 				auto value = ctx_.nm_cur()->find_constant(tok.name);
 				if (!value) {
 					throw_error("Unknown variable: \"" + tok.name + "\"");
@@ -555,7 +556,7 @@ class Parser {
 	bool get_type_namespace(Namespace*& nm, Token& type) {
 		auto parse_namespace = [&]() {
 			do {
-				type = match(TokenId::Name);
+				type = match(TokenId::Identifier);
 				if (auto next = nm->find_child(type.name); next) {
 					match(TokenId::DoubleColon);
 					nm = next;
@@ -564,7 +565,7 @@ class Parser {
 				}
 				flush();
 			} while (check(&Parser::is_double_colon));
-			type = match(TokenId::Name);
+			type = match(TokenId::Identifier);
 		};
 
 		auto first_tok = peek();
@@ -580,7 +581,7 @@ class Parser {
 		auto nm_parent = nm->parent();
 		if (!nm_parent) return false;
 
-		if (nm_parent = nm_parent->find_child(first_tok.name)) {
+		if ((nm_parent = nm_parent->find_child(first_tok.name))) {
 			flush();
 			match(TokenId::DoubleColon);
 			nm = nm_parent;
@@ -612,7 +613,7 @@ class Parser {
 		}
 
 		switch (t.id) {
-		case TokenId::Name:
+		case TokenId::Identifier:
 			flush();
 			type = nm->find_type(t.name, false);
 			if (!type) {
@@ -651,7 +652,7 @@ class Parser {
 		bool optional;
 
 		if (!(
-			(field_name = peek()) == TokenId::Name && maybe(optional, &Parser::one, TokenId::Optional) &&
+			(field_name = peek()) == TokenId::Identifier && maybe(optional, &Parser::one, TokenId::Optional) &&
 			peek() == TokenId::Colon && check(&Parser::type_decl, std::ref(type))
 			)) {
 			return false;
@@ -668,7 +669,7 @@ class Parser {
 		Token arg_name;
 		bool optional;
 
-		if (!((arg_name = peek()) == TokenId::Name && maybe(optional, &Parser::one, TokenId::Optional) && peek() == TokenId::Colon)) return false;
+		if (!((arg_name = peek()) == TokenId::Identifier && maybe(optional, &Parser::one, TokenId::Optional) && peek() == TokenId::Colon)) return false;
 
 		if (check(&Parser::one, TokenId::In)) arg.modifier = ArgumentModifier::In;
 		else if (check(&Parser::one, TokenId::Out)) arg.modifier = ArgumentModifier::Out;
@@ -692,7 +693,7 @@ class Parser {
 	}
 
 	bool version_decl(Ast_Struct_Decl* s) {
-		if (!(peek() == TokenId::Hash && peek() == TokenId::Name && tokens_.back().name == "version")) return false;
+		if (!(peek() == TokenId::Hash && peek() == TokenId::Identifier && tokens_.back().name == "version")) return false;
 
 		flush();
 
@@ -714,10 +715,11 @@ class Parser {
 		return false;
 	}
 
-	bool struct_decl() {
+	bool struct_decl(attributes_t& attr) {
 		Token name_tok;
 
-		if (!((name_tok = peek()) == TokenId::Name && peek() == TokenId::Colon)) return false;
+		if (!((name_tok = peek()) == TokenId::Identifier && peek() == TokenId::Colon))
+			return false;
 
 		bool is_exception;
 
@@ -770,13 +772,20 @@ class Parser {
 		builder_.emit((!s->is_exception() ? &Builder::emit_struct : &Builder::emit_exception), s);
 		ctx_.nm_cur()->add(s->name, s);
 
+		for (const auto& a : attr) {
+			if (a.first == "force_helpers" && a.second == "1")
+				ctx_.structs_with_helpers.push_back(s);
+			else
+				throw_error("Unknown attribute: " + a.first + " for struct " + s->name);
+		}
+
 		return true;
 	}
 
 	bool const_decl() {
 		if (peek() != TokenId::Const) return false;
 		flush();
-		auto var_name = match(TokenId::Name); match('=');
+		auto var_name = match(TokenId::Identifier); match('=');
 		auto var_value = parse_number(match(TokenId::Number)); match(';');
 		builder_.emit(&Builder::emit_constant, var_name.name, &var_value);
 		ctx_.nm_cur()->add_constant(std::move(var_name.name), std::move(var_value));
@@ -787,7 +796,7 @@ class Parser {
 		if (peek() != TokenId::Namespace) return false;
 		flush();
 
-		auto name = match(TokenId::Name); match('{');
+		auto name = match(TokenId::Identifier); match('{');
 		ctx_.push_namespace(std::move(name.name));
 
 		builder_.emit(&Builder::emit_namespace_begin);
@@ -817,7 +826,7 @@ class Parser {
 		f = new Ast_Function_Decl();
 		f->ret_value = ret_type ;
 		f->is_async = is_async;
-		f->name = match(TokenId::Name).name;
+		f->name = match(TokenId::Identifier).name;
 
 		match('(');
 
@@ -844,7 +853,7 @@ class Parser {
 			flush();
 			match('(');
 			
-			auto type = ctx_.nm_cur()->find_type(match(TokenId::Name).name, false);
+			auto type = ctx_.nm_cur()->find_type(match(TokenId::Identifier).name, false);
 			if (!type) throw_error("unknown exception type");
 				
 			if (type->id != FieldType::Struct && cflat(type)->is_exception()) {
@@ -876,17 +885,17 @@ class Parser {
 		{
 			PeekGuard pg(*this);
 
-			if (peek() == TokenId::Trusted) {
+			if (auto attribute = peek(); attribute == TokenId::Identifier) {
 				pg.flush();
 				match('=');
-
-				auto b = match(TokenId::Number);
-				if (!(b.name == "0" || b.name == "1"))
-					throw_error("the values that define trusted attribute are 'true' or 'false'");
-
+				Token value = peek();
+				if (!(value == TokenId::Identifier || value == TokenId::Number)) {
+					throw_error("Expected identifier or number");
+				}
+				flush();
 				match(']');
 
-				attr.emplace_back("trusted", b.name);
+				attr.emplace_back(attribute.name, value.name);
 				goto attributes_decl_next;
 			}
 		}
@@ -899,18 +908,19 @@ class Parser {
 		return true;
 	}
 
-	bool interface_decl() {
-		boost::container::small_vector<std::pair<std::string, std::string>, 2> attr;
-		check(&Parser::attributes_decl, std::ref(attr));
+	bool interface_decl(attributes_t& attr) {
 
 		if (peek() != TokenId::Interface) return false;
 		flush();
 
 		auto ifs = new Ast_Interface_Decl();
-		ifs->name = match(TokenId::Name).name;
+		ifs->name = match(TokenId::Identifier).name;
 
 		for (const auto& a : attr) {
-			if (a.first == "trusted") ifs->trusted = (a.second == "1");
+			if (a.first == "trusted")
+				ifs->trusted = (a.second == "1");
+			else
+				throw_error("Unknown attribute: " + a.first + " for interface " + ifs->name);
 			// other attributes...
 		}
 
@@ -920,7 +930,7 @@ class Parser {
 				pg.flush();
 
 				for (;;) {
-					auto name = match(TokenId::Name).name;
+					auto name = match(TokenId::Identifier).name;
 					if (auto type = ctx_.nm_cur()->find_type(name, false); type && type->id == FieldType::Interface) {
 						ifs->plist.push_back(cifs(type));
 					} else {
@@ -979,7 +989,7 @@ class Parser {
 
 		if (!(
 			peek() == TokenId::Using &&
-			(left = peek()) == TokenId::Name &&
+			(left = peek()) == TokenId::Identifier &&
 			peek() == TokenId::Assignment
 			))
 		{
@@ -1005,7 +1015,7 @@ class Parser {
 
 		auto e = new Ast_Enum_Decl;
 
-		e->name = std::move(match(TokenId::Name).name);
+		e->name = std::move(match(TokenId::Identifier).name);
 		e->token_id = TokenId::UInt32;
 		e->nm = ctx_.nm_cur();
 
@@ -1033,7 +1043,7 @@ class Parser {
 		int64_t ix = 0;
 
 		while ((tok = peek()) != TokenId::BracketClose) {
-			if (tok.id != TokenId::Name) throw_error("Unexpected token '" + tok.name + '\'');
+			if (tok.id != TokenId::Identifier) throw_error("Unexpected token '" + tok.name + '\'');
 			
 			auto name = std::move(tok.name);
 
@@ -1075,12 +1085,19 @@ class Parser {
 		return true;
 	}
 
+	bool something_that_could_have_attributes() {
+		attributes_t attr;
+		check(&Parser::attributes_decl, std::ref(attr));
+
+		return check(&Parser::interface_decl, std::ref(attr)) ||
+			check(&Parser::struct_decl, std::ref(attr));
+	}
+
 	bool stmt_decl() {
 		return (
 			check(&Parser::const_decl) ||
 			check(&Parser::namespace_decl) ||
-			check(&Parser::interface_decl) ||
-			check(&Parser::struct_decl) ||
+			check(&Parser::something_that_could_have_attributes) ||
 			check(&Parser::enum_decl) ||
 			check(&Parser::using_decl) ||
 			check(&Parser::one, TokenId::Semicolon)

@@ -437,6 +437,8 @@ void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f
 		if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
 			os << "  auto " << f->name << "() noexcept { return (::nprpc::flat::Span<";
 			emit_flat_type(wt, os); os << ">)base()." << f->name << "; }\n";
+			os << "  const auto " << f->name << "() const noexcept { return (::nprpc::flat::Span<const ";
+			emit_flat_type(wt, os); os << ">)base()." << f->name << "; }\n";
 		} else if (wt->id == FieldType::Struct) {
 			os << "  auto " << f->name << "() noexcept { return ::nprpc::flat::Span_ref<";
 			emit_flat_type(wt, os); os << ", "; emit_direct_type(wt, os);
@@ -592,9 +594,12 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 
 	case FieldType::Object:
 		assert(top_type == false);
-		os << bd << "memcpy(" << op1 << "().__data(), &" << op2 << "._data(), " << size_of_object_without_class_id << ");\n";
-		os << bd << op1 << "().class_id(" << op2 << "._data().class_id);\n";
-		os << bd << op1 << "().hostname(" << op2 << "._data().hostname);\n";
+		os << bd << "{\n";
+		os << bd << "  " << "auto tmp = " << op1 << "();\n";
+		os << bd << "  " << "nprpc_base::flat::assign_from_cpp_ObjectId("
+			"tmp, " << op2 << ".get_data()"
+		");\n";
+		os << bd << "}\n";
 		break;
 
 	default:
@@ -673,7 +678,7 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 		os << bd + 1 << "if (opt.has_value()) {\n";
 		os << bd + 2 << op1 << " = std::decay<decltype(" << op1 << ")>::type::value_type{};\n";
 		os << bd + 2 << "auto& value_to = " << op1 << ".value();\n";
-		
+
 		bd = bd + 2;
 		if (wt->id == FieldType::Struct || wt->id == FieldType::Vector || wt->id == FieldType::Array) {
 			os << bd << "auto value_from = opt.value();\n";
@@ -699,7 +704,7 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 		break;
 
 	case FieldType::Alias:
-		assign_from_flat_type(calias(type)->get_real_type(), op1, op2, oc, from_iterator);
+		assign_from_flat_type(calias(type)->get_real_type(), op1, op2, os, from_iterator);
 		break;
 
 	case FieldType::Object:
@@ -873,6 +878,7 @@ void Builder_Cpp::emit_file_footer() {
 	}
 
 	emit_helpers();
+	emit_struct_helpers();
 
 	std::stringstream ss;
 
@@ -1050,6 +1056,31 @@ void Builder_Cpp::emit_helpers() {
 	always_full_namespace(false);
 }
 
+void Builder_Cpp::emit_struct_helpers() {
+	oh << "namespace " << ctx_.base_name << "::flat {\n";
+
+	for (auto s : ctx_.structs_with_helpers) {
+		auto saved_namespace = ctx_.set_namespace(s->nm);
+		oh << "inline void assign_from_flat_" << s->name << "(";
+		emit_parameter_type_for_servant_callback_r(s, oh, false); 
+		oh << "& src, "; 
+		emit_parameter_type_for_proxy_call_r(s, oh, false); oh << "& dest) {\n";
+		assign_from_flat_type(s, "dest", "src", oh, false, true);
+		oh << "}\n";
+			
+		oh << "inline void assign_from_cpp_" << s->name << "(";
+		emit_parameter_type_for_servant_callback_r(s, oh, false);
+		oh << "& dest, const ";
+		emit_parameter_type_for_proxy_call_r(s, oh, false); 
+		oh << "& src) {\n";
+		assign_from_cpp_type(s, "dest", "src", oh, false, true);
+		oh << "}\n";
+		ctx_.set_namespace(saved_namespace);
+	}
+
+	oh << "} // namespace " << ctx_.base_name << "::flat\n";
+}
+
 void Builder_Cpp::emit_function_arguments(
 	Ast_Function_Decl* fn,
 	std::ostream& os,
@@ -1187,7 +1218,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 		"public:\n"
 		"  static std::string_view _get_class() noexcept { return \"" << ctx_.base_name << '/' << ctx_.nm_cur()->to_interface_path() << '.' << ifs->name << "\"; }\n"
 		"  std::string_view get_class() const noexcept override { return I" << ifs->name << "_Servant::_get_class(); }\n"
-		"  void dispatch(nprpc::Buffers& bufs, nprpc::EndPoint remote_endpoint, bool from_parent, nprpc::ReferenceList& ref_list) override;\n"
+		"  void dispatch(nprpc::Buffers& bufs, [[maybe_unused]] nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) override;\n"
 		;
 
 	for (auto fn : ifs->fns) {
@@ -1271,8 +1302,8 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 			"    static_cast<::nprpc::impl::Header*>(mb.data())->msg_type = ::nprpc::impl::MessageType::Request;\n"
 			"  }\n"
 			"  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));\n"
-			"  __ch.object_id() = this->_data().object_id;\n"
-			"  __ch.poa_idx() = this->_data().poa_idx;\n"
+			"  __ch.object_id() = this->object_id();\n"
+			"  __ch.poa_idx() = this->poa_idx();\n"
 			"  __ch.interface_idx() = interface_idx_;\n"
 			"  __ch.function_idx() = " << fn->idx << ";\n"
 			;
@@ -1299,7 +1330,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 	}
 
 	// Servant dispatch
-	oc << "void " << nm << "::I" << ifs->name << "_Servant::dispatch(nprpc::Buffers& bufs, nprpc::EndPoint remote_endpoint, bool from_parent, nprpc::ReferenceList& ref_list) {\n"
+	oc << "void " << nm << "::I" << ifs->name << "_Servant::dispatch(nprpc::Buffers& bufs, [[maybe_unused]] nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) {\n"
 		"  nprpc::impl::flat::CallHeader_Direct __ch(bufs(), sizeof(::nprpc::impl::Header));\n"
 		;
 		
@@ -1318,7 +1349,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 			if (i == ifs) return;
 			oc <<
 				"      case "<< ix << ":\n"
-				"        I" << i->name << "_Servant::dispatch(bufs, remote_endpoint, true, ref_list);\n"
+				"        I" << i->name << "_Servant::dispatch(bufs, ctx, true);\n"
 				"        return;\n"
 			;
 			++ix;
@@ -1404,7 +1435,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 				}
 			} else {
 				if (arg->type->id == FieldType::Object) {
-					oc << "nprpc::impl::create_object_from_flat(ia._" << ++in_ix << "(), remote_endpoint)";
+					oc << "nprpc::impl::create_object_from_flat(ia._" << ++in_ix << "(), ctx.remote_endpoint)";
 				} else {
 					oc << "ia._" << ++in_ix << "()";
 				}
@@ -1574,7 +1605,8 @@ Builder_Cpp::Builder_Cpp(Context& ctx, std::filesystem::path file_path,
 	if (!ctx_.is_nprpc_base()) {
 		oh << "#include <nprpc/nprpc.hpp>\n\n";
 	} else {
-		oh << "#include <nprpc/exception.hpp>\n\n";
+		oh << "#include <nprpc/exception.hpp>\n";
+		oh << "#include <string_view>\n\n";
 	}
 
   if (ctx_.is_nprpc_base()) {

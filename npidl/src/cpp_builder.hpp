@@ -45,6 +45,7 @@ private:
 	enum class Target { Regular, Exception, FunctionArgument };
 	void emit_struct2(Ast_Struct_Decl* s, std::ostream& os, Target target);
 	void emit_helpers();
+	void emit_struct_helpers();
 	void emit_safety_checks();
 	void emit_safety_checks_r(Ast_Type_Decl* type, std::string op, std::ostream& os, bool from_iterator = false, bool top_type = false);
 	

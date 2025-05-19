@@ -12,6 +12,10 @@ add_executable(npidl
   src/utils.hpp
 )
 
+target_include_directories(npidl PRIVATE
+  ${CMAKE_SOURCE_DIR}/nprpc/include
+)
+
 if(UNIX)
   target_link_libraries(npidl PRIVATE boost_program_options)
 endif()

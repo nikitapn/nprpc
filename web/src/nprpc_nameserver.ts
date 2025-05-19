@@ -12,8 +12,8 @@ export class Nameserver extends NPRPC.ObjectProxy {
   public async Bind(obj: /*in*/NPRPC.detail.ObjectId, name: /*in*/string): Promise<void> {
     let interface_idx = (arguments.length == 2 ? 0 : arguments[arguments.length - 1]);
     let buf = NPRPC.FlatBuffer.create();
-    buf.prepare(208);
-    buf.commit(80);
+    buf.prepare(216);
+    buf.commit(88);
     buf.write_msg_id(NPRPC.impl.MessageId.FunctionCall);
     buf.write_msg_type(NPRPC.impl.MessageType.Request);
     let __ch = new NPRPC.impl.Flat_nprpc_base.CallHeader_Direct(buf, 16);
@@ -98,8 +98,8 @@ export class _INameserver_Servant extends NPRPC.ObjectServant {
       let ia = new Flat_nprpc_nameserver.nprpc_nameserver_M2_Direct(buf, 32);
       let obuf = buf;
       obuf.consume(obuf.size);
-      obuf.prepare(192);
-      obuf.commit(64);
+      obuf.prepare(200);
+      obuf.commit(72);
       let oa = new Flat_nprpc_nameserver.nprpc_nameserver_M3_Direct(obuf,16);
 let __ret_val: boolean/*boolean*/;
       __ret_val = (obj as any).Resolve(ia._1, oa._2);
@@ -124,13 +124,13 @@ export namespace Flat_nprpc_nameserver {
 export class nprpc_nameserver_M1_Direct extends NPRPC.Flat.Flat {
   public get _1() { return new NPRPC.detail.Flat_nprpc_base.ObjectId_Direct(this.buffer, this.offset + 0); }
   public get _2() {
-    const offset = this.offset + 40;
+    const offset = this.offset + 48;
     const n = this.buffer.dv.getUint32(offset + 4, true);
     return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
   }
   public set _2(str: string) {
     const bytes = u8enc.encode(str);
-    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 40, bytes.length, 1, 1);
+    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 48, bytes.length, 1, 1);
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
 }

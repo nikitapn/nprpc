@@ -26,11 +26,11 @@ public:
 			obj.object_id() = nprpc::invalid_object_id;
 			return false;
 		}
-		
-		nprpc::assign_to_out(found->second->_data(), obj);
-		
-		std::cout << "resolving as: " << (std::string_view)name << " ip: " << std::hex << std::setw(8) << std::setfill('0') 
-			<< obj.ip4() << std::dec << std::endl;
+
+		const auto& oid = found->second->get_data();
+		nprpc_base::flat::assign_from_cpp_ObjectId(obj, oid);
+
+		std::cout << "Resolving: " << str << " with urls: " << oid.urls << std::endl;
 
 		return true;
 	}
@@ -45,15 +45,19 @@ int main() {
 		ioc.stop();
 		});
 
-	nprpc::Config rpc_cfg;
-	rpc_cfg.debug_level = nprpc::DebugLevel::DebugLevel_Critical;
-	rpc_cfg.port = 15000;
-	rpc_cfg.websocket_port = 15001;
+	auto rpc = nprpc::RpcBuilder()
+		.set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
+		.set_listen_tcp_port(15000)
+		.set_listen_http_port(15001)
+		// .set_hostname("localhost")
+		.build(ioc);
 
-	auto rpc = nprpc::init(ioc, std::move(rpc_cfg));
-	auto p1 = nprpc::Policy_Lifespan{nprpc::Policy_Lifespan::Persistent};
+	auto p1 = nprpc::Policy_Lifespan{nprpc::Policy_Lifespan::Type::Persistent};
 	auto poa = rpc->create_poa(1, { &p1 });
-	auto oid = poa->activate_object(&server);
+	auto oid = poa->activate_object(&server,
+		nprpc::ObjectActivationFlags::ALLOW_TCP |
+		nprpc::ObjectActivationFlags::ALLOW_WEBSOCKET
+	);
 
 	ioc.run();
 	rpc->destroy();

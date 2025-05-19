@@ -49,7 +49,7 @@ enum class TokenId {
 	Float32,
 	Float64 = fundamental_type_last,
 
-	Name,
+	Identifier,
 	Number,
 	String,
 	Vector,
@@ -231,7 +231,8 @@ struct Ast_Alias_Decl : Ast_Wrap_Type {
 
 	Ast_Type_Decl* get_real_type() const noexcept {
 		auto t = this;
-		while (t->type->id == FieldType::Alias) t = static_cast<Ast_Alias_Decl*>(t->type);
+		while (t->type->id == FieldType::Alias)
+			t = static_cast<Ast_Alias_Decl*>(t->type);
 		return t->type;
 	}
 
@@ -547,6 +548,7 @@ public:
 	int m_struct_n_ = 0;
 	std::vector<Ast_Struct_Decl*> exceptions;
 	std::vector<Ast_Interface_Decl*> interfaces;
+	std::vector<Ast_Struct_Decl*> structs_with_helpers;
 
 	int next_exception_id () noexcept { return ++exception_id_last; }
 
@@ -562,6 +564,12 @@ public:
 
 	Namespace* nm_cur() { return nm_cur_; }
 	Namespace* nm_root() { return nm_root_; }
+
+	Namespace* set_namespace(Namespace* nm) {
+		auto old = nm_cur_;
+		nm_cur_ = nm;
+		return old;
+	}
 
 	bool is_nprpc_base() const noexcept {
 		return base_name == "nprpc_base";
