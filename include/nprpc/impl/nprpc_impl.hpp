@@ -131,6 +131,8 @@ class SocketConnection
 
 class RpcImpl : public Rpc
 {
+  friend nprpc::PoaBuilder;
+
   static constexpr std::uint16_t           invalid_port = -1;
   boost::asio::io_context&                 ioc_;
   std::array<std::unique_ptr<PoaImpl>, 10> poas_;
@@ -166,8 +168,6 @@ class RpcImpl : public Rpc
   boost::asio::io_context& ioc() noexcept { return ioc_; }
   // void start() override;
   void                          destroy() override;
-  Poa*                          create_poa(uint32_t                       objects_max,
-                                           std::initializer_list<Policy*> policy_list) override;
   bool                          close_session(Session* con);
   virtual ObjectPtr<Nameserver> get_nameserver(
     std::string_view nameserver_ip) override;
@@ -181,6 +181,8 @@ class RpcImpl : public Rpc
   }
 
   RpcImpl(boost::asio::io_context& ioc);
+protected:
+ Poa* create_poa_impl(uint32_t max_objects, PoaPolicy::Lifespan lifespan);
 };
 
 class ObjectGuard
@@ -226,14 +228,17 @@ class PoaImpl : public Poa
   {
   }
 
+  PoaPolicy::Lifespan pl_lifespan_;
  public:
-  Policy_Lifespan::Type pl_lifespan = Policy_Lifespan::Type::Transient;
+  auto get_lifespan() const noexcept
+  {
+    return pl_lifespan_;
+  }
 
   virtual ~PoaImpl()
   {
-    if (pl_lifespan == Policy_Lifespan::Type::Persistent)
+    if (pl_lifespan_ == PoaPolicy::Lifespan::Persistent)
       return;
-
     // TODO: remove references
   }
 
@@ -263,7 +268,7 @@ class PoaImpl : public Poa
 
     oid.object_id = object_id_internal;
     oid.poa_idx   = get_index();
-    oid.flags     = static_cast<oflags_t>(pl_lifespan) << static_cast<oflags_t>(detail::ObjectFlag::Lifespan);
+    oid.flags     = static_cast<oflags_t>(pl_lifespan_) << static_cast<oflags_t>(detail::ObjectFlag::Lifespan);
     oid.origin    = g_cfg.uuid;
     oid.class_id  = obj->get_class();
 
@@ -300,7 +305,7 @@ class PoaImpl : public Poa
         */
     }
 
-    if (pl_lifespan == Policy_Lifespan::Type::Transient) {
+    if (pl_lifespan_ == PoaPolicy::Lifespan::Transient) {
       // std::lock_guard<std::mutex> lk(g_orb->new_activated_objects_mut_);
       // g_orb->new_activated_objects_.push_back(obj);
       if (!ctx)

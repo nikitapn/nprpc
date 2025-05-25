@@ -52,8 +52,11 @@ int main() {
 		// .set_hostname("localhost")
 		.build(ioc);
 
-	auto p1 = nprpc::Policy_Lifespan{nprpc::Policy_Lifespan::Type::Persistent};
-	auto poa = rpc->create_poa(1, { &p1 });
+	auto poa = nprpc::PoaBuilder(rpc)
+		.with_max_objects(1)
+		.with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+		.build();
+
 	auto oid = poa->activate_object(&server,
 		nprpc::ObjectActivationFlags::ALLOW_TCP |
 		nprpc::ObjectActivationFlags::ALLOW_WEBSOCKET

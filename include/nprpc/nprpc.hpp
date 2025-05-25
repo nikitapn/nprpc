@@ -29,6 +29,7 @@
 
 namespace nprpc {
 
+class Rpc;
 class Nameserver;
 class Poa;
 class ObjectServant;
@@ -37,8 +38,9 @@ class Object;
 constexpr nprpc::oid_t invalid_object_id = (uint64_t)-1;
 
 namespace impl {
-class PoaImpl;
+
 class RpcImpl;
+class PoaImpl;
 class ObjectGuard;
 
 NPRPC_API Object* create_object_from_flat(detail::flat::ObjectId_Direct oid,
@@ -90,29 +92,15 @@ class ObjectId
   const auto& get_data() const noexcept { return data_; }
 };
 
-class NPRPC_API Policy
-{
- public:
-  virtual void apply_policy(Poa* poa) = 0;
-  virtual ~Policy()                   = default;
+
+namespace PoaPolicy {
+enum class Lifespan {
+  Transient  = 0,
+  Persistent = 1
 };
+} // namespace PoaPolicy
 
-class NPRPC_API Policy_Lifespan : public Policy
-{
- public:
-  enum Type { 
-    Transient  = 0,
-    Persistent = 1
-  } policy_;
 
-  virtual void apply_policy(Poa* poa) override;
-
-  Policy_Lifespan(
-    Type policy)
-      : policy_(policy)
-  {
-  }
-};
 
 namespace ObjectActivationFlags {
 enum Enum : uint32_t {
@@ -130,6 +118,30 @@ enum Enum : uint32_t {
     ALLOW_TCP | ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET /* | ALLOW_SHARED_MEMORY */,
 };
 }
+
+class NPRPC_API PoaBuilder {
+  uint32_t objects_max_ = 1000;
+  PoaPolicy::Lifespan lifespan_policy_ = PoaPolicy::Lifespan::Transient;
+  Rpc* rpc_ = nullptr;
+
+public:
+  explicit PoaBuilder(Rpc* rpc) : rpc_(rpc) {}
+
+  // Set maximum number of objects this POA can handle
+  PoaBuilder& with_max_objects(uint32_t max) {
+    objects_max_ = max;
+    return *this;
+  }
+
+  // Set lifespan policy
+  PoaBuilder& with_lifespan(PoaPolicy::Lifespan policy) {
+    lifespan_policy_ = policy;
+    return *this;
+  }
+
+  // Build the POA
+  Poa* build();
+};
 
 class NPRPC_API Poa
 {
@@ -203,9 +215,9 @@ class Object : public ObjectId
  public:
   std::string_view get_class() const noexcept { return class_id(); };
 
-  Policy_Lifespan::Type policy_lifespan() const noexcept
+  PoaPolicy::Lifespan policy_lifespan() const noexcept
   {
-    return static_cast<Policy_Lifespan::Type>(
+    return static_cast<PoaPolicy::Lifespan>(
       flags() & (1 << static_cast<
         std::underlying_type_t<detail::ObjectFlag>>(detail::ObjectFlag::Lifespan))
     );
@@ -248,10 +260,10 @@ class Object : public ObjectId
 class NPRPC_API Rpc
 {
  public:
-  virtual Poa* create_poa(uint32_t                       objects_max,
-                          std::initializer_list<Policy*> policy_list = {})      = 0;
-  virtual void destroy()                                                        = 0;
-  virtual ObjectPtr<Nameserver> get_nameserver(std::string_view nameserver_ip)  = 0;
+  // Create a new POA builder
+  PoaBuilder create_poa() { return PoaBuilder(this); }
+  virtual void destroy() = 0;
+  virtual ObjectPtr<Nameserver> get_nameserver(std::string_view nameserver_ip) = 0;
   virtual ~Rpc() = default;
 };
 

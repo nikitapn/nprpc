@@ -25,18 +25,6 @@ void RpcImpl::destroy()
   g_orb = nullptr;
 }
 
-Poa* RpcImpl::create_poa(
-  uint32_t objects_max, std::initializer_list<Policy*> policy_list)
-{
-  auto idx   = poa_size_.fetch_add(1);
-  auto poa   = new PoaImpl(objects_max, idx);
-  poas_[idx] = std::unique_ptr<PoaImpl>(poa);
-  for (auto policy : policy_list) {
-    policy->apply_policy(poa);
-  }
-  return poa;
-}
-
 NPRPC_API std::shared_ptr<Session> RpcImpl::get_session(
   const EndPoint& endpoint)
 {
@@ -308,16 +296,10 @@ NPRPC_API Rpc* RpcBuilder::build(boost::asio::io_context& ioc)
   return impl::g_orb;
 }
 
-void Policy_Lifespan::apply_policy(
-  Poa* poa)
-{
-  static_cast<impl::PoaImpl*>(poa)->pl_lifespan = this->policy_;
-}
-
 uint32_t ObjectServant::release() noexcept
 {
-  if (static_cast<impl::PoaImpl*>(poa_)->pl_lifespan ==
-      Policy_Lifespan::Type::Persistent) {
+  if (static_cast<impl::PoaImpl*>(poa_)->get_lifespan() ==
+      PoaPolicy::Lifespan::Persistent) {
     return 1;
   }
 
@@ -335,7 +317,7 @@ uint32_t ObjectServant::release() noexcept
 NPRPC_API uint32_t Object::add_ref()
 {
   auto const cnt = local_ref_cnt_.fetch_add(1, std::memory_order_release);
-  if (policy_lifespan() == Policy_Lifespan::Type::Persistent || cnt)
+  if (policy_lifespan() == PoaPolicy::Lifespan::Persistent || cnt)
     return cnt + 1;
 
   flat_buffer buf;
@@ -363,7 +345,7 @@ NPRPC_API uint32_t Object::release()
   auto cnt = --local_ref_cnt_;
   if (cnt != 0) return cnt;
 
-  if (policy_lifespan() == Policy_Lifespan::Type::Transient) {
+  if (policy_lifespan() == PoaPolicy::Lifespan::Transient) {
     const auto& endpoint = get_endpoint();
 
     if (endpoint.type() == EndPointType::TcpTethered &&
@@ -494,6 +476,10 @@ bool ReferenceList::remove_ref(
   poa_idx_t poa_idx, oid_t oid)
 {
   return impl_->remove_ref(poa_idx, oid);
+}
+
+Poa* PoaBuilder::build() {
+  return static_cast<impl::RpcImpl*>(rpc_)->create_poa_impl(objects_max_, lifespan_policy_);
 }
 
 }  // namespace nprpc
