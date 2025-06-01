@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <semaphore.h>
 #endif
 
 #include <system_error>
@@ -74,7 +75,7 @@ struct SharedUUID::Impl {
         }
 
         WaitForSingleObject(mutex, INFINITE);  // Lock mutex
-        
+
         // Try to create or open shared memory
         file_mapping = CreateFileMappingA(
             INVALID_HANDLE_VALUE,    // Use paging file
@@ -83,33 +84,45 @@ struct SharedUUID::Impl {
             0,                      // Size: high 32-bits
             sizeof(Data),           // Size: low 32-bits
             SHM_NAME);             // Name of mapping object
-        
+
         if (!file_mapping) {
             throw std::system_error(GetLastError(), std::system_category(), 
                 "CreateFileMapping failed");
         }
 
         created_new = (GetLastError() != ERROR_ALREADY_EXISTS);
-        
+
         // Map view of file
         map_region = MapViewOfFile(
             file_mapping,           // Handle to mapping object
             FILE_MAP_ALL_ACCESS,    // Read/write permission
             0, 0,                  // Offset
             sizeof(Data));   // Number of bytes to map
-        
+
         if (!map_region) {
             throw std::system_error(GetLastError(), std::system_category(), 
                 "MapViewOfFile failed");
         }
 #else
+        sem_t* sem = sem_open(MUTEX_NAME, O_CREAT, S_IRUSR | S_IWUSR, 1);
+        if (sem == SEM_FAILED) {
+            throw std::system_error(errno, std::system_category(),
+                "sem_open failed");
+        }
+
+        // Lock semaphore
+        sem_wait(sem);
+
         shm_fd = shm_open(SHM_NAME, O_RDWR, S_IRUSR | S_IWUSR);
         if (shm_fd == -1) {
             assert(errno == ENOENT);
+            // Shared memory does not exist, create it
             created_new = true;
             // Create or open shared memory
             shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
             if (shm_fd == -1) {
+                sem_post(sem);
+                sem_close(sem);
                 throw std::system_error(errno, std::system_category(), 
                     "shm_open failed");
             }
@@ -117,6 +130,9 @@ struct SharedUUID::Impl {
 
         // Set the size
         if (ftruncate(shm_fd, sizeof(Data)) == -1) {
+            sem_post(sem);
+            sem_close(sem);
+            close(shm_fd);
             throw std::system_error(errno, std::system_category(), 
                 "ftruncate failed");
         }
@@ -124,8 +140,11 @@ struct SharedUUID::Impl {
         // Map the shared memory
         map_region = mmap(nullptr, sizeof(Data),
             PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-        
+
         if (map_region == MAP_FAILED) {
+            sem_post(sem);
+            sem_close(sem);
+            close(shm_fd);
             throw std::system_error(errno, std::system_category(), 
                 "mmap failed");
         }
@@ -138,6 +157,9 @@ struct SharedUUID::Impl {
             pthread_mutex_init(&data()->mutex, &attr);
             pthread_mutexattr_destroy(&attr);
         }
+
+        sem_post(sem);
+        sem_close(sem);
 
         pthread_mutex_lock(&data()->mutex);
 #endif
@@ -176,6 +198,8 @@ struct SharedUUID::Impl {
                 pthread_mutex_destroy(&data()->mutex);
                 // Unlink shared memory
                 shm_unlink(SHM_NAME);
+                // Unlink mutex
+                sem_unlink(MUTEX_NAME);
             }
             munmap(map_region, sizeof(Data));
         }

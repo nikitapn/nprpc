@@ -8,10 +8,10 @@
 
 int get_fundamental_size(TokenId token_id);
 int align_offset(int align_of, int& last_field_ended, int size, int elements_size = 1);
-void calc_struct_size_align(Ast_Struct_Decl* s);
-std::tuple<int, int> get_type_size_align(Ast_Type_Decl* type);
-bool is_flat(Ast_Type_Decl* type);
-bool is_fundamental(Ast_Type_Decl* type);
+void calc_struct_size_align(AstStructDecl* s);
+std::tuple<int, int> get_type_size_align(AstTypeDecl* type);
+bool is_flat(AstTypeDecl* type);
+bool is_fundamental(AstTypeDecl* type);
 
 constexpr uint32_t size_of_header       = 16;
 constexpr uint32_t size_of_call_header  = 16;
@@ -25,5 +25,5 @@ inline constexpr uint32_t  get_arguments_offset() {
 	return size_of_header + size_of_call_header;
 }
 
-void dfs_interface(std::function<void(Ast_Interface_Decl*)> fn, Ast_Interface_Decl* start);
+void dfs_interface(std::function<void(AstInterfaceDecl*)> fn, AstInterfaceDecl* start);
 

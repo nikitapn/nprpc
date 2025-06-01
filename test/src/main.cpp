@@ -1,11 +1,14 @@
-#include "CppUnitTest.h"
 #include "data.hpp"
 
 #include <iostream>
 #include <chrono>
 #include <numeric>
-#include "proxy/test.hpp"
-#include <nprpc/nprpc_nameserver.hpp>
+
+#include <gtest/gtest.h>
+
+#include <nprpc_test_stub/test.hpp>
+#include <nprpc_stub/nprpc_nameserver.hpp>
+
 #include <nplib/utils/thread_pool.hpp>
 #include <nplib/utils/utf8.h>
 
@@ -13,7 +16,6 @@
 #include <boost/range/irange.hpp>
 #include <boost/asio/thread_pool.hpp>
 
-using namespace Microsoft::VisualStudio::CppUnitTestFramework;
 using namespace std::string_literals;
 
 using nplib::utf8::wide;
@@ -26,7 +28,7 @@ nprpc::Rpc* rpc;
 nprpc::Poa* poa;
 
 
-TEST_MODULE_INITIALIZE(InitRPC)
+TEST(InitRPC)
 {
 	try {
 		nprpc::Config rpc_cfg;

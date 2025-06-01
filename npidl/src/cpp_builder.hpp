@@ -22,53 +22,53 @@ private:
 
 	std::filesystem::path file_path_;
 
-	std::unordered_map<Ast_Function_Decl*, std::string> proxy_arguments_;
+	std::unordered_map<AstFunctionDecl*, std::string> proxy_arguments_;
 
 	BlockDepth bd;
 
-	void emit_parameter_type_for_proxy_call_r(Ast_Type_Decl* type, std::ostream& os, bool input);
-	void emit_parameter_type_for_proxy_call(Ast_Function_Argument* arg, std::ostream& os);
+	void emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, std::ostream& os, bool input);
+	void emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, std::ostream& os);
 
-	void emit_parameter_type_for_servant_callback_r(Ast_Type_Decl* type, std::ostream& os, const bool input);
-	void emit_parameter_type_for_servant_callback(Ast_Function_Argument* arg, std::ostream& os);
+	void emit_parameter_type_for_servant_callback_r(AstTypeDecl* type, std::ostream& os, const bool input);
+	void emit_parameter_type_for_servant_callback(AstFunctionArgument* arg, std::ostream& os);
 
-	void assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std::string op2, std::ostream& os, bool from_iterator = false, bool top_type = false, bool direct_type = false);
-	void assign_from_flat_type(Ast_Type_Decl* type, std::string op1, std::string op2, std::ostream& os, bool from_iterator = false, bool top_object = false);
+	void assign_from_cpp_type(AstTypeDecl* type, std::string op1, std::string op2, std::ostream& os, bool from_iterator = false, bool top_type = false, bool direct_type = false);
+	void assign_from_flat_type(AstTypeDecl* type, std::string op1, std::string op2, std::ostream& os, bool from_iterator = false, bool top_object = false);
 
-	void emit_type(Ast_Type_Decl* type, std::ostream& os);
-	void emit_flat_type(Ast_Type_Decl* type, std::ostream& os);
-	void emit_direct_type(Ast_Type_Decl* type, std::ostream& os);
+	void emit_type(AstTypeDecl* type, std::ostream& os);
+	void emit_flat_type(AstTypeDecl* type, std::ostream& os);
+	void emit_direct_type(AstTypeDecl* type, std::ostream& os);
 
-	void emit_accessors(const std::string& flat_name, Ast_Field_Decl* f, std::ostream& os);
+	void emit_accessors(const std::string& flat_name, AstFieldDecl* f, std::ostream& os);
 
 
 	enum class Target { Regular, Exception, FunctionArgument };
-	void emit_struct2(Ast_Struct_Decl* s, std::ostream& os, Target target);
+	void emit_struct2(AstStructDecl* s, std::ostream& os, Target target);
 	void emit_helpers();
 	void emit_struct_helpers();
 	void emit_safety_checks();
-	void emit_safety_checks_r(Ast_Type_Decl* type, std::string op, std::ostream& os, bool from_iterator = false, bool top_type = false);
+	void emit_safety_checks_r(AstTypeDecl* type, std::string op, std::ostream& os, bool from_iterator = false, bool top_type = false);
 	
 
-	void proxy_call(Ast_Function_Decl* fn);
-	void proxy_async_call(Ast_Function_Decl* fn);
-	std::string_view proxy_arguments(Ast_Function_Decl* fn);
+	void proxy_call(AstFunctionDecl* fn);
+	void proxy_async_call(AstFunctionDecl* fn);
+	std::string_view proxy_arguments(AstFunctionDecl* fn);
 	static void emit_function_arguments(
-		Ast_Function_Decl* fn,
+		AstFunctionDecl* fn,
 		std::ostream& os,
-		std::function<void(Ast_Function_Argument*, std::ostream& os)> emitter
+		std::function<void(AstFunctionArgument*, std::ostream& os)> emitter
 	);
 
 	_ns ns(Namespace* nm);
 public:
-	virtual void emit_constant(const std::string& name, Ast_Number* number);
-	virtual void emit_struct(Ast_Struct_Decl* s);	
-	virtual void emit_exception(Ast_Struct_Decl* s);	
-	virtual void emit_using(Ast_Alias_Decl* u);	
-	virtual void emit_enum(Ast_Enum_Decl* e);
+	virtual void emit_constant(const std::string& name, AstNumber* number);
+	virtual void emit_struct(AstStructDecl* s);	
+	virtual void emit_exception(AstStructDecl* s);	
+	virtual void emit_using(AstAliasDecl* u);	
+	virtual void emit_enum(AstEnumDecl* e);
 	virtual void emit_namespace_begin();
 	virtual void emit_namespace_end();
-	virtual void emit_interface(Ast_Interface_Decl* ifs);
+	virtual void emit_interface(AstInterfaceDecl* ifs);
 	virtual void emit_file_footer();
 	
 

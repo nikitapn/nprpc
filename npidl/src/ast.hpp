@@ -73,31 +73,31 @@ enum class TokenId {
 	Const,
 };
 
-struct Ast_Struct_Decl;
-struct Ast_Type_Decl;
-struct Ast_Interface_Decl;
-struct Ast_Function_Decl;
-struct Ast_Number;
+struct AstStructDecl;
+struct AstTypeDecl;
+struct AstInterfaceDecl;
+struct AstFunctionDecl;
+struct AstNumber;
 
 class Namespace {
 	Namespace* parent_;
 	std::string name_;
 
 	std::vector<Namespace*> children_;
-	std::vector<std::pair<std::string, Ast_Type_Decl*>> types_;
-	std::vector<std::pair<std::string, Ast_Number>> constants_;
+	std::vector<std::pair<std::string, AstTypeDecl*>> types_;
+	std::vector<std::pair<std::string, AstNumber>> constants_;
 
-	std::string construct_path(const std::string& delim, bool omit_root = false) const noexcept;
+	std::string construct_path(std::string delim, bool omit_root = false) const noexcept;
 public:
 	Namespace();
 	Namespace(Namespace* parent, std::string&& name);
+
 	auto push(std::string&& s) noexcept;
-	Ast_Type_Decl* find_type(const std::string& str, bool only_this_namespace);
+	AstTypeDecl* find_type(const std::string& str, bool only_this_namespace);
 	Namespace* find_child(const std::string& str);
-	void add(const std::string& name, Ast_Type_Decl* type);
-	
-	void add_constant(std::string&& name, Ast_Number&& number);
-	Ast_Number* find_constant(const std::string& name);
+	AstNumber* find_constant(const std::string& name);
+	void add(const std::string& name, AstTypeDecl* type);
+	void add_constant(std::string&& name, AstNumber&& number);
 	
 	const std::string& name() const noexcept;
 	Namespace* parent() const noexcept;
@@ -122,7 +122,7 @@ enum class FieldType {
 
 enum class NumberFormat { Decimal, Hex, Scientific };
 
-struct Ast_Number {
+struct AstNumber {
 	std::variant<std::int64_t, float, double, bool> value;
 	NumberFormat format;
 	int max_size = 0;
@@ -137,12 +137,12 @@ struct Ast_Number {
 	}
 };
 
-inline bool operator == (std::int64_t x, const Ast_Number& n) {
+inline bool operator == (std::int64_t x, const AstNumber& n) {
 	assert(std::holds_alternative<std::int64_t>(n.value));
 	return std::get<std::int64_t>(n.value) == x;
 }
 
-inline bool operator != (std::int64_t x, const Ast_Number& n) {
+inline bool operator != (std::int64_t x, const AstNumber& n) {
 	return !::operator==(x, n);
 }
 
@@ -151,7 +151,7 @@ template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 // explicit deduction guide (not needed as of C++20)
 //template<class... Ts> overloaded(Ts...)->overloaded<Ts...>;
 
-inline std::ostream& operator << (std::ostream& os, const Ast_Number& n) {
+inline std::ostream& operator << (std::ostream& os, const AstNumber& n) {
 	std::visit(overloaded{
 		[&](int64_t x) { 
 			if (n.format == NumberFormat::Hex) {
@@ -173,71 +173,71 @@ inline std::ostream& operator << (std::ostream& os, const Ast_Number& n) {
 }
 
 
-struct Ast_Type_Decl {
+struct AstTypeDecl {
 	FieldType id;
 };
 
-struct Ast_Object_Decl : Ast_Type_Decl {
-	Ast_Object_Decl() {
+struct AstObjectDecl : AstTypeDecl {
+	AstObjectDecl() {
 		id = FieldType::Object;
 	}
 };
 
-struct Ast_Void_Decl : Ast_Type_Decl {
-	Ast_Void_Decl() {
+struct AstVoidDecl : AstTypeDecl {
+	AstVoidDecl() {
 		id = FieldType::Void;
 	}
 };
 
-struct Ast_Fundamental_Type : Ast_Type_Decl {
+struct AstFundamentalType : AstTypeDecl {
 	TokenId token_id;
 
-	Ast_Fundamental_Type(TokenId _token_id)
+	AstFundamentalType(TokenId _token_id)
 		: token_id(_token_id) 
 	{
 		id = FieldType::Fundamental;
 	}
 };
 
-struct Ast_Wrap_Type : Ast_Type_Decl {
-	Ast_Type_Decl* type;
-	Ast_Wrap_Type(Ast_Type_Decl* _type) : type(_type) {}
+struct AstWrapType : AstTypeDecl {
+	AstTypeDecl* type;
+	AstWrapType(AstTypeDecl* _type) : type(_type) {}
 
-	Ast_Type_Decl* real_type();
+	AstTypeDecl* real_type();
 };
 
-struct Ast_Array_Decl : Ast_Wrap_Type {
+struct AstArrayDecl : AstWrapType {
 	const int length;
 
-	Ast_Array_Decl(Ast_Type_Decl* _type, int _length) 
-		: Ast_Wrap_Type(_type)
+	AstArrayDecl(AstTypeDecl* _type, int _length) 
+		: AstWrapType(_type)
 		, length(_length) 
 	{
 		id = FieldType::Array;
 	}
 };
 
-struct Ast_Vector_Decl : Ast_Wrap_Type {
-	Ast_Vector_Decl()
-		: Ast_Wrap_Type(nullptr) 
+struct AstVectorDecl : AstWrapType {
+	AstVectorDecl()
+		: AstWrapType(nullptr) 
 	{
 		id = FieldType::Vector;
 	}
 };
 
-struct Ast_Alias_Decl : Ast_Wrap_Type {
+struct AstAliasDecl : AstWrapType {
 	Namespace* nm;
 	std::string name;
 
-	Ast_Type_Decl* get_real_type() const noexcept {
+	AstTypeDecl* get_real_type() const noexcept {
 		auto t = this;
 		while (t->type->id == FieldType::Alias)
-			t = static_cast<Ast_Alias_Decl*>(t->type);
+			t = static_cast<AstAliasDecl*>(t->type);
 		return t->type;
 	}
 
-	Ast_Alias_Decl(std::string&& _name,Namespace* _nm, Ast_Type_Decl* _type)
-		: Ast_Wrap_Type(_type)
+	AstAliasDecl(std::string&& _name,Namespace* _nm, AstTypeDecl* _type)
+		: AstWrapType(_type)
 		, nm(_nm)
 		, name(_name)
 	{
@@ -245,38 +245,38 @@ struct Ast_Alias_Decl : Ast_Wrap_Type {
 	}
 };
 
-struct Ast_String_Decl : Ast_Type_Decl {
-	Ast_String_Decl() {
+struct AstStringDecl : AstTypeDecl {
+	AstStringDecl() {
 		id = FieldType::String;
 	}
 };
 
-struct Ast_Interface_Decl : Ast_Type_Decl {
+struct AstInterfaceDecl : AstTypeDecl {
 	std::string name;
-	std::vector<Ast_Function_Decl*> fns;
-	std::vector<Ast_Interface_Decl*> plist;
+	std::vector<AstFunctionDecl*> fns;
+	std::vector<AstInterfaceDecl*> plist;
 	bool trusted = true;
 
 
-	Ast_Interface_Decl() {
+	AstInterfaceDecl() {
 		id = FieldType::Interface;
 	}
 };
 
-struct Ast_Enum_Decl : Ast_Fundamental_Type {
+struct AstEnumDecl : AstFundamentalType {
 	std::string name;
 	Namespace* nm;
-	std::vector<std::pair<std::string, std::pair<Ast_Number, bool>>> items;
+	std::vector<std::pair<std::string, std::pair<AstNumber, bool>>> items;
 	
-	Ast_Enum_Decl() 
-		: Ast_Fundamental_Type(TokenId::UInt32) 
+	AstEnumDecl() 
+		: AstFundamentalType(TokenId::UInt32) 
 	{
 		id = FieldType::Enum;
 	}
 };
 
-struct Ast_Field_Decl {
-	Ast_Type_Decl* type;
+struct AstFieldDecl {
+	AstTypeDecl* type;
 	std::string name;
 	bool function_argument = false;
 	bool input_function_argument;
@@ -290,12 +290,12 @@ struct Ast_Field_Decl {
 
 using struct_id_t = std::string;
 
-struct Ast_Struct_Decl : Ast_Type_Decl {
+struct AstStructDecl : AstTypeDecl {
 	int version = -1;
 	Namespace* nm;
 	std::string name;
 	struct_id_t unique_id;
-	std::vector<Ast_Field_Decl*> fields;
+	std::vector<AstFieldDecl*> fields;
 	int size = -1;
 	int align = -1;
 	bool flat = true;
@@ -305,96 +305,96 @@ struct Ast_Struct_Decl : Ast_Type_Decl {
 	bool is_exception() const noexcept { return exception_id != -1; }
 	const struct_id_t& get_function_struct_id();
 
-	Ast_Struct_Decl() {
+	AstStructDecl() {
 		id = FieldType::Struct;
 	}
 };
 
-struct Ast_Optional_Decl : Ast_Wrap_Type {
-	Ast_Optional_Decl(Ast_Type_Decl* _type)
-		: Ast_Wrap_Type(_type)
+struct AstOptionalDecl : AstWrapType {
+	AstOptionalDecl(AstTypeDecl* _type)
+		: AstWrapType(_type)
 	{
 		id = FieldType::Optional;
 	}
 };
 
-constexpr auto cft(Ast_Type_Decl* type) noexcept {
+constexpr auto cft(AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::Fundamental || type->id == FieldType::Enum);
-	return static_cast<Ast_Fundamental_Type*>(type);
+	return static_cast<AstFundamentalType*>(type);
 }
 
-constexpr auto cft(const Ast_Type_Decl* type) noexcept {
+constexpr auto cft(const AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::Fundamental || type->id == FieldType::Enum);
-	return static_cast<const Ast_Fundamental_Type*>(type);
+	return static_cast<const AstFundamentalType*>(type);
 }
 
-constexpr auto cwt(Ast_Type_Decl* type) noexcept {
+constexpr auto cwt(AstTypeDecl* type) noexcept {
 	assert(
 		type->id == FieldType::Array ||
 		type->id == FieldType::Vector ||
 		type->id == FieldType::Alias ||
 		type->id == FieldType::Optional
 	);
-	return static_cast<Ast_Wrap_Type*>(type);
+	return static_cast<AstWrapType*>(type);
 }
 
-constexpr auto car(Ast_Type_Decl* type) noexcept {
+constexpr auto car(AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::Array);
-	return static_cast<Ast_Array_Decl*>(type);
+	return static_cast<AstArrayDecl*>(type);
 }
 
-constexpr auto cvec(Ast_Type_Decl* type) noexcept {
+constexpr auto cvec(AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::Vector);
-	return static_cast<Ast_Vector_Decl*>(type);
+	return static_cast<AstVectorDecl*>(type);
 }
 
-constexpr auto cstr(Ast_Type_Decl* type) noexcept {
+constexpr auto cstr(AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::String);
-	return static_cast<Ast_String_Decl*>(type);
+	return static_cast<AstStringDecl*>(type);
 }
 
-constexpr auto cobj(Ast_Type_Decl* type) noexcept {
+constexpr auto cobj(AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::Object);
-	return static_cast<Ast_Object_Decl*>(type);
+	return static_cast<AstObjectDecl*>(type);
 }
 
-constexpr auto cflat(Ast_Type_Decl* type) noexcept {
+constexpr auto cflat(AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::Struct);
-	return static_cast<Ast_Struct_Decl*>(type);
+	return static_cast<AstStructDecl*>(type);
 }
 
-constexpr auto cenum(Ast_Type_Decl* type) noexcept {
+constexpr auto cenum(AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::Enum);
-	return static_cast<Ast_Enum_Decl*>(type);
+	return static_cast<AstEnumDecl*>(type);
 }
 
-constexpr auto cenum(const Ast_Type_Decl* type) noexcept {
+constexpr auto cenum(const AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::Enum);
-	return static_cast<const Ast_Enum_Decl*>(type);
+	return static_cast<const AstEnumDecl*>(type);
 }
 
-constexpr auto calias(Ast_Type_Decl* type) noexcept {
+constexpr auto calias(AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::Alias);
-	return static_cast<Ast_Alias_Decl*>(type);
+	return static_cast<AstAliasDecl*>(type);
 }
 
-constexpr auto calias(const Ast_Type_Decl* type) noexcept {
+constexpr auto calias(const AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::Alias);
-	return static_cast<const Ast_Alias_Decl*>(type);
+	return static_cast<const AstAliasDecl*>(type);
 }
 
-constexpr auto cifs(Ast_Type_Decl* type) noexcept {
+constexpr auto cifs(AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::Interface);
-	return static_cast<Ast_Interface_Decl*>(type);
+	return static_cast<AstInterfaceDecl*>(type);
 }
 
-constexpr auto copt(Ast_Type_Decl* type) noexcept {
+constexpr auto copt(AstTypeDecl* type) noexcept {
 	assert(type->id == FieldType::Optional);
-	return static_cast<Ast_Optional_Decl*>(type);
+	return static_cast<AstOptionalDecl*>(type);
 }
 
 
-inline Ast_Type_Decl* Ast_Wrap_Type::real_type() {
+inline AstTypeDecl* AstWrapType::real_type() {
 	auto wt = type;
 	if (wt->id == FieldType::Alias) wt = calias(wt)->get_real_type();
 	return wt;
@@ -402,20 +402,20 @@ inline Ast_Type_Decl* Ast_Wrap_Type::real_type() {
 
 enum class ArgumentModifier { In, Out };
 
-struct Ast_Function_Argument : Ast_Field_Decl {
+struct AstFunctionArgument : AstFieldDecl {
 	ArgumentModifier modifier;
 	bool direct = false;
 };
 
-struct Ast_Function_Decl {
+struct AstFunctionDecl {
 	uint16_t idx;
 	std::string name;
-	Ast_Type_Decl* ret_value;
-	Ast_Struct_Decl* in_s = nullptr;
-	Ast_Struct_Decl* out_s = nullptr;
+	AstTypeDecl* ret_value;
+	AstStructDecl* in_s = nullptr;
+	AstStructDecl* out_s = nullptr;
 	bool arguments_structs_have_been_made = false;
-	Ast_Struct_Decl* ex = nullptr;
-	std::vector<Ast_Function_Argument*> args, in_args, out_args;
+	AstStructDecl* ex = nullptr;
+	std::vector<AstFunctionArgument*> args, in_args, out_args;
 	bool is_async;
 
 	bool is_void() const noexcept { return ret_value->id == FieldType::Void; }
@@ -442,8 +442,7 @@ public:
 };
 
 
-using AFFAList = List<struct_id_t, Ast_Struct_Decl*>;
-
+using AFFAList = List<struct_id_t, AstStructDecl*>;
 
 inline const std::string& Namespace::name() const noexcept { return name_; }
 inline Namespace* Namespace::parent() const noexcept { return parent_; }
@@ -453,7 +452,7 @@ inline auto Namespace::push(std::string&& s) noexcept {
 	return children_.back();
 }
 
-inline Ast_Type_Decl* Namespace::find_type(const std::string& str, bool only_this_namespace) {
+inline AstTypeDecl* Namespace::find_type(const std::string& str, bool only_this_namespace) {
 	if (auto it = std::find_if(types_.begin(), types_.end(),
 		[&str](auto const& pair) { return pair.first == str; }); it != types_.end()) {
 		return it->second;
@@ -472,14 +471,14 @@ inline Namespace* Namespace::find_child(const std::string& str) {
 	return nullptr;
 }
 
-inline void Namespace::add(const std::string& name, Ast_Type_Decl* type) {
+inline void Namespace::add(const std::string& name, AstTypeDecl* type) {
 	if (std::find_if(std::begin(types_), std::end(types_), [&name](const auto& pair) { return pair.first == name; }) != std::end(types_)) {
 		throw "type redefinition";
 	}
 	types_.push_back({ name, type });
 }
 
-inline std::string Namespace::construct_path(const std::string& delim, bool omit_root) const noexcept {
+inline std::string Namespace::construct_path(std::string delim, bool omit_root) const noexcept {
 	if (omit_root && parent() && parent()->name().empty()) return {};
 	
 	auto ptr = parent();
@@ -493,18 +492,15 @@ inline std::string Namespace::construct_path(const std::string& delim, bool omit
 }
 
 inline std::string Namespace::to_cpp17_namespace() const noexcept {
-	static const auto delim = std::string(2, ':');
-	return construct_path(delim);
+	return construct_path(std::string(2, ':'));
 }
 
 inline std::string Namespace::to_ts_namespace() const noexcept {
-	static const auto delim = std::string(2, '.');
-	return construct_path(delim, true);
+	return construct_path(std::string(2,'.'), true);
 }
 
 inline std::string Namespace::to_interface_path() const noexcept {
-	static const auto delim = std::string(1, '.');
-	return construct_path(delim);
+	return construct_path(std::string(1, '.'));
 }
 
 inline Namespace::Namespace()
@@ -518,7 +514,7 @@ inline Namespace::Namespace(Namespace* parent, std::string&& name)
 {
 }
 
-inline void Namespace::add_constant(std::string&& name, Ast_Number&& number) {
+inline void Namespace::add_constant(std::string&& name, AstNumber&& number) {
 	if (std::find_if(std::begin(constants_), std::end(constants_), 
 		[&name](const auto& pair) { return pair.first == name; }) != std::end(constants_)) {
 		throw std::runtime_error("constant redefinition");
@@ -526,7 +522,7 @@ inline void Namespace::add_constant(std::string&& name, Ast_Number&& number) {
 	constants_.emplace_back(std::move(name), std::move(number));
 }
 
-inline Ast_Number* Namespace::find_constant(const std::string& name) {
+inline AstNumber* Namespace::find_constant(const std::string& name) {
 	auto it = std::find_if(std::begin(constants_), std::end(constants_),
 		[&name](const auto& pair) { return pair.first == name; });
 	return it != std::end(constants_) ? &it->second : nullptr;
@@ -536,21 +532,31 @@ class Context {
 	Namespace* nm_root_;
 	Namespace* nm_cur_;
 	int exception_id_last = -1;
-public:
+
+	std::string module_name;
 	std::string base_name;
+public:
+	AFFAList affa_list;
+	int m_struct_n_ = 0;
+	std::vector<AstStructDecl*> exceptions;
+	std::vector<AstInterfaceDecl*> interfaces;
+	std::vector<AstStructDecl*> structs_with_helpers;
 
 	const std::string& current_file() const noexcept {
 		return base_name;
 	}
 
+	const std::string& module() const noexcept {
+		return module_name;
+	}
 
-	AFFAList affa_list;
-	int m_struct_n_ = 0;
-	std::vector<Ast_Struct_Decl*> exceptions;
-	std::vector<Ast_Interface_Decl*> interfaces;
-	std::vector<Ast_Struct_Decl*> structs_with_helpers;
+	std::string top_level_namespace() const noexcept {
+		return module_name + "::" + base_name;
+	}
 
-	int next_exception_id () noexcept { return ++exception_id_last; }
+	int next_exception_id () noexcept {
+		return ++exception_id_last; 
+	}
 
 	auto push_namespace(std::string&& s) {
 		nm_cur_ = nm_cur_->push(std::move(s));
@@ -562,8 +568,13 @@ public:
 		assert(nm_cur_);
 	}
 
-	Namespace* nm_cur() { return nm_cur_; }
-	Namespace* nm_root() { return nm_root_; }
+	Namespace* nm_cur() {
+		return nm_cur_;
+	}
+	
+	Namespace* nm_root() {
+		return nm_root_; 
+	}
 
 	Namespace* set_namespace(Namespace* nm) {
 		auto old = nm_cur_;
@@ -584,5 +595,10 @@ public:
 		std::transform(base_name.begin(), base_name.end(), base_name.begin(), [](char c) {
 			return c == '.' ? '_' : ::tolower(c); });
 		nm_root_ = nm_cur_ = new Namespace();
+	}
+
+	Context(const std::string& module_name)
+		: module_name(module_name)
+	{
 	}
 };

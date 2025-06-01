@@ -1,5 +1,5 @@
 #include <nprpc/impl/nprpc_impl.hpp>
-#include <nprpc/nprpc_nameserver.hpp>
+#include <nprpc_stub/nprpc_nameserver.hpp>
 
 #include <cassert>
 
@@ -210,7 +210,7 @@ NPRPC_API Object* create_object_from_flat(
   obj->local_ref_cnt_ = 1;
 
   auto& oid = obj->get_data();
-  nprpc_base::flat::assign_from_flat_ObjectId(direct, oid);
+  nprpc::detail::helpers::assign_from_flat_ObjectId(direct, oid);
 
   if (direct.flags() & (1 << static_cast<std::underlying_type_t<detail::ObjectFlag>>(detail::ObjectFlag::Tethered))) 
   {

@@ -15,18 +15,18 @@ protected:
 	bool always_full_namespace_ = false;
 
 	void always_full_namespace(bool flag) { always_full_namespace_ = flag; }
-	void make_arguments_structs(Ast_Function_Decl* fn);
-	void emit_arguments_structs(std::function<void(Ast_Struct_Decl*)> fn);
+	void make_arguments_structs(AstFunctionDecl* fn);
+	void emit_arguments_structs(std::function<void(AstStructDecl*)> fn);
 public:
-	virtual void emit_constant(const std::string& name, Ast_Number* number) = 0;
-	virtual void emit_struct(Ast_Struct_Decl* s) = 0;
-	virtual void emit_exception(Ast_Struct_Decl* s) = 0;
+	virtual void emit_constant(const std::string& name, AstNumber* number) = 0;
+	virtual void emit_struct(AstStructDecl* s) = 0;
+	virtual void emit_exception(AstStructDecl* s) = 0;
 	virtual void emit_namespace_begin() = 0;
 	virtual void emit_namespace_end() = 0;
-	virtual void emit_interface(Ast_Interface_Decl* ifs) = 0;
+	virtual void emit_interface(AstInterfaceDecl* ifs) = 0;
 	virtual void emit_file_footer() = 0;
-	virtual void emit_using(Ast_Alias_Decl* u) = 0;
-	virtual void emit_enum(Ast_Enum_Decl* e) = 0;
+	virtual void emit_using(AstAliasDecl* u) = 0;
+	virtual void emit_enum(AstEnumDecl* e) = 0;
 	
 	Builder(Context& ctx) : ctx_(ctx) {}
 	virtual ~Builder() = default;

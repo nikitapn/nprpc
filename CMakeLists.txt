@@ -1,34 +1,33 @@
 add_subdirectory(npidl)
 
-list(APPEND IDL_FILES_LIST 
-  idl/nprpc_base.npidl 
-  idl/nprpc_nameserver.npidl
+include(${CMAKE_SOURCE_DIR}/nprpc/cmake/npidl.cmake)
+
+set(IDL_FILES
+  ${CMAKE_SOURCE_DIR}/nprpc/idl/nprpc_base.npidl        # core RPC files must have "nprpc_" prefix
+  ${CMAKE_SOURCE_DIR}/nprpc/idl/nprpc_nameserver.npidl
 )
 
-foreach(file ${IDL_FILES_LIST})
-  string(REPLACE "/" "_" tmp ${file})
-  string(REPLACE "idl/" "" filename ${file})
-  string(REPLACE ".npidl" ".cpp" filename_cpp ${filename})
-  string(REPLACE ".npidl" ".hpp" filename_hpp ${filename})
-  string(REPLACE ".npidl" ".ts" filename_ts ${filename})
+npidl_generate_idl_files("${IDL_FILES}" nprpc_stub)
+
+# Copy nprpc_stub generated headers to the nprpc/include/nprpc_stub directory
+foreach(file ${nprpc_stub_GENERATED_HEADERS})
+  get_filename_component(filename ${file} NAME)
   add_custom_command(
-    OUTPUT 
-      ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc/${filename_hpp}
-      ${CMAKE_SOURCE_DIR}/nprpc/nprpcst/${filename_cpp}
-      ${CMAKE_SOURCE_DIR}/nprpc/web/src/${filename_ts}
-    COMMAND
-      npidl
-      --out-inc-dir ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc
-      --out-src-dir ${CMAKE_SOURCE_DIR}/nprpc/nprpcst
-      --out-ts-dir ${CMAKE_SOURCE_DIR}/nprpc/web/src
-      ${CMAKE_SOURCE_DIR}/nprpc/idl/${filename}
-    DEPENDS
-      npidl
+    OUTPUT ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc_stub/${filename}
+    DEPENDS ${file}
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+      ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc_stub
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
       ${file}
+      ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc_stub
+    COMMENT "Copying nprpc_stub generated headers to nprpc/include/nprpc/gen"
   )
 endforeach()
 
 add_library(nprpc SHARED
+  ${nprpc_stub_GENERATED_SOURCES}
+  include/nprpc_stub/nprpc_base.hpp
+  include/nprpc_stub/nprpc_nameserver.hpp
   src/framework.h
   src/nprpc.cpp
   src/rpc_impl.cpp
@@ -58,8 +57,6 @@ add_library(nprpc SHARED
   include/nprpc/impl/nprpc_impl.hpp
   include/nprpc/impl/session.hpp
   include/nprpc/impl/uuid.hpp
-  include/nprpc/nprpc_base.hpp
-  include/nprpc/nprpc_nameserver.hpp
   include/nprpc/nprpc.hpp
   include/nprpc/object_ptr.hpp
   include/nprpc/serialization/iarchive.h
@@ -70,7 +67,12 @@ add_library(nprpc SHARED
   include/nprpc/utils.hpp
 )
 
-target_include_directories(nprpc PRIVATE ./include)
+message(STATUS "nprpc_stub_INCLUDE_DIR: ${nprpc_stub_GENERATED_HEADERS}")
+
+target_include_directories(nprpc 
+  PRIVATE 
+    ./include
+  )
 
 if(WIN32)
   target_link_libraries(nprpc PUBLIC
@@ -88,22 +90,15 @@ else()
   target_compile_options(nprpc PRIVATE -fPIC)
 endif()
 
-add_library(nprpcst STATIC
-  include/nprpc/nprpc_nameserver.hpp
-  nprpcst/nprpc_nameserver.cpp
-)
-
-if(UNIX)
-  target_compile_options(nprpcst PRIVATE -fPIC)
-endif()
-
-target_include_directories(nprpcst PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
-
+# nameserver executable
 add_executable(npnameserver
   npnameserver/npnameserver.cpp
 )
-target_include_directories(npnameserver PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
-target_link_libraries(npnameserver PUBLIC nprpc nprpcst)
+target_include_directories(npnameserver 
+  PRIVATE 
+    ${CMAKE_SOURCE_DIR}/nprpc/include
+  )
+target_link_libraries(npnameserver PUBLIC nprpc)
 
 # Test executable for shared memory reference counter
 # add_executable(test_shared_memory_ref_counter
@@ -118,3 +113,6 @@ add_custom_target(npm_library
     ${CMAKE_SOURCE_DIR}/nprpc/web/src/nprpc_base.ts
     ${CMAKE_SOURCE_DIR}/nprpc/web/src/nprpc_nameserver.ts
 )
+
+add_subdirectory(check)
+add_subdirectory(test)

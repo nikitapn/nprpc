@@ -185,7 +185,7 @@ static std::string_view fundamental_to_ts(TokenId id) {
 }
 
 
-void Builder_Typescript::emit_type(Ast_Type_Decl* type, std::ostream& os) {
+void Builder_Typescript::emit_type(AstTypeDecl* type, std::ostream& os) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << toktype << fundamental_to_ts(cft(type)->token_id) << "/*" << cft(type)->token_id << "*/";
@@ -220,14 +220,14 @@ void Builder_Typescript::emit_type(Ast_Type_Decl* type, std::ostream& os) {
 	}
 }
 
-void Builder_Typescript::emit_flat_type(Ast_Type_Decl* type, std::ostream& os) {
+void Builder_Typescript::emit_flat_type(AstTypeDecl* type, std::ostream& os) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << cft(type)->token_id;
 		break;
 	case FieldType::Struct: {
 		auto s = cflat(type);
-		os << s->nm->to_ts_namespace() << "Flat_" << ctx_.base_name << '.' << s->name;
+		os << s->nm->to_ts_namespace() << "Flat_" << ctx_.current_file() << '.' << s->name;
 		break;
 	}
 	case FieldType::Vector:
@@ -256,7 +256,7 @@ void Builder_Typescript::emit_flat_type(Ast_Type_Decl* type, std::ostream& os) {
 	}
 }
 
-void Builder_Typescript::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f, int& last_field_ended) {
+void Builder_Typescript::emit_accessors(const std::string& flat_name, AstFieldDecl* f, int& last_field_ended) {
 	switch (f->type->id) {
 	case FieldType::Fundamental: 
 	case FieldType::Enum:
@@ -371,7 +371,7 @@ void Builder_Typescript::emit_accessors(const std::string& flat_name, Ast_Field_
 			"this.offset + " << align_offset(align_of_object, last_field_ended, size_of_object) << "); }\n";
 		break;
 	case FieldType::Alias: {
-		auto temp = std::make_unique<Ast_Field_Decl>();
+		auto temp = std::make_unique<AstFieldDecl>();
 		temp->name = f->name;
 		temp->type = calias(f->type)->get_real_type();
 		emit_accessors(flat_name, temp.get(), last_field_ended);
@@ -383,7 +383,7 @@ void Builder_Typescript::emit_accessors(const std::string& flat_name, Ast_Field_
 	}
 }
 
-void Builder_Typescript::emit_parameter_type_for_servant_callback_r(Ast_Type_Decl* type, std::ostream& os, const bool input) {
+void Builder_Typescript::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type, std::ostream& os, const bool input) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << fundamental_to_ts(cft(type)->token_id);
@@ -457,7 +457,7 @@ void Builder_Typescript::emit_parameter_type_for_servant_callback_r(Ast_Type_Dec
 	}
 }
 
-void Builder_Typescript::emit_parameter_type_for_servant_callback(Ast_Function_Argument* arg, std::ostream& os) {
+void Builder_Typescript::emit_parameter_type_for_servant_callback(AstFunctionArgument* arg, std::ostream& os) {
 	auto const input = (arg->modifier == ArgumentModifier::In);
 	emit_parameter_type_for_servant_callback_r(arg->type, os, input);
 //	if (!input &&
@@ -469,7 +469,7 @@ void Builder_Typescript::emit_parameter_type_for_servant_callback(Ast_Function_A
 }
 
 
-void Builder_Typescript::emit_parameter_type_for_proxy_call_r(Ast_Type_Decl* type, std::ostream& os, bool input) {
+void Builder_Typescript::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, std::ostream& os, bool input) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << fundamental_to_ts(cft(type)->token_id);
@@ -509,7 +509,7 @@ void Builder_Typescript::emit_parameter_type_for_proxy_call_r(Ast_Type_Decl* typ
 	}
 }
 
-void Builder_Typescript::emit_parameter_type_for_proxy_call(Ast_Function_Argument* arg, std::ostream& os) {
+void Builder_Typescript::emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, std::ostream& os) {
 	const bool input = (arg->modifier == ArgumentModifier::In);
 
 	os << (input ? "/*in*/" : "/*out*/");
@@ -530,7 +530,7 @@ void Builder_Typescript::emit_parameter_type_for_proxy_call(Ast_Function_Argumen
 }
 
 
-void Builder_Typescript::assign_from_ts_type(Ast_Type_Decl* type, std::string op1, std::string op2, bool from_iterator) {
+void Builder_Typescript::assign_from_ts_type(AstTypeDecl* type, std::string op1, std::string op2, bool from_iterator) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 	case FieldType::String:
@@ -621,7 +621,7 @@ void Builder_Typescript::assign_from_ts_type(Ast_Type_Decl* type, std::string op
 	}
 }
 
-void Builder_Typescript::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, std::string op2, bool from_iterator, bool top_object, bool direct) {
+void Builder_Typescript::assign_from_flat_type(AstTypeDecl* type, std::string op1, std::string op2, bool from_iterator, bool top_object, bool direct) {
 	static int _idx = 0;
 	switch (type->id) {
 	case FieldType::Fundamental:
@@ -709,7 +709,7 @@ void Builder_Typescript::assign_from_flat_type(Ast_Type_Decl* type, std::string 
 	}
 }
 
-void Builder_Typescript::emit_struct2(Ast_Struct_Decl* s, bool is_exception) {
+void Builder_Typescript::emit_struct2(AstStructDecl* s, bool is_exception) {
 	calc_struct_size_align(s);
 
 	// native typescript
@@ -736,7 +736,7 @@ void Builder_Typescript::emit_struct2(Ast_Struct_Decl* s, bool is_exception) {
 
 	auto const accessor_name = s->name + "_Direct";
 
-	out << "export namespace Flat_" << ctx_.base_name << " {\n";
+	out << "export namespace Flat_" << ctx_.current_file() << " {\n";
 	out << "export class " << accessor_name << " extends NPRPC.Flat.Flat {\n";
 
 	int offset = 0;
@@ -747,7 +747,7 @@ void Builder_Typescript::emit_struct2(Ast_Struct_Decl* s, bool is_exception) {
 	out << "}\n} // namespace Flat \n";
 }
 
-void Builder_Typescript::emit_constant(const std::string& name, Ast_Number* number) {
+void Builder_Typescript::emit_constant(const std::string& name, AstNumber* number) {
 	out << "export const " << name << " = ";
 	std::visit(overloaded{
 	[&](int64_t x) { 
@@ -760,11 +760,11 @@ void Builder_Typescript::emit_constant(const std::string& name, Ast_Number* numb
 	out << ";\n";
 }
 
-void Builder_Typescript::emit_struct(Ast_Struct_Decl* s) {
+void Builder_Typescript::emit_struct(AstStructDecl* s) {
 	emit_struct2(s, false);
 }
 
-void Builder_Typescript::emit_exception(Ast_Struct_Decl* s) {
+void Builder_Typescript::emit_exception(AstStructDecl* s) {
 	assert(s->is_exception());
 	emit_struct2(s, true);
 }
@@ -777,7 +777,7 @@ void Builder_Typescript::emit_file_footer() {
 		out <<
 			"\n"
 
-			"function " << ctx_.base_name << "_throw_exception(buf: NPRPC.FlatBuffer): void { \n"
+			"function " << ctx_.current_file() << "_throw_exception(buf: NPRPC.FlatBuffer): void { \n"
 			"  switch( buf.read_exception_number() ) {\n"
 			;
 
@@ -786,7 +786,7 @@ void Builder_Typescript::emit_file_footer() {
 			out <<
 				"  case " << ex->exception_id << ":\n"
 				"  {\n"
-				"    let ex_flat = new Flat_" << ctx_.base_name << '.' << ns(ex->nm) << ex->name << "_Direct(buf, " << size_of_header << ");\n"
+				"    let ex_flat = new Flat_" << ctx_.current_file() << '.' << ns(ex->nm) << ex->name << "_Direct(buf, " << size_of_header << ");\n"
 				"    let ex = new " << ns(ex->nm) << ex->name << "();\n"
 				;
 
@@ -817,11 +817,11 @@ void Builder_Typescript::emit_file_footer() {
 	emit_arguments_structs(std::bind(&Builder_Typescript::emit_struct2, this, _1, false));
 }
 
-void Builder_Typescript::emit_using(Ast_Alias_Decl* u) {
+void Builder_Typescript::emit_using(AstAliasDecl* u) {
 	out << "export type " << u->name << " = "; emit_type(u->type, out); out << ";\n";
 }
 
-void Builder_Typescript::emit_enum(Ast_Enum_Decl* e) {
+void Builder_Typescript::emit_enum(AstEnumDecl* e) {
 	out << "export const enum " << e->name << " { //" << toktype << e->token_id << '\n';
 	std::int64_t ix = 0;
 	for (size_t i = 0; i < e->items.size(); ++i) {
@@ -848,12 +848,12 @@ void Builder_Typescript::emit_namespace_end() {
 	out << "} // namespace " << ctx_.nm_cur()->name() << "\n\n";
 }
 
-void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
-	auto const flat_nm = "Flat_" + ctx_.base_name;
+void Builder_Typescript::emit_interface(AstInterfaceDecl* ifs) {
+	auto const flat_nm = "Flat_" + ctx_.current_file();
 	const auto servant_iname = 'I' + ifs->name + "_Servant";
 
-	auto emit_function_arguments = [](bool ts, Ast_Function_Decl* fn, std::ostream& os,
-		std::function<void(Ast_Function_Argument*, std::ostream& os)> emitter) {
+	auto emit_function_arguments = [](bool ts, AstFunctionDecl* fn, std::ostream& os,
+		std::function<void(AstFunctionArgument*, std::ostream& os)> emitter) {
 			os << "(";
 			size_t ix = 0;
 			for (auto arg : fn->args) {
@@ -888,8 +888,8 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 		;
 
 	// parent's functions
-	std::map<Ast_Interface_Decl*, int> ifs_idxs;
-	auto count_all = [&ifs_idxs](Ast_Interface_Decl* ifs_inherited, int& n) { 
+	std::map<AstInterfaceDecl*, int> ifs_idxs;
+	auto count_all = [&ifs_idxs](AstInterfaceDecl* ifs_inherited, int& n) { 
 		ifs_idxs.emplace(ifs_inherited, n);
 	};
 
@@ -944,7 +944,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 
 		if (fn->in_s) {
 			out <<
-				"  let _ = new Flat_" << ctx_.base_name << '.' << fn->in_s->name << "_Direct(buf," << get_arguments_offset() << ");\n"
+				"  let _ = new Flat_" << ctx_.current_file() << '.' << fn->in_s->name << "_Direct(buf," << get_arguments_offset() << ");\n"
 				;
 		}
 
@@ -967,7 +967,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 		if (fn->ex) {
 			out <<
 				"    if (std_reply == 1) {\n"
-				"      " << ctx_.base_name << "_throw_exception(buf);\n"
+				"      " << ctx_.current_file() << "_throw_exception(buf);\n"
 				"    }\n"
 				;
 		}
@@ -987,7 +987,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 				;
 
 			// (sizeof the message + sizeof BlockResponse) next struct will be always aligned by 8
-			out << "  let out = new Flat_" << ctx_.base_name << '.' << fn->out_s->name << "_Direct(buf, " << size_of_header << ");\n";
+			out << "  let out = new Flat_" << ctx_.current_file() << '.' << fn->out_s->name << "_Direct(buf, " << size_of_header << ");\n";
 
 			int ix = fn->is_void() ? 0 : 1;
 
@@ -1030,7 +1030,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 
 	out <<
 		"export class _" << servant_iname << " extends NPRPC.ObjectServant {\n"
-		"  public static _get_class(): string { return \"" << ctx_.base_name << '/' << ctx_.nm_cur()->to_interface_path() << '.' << ifs->name << "\"; }\n"
+		"  public static _get_class(): string { return \"" << ctx_.current_file() << '/' << ctx_.nm_cur()->to_interface_path() << '.' << ifs->name << "\"; }\n"
 		"  public readonly get_class = () => { return _"<< servant_iname << "._get_class(); }\n"
 		"  public readonly dispatch = (buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, from_parent: boolean) => {\n"
 		"    _" << servant_iname << "._dispatch(this, buf, remote_endpoint, from_parent);\n"
@@ -1054,7 +1054,7 @@ void Builder_Typescript::emit_interface(Ast_Interface_Decl* ifs) {
 			;
 	
 		int ix = 1;
-		auto select_interface = [&ix, this, ifs](Ast_Interface_Decl* i) {
+		auto select_interface = [&ix, this, ifs](AstInterfaceDecl* i) {
 			if (i == ifs) return;
 			out <<
 				"      case "<< ix << ":\n"

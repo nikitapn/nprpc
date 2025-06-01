@@ -15,20 +15,20 @@
 using std::placeholders::_1;
 using std::placeholders::_2;
 
-void Builder::emit_arguments_structs(std::function<void(Ast_Struct_Decl*)> emitter) {
+void Builder::emit_arguments_structs(std::function<void(AstStructDecl*)> emitter) {
 	always_full_namespace(true);
 	for (auto& [unused, s] : ctx_.affa_list) emitter(s);
 	always_full_namespace(false);
 }
 
-void Builder::make_arguments_structs(Ast_Function_Decl* fn) {
+void Builder::make_arguments_structs(AstFunctionDecl* fn) {
 	if (fn->arguments_structs_have_been_made) return;
 
 	auto& in_args = fn->in_args;
 	auto& out_args = fn->out_args;
 
 	if (!fn->is_void()) {
-		auto ret = new Ast_Function_Argument();
+		auto ret = new AstFunctionArgument();
 		ret->name = "ret_val";
 		ret->modifier = ArgumentModifier::Out;
 		ret->type = fn->ret_value;
@@ -40,15 +40,15 @@ void Builder::make_arguments_structs(Ast_Function_Decl* fn) {
 		else out_args.push_back(arg);
 	}
 
-	auto make_struct = [this, fn](std::vector<Ast_Function_Argument*>& args) -> Ast_Struct_Decl* {
+	auto make_struct = [this, fn](std::vector<AstFunctionArgument*>& args) -> AstStructDecl* {
 		if (args.empty()) return nullptr;
 
-		auto s = new Ast_Struct_Decl();
-		s->name = ctx_.base_name + "_M" + std::to_string(++ctx_.m_struct_n_);
+		auto s = new AstStructDecl();
+		s->name = ctx_.current_file() + "_M" + std::to_string(++ctx_.m_struct_n_);
 		
 
-		std::transform(args.begin(), args.end(), std::back_inserter(s->fields), [ix = 0, s, fn](Ast_Function_Argument* arg) mutable {
-			auto f = new Ast_Field_Decl();
+		std::transform(args.begin(), args.end(), std::back_inserter(s->fields), [ix = 0, s, fn](AstFunctionArgument* arg) mutable {
+			auto f = new AstFieldDecl();
 			f->name = "_" + std::to_string(++ix);
 			f->type = arg->type;
 			s->flat &= is_flat(arg->type);
@@ -112,7 +112,7 @@ static std::string_view fundamental_to_flat(TokenId id) {
 	}
 }
 
-void Builder_Cpp::emit_type(Ast_Type_Decl* type, std::ostream& os) {
+void Builder_Cpp::emit_type(AstTypeDecl* type, std::ostream& os) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << fundamental_to_cpp(cft(type)->token_id);
@@ -155,7 +155,7 @@ void Builder_Cpp::emit_type(Ast_Type_Decl* type, std::ostream& os) {
 	}
 }
 
-void Builder_Cpp::emit_flat_type(Ast_Type_Decl* type, std::ostream& os) {
+void Builder_Cpp::emit_flat_type(AstTypeDecl* type, std::ostream& os) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << fundamental_to_flat(cft(type)->token_id);
@@ -202,7 +202,7 @@ Builder_Cpp::_ns Builder_Cpp::ns(Namespace* nm) {
 	return { *this, nm };
 }
 
-void Builder_Cpp::emit_parameter_type_for_proxy_call_r(Ast_Type_Decl* type, std::ostream& os, bool input) {
+void Builder_Cpp::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, std::ostream& os, bool input) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << fundamental_to_cpp(cft(type)->token_id);
@@ -252,7 +252,7 @@ void Builder_Cpp::emit_parameter_type_for_proxy_call_r(Ast_Type_Decl* type, std:
 	}
 }
 
-void Builder_Cpp::emit_parameter_type_for_proxy_call(Ast_Function_Argument* arg, std::ostream& os) {
+void Builder_Cpp::emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, std::ostream& os) {
 	const bool input = (arg->modifier == ArgumentModifier::In);
 
 	if (input && arg->type->id != FieldType::Fundamental && arg->type->id != FieldType::Vector) {
@@ -266,7 +266,7 @@ void Builder_Cpp::emit_parameter_type_for_proxy_call(Ast_Function_Argument* arg,
 	}
 }
 
-void Builder_Cpp::emit_parameter_type_for_servant_callback_r(Ast_Type_Decl* type, std::ostream& os, const bool input) {
+void Builder_Cpp::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type, std::ostream& os, const bool input) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << fundamental_to_flat(cft(type)->token_id);
@@ -276,7 +276,7 @@ void Builder_Cpp::emit_parameter_type_for_servant_callback_r(Ast_Type_Decl* type
 		break;
 	case FieldType::Array:
 	case FieldType::Vector: {
-		auto wt = static_cast<Ast_Wrap_Type*>(type)->real_type();
+		auto wt = static_cast<AstWrapType*>(type)->real_type();
 		if (input || type->id == FieldType::Array) {
 			if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
 				os << "::nprpc::flat::Span<"; emit_flat_type(wt, os); os << ">";
@@ -342,7 +342,7 @@ void Builder_Cpp::emit_parameter_type_for_servant_callback_r(Ast_Type_Decl* type
 	}
 }
 
-void Builder_Cpp::emit_parameter_type_for_servant_callback(Ast_Function_Argument* arg, std::ostream& os) {
+void Builder_Cpp::emit_parameter_type_for_servant_callback(AstFunctionArgument* arg, std::ostream& os) {
 	auto const input = (arg->modifier == ArgumentModifier::In);
 	emit_parameter_type_for_servant_callback_r(arg->type, os, input);
 	if (!input &&
@@ -354,7 +354,7 @@ void Builder_Cpp::emit_parameter_type_for_servant_callback(Ast_Function_Argument
 	}
 }
 
-void Builder_Cpp::emit_direct_type(Ast_Type_Decl* type, std::ostream& os) {
+void Builder_Cpp::emit_direct_type(AstTypeDecl* type, std::ostream& os) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << "void";
@@ -406,7 +406,7 @@ void Builder_Cpp::emit_direct_type(Ast_Type_Decl* type, std::ostream& os) {
 	}
 }
 
-void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f, std::ostream& os) {
+void Builder_Cpp::emit_accessors(const std::string& flat_name, AstFieldDecl* f, std::ostream& os) {
 	switch (f->type->id) {
 	case FieldType::Fundamental: {
 		auto type_name = fundamental_to_flat(cft(f->type)->token_id);
@@ -426,7 +426,7 @@ void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f
 
 	case FieldType::Vector: 
 		os << "  void " << f->name << "(std::uint32_t elements_size) { new (&base()." << f->name << ") ::nprpc::flat::Vector<";
-		emit_flat_type(static_cast<Ast_Wrap_Type*>(f->type)->type, os); os << ">(buffer_, elements_size); }\n";
+		emit_flat_type(static_cast<AstWrapType*>(f->type)->type, os); os << ">(buffer_, elements_size); }\n";
 
 		os << "  auto " << f->name << "_d() noexcept { return "; 
 		emit_direct_type(f->type, os);
@@ -472,7 +472,7 @@ void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f
 		break;
 
 	case FieldType::Alias: {
-		auto temp = std::make_unique<Ast_Field_Decl>();
+		auto temp = std::make_unique<AstFieldDecl>();
 		temp->name = f->name;
 		temp->type = calias(f->type)->get_real_type();
 		emit_accessors(flat_name, temp.get(), os);
@@ -493,7 +493,7 @@ void Builder_Cpp::emit_accessors(const std::string& flat_name, Ast_Field_Decl* f
 	}
 }
 
-void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std::string op2, std::ostream& os, 
+void Builder_Cpp::assign_from_cpp_type(AstTypeDecl* type, std::string op1, std::string op2, std::ostream& os, 
 	bool from_iterator, 
 	bool top_type,
 	bool/* direct_type */) {
@@ -596,7 +596,7 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 		assert(top_type == false);
 		os << bd << "{\n";
 		os << bd << "  " << "auto tmp = " << op1 << "();\n";
-		os << bd << "  " << "nprpc_base::flat::assign_from_cpp_ObjectId("
+		os << bd << "  " << "nprpc::detail::helpers::assign_from_cpp_ObjectId("
 			"tmp, " << op2 << ".get_data()"
 		");\n";
 		os << bd << "}\n";
@@ -608,7 +608,7 @@ void Builder_Cpp::assign_from_cpp_type(Ast_Type_Decl* type, std::string op1, std
 	}
 }
 
-void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, std::string op2, std::ostream& os, bool from_iterator, bool top_object) {
+void Builder_Cpp::assign_from_flat_type(AstTypeDecl* type, std::string op1, std::string op2, std::ostream& os, bool from_iterator, bool top_object) {
 	switch (type->id) {
 	case FieldType::Fundamental: {
 		//assert(top_object == false);
@@ -634,7 +634,7 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 
 	case FieldType::Array:
 	case FieldType::Vector: {
-		auto wt = static_cast<Ast_Wrap_Type*>(type)->type;
+		auto wt = static_cast<AstWrapType*>(type)->type;
 		auto const size = std::get<0>(get_type_size_align(wt));
 		os << bd << "{\n"
 			<< bd + 1 <<"auto span = " << op2 << "();\n";
@@ -721,7 +721,7 @@ void Builder_Cpp::assign_from_flat_type(Ast_Type_Decl* type, std::string op1, st
 	}
 }
 
-void Builder_Cpp::emit_struct2(Ast_Struct_Decl* s, std::ostream& os, Target target) {
+void Builder_Cpp::emit_struct2(AstStructDecl* s, std::ostream& os, Target target) {
 	auto make_struct = [s, this, &os]<typename T>(T && fn) {
 		os << "struct " << s->name << " {\n";
 		for (auto const f : s->fields) {
@@ -813,7 +813,7 @@ void Builder_Cpp::emit_struct2(Ast_Struct_Decl* s, std::ostream& os, Target targ
 	os << '\n';
 }
 
-void Builder_Cpp::emit_constant(const std::string& name, Ast_Number* number) {
+void Builder_Cpp::emit_constant(const std::string& name, AstNumber* number) {
 	oh << "constexpr auto " << name << " = ";
 	std::visit(overloaded{
 	[&](int64_t x) { 
@@ -826,11 +826,11 @@ void Builder_Cpp::emit_constant(const std::string& name, Ast_Number* number) {
 	oh << ";\n";
 }
 
-void Builder_Cpp::emit_struct(Ast_Struct_Decl* s) {
+void Builder_Cpp::emit_struct(AstStructDecl* s) {
 	emit_struct2(s, oh, Target::Regular);
 }
 
-void Builder_Cpp::emit_exception(Ast_Struct_Decl* s) {
+void Builder_Cpp::emit_exception(AstStructDecl* s) {
 	assert(s->is_exception());
 	emit_struct2(s, oh, Target::Exception);
 }
@@ -842,7 +842,7 @@ void Builder_Cpp::emit_file_footer() {
 
 		oc <<
 			"\n"
-			"void " << ctx_.base_name << "_throw_exception(::nprpc::flat_buffer& buf) { \n"
+			"void " << ctx_.current_file() << "_throw_exception(::nprpc::flat_buffer& buf) { \n"
 			"  switch(*(uint32_t*)( (char*)buf.data().data() + sizeof(::nprpc::impl::Header)) ) {\n"
 			;
 
@@ -891,7 +891,7 @@ void Builder_Cpp::emit_file_footer() {
 	oh << "\n#endif";
 }
 
-void Builder_Cpp::emit_safety_checks_r(Ast_Type_Decl* type, std::string op, std::ostream& os, bool /* from_iterator */, bool top_type) {
+void Builder_Cpp::emit_safety_checks_r(AstTypeDecl* type, std::string op, std::ostream& os, bool /* from_iterator */, bool top_type) {
 	switch (type->id) {
 	case FieldType::Struct: {
 		auto s = cflat(type);
@@ -1017,7 +1017,7 @@ void Builder_Cpp::emit_namespace_end() {
 
 void Builder_Cpp::emit_helpers() {
 	always_full_namespace(true);
-	oh << "namespace " << ctx_.base_name << "::helper {\n";
+	oh << "namespace " << ctx_.current_file() << "::helper {\n";
 	for (auto& [unused, s] : ctx_.affa_list) {
 		for (auto f : s->fields) {
 			assert(f->function_argument);
@@ -1052,14 +1052,14 @@ void Builder_Cpp::emit_helpers() {
 		}
 	}
 
-	oh << "} // namespace " << ctx_.base_name << "::helper\n";
+	oh << "} // namespace " << ctx_.current_file() << "::helper\n";
 	always_full_namespace(false);
 }
 
 void Builder_Cpp::emit_struct_helpers() {
-	oh << "namespace " << ctx_.base_name << "::flat {\n";
 
 	for (auto s : ctx_.structs_with_helpers) {
+		oh << "namespace " << s->nm->to_cpp17_namespace() << "::helpers {\n";
 		auto saved_namespace = ctx_.set_namespace(s->nm);
 		oh << "inline void assign_from_flat_" << s->name << "(";
 		emit_parameter_type_for_servant_callback_r(s, oh, false); 
@@ -1076,15 +1076,15 @@ void Builder_Cpp::emit_struct_helpers() {
 		assign_from_cpp_type(s, "dest", "src", oh, false, true);
 		oh << "}\n";
 		ctx_.set_namespace(saved_namespace);
+		oh << "} // namespace " << s->nm->name() << "::flat\n";
 	}
 
-	oh << "} // namespace " << ctx_.base_name << "::flat\n";
 }
 
 void Builder_Cpp::emit_function_arguments(
-	Ast_Function_Decl* fn,
+	AstFunctionDecl* fn,
 	std::ostream& os,
-	std::function<void(Ast_Function_Argument*, std::ostream& os)> emitter
+	std::function<void(AstFunctionArgument*, std::ostream& os)> emitter
 ) {
 	os << "(";
 	size_t ix = 0;
@@ -1096,14 +1096,14 @@ void Builder_Cpp::emit_function_arguments(
 	os << ')';
 };
 
-void Builder_Cpp::proxy_call(Ast_Function_Decl* fn) {
+void Builder_Cpp::proxy_call(AstFunctionDecl* fn) {
 	oc <<
 		"  ::nprpc::impl::g_orb->call(this->get_endpoint(), buf, this->get_timeout());\n"
 		"  auto std_reply = nprpc::impl::handle_standart_reply(buf);\n"
 		;
 
 	if (fn->ex) 
-		oc << "  if (std_reply == 1) " << ctx_.base_name << "_throw_exception(buf);\n";
+		oc << "  if (std_reply == 1) " << ctx_.current_file() << "_throw_exception(buf);\n";
 	
 	if (!fn->out_s) {
 		oc <<
@@ -1137,7 +1137,7 @@ void Builder_Cpp::proxy_call(Ast_Function_Decl* fn) {
 	}
 }
 
-void Builder_Cpp::proxy_async_call(Ast_Function_Decl* fn) {
+void Builder_Cpp::proxy_async_call(AstFunctionDecl* fn) {
 	oc <<
 		"  ::nprpc::impl::g_orb->call_async(this->get_endpoint(), std::move(buf), !handler ? std::nullopt : std::make_optional([handler = move(handler)] (\n"
 		"    const boost::system::error_code& ec, nprpc::flat_buffer& buf) {\n"
@@ -1169,7 +1169,7 @@ void Builder_Cpp::proxy_async_call(Ast_Function_Decl* fn) {
 		oc << "}), get_timeout());\n";
 }
 
-std::string_view Builder_Cpp::proxy_arguments(Ast_Function_Decl* fn) {
+std::string_view Builder_Cpp::proxy_arguments(AstFunctionDecl* fn) {
 	if (auto it = proxy_arguments_.find(fn); it != proxy_arguments_.end()) 
 		return it->second;
 
@@ -1200,7 +1200,7 @@ std::string_view Builder_Cpp::proxy_arguments(Ast_Function_Decl* fn) {
 	return proxy_arguments_.emplace(fn, ss.str()).first->second;
 }
 
-void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
+void Builder_Cpp::emit_interface(AstInterfaceDecl* ifs) {
 	// Servant definition
 	oh <<
 		"class I" << ifs->name << "_Servant\n";
@@ -1216,7 +1216,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 
 	oh <<
 		"public:\n"
-		"  static std::string_view _get_class() noexcept { return \"" << ctx_.base_name << '/' << ctx_.nm_cur()->to_interface_path() << '.' << ifs->name << "\"; }\n"
+		"  static std::string_view _get_class() noexcept { return \"" << ctx_.current_file() << '/' << ctx_.nm_cur()->to_interface_path() << '.' << ifs->name << "\"; }\n"
 		"  std::string_view get_class() const noexcept override { return I" << ifs->name << "_Servant::_get_class(); }\n"
 		"  void dispatch(nprpc::Buffers& bufs, [[maybe_unused]] nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) override;\n"
 		;
@@ -1257,7 +1257,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 	} else {
 		oh <<"  " << ifs->name << "(uint8_t interface_idx)\n";
 
-		auto count_all = [](Ast_Interface_Decl* /* ifs_inherited */, int& n) { ++n; };
+		auto count_all = [](AstInterfaceDecl* /* ifs_inherited */, int& n) { ++n; };
 
 		int n = 1;
 		for (auto parent : ifs->plist) {
@@ -1345,7 +1345,7 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 			;
 	
 		int ix = 1;
-		auto select_interface = [&ix, this, ifs](Ast_Interface_Decl* i) {
+		auto select_interface = [&ix, this, ifs](AstInterfaceDecl* i) {
 			if (i == ifs) return;
 			oc <<
 				"      case "<< ix << ":\n"
@@ -1549,11 +1549,11 @@ void Builder_Cpp::emit_interface(Ast_Interface_Decl* ifs) {
 	oc << "}\n\n"; // dispatch
 }
 
-void Builder_Cpp::emit_using(Ast_Alias_Decl* u) {
+void Builder_Cpp::emit_using(AstAliasDecl* u) {
 	oh << "using " << u->name << " = "; emit_type(u->type, oh); oh << ";\n";
 }
 
-void Builder_Cpp::emit_enum(Ast_Enum_Decl* e) {
+void Builder_Cpp::emit_enum(AstEnumDecl* e) {
 	oh << "enum class " << e->name << " : " << fundamental_to_cpp(e->token_id) << " {\n";
 	int64_t ix = 0;
 	for (size_t i = 0; i < e->items.size(); ++i) {
@@ -1592,10 +1592,10 @@ Builder_Cpp::Builder_Cpp(Context& ctx, std::filesystem::path file_path,
 		std::transform(r.begin(), r.end(), r.begin(), [](char c) {
 			return c == '.' ? '_' : ::toupper(c);
 			});
-		return r + '_';
+		return r;
 	};
 
-	auto h1 = make_guard(ctx_.base_name);
+	auto h1 = make_guard("__NPRPC_" + ctx_.current_file() + "_HPP__");
 
 	oh <<
 		"#ifndef " << h1 << "\n"
@@ -1609,19 +1609,11 @@ Builder_Cpp::Builder_Cpp(Context& ctx, std::filesystem::path file_path,
 		oh << "#include <string_view>\n\n";
 	}
 
-  if (ctx_.is_nprpc_base()) {
-  	ocpp <<
-		  "#include <nprpc/nprpc_base.hpp>\n";
-  } else if (ctx_.is_nprpc_nameserver()) {
-    ocpp <<
-		  "#include <nprpc/nprpc_nameserver.hpp>\n";
-  } else {
-    ocpp <<
-		  "#include \"" << ctx_.base_name << ".hpp\"\n";
-  }
+	ocpp <<
+		"#include \"" << ctx_.module() << '/' << ctx_.current_file() << ".hpp\"\n";
 
   ocpp <<
     "#include <nprpc/impl/nprpc_impl.hpp>\n\n"
-		"void " << ctx_.base_name << "_throw_exception(::nprpc::flat_buffer& buf);\n\n"
+		"void " << ctx_.current_file() << "_throw_exception(::nprpc::flat_buffer& buf);\n\n"
 		;
 }

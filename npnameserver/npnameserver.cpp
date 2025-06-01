@@ -4,7 +4,7 @@
 #include <iostream>
 #include <memory>
 #include <unordered_map>
-#include <nprpc/nprpc_nameserver.hpp>
+#include <nprpc_stub/nprpc_nameserver.hpp>
 #include <boost/asio/signal_set.hpp>
 #include <boost/beast/core/error.hpp>
 
@@ -28,7 +28,7 @@ public:
 		}
 
 		const auto& oid = found->second->get_data();
-		nprpc_base::flat::assign_from_cpp_ObjectId(obj, oid);
+		nprpc::detail::helpers::assign_from_cpp_ObjectId(obj, oid);
 
 		std::cout << "Resolving: " << str << " with urls: " << oid.urls << std::endl;
 

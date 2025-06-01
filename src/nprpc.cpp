@@ -112,6 +112,7 @@ NPRPC_API uint32_t Object::add_ref()
 
   auto constexpr msg_size =
     sizeof(impl::Header) + sizeof(::nprpc::detail::flat::ObjectIdLocal);
+
   auto mb = buf.prepare(msg_size);
   buf.commit(msg_size);
 
@@ -153,8 +154,7 @@ NPRPC_API uint32_t Object::release()
       static_cast<impl::Header*>(mb.data())->msg_type =
         impl::MessageType::Request;
 
-      ::nprpc::detail::flat::ObjectIdLocal_Direct msg(buf,
-                                                      sizeof(impl::Header));
+      nprpc::detail::flat::ObjectIdLocal_Direct msg(buf, sizeof(impl::Header));
       msg.object_id() = object_id();
       msg.poa_idx()   = poa_idx();
 

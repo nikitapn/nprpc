@@ -2,7 +2,6 @@
 add_executable(npidl
   src/ast.hpp
   src/builder.hpp
-  src/check_size.cpp
   src/cpp_builder.cpp
   src/cpp_builder.hpp
   src/main.cpp

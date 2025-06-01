@@ -483,7 +483,7 @@ class Parser {
 		return true;
 	}
 
-	Ast_Number parse_number(const Token& tok) {
+	AstNumber parse_number(const Token& tok) {
 		const auto& str = tok.name;
 
 		std::int64_t i64;
@@ -495,31 +495,31 @@ class Parser {
 			if (result.ec != std::errc()) { 
 				throw_error("Hex number.std::from_chars returned: " + std::make_error_code(result.ec).message()); 
 			}
-			return Ast_Number{ i64, NumberFormat::Hex };
+			return AstNumber{ i64, NumberFormat::Hex };
 		} else if(str.find('.') != std::string::npos) {
 			if (str.back() == 'f') {
 				auto result = std::from_chars(str.data(), str.data() + str.size(), flt32);
 				if (result.ec != std::errc()) {
 					throw_error("Float32 number.std::from_chars returned: " + std::make_error_code(result.ec).message());
 				}
-				return Ast_Number{ flt32, NumberFormat::Decimal };
+				return AstNumber{ flt32, NumberFormat::Decimal };
 			} else {
 				auto result = std::from_chars(str.data(), str.data() + str.size(), flt64);
 				if (result.ec != std::errc()) {
 					throw_error("Float64 number.std::from_chars returned: " + std::make_error_code(result.ec).message());
 				}
-				return Ast_Number{ flt64, NumberFormat::Decimal };
+				return AstNumber{ flt64, NumberFormat::Decimal };
 			}
 		} else {
 			auto result = std::from_chars(str.data(), str.data() + str.size(), i64, 10);
 			if (result.ec != std::errc()) {
 				throw_error("Integer number.std::from_chars returned: " + std::make_error_code(result.ec).message());
 			}
-			return Ast_Number{ i64, NumberFormat::Decimal };
+			return AstNumber{ i64, NumberFormat::Decimal };
 		}
 	}
 
-	bool array_decl(Ast_Type_Decl*& type) {
+	bool array_decl(AstTypeDecl*& type) {
 		if (peek() == TokenId::SquareBracketOpen) {
 			flush();
 
@@ -542,7 +542,7 @@ class Parser {
 			flush();
 
 			match(TokenId::SquareBracketClose);
-			type = new Ast_Array_Decl(type, length);
+			type = new AstArrayDecl(type, length);
 
 			return true;
 		}
@@ -593,7 +593,7 @@ class Parser {
 		return false;
 	}
 
-	bool type_decl(Ast_Type_Decl*& type) {
+	bool type_decl(AstTypeDecl*& type) {
 		type = nullptr;
 
 		auto nm = ctx_.nm_cur();
@@ -607,7 +607,7 @@ class Parser {
 
 		if (t.is_fundamental_type()) {
 			flush();
-			type = new Ast_Fundamental_Type(t.id);
+			type = new AstFundamentalType(t.id);
 			check(&Parser::array_decl, std::ref(type));
 			return true;
 		}
@@ -623,32 +623,32 @@ class Parser {
 			return true;
 		case TokenId::Vector:
 			flush();
-			type = new Ast_Vector_Decl();
+			type = new AstVectorDecl();
 			match('<');
-			if (!check(&Parser::type_decl, std::ref(static_cast<Ast_Vector_Decl*>(type)->type))) throw_error("Expected a type declaration");
+			if (!check(&Parser::type_decl, std::ref(static_cast<AstVectorDecl*>(type)->type))) throw_error("Expected a type declaration");
 			match('>');
 			return true;
 		case TokenId::String:
 			flush();
-			type = new Ast_String_Decl();
+			type = new AstStringDecl();
 			check(&Parser::array_decl, std::ref(type));
 			return true;
 		case TokenId::Void:
 			flush();
-			type = new Ast_Void_Decl();
+			type = new AstVoidDecl();
 			return true;
 		case TokenId::Object:
 			flush();
-			type = new Ast_Object_Decl();
+			type = new AstObjectDecl();
 			return true;
 		default:
 			return false;
 		}
 	}
 
-	bool field_decl(Ast_Field_Decl*& field) {
+	bool field_decl(AstFieldDecl*& field) {
 		Token field_name;
-		Ast_Type_Decl* type;
+		AstTypeDecl* type;
 		bool optional;
 
 		if (!(
@@ -658,14 +658,14 @@ class Parser {
 			return false;
 		}
 
-		field = new Ast_Field_Decl();
+		field = new AstFieldDecl();
 		field->name = std::move(field_name.name);
-		field->type = optional ? new Ast_Optional_Decl(type) : type;
+		field->type = optional ? new AstOptionalDecl(type) : type;
 
 		return true;
 	}
 
-	bool arg_decl(Ast_Function_Argument& arg) {
+	bool arg_decl(AstFunctionArgument& arg) {
 		Token arg_name;
 		bool optional;
 
@@ -682,17 +682,17 @@ class Parser {
 		}
 
 
-		Ast_Type_Decl* type;
+		AstTypeDecl* type;
 
 		if (!check(&Parser::type_decl, std::ref(type))) return false;
 
 		arg.name = arg_name.name;
-		arg.type = optional ? new Ast_Optional_Decl(type) : type;
+		arg.type = optional ? new AstOptionalDecl(type) : type;
 
 		return true;
 	}
 
-	bool version_decl(Ast_Struct_Decl* s) {
+	bool version_decl(AstStructDecl* s) {
 		if (!(peek() == TokenId::Hash && peek() == TokenId::Identifier && tokens_.back().name == "version")) return false;
 
 		flush();
@@ -730,7 +730,7 @@ class Parser {
 
 		flush();
 
-		auto s = new Ast_Struct_Decl();
+		auto s = new AstStructDecl();
 
 		s->name = name_tok.name;
 		
@@ -744,16 +744,16 @@ class Parser {
 		s->nm = ctx_.nm_cur();
 
 		if (is_exception) {
-			auto ex_id = new Ast_Field_Decl();
+			auto ex_id = new AstFieldDecl();
 			ex_id->name = "__ex_id";
-			ex_id->type = new Ast_Fundamental_Type(TokenId::UInt32);
+			ex_id->type = new AstFundamentalType(TokenId::UInt32);
 			s->fields.push_back(ex_id);
 		}
 
 		match('{');
 
 		while (check(&Parser::struct_close_tag) == false) {
-			Ast_Field_Decl* field;
+			AstFieldDecl* field;
 			if (check(&Parser::field_decl, std::ref(field))) {
 				s->fields.push_back(field);
 				s->flat &= is_flat(field->type);
@@ -814,30 +814,30 @@ class Parser {
 		return true;
 	}
 
-	bool function_decl(Ast_Function_Decl*& f) {
+	bool function_decl(AstFunctionDecl*& f) {
 		bool is_async;
-		Ast_Type_Decl* ret_type = nullptr;
+		AstTypeDecl* ret_type = nullptr;
 		
 		if (!(is_async = check(&Parser::one, TokenId::Async)) && 
 			!check(&Parser::type_decl, std::ref(ret_type))) return false;
 		
-		if (!ret_type) ret_type = new Ast_Void_Decl();
+		if (!ret_type) ret_type = new AstVoidDecl();
 		
-		f = new Ast_Function_Decl();
+		f = new AstFunctionDecl();
 		f->ret_value = ret_type ;
 		f->is_async = is_async;
 		f->name = match(TokenId::Identifier).name;
 
 		match('(');
 
-		Ast_Function_Argument arg;
+		AstFunctionArgument arg;
 
 		if (check(&Parser::one, TokenId::RoundBracketClose) == false) {
 			for (;;) {
 				if (!check(&Parser::arg_decl, std::ref(arg))) {
 					throw_error("Expected tokens: argument declaration");
 				}
-				f->args.push_back(new Ast_Function_Argument(std::move(arg)));
+				f->args.push_back(new AstFunctionArgument(std::move(arg)));
 				if (check(&Parser::one, TokenId::RoundBracketClose)) break;
 				match(',');
 			}
@@ -913,7 +913,7 @@ class Parser {
 		if (peek() != TokenId::Interface) return false;
 		flush();
 
-		auto ifs = new Ast_Interface_Decl();
+		auto ifs = new AstInterfaceDecl();
 		ifs->name = match(TokenId::Identifier).name;
 
 		for (const auto& a : attr) {
@@ -950,7 +950,7 @@ class Parser {
 
 		match('{');
 
-		Ast_Function_Decl* f;
+		AstFunctionDecl* f;
 		for (;;) {
 			if (check(&Parser::one, TokenId::BracketClose)) break;
 			if (check(&Parser::function_decl, std::ref(f))) {
@@ -996,12 +996,12 @@ class Parser {
 			return false;
 		}
 
-		Ast_Type_Decl* right;
+		AstTypeDecl* right;
 		if (!check(&Parser::type_decl, std::ref(right))) {
 			throw_error("Expected a type declaration after using");
 		}
 
-		auto a = new Ast_Alias_Decl(std::move(left.name), ctx_.nm_cur(), right);
+		auto a = new AstAliasDecl(std::move(left.name), ctx_.nm_cur(), right);
 		ctx_.nm_cur()->add(a->name, a);
 
 		builder_.emit(&Builder::emit_using, a);
@@ -1013,7 +1013,7 @@ class Parser {
 		if (peek() != TokenId::Enum) return false;
 		flush();
 
-		auto e = new Ast_Enum_Decl;
+		auto e = new AstEnumDecl;
 
 		e->name = std::move(match(TokenId::Identifier).name);
 		e->token_id = TokenId::UInt32;
@@ -1059,14 +1059,14 @@ class Parser {
 				}
 
 				// explicit
-				e->items.emplace_back(std::move(name), std::pair<Ast_Number, bool>{ n, true });
+				e->items.emplace_back(std::move(name), std::pair<AstNumber, bool>{ n, true });
 				
 				ix = std::get<std::int64_t>(n.value) + 1;
 				tok = peek();
 			} else {
 
 				// implicit
-				e->items.emplace_back(std::move(name), std::pair<Ast_Number, bool>{ ix, 0 });
+				e->items.emplace_back(std::move(name), std::pair<AstNumber, bool>{ ix, 0 });
 				ix++;
 			}
 
@@ -1130,6 +1130,7 @@ int main(int argc, char* argv[]) {
 	
 	std::filesystem::path out_inc_dir, out_src_dir, out_ts_dir, input_file;
 	bool generate_typescript;
+	std::string module_name;
 
 	// Declare the supported options.
 	po::options_description desc("Allowed options");
@@ -1139,6 +1140,7 @@ int main(int argc, char* argv[]) {
 		("out-src-dir", po::value<std::filesystem::path>(&out_src_dir), "directory for generated source files")
 		("out-ts-dir", po::value<std::filesystem::path>(&out_ts_dir), "directory for generated typescript files")
 		("gen-ts", po::value<bool>(&generate_typescript)->default_value(true), "generate typescript")
+		("module-name", po::value<std::string>(&module_name), "Module name [required]")
 		("input-file", po::value<std::filesystem::path>(&input_file), "input file")
 		;
 
@@ -1157,12 +1159,16 @@ int main(int argc, char* argv[]) {
 			std::cerr << "no input file...\n";
 			return -1;
 		}
+		if (!vm.count("module-name")) {
+			std::cerr << "no module name specified...\n";
+			return -1;
+		}
 	} catch (po::unknown_option& e) {
 		std::cerr << e.what();
 		return -1;
 	}
 
-	Context ctx;
+	Context ctx{module_name};
 
     try {
 	    ctx.open(input_file);

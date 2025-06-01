@@ -18,7 +18,7 @@
 #include <boost/beast/core/flat_buffer.hpp>
 
 #include <nprpc/common.hpp>
-#include <nprpc/nprpc_base.hpp>
+#include <nprpc_stub/nprpc_base.hpp>
 #include <nprpc/basic.hpp>
 #include <nprpc/buffer.hpp>
 #include <nprpc/object_ptr.hpp>
@@ -35,7 +35,7 @@ class Poa;
 class ObjectServant;
 class Object;
 
-constexpr nprpc::oid_t invalid_object_id = (uint64_t)-1;
+constexpr oid_t invalid_object_id = (uint64_t)-1;
 
 namespace impl {
 
@@ -51,7 +51,7 @@ class ObjectId
 {
   friend impl::PoaImpl;
  protected:
-  detail::ObjectId data_;
+  ::nprpc::detail::ObjectId data_;
  public:
   template <typename Archive>
   void serialize(Archive& ar)
@@ -66,14 +66,14 @@ class ObjectId
 
   void assign_from_direct(const nprpc::detail::flat::ObjectId_Direct& other)
   {
-    nprpc_base::flat::assign_from_flat_ObjectId(const_cast<nprpc::detail::flat::ObjectId_Direct&>(other), data_);
+    nprpc::detail::helpers::assign_from_flat_ObjectId(const_cast<nprpc::detail::flat::ObjectId_Direct&>(other), data_);
   }
   
   static void assign_to_direct(
     const nprpc::ObjectId& oid, 
     detail::flat::ObjectId_Direct& direct)
   {
-    nprpc_base::flat::assign_from_cpp_ObjectId(direct, oid.data_);
+    nprpc::detail::helpers::assign_from_cpp_ObjectId(direct, oid.data_);
   }
 
   auto object_id() const noexcept { return data_.object_id; }
@@ -269,7 +269,7 @@ class NPRPC_API Rpc
 
 namespace impl {
 struct Config {
-  DebugLevel                 debug_level = DebugLevel::DebugLevel_Critical;
+  DebugLevel                 debug_level = ::nprpc::DebugLevel::DebugLevel_Critical;
   uuid_t                     uuid;
   std::string                hostname;
   std::string                listen_address    = "0.0.0.0";
@@ -290,7 +290,7 @@ class RpcBuilder {
  public:
   NPRPC_API RpcBuilder();
 
-  RpcBuilder& set_debug_level(DebugLevel level) noexcept
+  RpcBuilder& set_debug_level(::nprpc::DebugLevel level) noexcept
   {
     cfg_.debug_level = level;
     return *this;

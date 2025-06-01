@@ -23,7 +23,7 @@ int align_offset(int align_of, int& last_field_ended, int size, int elements_siz
 	return offset;
 }
 
-void calc_struct_size_align(Ast_Struct_Decl* s, Ast_Type_Decl* t, int& offset, int elements_size) {
+void calc_struct_size_align(AstStructDecl* s, AstTypeDecl* t, int& offset, int elements_size) {
 	switch (t->id) {
 		case FieldType::Fundamental: {
 			int size = get_fundamental_size(cft(t)->token_id);
@@ -70,7 +70,7 @@ void calc_struct_size_align(Ast_Struct_Decl* s, Ast_Type_Decl* t, int& offset, i
 		}
 }
 
-void calc_struct_size_align(Ast_Struct_Decl* s) {
+void calc_struct_size_align(AstStructDecl* s) {
 	s->align = 1;
 	int offset = 0;
 	
@@ -83,7 +83,7 @@ void calc_struct_size_align(Ast_Struct_Decl* s) {
 	// std::cout << s->name << ": s. " << s->size << " a. " << s->align <<"\n";
 }
 
-std::tuple<int, int> get_type_size_align(Ast_Type_Decl* type) {
+std::tuple<int, int> get_type_size_align(AstTypeDecl* type) {
 	switch (type->id) {
 		case FieldType::Fundamental: {
 			int size = get_fundamental_size(cft(type)->token_id);
@@ -114,7 +114,7 @@ std::tuple<int, int> get_type_size_align(Ast_Type_Decl* type) {
 	return {};
 }
 
-void get_type_id(const Ast_Type_Decl* type, struct_id_t& id, std::string* field_name) {
+void get_type_id(const AstTypeDecl* type, struct_id_t& id, std::string* field_name) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		switch (cft(type)->token_id) {
@@ -135,23 +135,23 @@ void get_type_id(const Ast_Type_Decl* type, struct_id_t& id, std::string* field_
 		}
 		break;
 	case FieldType::Struct:
-		id += static_cast<const Ast_Struct_Decl*>(type)->name;
+		id += static_cast<const AstStructDecl*>(type)->name;
 		if (field_name) id += *field_name;
 		break;
 	case FieldType::Array:
 		id += 'A';
-		get_type_id(static_cast<const Ast_Wrap_Type*>(type)->type, id, nullptr);
+		get_type_id(static_cast<const AstWrapType*>(type)->type, id, nullptr);
 		break;
 	case FieldType::Vector:
 		id += 'V';
-		get_type_id(static_cast<const Ast_Wrap_Type*>(type)->type, id, nullptr);
+		get_type_id(static_cast<const AstWrapType*>(type)->type, id, nullptr);
 		break;
 	case FieldType::String:
 		id += 'S';
 		break;
 	case FieldType::Optional:
 		id += '?';
-		get_type_id(static_cast<const Ast_Wrap_Type*>(type)->type, id, nullptr);
+		get_type_id(static_cast<const AstWrapType*>(type)->type, id, nullptr);
 		break;
 	case FieldType::Object:
 		id += 'O';
@@ -168,7 +168,7 @@ void get_type_id(const Ast_Type_Decl* type, struct_id_t& id, std::string* field_
 	}
 }
 
-const struct_id_t& Ast_Struct_Decl::get_function_struct_id() {
+const struct_id_t& AstStructDecl::get_function_struct_id() {
 	if (unique_id.length() > 0) return unique_id;
 	
 	int param_n = 0;
@@ -180,7 +180,7 @@ const struct_id_t& Ast_Struct_Decl::get_function_struct_id() {
 	return unique_id;
 }
 
-bool is_flat(Ast_Type_Decl* type) {
+bool is_flat(AstTypeDecl* type) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 	case FieldType::Enum:
@@ -203,7 +203,7 @@ bool is_flat(Ast_Type_Decl* type) {
 	}
 }
 
-bool is_fundamental(Ast_Type_Decl* type) {
+bool is_fundamental(AstTypeDecl* type) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 	case FieldType::Enum:
@@ -216,10 +216,10 @@ bool is_fundamental(Ast_Type_Decl* type) {
 }
 
 void dfs_interface(
-	std::function<void(Ast_Interface_Decl*)> fn, 
-	Ast_Interface_Decl* start
+	std::function<void(AstInterfaceDecl*)> fn, 
+	AstInterfaceDecl* start
 ) {
-	using T = std::pair<size_t, std::vector<Ast_Interface_Decl*>*>;
+	using T = std::pair<size_t, std::vector<AstInterfaceDecl*>*>;
 	std::stack<T, boost::container::small_vector<T, 8>> stack;
 	stack.push({0, &start->plist});
 	fn(start);
