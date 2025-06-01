@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc_test_stub/test.hpp>
 #include <nprpc_stub/nprpc_nameserver.hpp>
 
@@ -104,7 +105,7 @@ public:
             rpc = nprpc::RpcBuilder()
                 .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
                 .set_listen_tcp_port(22222)
-                .set_listen_http_port(0)
+                .set_listen_http_port(22223)
                 .build(thread_pool::get_instance().ctx());
 
             // Use the new PoaBuilder API  
@@ -134,11 +135,11 @@ public:
 class NprpcTest : public ::testing::Test {
 protected:
     template<typename T>
-    auto make_stuff_happen(typename T::servant_t& servant) {
+    auto make_stuff_happen(typename T::servant_t& servant, nprpc::ObjectActivationFlags::Enum flags) {
         static const std::string object_name = "nprpc_test_object";
 
         auto nameserver = rpc->get_nameserver("127.0.0.1");
-        auto oid = poa->activate_object(&servant, nprpc::ObjectActivationFlags::ALLOW_TCP);
+        auto oid = poa->activate_object(&servant, flags);
         nameserver->Bind(oid, object_name);
 
         nprpc::Object* raw;
@@ -178,32 +179,37 @@ TEST_F(NprpcTest, TestBasic) {
         }
     } servant;
 
-    try {
-        auto obj = make_stuff_happen<test::TestBasic>(servant);
+    auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
+        try {
+            auto obj = make_stuff_happen<test::TestBasic>(servant, flags);
 
-        EXPECT_TRUE(obj->ReturnBoolean());
+            EXPECT_TRUE(obj->ReturnBoolean());
 
-        std::vector<uint8_t> ints;
-        ints.reserve(256);
-        boost::push_back(ints, boost::irange(0, 255));
+            std::vector<uint8_t> ints;
+            ints.reserve(256);
+            boost::push_back(ints, boost::irange(0, 255));
 
-        EXPECT_TRUE(obj->In(100, true, nprpc::flat::make_read_only_span(ints)));
+            EXPECT_TRUE(obj->In(100, true, nprpc::flat::make_read_only_span(ints)));
 
-        uint32_t a;
-        bool b;
+            uint32_t a;
+            bool b;
 
-        obj->Out(a, b, ints);
+            obj->Out(a, b, ints);
 
-        EXPECT_EQ(a, 100u);
-        EXPECT_TRUE(b);
+            EXPECT_EQ(a, 100u);
+            EXPECT_TRUE(b);
 
-        uint8_t ix = 0;
-        for (auto i : ints) {
-            EXPECT_EQ(ix++, i);
+            uint8_t ix = 0;
+            for (auto i : ints) {
+                EXPECT_EQ(ix++, i);
+            }
+        } catch (nprpc::Exception& ex) {
+            FAIL() << "Exception in TestBasic: " << ex.what();
         }
-    } catch (nprpc::Exception& ex) {
-        FAIL() << "Exception in TestBasic: " << ex.what();
-    }
+    };
+
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
 }
 
 // Optional types test
@@ -240,24 +246,28 @@ TEST_F(NprpcTest, TestOptional) {
         }
     } servant;
 
-    try {
-        auto obj = make_stuff_happen<test::TestOptional>(servant);
+    auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
+        try {
+            auto obj = make_stuff_happen<test::TestOptional>(servant, flags);
 
-        EXPECT_TRUE(obj->InEmpty(std::nullopt));
-        EXPECT_TRUE(obj->In(100, test::AAA{ 100u, "test_b"s, "test_c"s }));
+            EXPECT_TRUE(obj->InEmpty(std::nullopt));
+            EXPECT_TRUE(obj->In(100, test::AAA{ 100u, "test_b"s, "test_c"s }));
 
-        std::optional<uint32_t> a;
+            std::optional<uint32_t> a;
 
-        obj->OutEmpty(a);
-        EXPECT_FALSE(a.has_value());
+            obj->OutEmpty(a);
+            EXPECT_FALSE(a.has_value());
 
-        obj->Out(a);
-        EXPECT_TRUE(a.has_value());
-        EXPECT_EQ(a.value(), 100u);
+            obj->Out(a);
+            EXPECT_TRUE(a.has_value());
+            EXPECT_EQ(a.value(), 100u);
 
-    } catch (nprpc::Exception& ex) {
-        FAIL() << "Exception in TestOptional: " << ex.what();
-    }
+        } catch (nprpc::Exception& ex) {
+            FAIL() << "Exception in TestOptional: " << ex.what();
+        }
+    };
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
 }
 
 // Nested structures test
@@ -297,38 +307,42 @@ TEST_F(NprpcTest, TestNested) {
         }
     } servant;
 
-    try {
-        auto obj = make_stuff_happen<test::TestNested>(servant);
-        obj->set_timeout(5000); // Set a longer timeout for this test
+    auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
+        try {
+            auto obj = make_stuff_happen<test::TestNested>(servant, flags);
+            obj->set_timeout(5000); // Set a longer timeout for this test
 
-        std::optional<test::BBB> a;
+            std::optional<test::BBB> a;
 
-        obj->Out(a);
+            obj->Out(a);
 
-        EXPECT_TRUE(a.has_value());
-        auto& value = a.value();
+            EXPECT_TRUE(a.has_value());
+            auto& value = a.value();
 
-        EXPECT_EQ(value.a.size(), 1024ull);
+            EXPECT_EQ(value.a.size(), 1024ull);
 
-        std::uint32_t ix = 0;
-        for (auto& i : value.a) {
-            EXPECT_EQ(i.a, ix++);
-            EXPECT_EQ(std::string_view(i.b), std::string_view(tstr1));
-            EXPECT_EQ(std::string_view(i.c), std::string_view(tstr2));
+            std::uint32_t ix = 0;
+            for (auto& i : value.a) {
+                EXPECT_EQ(i.a, ix++);
+                EXPECT_EQ(std::string_view(i.b), std::string_view(tstr1));
+                EXPECT_EQ(std::string_view(i.c), std::string_view(tstr2));
+            }
+
+            EXPECT_EQ(value.b.size(), 2048ull);
+
+            bool b = false;
+            for (auto& i : value.b) {
+                EXPECT_EQ(std::string_view(i.a), std::string_view(tstr1));
+                EXPECT_EQ(std::string_view(i.b), std::string_view(tstr2));
+                EXPECT_TRUE(i.c.has_value());
+                EXPECT_EQ(i.c.value(), b ^= 1);
+            }
+        } catch (nprpc::Exception& ex) {
+            FAIL() << "Exception in TestNested: " << ex.what();
         }
-
-        EXPECT_EQ(value.b.size(), 2048ull);
-
-        bool b = false;
-        for (auto& i : value.b) {
-            EXPECT_EQ(std::string_view(i.a), std::string_view(tstr1));
-            EXPECT_EQ(std::string_view(i.b), std::string_view(tstr2));
-            EXPECT_TRUE(i.c.has_value());
-            EXPECT_EQ(i.c.value(), b ^= 1);
-        }
-    } catch (nprpc::Exception& ex) {
-        FAIL() << "Exception in TestNested: " << ex.what();
-    }
+    };
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
 }
 
 // Large message test to verify async_write fix for messages >2.6MB
@@ -374,70 +388,96 @@ TEST_F(NprpcTest, TestLargeMessage) {
         }
     } servant;
 
-    try {
-        auto obj = make_stuff_happen<test::TestBasic>(servant);
-        obj->set_timeout(5000); // Set a longer timeout for this test
+    auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
+        try {   
+            auto obj = make_stuff_happen<test::TestBasic>(servant, flags);
+            obj->set_timeout(5000); // Set a longer timeout for this test
 
-        // Test sending 3MB of data
-        std::vector<uint8_t> large_data(3 * 1024 * 1024);
-        large_data[0] = 0xAB;
-        large_data[large_data.size() - 1] = 0xCD;
-        for (size_t i = 1; i < large_data.size() - 1; ++i) {
-            large_data[i] = static_cast<uint8_t>(i % 256);
-        }
+            // Test sending 3MB of data
+            std::vector<uint8_t> large_data(3 * 1024 * 1024);
+            large_data[0] = 0xAB;
+            large_data[large_data.size() - 1] = 0xCD;
+            for (size_t i = 1; i < large_data.size() - 1; ++i) {
+                large_data[i] = static_cast<uint8_t>(i % 256);
+            }
 
-        std::cout << "Testing large message transmission (3MB)..." << std::endl;
+            std::cout << "Testing large message transmission (3MB)..." << std::endl;
         
-        // This should work with our async_write fix
-        EXPECT_TRUE(obj->In(42, true, nprpc::flat::make_read_only_span(large_data)));
+            // This should work with our async_write fix
+            EXPECT_TRUE(obj->In(42, true, nprpc::flat::make_read_only_span(large_data)));
 
-        // Test receiving 3MB of data
-        uint32_t a;
-        bool b;
-        std::vector<uint8_t> received_data;
+            // Test receiving 3MB of data
+            uint32_t a;
+            bool b;
+            std::vector<uint8_t> received_data;
 
-        std::cout << "Testing large message reception (3MB)..." << std::endl;
-        obj->Out(a, b, received_data);
+            std::cout << "Testing large message reception (3MB)..." << std::endl;
+            obj->Out(a, b, received_data);
 
-        EXPECT_EQ(a, 42u);
-        EXPECT_TRUE(b);
-        EXPECT_EQ(received_data.size(), 3 * 1024 * 1024u);
-        EXPECT_EQ(received_data[0], 0xAB);
-        EXPECT_EQ(received_data[received_data.size() - 1], 0xCD);
+            EXPECT_EQ(a, 42u);
+            EXPECT_TRUE(b);
+            EXPECT_EQ(received_data.size(), 3 * 1024 * 1024u);
+            EXPECT_EQ(received_data[0], 0xAB);
+            EXPECT_EQ(received_data[received_data.size() - 1], 0xCD);
 
-        std::cout << "Large message test completed successfully!" << std::endl;
+            std::cout << "Large message test completed successfully!" << std::endl;
 
-    } catch (nprpc::Exception& ex) {
-        FAIL() << "Exception in TestLargeMessage: " << ex.what();
-    }
+        } catch (nprpc::Exception& ex) {
+            FAIL() << "Exception in TestLargeMessage: " << ex.what();
+        }
+    };
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
 }
 
-/*
 // Bad input validation test
 TEST_F(NprpcTest, TestBadInput) {
     class TestBadInputImpl : public test::ITestBadInput_Servant {
     public:
-        virtual void In(test::flat::DDD_Direct a) {}
+        virtual void In(::nprpc::flat::Span<uint8_t> a) {}
     } servant;
 
-    try {
-        auto obj = make_stuff_happen<test::TestBadInput>(servant);
+    auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
+        try {
+            auto obj = make_stuff_happen<test::TestBadInput>(servant, flags);
 
-        test::DDD a;
-        //a.b.push_back(test::DDD{});
-        //a.b[0].a = "string";
+            boost::beast::flat_buffer buf;
+            auto mb = buf.prepare(2048);
+            buf.commit(40);
+            static_cast<::nprpc::impl::Header*>(mb.data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
+            static_cast<::nprpc::impl::Header*>(mb.data())->msg_type = ::nprpc::impl::MessageType::Request;
+            ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));
+            __ch.object_id() = obj->object_id();
+            __ch.poa_idx() = obj->poa_idx();
+            __ch.interface_idx() = 0; // single interface
+            __ch.function_idx() = 0; // single function
 
-        obj->In(a);
+            buf.commit(1024);
+            // Set correct size in header
+            static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size() - 4);
+            auto vec_begin = static_cast<std::byte*>(buf.data().data()) + 32;
+            // Set size of the vector to be larger than the buffer size
+            *reinterpret_cast<uint32_t*>(vec_begin) = 0xDEADBEEF;
+       
+            ::nprpc::impl::g_orb->call(obj->get_endpoint(), buf, obj->get_timeout());
+            auto std_reply = nprpc::impl::handle_standart_reply(buf);
+            if (std_reply != 0) {
+                throw nprpc::Exception("Unknown Error");
+            }
 
-        FAIL() << "Expected nprpc::ExceptionBadInput to be thrown";
-    } catch (nprpc::ExceptionBadInput&) {
-        // Expected exception - test passed
-        SUCCEED();
-    } catch (nprpc::Exception& ex) {
-        FAIL() << "Unexpected exception in TestBadInput: " << ex.what();
-    }
+            FAIL() << "Expected nprpc::ExceptionBadInput to be thrown";
+        } catch (nprpc::ExceptionBadInput&) {
+            // Expected exception - test passed
+            SUCCEED();
+        } catch (nprpc::Exception& ex) {
+            FAIL() << "Unexpected exception in TestBadInput: " << ex.what();
+        }
+    };
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
 }
-*/
+
+
 } // namespace nprpctest
 
 int main(int argc, char** argv) {

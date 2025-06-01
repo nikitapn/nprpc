@@ -39,15 +39,9 @@ interface TestNested {
 	void Out(a?: out BBB);
 }
 
-
-DDD : flat {
-	a: vector<AAA>;
-	b?: vector<CCC>;
-}
-
 [trusted=false]
 interface TestBadInput {
-	void In(a: in DDD);
+	void In(a: in vector<u8>);
 }
 
 }
