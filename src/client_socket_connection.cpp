@@ -6,6 +6,7 @@
 
 #include <iostream>
 #include <future>
+#include <boost/asio/write.hpp>
 
 #include "helper.hpp"
 
@@ -180,7 +181,7 @@ void SocketConnection::on_read_size(const boost::system::error_code& ec, size_t 
   timeout_timer_.expires_at(boost::posix_time::pos_infin);
   
   if (ec) {
-    fail(ec, "read");
+    fail(ec, "client_socket_session: on_read_size");
     (*wq_.front()).on_failed(ec);
     pop_and_execute_next_task();
     return;
@@ -206,7 +207,7 @@ void SocketConnection::on_read_body(const boost::system::error_code& ec, size_t 
   timeout_timer_.expires_at(boost::posix_time::pos_infin);
 
   if (ec) {
-    fail(ec, "read");
+    fail(ec, "client_socket_session: on_read_body");
     (*wq_.front()).on_failed(ec);
     pop_and_execute_next_task();
     return;

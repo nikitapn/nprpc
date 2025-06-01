@@ -115,4 +115,7 @@ add_custom_target(npm_library
 )
 
 add_subdirectory(check)
-add_subdirectory(test)
+
+if(UNIX)
+  add_subdirectory(test)
+endif()

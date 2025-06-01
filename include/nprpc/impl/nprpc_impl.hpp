@@ -124,7 +124,7 @@ class SocketConnection
     const flat_buffer& buf, WriteHandler&& handler)
   {
     timeout_timer_.expires_from_now(timeout_);
-    socket_.async_send(buf.cdata(), std::forward<WriteHandler>(handler));
+    boost::asio::async_write(socket_, buf.cdata(), std::forward<WriteHandler>(handler));
   }
 
   SocketConnection(const EndPoint&                endpoint,

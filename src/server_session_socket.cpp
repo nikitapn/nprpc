@@ -12,6 +12,7 @@
 #include <deque>
 #include <boost/beast/core/bind_handler.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
+#include <boost/asio/write.hpp>
 
 #include <nprpc/nprpc.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
@@ -54,8 +55,11 @@ public:
     assert(false);
 	}
 
-  void on_write(boost::system::error_code ec, std::size_t /*bytes_transferred*/) {
+  void on_write(boost::system::error_code ec, [[maybe_unused]] std::size_t bytes_transferred) {
     if (ec) return fail(ec, "write");
+
+    // std::cout << "server_session_socket: on_write: bytes_transferred = "
+    //           << bytes_transferred << std::endl;
 
     assert(write_queue_.size() >= 1);
     write_queue_.pop_front();
@@ -69,7 +73,7 @@ public:
 
   void on_read_body(const boost::system::error_code& ec, size_t len) {
     if (ec) {
-      fail(ec, "read");
+      fail(ec, "server_session_socket: on_read_body");
       return;
     }
 
@@ -87,7 +91,7 @@ public:
 
     write_queue_.push_front({});
 
-    socket_.async_send(rx_buffer_().cdata(),
+    boost::asio::async_write(socket_, rx_buffer_().cdata(),
       std::bind(&Session_Socket::on_write, shared_from_this(),
         std::placeholders::_1, std::placeholders::_2)
     );
@@ -102,7 +106,7 @@ public:
 
   void on_read_size(const boost::system::error_code& ec, size_t len) {
     if (ec) {
-      fail(ec, "read");
+      fail(ec, "server_session_socket: on_read_size");
       return;
     }
 
