@@ -1,6 +1,7 @@
 #pragma once
 
 #include <nprpc/impl/shared_ring_buffer.hpp>
+#include <nprpc/impl/shared_memory_ref_counter.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <boost/asio.hpp>
 #include <iostream>
@@ -27,20 +28,18 @@ class SharedMemoryChannel {
     std::string event_write_name_;
     uint32_t channel_id_;
 
+    // Use reference-counted shared memory buffers
+    SharedMemoryRef<SharedRingBuffer> buffer_s2c_;
+    SharedMemoryRef<SharedRingBuffer> buffer_c2s_;
+
 #ifdef _WIN32
-    HANDLE mapping_s2c_ = nullptr;
-    HANDLE mapping_c2s_ = nullptr;
     HANDLE event_read_ = nullptr;
     HANDLE event_write_ = nullptr;
 #else
-    int fd_s2c_ = -1;
-    int fd_c2s_ = -1;
     sem_t* sem_read_ = nullptr;
     sem_t* sem_write_ = nullptr;
 #endif
 
-    SharedRingBuffer* buffer_s2c_ = nullptr;
-    SharedRingBuffer* buffer_c2s_ = nullptr;
     bool is_server_;
     
     boost::asio::io_context& ioc_;

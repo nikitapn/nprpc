@@ -103,8 +103,14 @@ add_executable(npnameserver
   npnameserver/npnameserver.cpp
 )
 target_include_directories(npnameserver PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
-
 target_link_libraries(npnameserver PUBLIC nprpc nprpcst)
+
+# Test executable for shared memory reference counter
+# add_executable(test_shared_memory_ref_counter
+#   test_shared_memory_ref_counter.cpp
+# )
+# target_include_directories(test_shared_memory_ref_counter PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
+# target_link_libraries(test_shared_memory_ref_counter PUBLIC nprpc)
 
 add_custom_target(npm_library
   COMMAND cd ${CMAKE_SOURCE_DIR}/nprpc/web && npm install && npm run build

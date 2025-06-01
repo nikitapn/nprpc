@@ -33,9 +33,12 @@ class Session_Socket
   uint32_t size_to_read_ = 0;
   std::deque<std::unique_ptr<work>> write_queue_;
 public:
+  // Simple socket sessions are not duplex, it's assumed that client is also can accept
+  // new connetions from the server, so we don't need to handle duplex communication
   virtual void timeout_action() final {
     assert(false);
   }
+
   virtual void send_receive(
 		flat_buffer&,
 		uint32_t

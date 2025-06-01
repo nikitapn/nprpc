@@ -109,7 +109,14 @@ class AcceptingPlainWebSocketSession
 {
 public:
   explicit AcceptingPlainWebSocketSession(plain_ws&& ws)
-    : PlainWebSocketSessionT<AcceptingPlainWebSocketSession>(std::move(ws)) {}
+    : PlainWebSocketSessionT<AcceptingPlainWebSocketSession>(std::move(ws))
+  {
+    auto endpoint = this->ws().next_layer().socket().remote_endpoint();
+    this->ctx_.remote_endpoint = EndPoint(
+      EndPointType::TcpTethered,
+      endpoint.address().to_v4().to_string(), 
+      endpoint.port());
+  }
 };
 
 class AcceptingSSLWebSocketSession
@@ -118,7 +125,14 @@ class AcceptingSSLWebSocketSession
 {
 public:
   explicit AcceptingSSLWebSocketSession(ssl_ws&& ws)
-    : SSLWebSocketSessionT<AcceptingSSLWebSocketSession>(std::move(ws)) {}
+    : SSLWebSocketSessionT<AcceptingSSLWebSocketSession>(std::move(ws))
+  {
+    auto endpoint = this->ws().next_layer().next_layer().socket().remote_endpoint();
+    this->ctx_.remote_endpoint = EndPoint(
+      EndPointType::TcpTethered,
+      endpoint.address().to_v4().to_string(), 
+      endpoint.port());
+  }
 };
 
 template <class Body, class Allocator>
@@ -135,21 +149,18 @@ class ClientPlainWebSocketSession
   : public PlainWebSocketSessionT<ClientPlainWebSocketSession>
   , public std::enable_shared_from_this<ClientPlainWebSocketSession>
 {
-  // this endpoint is used to reconnect
+  // this resolved endpoint is used to reconnect
   // the session if the connection is lost
   // in client implementation
   boost::asio::ip::tcp::endpoint endpoint_;
 public:
-  explicit ClientPlainWebSocketSession(plain_ws&& ws)
+  explicit ClientPlainWebSocketSession(plain_ws&& ws, const EndPoint& ep)
     : PlainWebSocketSessionT<ClientPlainWebSocketSession>(std::move(ws))
   {
-    this->endpoint_ = this->ws().next_layer().socket().remote_endpoint();
-    this->ctx_.remote_endpoint = EndPoint(
-      EndPointType::TcpTethered,
-      this->endpoint_.address().to_v4().to_string(), 
-      this->endpoint_.port());
+    this->ctx_.remote_endpoint = ep;
   }
 
+  // TODO: Implement reconnect logic
   void reconnect() {}
 };
 
@@ -157,21 +168,18 @@ class ClientSSLWebSocketSession
   : public SSLWebSocketSessionT<ClientSSLWebSocketSession>
   , public std::enable_shared_from_this<ClientSSLWebSocketSession>
 {
-  // this endpoint is used to reconnect
+  // this resolved endpoint is used to reconnect
   // the session if the connection is lost
   // in client implementation
   boost::asio::ip::tcp::endpoint endpoint_;
 public:
-  explicit ClientSSLWebSocketSession(ssl_ws&& ws)
+  explicit ClientSSLWebSocketSession(ssl_ws&& ws, const EndPoint& ep)
     : SSLWebSocketSessionT<ClientSSLWebSocketSession>(std::move(ws)) 
   {
-    this->endpoint_ = this->ws().next_layer().next_layer().socket().remote_endpoint();
-    this->ctx_.remote_endpoint = EndPoint(
-      EndPointType::TcpTethered,
-      this->endpoint_.address().to_v4().to_string(), 
-      this->endpoint_.port());
+    this->ctx_.remote_endpoint = ep;
   }
 
+  // TODO: Implement reconnect logic
   void reconnect() {}
 };
 

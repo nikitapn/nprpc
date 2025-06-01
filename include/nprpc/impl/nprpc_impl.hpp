@@ -28,6 +28,8 @@
 
 namespace nprpc::impl {
 
+NPRPC_API void fill_guid(std::array<std::uint8_t, 16>& guid) noexcept;
+
 class RpcImpl;
 class PoaImpl;
 
@@ -269,7 +271,7 @@ class PoaImpl : public Poa
     oid.object_id = object_id_internal;
     oid.poa_idx   = get_index();
     oid.flags     = static_cast<oflags_t>(pl_lifespan_) << static_cast<oflags_t>(detail::ObjectFlag::Lifespan);
-    oid.origin    = g_cfg.uuid;
+    fill_guid(oid.origin);
     oid.class_id  = obj->get_class();
 
     using namespace std::string_literals;
@@ -425,6 +427,16 @@ inline void Session::close()
   impl::g_orb->close_session(this);
 }
 
-NPRPC_API void fill_guid(std::array<std::uint8_t, 16>& guid) noexcept;
+class ReferenceListImpl
+{
+  std::vector<std::pair<nprpc::detail::ObjectIdLocal, ObjectServant*>> refs_;
+ public:
+  ~ReferenceListImpl();
+
+  void add_ref(ObjectServant* obj);
+  bool remove_ref(poa_idx_t poa_idx, oid_t oid);
+};
+
+
 
 }  // namespace nprpc::impl

@@ -12,26 +12,24 @@
 namespace nprpc::impl {
 
 class SharedUUID {
-public:
-    using uuid_array = std::array<std::uint8_t, 16>;
-    
-    static SharedUUID& instance();
-    
-    // Get current UUID value
-    const uuid_array& get() const noexcept;
-    
-    // Generate new UUID and store it
-    void generate_new();
-    
-    ~SharedUUID();
+    struct Impl;
+    std::unique_ptr<Impl> pimpl_;
 
-private:
     SharedUUID();
     SharedUUID(const SharedUUID&) = delete;
     SharedUUID& operator=(const SharedUUID&) = delete;
+public:
+    using uuid_array = std::array<std::uint8_t, 16>;
 
-    struct Impl;
-    std::unique_ptr<Impl> pimpl_;
+    static SharedUUID& instance();
+
+    // Get current UUID value
+    const uuid_array& get() const noexcept;
+
+    // Generate new UUID and store it
+    void generate_new();
+
+    ~SharedUUID();
 };
 
 } // namespace nprpc::impl

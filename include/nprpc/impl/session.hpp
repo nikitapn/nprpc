@@ -18,7 +18,6 @@ public:
   bool closed_ = false;
 protected:
   Buffers rx_buffer_;
-  EndPoint remote_endpoint_;
   SessionContext ctx_;
 
   boost::asio::deadline_timer timeout_timer_;
@@ -63,7 +62,7 @@ public:
     }
     timeout_timer_.async_wait(std::bind(&Session::start_timeout_timer, this));
   }
-  const EndPoint& remote_endpoint() const noexcept { return remote_endpoint_; }
+  const EndPoint& remote_endpoint() const noexcept { return ctx_.remote_endpoint; }
   SessionContext& ctx() noexcept { return ctx_; }
   void handle_request();
 

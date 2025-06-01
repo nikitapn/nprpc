@@ -39,14 +39,27 @@ struct SharedUUID::Impl {
     HANDLE file_mapping = nullptr;
     HANDLE mutex = nullptr;
     void* map_region = nullptr;
+
+    struct Data {
+        std::atomic_int ref_cnt;
+        uuid_array uuid;
+    };
 #else
     int shm_fd = -1;
     void* map_region = nullptr;
-    pthread_mutex_t* mutex = nullptr;
+    struct Data {
+        pthread_mutex_t mutex;
+        std::atomic_int ref_cnt;
+        uuid_array uuid;
+    };
 #endif
 
+    Data* data() {
+        return static_cast<Data*>(map_region);
+    }
+
     uuid_array& uuid_ref() { 
-        return *static_cast<uuid_array*>(map_region); 
+        return data()->uuid;
     }
 
     Impl() {
@@ -68,7 +81,7 @@ struct SharedUUID::Impl {
             nullptr,                 // Default security
             PAGE_READWRITE,         // Read/write access
             0,                      // Size: high 32-bits
-            sizeof(uuid_array),     // Size: low 32-bits
+            sizeof(Data),           // Size: low 32-bits
             SHM_NAME);             // Name of mapping object
         
         if (!file_mapping) {
@@ -83,28 +96,33 @@ struct SharedUUID::Impl {
             file_mapping,           // Handle to mapping object
             FILE_MAP_ALL_ACCESS,    // Read/write permission
             0, 0,                  // Offset
-            sizeof(uuid_array));   // Number of bytes to map
+            sizeof(Data));   // Number of bytes to map
         
         if (!map_region) {
             throw std::system_error(GetLastError(), std::system_category(), 
                 "MapViewOfFile failed");
         }
 #else
-        // Create or open shared memory
-        shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+        shm_fd = shm_open(SHM_NAME, O_RDWR, S_IRUSR | S_IWUSR);
         if (shm_fd == -1) {
-            throw std::system_error(errno, std::system_category(), 
-                "shm_open failed");
+            assert(errno == ENOENT);
+            created_new = true;
+            // Create or open shared memory
+            shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+            if (shm_fd == -1) {
+                throw std::system_error(errno, std::system_category(), 
+                    "shm_open failed");
+            }
         }
 
         // Set the size
-        if (ftruncate(shm_fd, sizeof(uuid_array) + sizeof(pthread_mutex_t)) == -1) {
+        if (ftruncate(shm_fd, sizeof(Data)) == -1) {
             throw std::system_error(errno, std::system_category(), 
                 "ftruncate failed");
         }
 
         // Map the shared memory
-        map_region = mmap(nullptr, sizeof(uuid_array) + sizeof(pthread_mutex_t), 
+        map_region = mmap(nullptr, sizeof(Data),
             PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
         
         if (map_region == MAP_FAILED) {
@@ -112,34 +130,29 @@ struct SharedUUID::Impl {
                 "mmap failed");
         }
 
-        // Setup mutex in shared memory
-        mutex = static_cast<pthread_mutex_t*>(static_cast<void*>(
-            static_cast<char*>(map_region) + sizeof(uuid_array)));
-
-        // Try to initialize mutex (only first process should do this)
-        pthread_mutexattr_t attr;
-        pthread_mutexattr_init(&attr);
-        pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
-        
-        if (pthread_mutex_init(mutex, &attr) == 0) {
-            created_new = true;
+        if (created_new) {
+            // Try to initialize mutex (only first process should do this)
+            pthread_mutexattr_t attr;
+            pthread_mutexattr_init(&attr);
+            pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+            pthread_mutex_init(&data()->mutex, &attr);
+            pthread_mutexattr_destroy(&attr);
         }
-        
-        pthread_mutexattr_destroy(&attr);
-        
-        // Lock the mutex
-        pthread_mutex_lock(mutex);
+
+        pthread_mutex_lock(&data()->mutex);
 #endif
 
         if (created_new) {
-            // Generate initial UUID
             generate_new_uuid();
+            data()->ref_cnt.store(1, std::memory_order_relaxed);
+        } else {
+            data()->ref_cnt.fetch_add(1, std::memory_order_relaxed);
         }
 
 #ifdef _WIN32
         ReleaseMutex(mutex);
 #else
-        pthread_mutex_unlock(mutex);
+        pthread_mutex_unlock(&data()->mutex);
 #endif
     }
 
@@ -156,11 +169,18 @@ struct SharedUUID::Impl {
         }
 #else
         if (map_region != MAP_FAILED && map_region != nullptr) {
-            munmap(map_region, sizeof(uuid_array) + sizeof(pthread_mutex_t));
+            // Crash recovery is not implemented, so we just decrement ref count
+            auto cnt = data()->ref_cnt.fetch_sub(1, std::memory_order_relaxed);
+            if (cnt == 1) {
+                // Last reference, cleanup
+                pthread_mutex_destroy(&data()->mutex);
+                // Unlink shared memory
+                shm_unlink(SHM_NAME);
+            }
+            munmap(map_region, sizeof(Data));
         }
         if (shm_fd != -1) {
             close(shm_fd);
-            shm_unlink(SHM_NAME);  // Remove shared memory on last process exit
         }
 #endif
     }
@@ -175,7 +195,7 @@ struct SharedUUID::Impl {
 #ifdef _WIN32
         WaitForSingleObject(mutex, INFINITE);
 #else
-        pthread_mutex_lock(mutex);
+        pthread_mutex_lock(&data()->mutex);
 #endif
     }
 
@@ -183,7 +203,7 @@ struct SharedUUID::Impl {
 #ifdef _WIN32
         ReleaseMutex(mutex);
 #else
-        pthread_mutex_unlock(mutex);
+        pthread_mutex_unlock(&data()->mutex);
 #endif
     }
 };
