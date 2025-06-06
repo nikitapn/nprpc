@@ -1,4 +1,4 @@
-include(${CMAKE_SOURCE_DIR}/nprpc/cmake/npidl.cmake)
+include(../cmake/npidl.cmake)
 
 set(IDL_FILES 
   ${CMAKE_SOURCE_DIR}/nprpc/test/idl/test.npidl
@@ -30,6 +30,10 @@ target_link_libraries(nprpc_test
   GTest::gtest_main
   nprpc
 )
+
+add_subdirectory(js)
+
+add_dependencies(nprpc_js_test nprpc_test)
 
 # Enable testing and include GoogleTest
 enable_testing()

@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "es6",
+    "module": "system",
+    "outFile": "dist/index.js",
+    "sourceMap": true,
+    "moduleResolution": "node",
+    "baseUrl": "./",
+    "paths": {
+      "*": [
+        "src/my_modules/*",
+        "node_modules/*"
+      ]
+    },
+    "typeRoots": [
+      "src/my_modules",
+      "node_modules/@types"
+    ]
+  },
+  "include": ["src/**/*"]
+}

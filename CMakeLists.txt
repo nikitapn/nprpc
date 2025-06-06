@@ -1,10 +1,13 @@
 add_subdirectory(npidl)
 
-include(${CMAKE_SOURCE_DIR}/nprpc/cmake/npidl.cmake)
+message(STATUS "CMAKE_SOURCE_DIR: ${CMAKE_SOURCE_DIR}")
+message(STATUS "PROJECT_SOURCE_DIR: ${PROJECT_SOURCE_DIR}")
+message(STATUS "CMAKE_CURRENT_SOURCE_DIR: ${CMAKE_CURRENT_SOURCE_DIR}")
+include(cmake/npidl.cmake)
 
 set(IDL_FILES
-  ${CMAKE_SOURCE_DIR}/nprpc/idl/nprpc_base.npidl        # core RPC files must have "nprpc_" prefix
-  ${CMAKE_SOURCE_DIR}/nprpc/idl/nprpc_nameserver.npidl
+  ${CMAKE_CURRENT_SOURCE_DIR}/idl/nprpc_base.npidl        # core RPC files must have "nprpc_" prefix
+  ${CMAKE_CURRENT_SOURCE_DIR}/idl/nprpc_nameserver.npidl
 )
 
 npidl_generate_idl_files("${IDL_FILES}" nprpc_stub)
@@ -13,13 +16,13 @@ npidl_generate_idl_files("${IDL_FILES}" nprpc_stub)
 foreach(file ${nprpc_stub_GENERATED_HEADERS})
   get_filename_component(filename ${file} NAME)
   add_custom_command(
-    OUTPUT ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc_stub/${filename}
+    OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/include/nprpc_stub/${filename}
     DEPENDS ${file}
     COMMAND ${CMAKE_COMMAND} -E make_directory
-      ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc_stub
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/nprpc_stub
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       ${file}
-      ${CMAKE_SOURCE_DIR}/nprpc/include/nprpc_stub
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/nprpc_stub
     COMMENT "Copying nprpc_stub generated headers to nprpc/include/nprpc/gen"
   )
 endforeach()
@@ -107,15 +110,14 @@ target_link_libraries(npnameserver PUBLIC nprpc)
 # target_include_directories(test_shared_memory_ref_counter PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
 # target_link_libraries(test_shared_memory_ref_counter PUBLIC nprpc)
 
-add_custom_target(npm_library
-  COMMAND cd ${CMAKE_SOURCE_DIR}/nprpc/web && npm install && npm run build
-  DEPENDS
-    ${CMAKE_SOURCE_DIR}/nprpc/web/src/nprpc_base.ts
-    ${CMAKE_SOURCE_DIR}/nprpc/web/src/nprpc_nameserver.ts
-)
-
 add_subdirectory(check)
+add_subdirectory(nprpc_js)
+add_dependencies(nprpc_js nprpc)
 
 if(UNIX)
-  add_subdirectory(test)
+  if(OPT_NPRPC_SKIP_TESTS)
+    message(STATUS "Skipping tests as per OPT_NPRPC_SKIP_TESTS")
+  else()
+    add_subdirectory(test)
+  endif()
 endif()

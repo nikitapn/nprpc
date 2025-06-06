@@ -1,4 +1,5 @@
 const path = require('path');
+const FixDeclarationPathsPlugin = require('./fix-declaration-paths');
 
 module.exports = env => {
 	let is_debug = env.debug == 'true' ? true : false;
@@ -12,7 +13,7 @@ module.exports = env => {
   module: {
     rules: [
       {
-        test: /\.tsx?$/,
+        test: /\.ts$/,
         use: 'ts-loader',
         exclude: /node_modules/,
       },
@@ -20,7 +21,13 @@ module.exports = env => {
   },
   resolve: {
     extensions: ['.ts', '.js'],
-  },
+    alias: {
+      '@': path.resolve(__dirname, 'src/'),
+    },
+  }, 
+  plugins: [
+      new FixDeclarationPathsPlugin()
+  ],
   output: {
     filename: 'index.js',
 		libraryTarget: 'umd',

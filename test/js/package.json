@@ -1,0 +1,16 @@
+{
+  "name": "nprpc_js_test",
+  "version": "1.0.0",
+  "description": "NPRPC JS Test",
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "test": "test"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

@@ -72,6 +72,7 @@ void serialize_free(Archive& ar, std::string& obj) {
 }
 
 template<typename Archive, typename T, typename Alloc>
+requires (!std::is_same_v<Archive, json_oarchive>)
 void serialize_free(Archive& ar, std::vector<T, Alloc>& obj) {
 	if constexpr (Archive::is_saving::value) {
 		auto size = static_cast<unsigned int>(obj.size());
@@ -87,18 +88,8 @@ void serialize_free(Archive& ar, std::vector<T, Alloc>& obj) {
 	}
 }
 
-template<JsonArchive Archive, typename T, typename Alloc>
-void serialize_free(Archive& ar, std::vector<T, Alloc>& obj) {
-	if constexpr (Archive::is_saving::value) {
-		ar.put_char('[');
-		ar.save_sequence(obj.data(), static_cast<unsigned int>(obj.size()));
-		ar.put_char(']');
-	} else {
-		static_assert("not implemented");
-	}
-}
-
 template<typename Archive, typename T, size_t N>
+requires (!std::is_same_v<Archive, json_oarchive>)
 void serialize_free(Archive& ar, std::array<T, N>& obj) {
 	if constexpr (Archive::is_saving::value) {
 		auto size = static_cast<unsigned int>(obj.size());
@@ -110,6 +101,59 @@ void serialize_free(Archive& ar, std::array<T, N>& obj) {
 		for (unsigned int i = 0; i < size; ++i) {
 			ar >> obj[i];
 		}
+	}
+}
+
+// Concept for containers with contiguous memory (data() method)
+template<typename T>
+concept ContiguousContainer = requires(T v) {
+	v.data();
+	v.size();
+};
+
+// Concept for any iterable container
+template<typename T>
+concept IterableContainer = requires(T v) {
+	v.begin();
+	v.end();
+	v.size();
+};
+
+// Unified container concept - either contiguous or iterable
+template<typename T>
+concept Container = ContiguousContainer<T> || IterableContainer<T>;
+
+// Optimized serialization for contiguous containers (std::vector, std::array, std::string)
+template<JsonArchive Archive, ContiguousContainer T>
+void serialize_free(Archive& ar, T& obj) {
+	if constexpr (Archive::is_saving::value) {
+		ar.put_char('[');
+		if (obj.size() > 0) {
+			ar.save_sequence(obj.data(), static_cast<unsigned int>(obj.size()));
+		}
+		ar.put_char(']');
+	} else {
+		static_assert("not implemented");
+	}
+}
+
+// General serialization for iterator-based containers (std::list, std::set, std::map, etc.)
+template<JsonArchive Archive, IterableContainer T>
+requires (!ContiguousContainer<T>)
+void serialize_free(Archive& ar, T& obj) {
+	if constexpr (Archive::is_saving::value) {
+		ar.put_char('[');
+		bool first = true;
+		for (const auto& item : obj) {
+			if (!first) {
+				ar.put_char(',');
+			}
+			ar << item;
+			first = false;
+		}
+		ar.put_char(']');
+	} else {
+		static_assert("not implemented");
 	}
 }
 

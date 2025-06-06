@@ -79,7 +79,7 @@ void Builder::make_arguments_structs(AstFunctionDecl* fn) {
 	fn->arguments_structs_have_been_made = true;
 }
 
-std::ostream& operator<<(std::ostream& os, const Builder_Cpp::_ns& ns) {
+std::ostream& operator<<(std::ostream& os, const CppBuilder::_ns& ns) {
 	if (ns.bulder_.always_full_namespace_ || ns.nm != ns.bulder_.ctx_.nm_cur()) {
 		os << ns.nm->to_cpp17_namespace() << "::";
 	}
@@ -112,7 +112,7 @@ static std::string_view fundamental_to_flat(TokenId id) {
 	}
 }
 
-void Builder_Cpp::emit_type(AstTypeDecl* type, std::ostream& os) {
+void CppBuilder::emit_type(AstTypeDecl* type, std::ostream& os) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << fundamental_to_cpp(cft(type)->token_id);
@@ -155,7 +155,7 @@ void Builder_Cpp::emit_type(AstTypeDecl* type, std::ostream& os) {
 	}
 }
 
-void Builder_Cpp::emit_flat_type(AstTypeDecl* type, std::ostream& os) {
+void CppBuilder::emit_flat_type(AstTypeDecl* type, std::ostream& os) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << fundamental_to_flat(cft(type)->token_id);
@@ -198,11 +198,11 @@ void Builder_Cpp::emit_flat_type(AstTypeDecl* type, std::ostream& os) {
 	}
 }
 
-Builder_Cpp::_ns Builder_Cpp::ns(Namespace* nm) {
+CppBuilder::_ns CppBuilder::ns(Namespace* nm) {
 	return { *this, nm };
 }
 
-void Builder_Cpp::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, std::ostream& os, bool input) {
+void CppBuilder::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, std::ostream& os, bool input) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << fundamental_to_cpp(cft(type)->token_id);
@@ -252,7 +252,7 @@ void Builder_Cpp::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, std::o
 	}
 }
 
-void Builder_Cpp::emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, std::ostream& os) {
+void CppBuilder::emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, std::ostream& os) {
 	const bool input = (arg->modifier == ArgumentModifier::In);
 
 	if (input && arg->type->id != FieldType::Fundamental && arg->type->id != FieldType::Vector) {
@@ -266,7 +266,7 @@ void Builder_Cpp::emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, s
 	}
 }
 
-void Builder_Cpp::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type, std::ostream& os, const bool input) {
+void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type, std::ostream& os, const bool input) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << fundamental_to_flat(cft(type)->token_id);
@@ -342,7 +342,7 @@ void Builder_Cpp::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type, 
 	}
 }
 
-void Builder_Cpp::emit_parameter_type_for_servant_callback(AstFunctionArgument* arg, std::ostream& os) {
+void CppBuilder::emit_parameter_type_for_servant_callback(AstFunctionArgument* arg, std::ostream& os) {
 	auto const input = (arg->modifier == ArgumentModifier::In);
 	emit_parameter_type_for_servant_callback_r(arg->type, os, input);
 	if (!input &&
@@ -354,7 +354,7 @@ void Builder_Cpp::emit_parameter_type_for_servant_callback(AstFunctionArgument* 
 	}
 }
 
-void Builder_Cpp::emit_direct_type(AstTypeDecl* type, std::ostream& os) {
+void CppBuilder::emit_direct_type(AstTypeDecl* type, std::ostream& os) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << "void";
@@ -406,7 +406,7 @@ void Builder_Cpp::emit_direct_type(AstTypeDecl* type, std::ostream& os) {
 	}
 }
 
-void Builder_Cpp::emit_accessors(const std::string& flat_name, AstFieldDecl* f, std::ostream& os) {
+void CppBuilder::emit_accessors(const std::string& flat_name, AstFieldDecl* f, std::ostream& os) {
 	switch (f->type->id) {
 	case FieldType::Fundamental: {
 		auto type_name = fundamental_to_flat(cft(f->type)->token_id);
@@ -493,7 +493,7 @@ void Builder_Cpp::emit_accessors(const std::string& flat_name, AstFieldDecl* f, 
 	}
 }
 
-void Builder_Cpp::assign_from_cpp_type(AstTypeDecl* type, std::string op1, std::string op2, std::ostream& os, 
+void CppBuilder::assign_from_cpp_type(AstTypeDecl* type, std::string op1, std::string op2, std::ostream& os, 
 	bool from_iterator, 
 	bool top_type,
 	bool/* direct_type */) {
@@ -608,7 +608,7 @@ void Builder_Cpp::assign_from_cpp_type(AstTypeDecl* type, std::string op1, std::
 	}
 }
 
-void Builder_Cpp::assign_from_flat_type(AstTypeDecl* type, std::string op1, std::string op2, std::ostream& os, bool from_iterator, bool top_object) {
+void CppBuilder::assign_from_flat_type(AstTypeDecl* type, std::string op1, std::string op2, std::ostream& os, bool from_iterator, bool top_object) {
 	switch (type->id) {
 	case FieldType::Fundamental: {
 		//assert(top_object == false);
@@ -721,7 +721,7 @@ void Builder_Cpp::assign_from_flat_type(AstTypeDecl* type, std::string op1, std:
 	}
 }
 
-void Builder_Cpp::emit_struct2(AstStructDecl* s, std::ostream& os, Target target) {
+void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target) {
 	auto make_struct = [s, this, &os]<typename T>(T && fn) {
 		os << "struct " << s->name << " {\n";
 		for (auto const f : s->fields) {
@@ -733,7 +733,7 @@ void Builder_Cpp::emit_struct2(AstStructDecl* s, std::ostream& os, Target target
 	};
 
 	if (target == Target::Regular) {
-		make_struct(std::bind(&Builder_Cpp::emit_type, this, _1, _2));
+		make_struct(std::bind(&CppBuilder::emit_type, this, _1, _2));
 	} else if (target == Target::Exception) {
 		os << "class " << s->name << " : public ::nprpc::Exception {\n"
 			"public:\n"
@@ -780,7 +780,7 @@ void Builder_Cpp::emit_struct2(AstStructDecl* s, std::ostream& os, Target target
 	if (target != Target::FunctionArgument)
 		os << "namespace flat {\n";
 	
-	make_struct(std::bind(&Builder_Cpp::emit_flat_type, this, _1, _2));
+	make_struct(std::bind(&CppBuilder::emit_flat_type, this, _1, _2));
 
 	auto const accessor_name = s->name + "_Direct";
 
@@ -813,7 +813,7 @@ void Builder_Cpp::emit_struct2(AstStructDecl* s, std::ostream& os, Target target
 	os << '\n';
 }
 
-void Builder_Cpp::emit_constant(const std::string& name, AstNumber* number) {
+void CppBuilder::emit_constant(const std::string& name, AstNumber* number) {
 	oh << "constexpr auto " << name << " = ";
 	std::visit(overloaded{
 	[&](int64_t x) { 
@@ -826,16 +826,16 @@ void Builder_Cpp::emit_constant(const std::string& name, AstNumber* number) {
 	oh << ";\n";
 }
 
-void Builder_Cpp::emit_struct(AstStructDecl* s) {
+void CppBuilder::emit_struct(AstStructDecl* s) {
 	emit_struct2(s, oh, Target::Regular);
 }
 
-void Builder_Cpp::emit_exception(AstStructDecl* s) {
+void CppBuilder::emit_exception(AstStructDecl* s) {
 	assert(s->is_exception());
 	emit_struct2(s, oh, Target::Exception);
 }
 
-void Builder_Cpp::emit_file_footer() {
+void CppBuilder::emit_file_footer() {
 	auto& exs = ctx_.exceptions;
 
 	if (!exs.empty()) {
@@ -883,7 +883,7 @@ void Builder_Cpp::emit_file_footer() {
 	std::stringstream ss;
 
 	ss << "namespace {\n";
-	emit_arguments_structs(std::bind(&Builder_Cpp::emit_struct2, this, _1, std::ref(ss), Target::FunctionArgument));
+	emit_arguments_structs(std::bind(&CppBuilder::emit_struct2, this, _1, std::ref(ss), Target::FunctionArgument));
 	ocpp << ss.str() << "\n";
 	emit_safety_checks();
 	ocpp << "} // \n\n" << oc.str();
@@ -891,7 +891,7 @@ void Builder_Cpp::emit_file_footer() {
 	oh << "\n#endif";
 }
 
-void Builder_Cpp::emit_safety_checks_r(AstTypeDecl* type, std::string op, std::ostream& os, bool /* from_iterator */, bool top_type) {
+void CppBuilder::emit_safety_checks_r(AstTypeDecl* type, std::string op, std::ostream& os, bool /* from_iterator */, bool top_type) {
 	switch (type->id) {
 	case FieldType::Struct: {
 		auto s = cflat(type);
@@ -974,7 +974,7 @@ void Builder_Cpp::emit_safety_checks_r(AstTypeDecl* type, std::string op, std::o
 	}
 }
 
-void Builder_Cpp::emit_safety_checks() {
+void CppBuilder::emit_safety_checks() {
 	std::set<struct_id_t> set;
 
 	for (auto ifs : ctx_.interfaces) {
@@ -1005,17 +1005,17 @@ void Builder_Cpp::emit_safety_checks() {
 	}
 }
 
-void Builder_Cpp::emit_namespace_begin() {
+void CppBuilder::emit_namespace_begin() {
 	oh << "namespace " << ctx_.nm_cur()->name() << " { \n";
 	oc << "namespace " << ctx_.nm_cur()->name() << " { \n";
 }
 
-void Builder_Cpp::emit_namespace_end() {
+void CppBuilder::emit_namespace_end() {
 	oh << "} // namespace " << ctx_.nm_cur()->name() << "\n\n";
 	oc << "} // namespace " << ctx_.nm_cur()->name() << "\n\n";
 }
 
-void Builder_Cpp::emit_helpers() {
+void CppBuilder::emit_helpers() {
 	always_full_namespace(true);
 	oh << "namespace " << ctx_.current_file() << "::helper {\n";
 	for (auto& [unused, s] : ctx_.affa_list) {
@@ -1056,7 +1056,7 @@ void Builder_Cpp::emit_helpers() {
 	always_full_namespace(false);
 }
 
-void Builder_Cpp::emit_struct_helpers() {
+void CppBuilder::emit_struct_helpers() {
 
 	for (auto s : ctx_.structs_with_helpers) {
 		oh << "namespace " << s->nm->to_cpp17_namespace() << "::helpers {\n";
@@ -1081,7 +1081,7 @@ void Builder_Cpp::emit_struct_helpers() {
 
 }
 
-void Builder_Cpp::emit_function_arguments(
+void CppBuilder::emit_function_arguments(
 	AstFunctionDecl* fn,
 	std::ostream& os,
 	std::function<void(AstFunctionArgument*, std::ostream& os)> emitter
@@ -1096,7 +1096,7 @@ void Builder_Cpp::emit_function_arguments(
 	os << ')';
 };
 
-void Builder_Cpp::proxy_call(AstFunctionDecl* fn) {
+void CppBuilder::proxy_call(AstFunctionDecl* fn) {
 	oc <<
 		"  ::nprpc::impl::g_orb->call(this->get_endpoint(), buf, this->get_timeout());\n"
 		"  auto std_reply = nprpc::impl::handle_standart_reply(buf);\n"
@@ -1137,7 +1137,7 @@ void Builder_Cpp::proxy_call(AstFunctionDecl* fn) {
 	}
 }
 
-void Builder_Cpp::proxy_async_call(AstFunctionDecl* fn) {
+void CppBuilder::proxy_async_call(AstFunctionDecl* fn) {
 	oc <<
 		"  ::nprpc::impl::g_orb->call_async(this->get_endpoint(), std::move(buf), !handler ? std::nullopt : std::make_optional([handler = move(handler)] (\n"
 		"    const boost::system::error_code& ec, nprpc::flat_buffer& buf) {\n"
@@ -1169,14 +1169,14 @@ void Builder_Cpp::proxy_async_call(AstFunctionDecl* fn) {
 		oc << "}), get_timeout());\n";
 }
 
-std::string_view Builder_Cpp::proxy_arguments(AstFunctionDecl* fn) {
+std::string_view CppBuilder::proxy_arguments(AstFunctionDecl* fn) {
 	if (auto it = proxy_arguments_.find(fn); it != proxy_arguments_.end()) 
 		return it->second;
 
 	std::stringstream ss;
 	if (!fn->is_async) {
 		emit_function_arguments(fn, ss,
-			std::bind(&Builder_Cpp::emit_parameter_type_for_proxy_call, this, _1, _2)
+			std::bind(&CppBuilder::emit_parameter_type_for_proxy_call, this, _1, _2)
 		);
 	} else {
 		size_t out_args_size = fn->out_args.size();
@@ -1200,7 +1200,7 @@ std::string_view Builder_Cpp::proxy_arguments(AstFunctionDecl* fn) {
 	return proxy_arguments_.emplace(fn, ss.str()).first->second;
 }
 
-void Builder_Cpp::emit_interface(AstInterfaceDecl* ifs) {
+void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 	// Servant definition
 	oh <<
 		"class I" << ifs->name << "_Servant\n";
@@ -1216,7 +1216,7 @@ void Builder_Cpp::emit_interface(AstInterfaceDecl* ifs) {
 
 	oh <<
 		"public:\n"
-		"  static std::string_view _get_class() noexcept { return \"" << ctx_.current_file() << '/' << ctx_.nm_cur()->to_interface_path() << '.' << ifs->name << "\"; }\n"
+		"  static std::string_view _get_class() noexcept { return \"" << ctx_.current_file() << '/' << ctx_.nm_cur()->to_cpp17_namespace() << '.' << ifs->name << "\"; }\n"
 		"  std::string_view get_class() const noexcept override { return I" << ifs->name << "_Servant::_get_class(); }\n"
 		"  void dispatch(nprpc::Buffers& bufs, [[maybe_unused]] nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) override;\n"
 		;
@@ -1225,7 +1225,7 @@ void Builder_Cpp::emit_interface(AstInterfaceDecl* ifs) {
 		oh << "  virtual "; emit_type(fn->ret_value, oh);
 		oh << ' ' << fn->name << " ";
 		emit_function_arguments(fn, oh,
-			std::bind(&Builder_Cpp::emit_parameter_type_for_servant_callback, this, _1, _2)
+			std::bind(&CppBuilder::emit_parameter_type_for_servant_callback, this, _1, _2)
 		);
 		oh << " = 0;\n";
 	}
@@ -1549,11 +1549,11 @@ void Builder_Cpp::emit_interface(AstInterfaceDecl* ifs) {
 	oc << "}\n\n"; // dispatch
 }
 
-void Builder_Cpp::emit_using(AstAliasDecl* u) {
+void CppBuilder::emit_using(AstAliasDecl* u) {
 	oh << "using " << u->name << " = "; emit_type(u->type, oh); oh << ";\n";
 }
 
-void Builder_Cpp::emit_enum(AstEnumDecl* e) {
+void CppBuilder::emit_enum(AstEnumDecl* e) {
 	oh << "enum class " << e->name << " : " << fundamental_to_cpp(e->token_id) << " {\n";
 	int64_t ix = 0;
 	for (size_t i = 0; i < e->items.size(); ++i) {
@@ -1570,7 +1570,7 @@ void Builder_Cpp::emit_enum(AstEnumDecl* e) {
 	oh << "\n};\n";
 }
 
-Builder_Cpp::Builder_Cpp(Context& ctx, std::filesystem::path file_path, 
+CppBuilder::CppBuilder(Context& ctx, std::filesystem::path file_path, 
 	std::filesystem::path out_inc_path, std::filesystem::path out_src_path)
 	: Builder(ctx)
 	, file_path_(file_path) {

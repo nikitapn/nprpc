@@ -103,7 +103,6 @@ public:
 	Namespace* parent() const noexcept;
 	std::string to_cpp17_namespace() const noexcept;
 	std::string to_ts_namespace() const noexcept;
-	std::string to_interface_path() const noexcept;
 };
 
 enum class FieldType {
@@ -496,11 +495,7 @@ inline std::string Namespace::to_cpp17_namespace() const noexcept {
 }
 
 inline std::string Namespace::to_ts_namespace() const noexcept {
-	return construct_path(std::string(2,'.'), true);
-}
-
-inline std::string Namespace::to_interface_path() const noexcept {
-	return construct_path(std::string(1, '.'));
+	return construct_path(std::string(1, '.'), true);
 }
 
 inline Namespace::Namespace()

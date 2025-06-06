@@ -7,14 +7,14 @@
 #include <filesystem>
 #include "builder.hpp"
 
-class Builder_Cpp : public Builder {
+class CppBuilder : public Builder {
 public:
 struct _ns {
-		Builder_Cpp& bulder_;
+		CppBuilder& bulder_;
 		Namespace* nm;
 	};
 private:
-	friend std::ostream& operator<<(std::ostream&, const Builder_Cpp::_ns&);
+	friend std::ostream& operator<<(std::ostream&, const CppBuilder::_ns&);
 
 	std::ofstream oh;
 	std::ofstream ocpp;
@@ -72,5 +72,5 @@ public:
 	virtual void emit_file_footer();
 	
 
-	Builder_Cpp(Context& ctx, std::filesystem::path file_path, std::filesystem::path out_inc_path, std::filesystem::path out_src_path);
+	CppBuilder(Context& ctx, std::filesystem::path file_path, std::filesystem::path out_inc_path, std::filesystem::path out_src_path);
 };

@@ -4,6 +4,6 @@ add_library(check_size STATIC
 )
 
 target_include_directories(check_size PRIVATE
-  ${CMAKE_SOURCE_DIR}/nprpc/include
-  ${CMAKE_SOURCE_DIR}/nprpc/npidl/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${CMAKE_CURRENT_SOURCE_DIR}/../npidl/src
 )

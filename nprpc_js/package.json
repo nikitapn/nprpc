@@ -1,0 +1,19 @@
+{
+  "name": "nprpc",
+  "version": "1.0.4",
+  "description": "A Simple Javascript Rpc Client",
+  "repository": "https://github.com/nikitapn/nprpc.git",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "webpack --env debug=false",
+    "watch": "webpack --env debug=true"
+  },
+  "author": "nikitapnn1@gmail.com",
+  "license": "GPL-3.0",
+  "devDependencies": {
+    "ts-loader": "^9.5.2",
+    "typescript": "^5.8.3",
+    "webpack": "^5.99.9",
+    "webpack-cli": "^6.0.1"
+  }
+}

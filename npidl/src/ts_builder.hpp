@@ -9,14 +9,14 @@
 #include "builder.hpp"
 
 
-class Builder_Typescript : public Builder {
+class TypescriptBuilder : public Builder {
 public:
 struct _ns {
-		Builder_Typescript& bulder_;
+		TypescriptBuilder& bulder_;
 		Namespace* nm;
 	};
 private:
-	friend std::ostream& operator<<(std::ostream&, const Builder_Typescript::_ns&);
+	friend std::ostream& operator<<(std::ostream&, const TypescriptBuilder::_ns&);
 
 	std::ofstream out;
 	std::stringstream spans;
@@ -35,6 +35,7 @@ private:
 	void emit_type(AstTypeDecl* type, std::ostream& os);
 	void emit_flat_type(AstTypeDecl* type, std::ostream& os);
 	void emit_struct2(AstStructDecl* s, bool is_exception);
+	void emit_struct_helpers();
 
 	_ns ns(Namespace* nm);
 public:
@@ -48,5 +49,5 @@ public:
 	virtual void emit_using(AstAliasDecl* u);
 	virtual void emit_enum(AstEnumDecl* e);
 
-	Builder_Typescript(Context& ctx, std::filesystem::path file_path, std::filesystem::path out_dir);
+	TypescriptBuilder(Context& ctx, std::filesystem::path file_path, std::filesystem::path out_dir);
 };

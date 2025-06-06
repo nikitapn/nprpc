@@ -1173,9 +1173,9 @@ int main(int argc, char* argv[]) {
     try {
 	    ctx.open(input_file);
 		BuildGroup builder(ctx);
-		builder.add<Builder_Cpp>(input_file, out_inc_dir, out_src_dir);
+		builder.add<CppBuilder>(input_file, out_inc_dir, out_src_dir);
 		if (generate_typescript) {
-			builder.add<Builder_Typescript>(input_file, out_ts_dir);
+			builder.add<TypescriptBuilder>(input_file, out_ts_dir);
 		}
 
 		Parser parser(input_file, ctx, builder);

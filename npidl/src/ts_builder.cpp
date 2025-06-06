@@ -151,7 +151,7 @@ static std::ostream& operator << (std::ostream& os, const TokenId& token_id) {
 	return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const Builder_Typescript::_ns& ns) {
+std::ostream& operator<<(std::ostream& os, const TypescriptBuilder::_ns& ns) {
 	if (
 		(ns.bulder_.always_full_namespace_ || ns.nm != ns.bulder_.ctx_.nm_cur()) &&
 		(ns.nm->parent() != nullptr && !ns.nm->parent()->name().empty())
@@ -185,7 +185,7 @@ static std::string_view fundamental_to_ts(TokenId id) {
 }
 
 
-void Builder_Typescript::emit_type(AstTypeDecl* type, std::ostream& os) {
+void TypescriptBuilder::emit_type(AstTypeDecl* type, std::ostream& os) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << toktype << fundamental_to_ts(cft(type)->token_id) << "/*" << cft(type)->token_id << "*/";
@@ -220,14 +220,14 @@ void Builder_Typescript::emit_type(AstTypeDecl* type, std::ostream& os) {
 	}
 }
 
-void Builder_Typescript::emit_flat_type(AstTypeDecl* type, std::ostream& os) {
+void TypescriptBuilder::emit_flat_type(AstTypeDecl* type, std::ostream& os) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << cft(type)->token_id;
 		break;
 	case FieldType::Struct: {
 		auto s = cflat(type);
-		os << s->nm->to_ts_namespace() << "Flat_" << ctx_.current_file() << '.' << s->name;
+		os << ns(s->nm) << "Flat_" << ctx_.current_file() << '.' << s->name;
 		break;
 	}
 	case FieldType::Vector:
@@ -256,7 +256,7 @@ void Builder_Typescript::emit_flat_type(AstTypeDecl* type, std::ostream& os) {
 	}
 }
 
-void Builder_Typescript::emit_accessors(const std::string& flat_name, AstFieldDecl* f, int& last_field_ended) {
+void TypescriptBuilder::emit_accessors(const std::string& flat_name, AstFieldDecl* f, int& last_field_ended) {
 	switch (f->type->id) {
 	case FieldType::Fundamental: 
 	case FieldType::Enum:
@@ -383,7 +383,7 @@ void Builder_Typescript::emit_accessors(const std::string& flat_name, AstFieldDe
 	}
 }
 
-void Builder_Typescript::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type, std::ostream& os, const bool input) {
+void TypescriptBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type, std::ostream& os, const bool input) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << fundamental_to_ts(cft(type)->token_id);
@@ -457,7 +457,7 @@ void Builder_Typescript::emit_parameter_type_for_servant_callback_r(AstTypeDecl*
 	}
 }
 
-void Builder_Typescript::emit_parameter_type_for_servant_callback(AstFunctionArgument* arg, std::ostream& os) {
+void TypescriptBuilder::emit_parameter_type_for_servant_callback(AstFunctionArgument* arg, std::ostream& os) {
 	auto const input = (arg->modifier == ArgumentModifier::In);
 	emit_parameter_type_for_servant_callback_r(arg->type, os, input);
 //	if (!input &&
@@ -469,14 +469,13 @@ void Builder_Typescript::emit_parameter_type_for_servant_callback(AstFunctionArg
 }
 
 
-void Builder_Typescript::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, std::ostream& os, bool input) {
+void TypescriptBuilder::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, std::ostream& os, bool input) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 		os << fundamental_to_ts(cft(type)->token_id);
 		break;
 	case FieldType::Struct:
-		if (auto nm = ctx_.nm_cur()->to_ts_namespace(); !nm.empty()) os << nm << '.';
-		os << cflat(type)->name;
+		os << ns(ctx_.nm_cur()) << cflat(type)->name;
 		break;
 	case FieldType::Array:
 	case FieldType::Vector:
@@ -509,7 +508,7 @@ void Builder_Typescript::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type,
 	}
 }
 
-void Builder_Typescript::emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, std::ostream& os) {
+void TypescriptBuilder::emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, std::ostream& os) {
 	const bool input = (arg->modifier == ArgumentModifier::In);
 
 	os << (input ? "/*in*/" : "/*out*/");
@@ -530,7 +529,7 @@ void Builder_Typescript::emit_parameter_type_for_proxy_call(AstFunctionArgument*
 }
 
 
-void Builder_Typescript::assign_from_ts_type(AstTypeDecl* type, std::string op1, std::string op2, bool from_iterator) {
+void TypescriptBuilder::assign_from_ts_type(AstTypeDecl* type, std::string op1, std::string op2, bool from_iterator) {
 	switch (type->id) {
 	case FieldType::Fundamental:
 	case FieldType::String:
@@ -601,19 +600,7 @@ void Builder_Typescript::assign_from_ts_type(AstTypeDecl* type, std::string op1,
 		assign_from_ts_type(calias(type)->type, op1, op2, from_iterator);
 		break;
 	case FieldType::Object:
-		out <<
-			"  " << op1 << ".object_id = " << op2 << ".object_id;\n"
-			"  " << op1 << ".ip4 = " << op2 << ".ip4;\n"
-			"  " << op1 << ".port = " << op2 << ".port;\n"
-			"  " << op1 << ".websocket_port = " << op2 << ".websocket_port;\n"
-			"  " << op1 << ".poa_idx = " << op2 << ".poa_idx;\n"
-			"  " << op1 << ".flags = " << op2 << ".flags;\n"
-			"  " << op1 << ".class_id = " << op2 << ".class_id;\n"
-			"  " << op1 << ".hostname = " << op2 << ".hostname;\n"
-			;
-		
-		//out << "  memcpy(&" << op1 << "().ip4(), &" << op2 << "._data().ip4, " << size_of_object_without_class_id <<");\n";
-		//out << "  " << op1 << "().class_id(" << op2 << "._data().class_id);\n";
+		out << "  NPRPC.oid_assign_from_ts(" << op1 << ", " << op2 << ");\n";
 		break;
 	default:
 		assert(false);
@@ -621,7 +608,14 @@ void Builder_Typescript::assign_from_ts_type(AstTypeDecl* type, std::string op1,
 	}
 }
 
-void Builder_Typescript::assign_from_flat_type(AstTypeDecl* type, std::string op1, std::string op2, bool from_iterator, bool top_object, bool direct) {
+void TypescriptBuilder::assign_from_flat_type(
+	AstTypeDecl* type,
+	std::string op1,
+	std::string op2,
+	bool from_iterator,
+	bool top_object,
+	bool direct)
+{
 	static int _idx = 0;
 	switch (type->id) {
 	case FieldType::Fundamental:
@@ -698,7 +692,7 @@ void Builder_Typescript::assign_from_flat_type(AstTypeDecl* type, std::string op
 	case FieldType::Object:
 		if (top_object) {
 			// expecting out passed by reference
-			out << "  " << op1 << ".value = NPRPC.create_object_from_flat(" << op2 << ", this.data.ip4);\n";
+			out << "  " << op1 << ".value = NPRPC.create_object_from_flat(" << op2 << ", this.endpoint);\n";
 		} else {
 			out << "  " << op1 << " = NPRPC.oid_create_from_flat(" << op2 << ");\n";
 		}
@@ -709,7 +703,7 @@ void Builder_Typescript::assign_from_flat_type(AstTypeDecl* type, std::string op
 	}
 }
 
-void Builder_Typescript::emit_struct2(AstStructDecl* s, bool is_exception) {
+void TypescriptBuilder::emit_struct2(AstStructDecl* s, bool is_exception) {
 	calc_struct_size_align(s);
 
 	// native typescript
@@ -747,7 +741,7 @@ void Builder_Typescript::emit_struct2(AstStructDecl* s, bool is_exception) {
 	out << "}\n} // namespace Flat \n";
 }
 
-void Builder_Typescript::emit_constant(const std::string& name, AstNumber* number) {
+void TypescriptBuilder::emit_constant(const std::string& name, AstNumber* number) {
 	out << "export const " << name << " = ";
 	std::visit(overloaded{
 	[&](int64_t x) { 
@@ -760,16 +754,16 @@ void Builder_Typescript::emit_constant(const std::string& name, AstNumber* numbe
 	out << ";\n";
 }
 
-void Builder_Typescript::emit_struct(AstStructDecl* s) {
+void TypescriptBuilder::emit_struct(AstStructDecl* s) {
 	emit_struct2(s, false);
 }
 
-void Builder_Typescript::emit_exception(AstStructDecl* s) {
+void TypescriptBuilder::emit_exception(AstStructDecl* s) {
 	assert(s->is_exception());
 	emit_struct2(s, true);
 }
 
-void Builder_Typescript::emit_file_footer() {
+void TypescriptBuilder::emit_file_footer() {
 	// throw_exception function body
 	auto& exs = ctx_.exceptions;
 	if (!exs.empty()) {
@@ -814,14 +808,15 @@ void Builder_Typescript::emit_file_footer() {
 
 	// other
 
-	emit_arguments_structs(std::bind(&Builder_Typescript::emit_struct2, this, _1, false));
+	emit_arguments_structs(std::bind(&TypescriptBuilder::emit_struct2, this, _1, false));
+	emit_struct_helpers();
 }
 
-void Builder_Typescript::emit_using(AstAliasDecl* u) {
+void TypescriptBuilder::emit_using(AstAliasDecl* u) {
 	out << "export type " << u->name << " = "; emit_type(u->type, out); out << ";\n";
 }
 
-void Builder_Typescript::emit_enum(AstEnumDecl* e) {
+void TypescriptBuilder::emit_enum(AstEnumDecl* e) {
 	out << "export const enum " << e->name << " { //" << toktype << e->token_id << '\n';
 	std::int64_t ix = 0;
 	for (size_t i = 0; i < e->items.size(); ++i) {
@@ -838,17 +833,17 @@ void Builder_Typescript::emit_enum(AstEnumDecl* e) {
 	out << "\n}\n";
 }
 
-void Builder_Typescript::emit_namespace_begin() {
+void TypescriptBuilder::emit_namespace_begin() {
 	if (ctx_.nm_cur()->parent() && ctx_.nm_cur()->parent()->name().empty()) return;
 	out << "export namespace " << ctx_.nm_cur()->name() << " { \n";
 }
 
-void Builder_Typescript::emit_namespace_end() {
+void TypescriptBuilder::emit_namespace_end() {
 	if (ctx_.nm_cur()->parent() && ctx_.nm_cur()->parent()->name().empty()) return;
 	out << "} // namespace " << ctx_.nm_cur()->name() << "\n\n";
 }
 
-void Builder_Typescript::emit_interface(AstInterfaceDecl* ifs) {
+void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 	auto const flat_nm = "Flat_" + ctx_.current_file();
 	const auto servant_iname = 'I' + ifs->name + "_Servant";
 
@@ -905,7 +900,7 @@ void Builder_Typescript::emit_interface(AstInterfaceDecl* ifs) {
 		for (auto& fn : inherited_ifs.first->fns) {
 			out << "  public async " << fn->name;
 			emit_function_arguments(false, fn, out,
-				std::bind(&Builder_Typescript::emit_parameter_type_for_proxy_call, this, _1, _2)
+				std::bind(&TypescriptBuilder::emit_parameter_type_for_proxy_call, this, _1, _2)
 			);
 			out << ": Promise<"; emit_type(fn->ret_value, out);  out << "> {\n";
 			out << "    " << (!fn->is_void() ? "return " : "") << inherited_ifs.first->name << ".prototype." << fn->name << ".bind(this,";
@@ -921,7 +916,7 @@ void Builder_Typescript::emit_interface(AstInterfaceDecl* ifs) {
 		make_arguments_structs(fn);
 		out << "  public async " << fn->name;
 		emit_function_arguments(true, fn, out,
-			std::bind(&Builder_Typescript::emit_parameter_type_for_proxy_call, this, _1, _2)
+			std::bind(&TypescriptBuilder::emit_parameter_type_for_proxy_call, this, _1, _2)
 		);
 		out << ": Promise<"; emit_type(fn->ret_value, out);  out << "> {\n"
 			"    let interface_idx = (arguments.length == " << fn->args.size() << " ? 0 : arguments[arguments.length - 1]);\n"
@@ -959,7 +954,7 @@ void Builder_Typescript::emit_interface(AstInterfaceDecl* ifs) {
 
 		out <<
 			"    await NPRPC.rpc.call(\n"
-			"      this.endpoint(), buf, this.timeout\n"
+			"      this.endpoint, buf, this.timeout\n"
 			"    );\n"
 			"    let std_reply = NPRPC.handle_standart_reply(buf);\n"
 			;
@@ -1021,7 +1016,7 @@ void Builder_Typescript::emit_interface(AstInterfaceDecl* ifs) {
 	for (auto fn : ifs->fns) {
 		out << "  " << fn->name;
 		emit_function_arguments(false, fn, out,
-			std::bind(&Builder_Typescript::emit_parameter_type_for_servant_callback, this, _1, _2)
+			std::bind(&TypescriptBuilder::emit_parameter_type_for_servant_callback, this, _1, _2)
 		);
 		out << ": "; emit_type(fn->ret_value, out); out << ";\n";
 	}
@@ -1030,7 +1025,7 @@ void Builder_Typescript::emit_interface(AstInterfaceDecl* ifs) {
 
 	out <<
 		"export class _" << servant_iname << " extends NPRPC.ObjectServant {\n"
-		"  public static _get_class(): string { return \"" << ctx_.current_file() << '/' << ctx_.nm_cur()->to_interface_path() << '.' << ifs->name << "\"; }\n"
+		"  public static _get_class(): string { return \"" << ctx_.current_file() << '/' << ns(ctx_.nm_cur()) << ifs->name << "\"; }\n"
 		"  public readonly get_class = () => { return _"<< servant_iname << "._get_class(); }\n"
 		"  public readonly dispatch = (buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, from_parent: boolean) => {\n"
 		"    _" << servant_iname << "._dispatch(this, buf, remote_endpoint, from_parent);\n"
@@ -1135,7 +1130,7 @@ void Builder_Typescript::emit_interface(AstInterfaceDecl* ifs) {
 				}
 			} else {
 				if (arg->type->id == FieldType::Object) {
-					out << "NPRPC.create_object_from_flat(ia._" << ++in_ix << ", remote_endpoint.ip4)";
+					out << "NPRPC.create_object_from_flat(ia._" << ++in_ix << ", remote_endpoint)";
 				} else {
 					out << "ia._" << ++in_ix;
 					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::Array) out << "_d()";
@@ -1252,11 +1247,40 @@ void Builder_Typescript::emit_interface(AstInterfaceDecl* ifs) {
 		;
 }
 
-Builder_Typescript::_ns Builder_Typescript::ns(Namespace* nm) {
+
+void TypescriptBuilder::emit_struct_helpers() {
+		for (auto s : ctx_.structs_with_helpers) {
+			out << "export namespace " << ns(s->nm) << "helpers {\n";
+			auto saved_namespace = ctx_.set_namespace(s->nm);
+			// flat -> ts
+			out << "export const assign_from_flat_" << s->name << " = (src: ";
+			emit_parameter_type_for_servant_callback_r(s, out, false); 
+			out << "): ";
+			emit_parameter_type_for_proxy_call_r(s, out, false); 
+			out << " => {\n  let dest: ";
+			emit_parameter_type_for_proxy_call_r(s, out, false); 
+			out << ";\n";
+			assign_from_flat_type(s, "dest", "src", false, true);
+			out << "  return dest;\n}\n";
+			// ts -> flat
+			out << "export const assign_from_ts_" << s->name << " = (dest: ";
+			emit_parameter_type_for_servant_callback_r(s, out, false);
+			out << ", src: ";
+			emit_parameter_type_for_proxy_call_r(s, out, false); 
+			out << ") => {\n";
+			assign_from_ts_type(s, "dest", "src");
+			out << "}\n";
+			ctx_.set_namespace(saved_namespace);
+			out << "} // namespace " << s->nm->name() << ".helpers\n";
+	}
+
+}
+
+TypescriptBuilder::_ns TypescriptBuilder::ns(Namespace* nm) {
 	return { *this, nm };
 }
 
-Builder_Typescript::Builder_Typescript(Context& ctx, std::filesystem::path file_path, std::filesystem::path out_dir)
+TypescriptBuilder::TypescriptBuilder(Context& ctx, std::filesystem::path file_path, std::filesystem::path out_dir)
 	: Builder(ctx)
 {
 	auto filename = file_path.filename();
@@ -1264,9 +1288,9 @@ Builder_Typescript::Builder_Typescript(Context& ctx, std::filesystem::path file_
 	out.open(out_dir / filename);
 
 	if (ctx_.is_nprpc_base()) {
-		out << "import * as NPRPC from './base'\n\n";
+		out << "import * as NPRPC from '@/base'\n\n";
 	} else if (ctx_.is_nprpc_nameserver()) {
-		out << "import * as NPRPC from './index_internal'\n\n";
+		out << "import * as NPRPC from '@/index_internal'\n\n";
 	} else {
 		out << "import * as NPRPC from 'nprpc'\n\n";
 	}

@@ -326,6 +326,15 @@ class RpcBuilder {
     return *this;
   }
 
+  RpcBuilder& set_spa_links(
+    std::initializer_list<std::string_view> links) noexcept
+  {
+    for (const auto& link : links)
+      cfg_.spa_links.emplace_back(link);
+
+    return *this;
+  }
+
   RpcBuilder& enable_ssl_server(
     std::string_view public_key_path,
     std::string_view private_key_path,

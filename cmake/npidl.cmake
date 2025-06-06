@@ -5,16 +5,17 @@ function(npidl_generate_idl_files idl_files_list module_name)
       OUTPUT
         ${CMAKE_BINARY_DIR}/${module_name}/src/gen/include/${module_name}/${basename}.hpp 
         ${CMAKE_BINARY_DIR}/${module_name}/src/gen/${basename}.cpp
+        ${CMAKE_BINARY_DIR}/${module_name}/src/gen/js/${basename}.ts
       COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${module_name}/src/gen/include/${module_name}
-      COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${module_name}/src/gen/web
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${module_name}/src/gen/js
       COMMAND npidl
         --module-name ${module_name}
         --out-inc-dir ${CMAKE_BINARY_DIR}/${module_name}/src/gen/include/${module_name}
         --out-src-dir ${CMAKE_BINARY_DIR}/${module_name}/src/gen
-        --out-ts-dir ${CMAKE_BINARY_DIR}/${module_name}/src/gen/web
+        --out-ts-dir ${CMAKE_BINARY_DIR}/${module_name}/src/gen/js
         ${file}
       DEPENDS npidl ${file}
-      BYPRODUCTS ${CMAKE_BINARY_DIR}/${module_name}/src/gen/web/${basename}.ts
+      # BYPRODUCTS ${CMAKE_BINARY_DIR}/${module_name}/src/gen/js/${basename}.ts
       COMMENT "Generating npc files from ${file}"
       VERBATIM
     )
