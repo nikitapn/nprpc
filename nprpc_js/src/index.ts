@@ -16,7 +16,7 @@ export function get_nameserver(nameserver_ip: string): Nameserver {
 	const oid: detail.ObjectId = {
 		object_id: 0n,
 		poa_idx: 0,
-		flags: (1 << detail.ObjectFlag.Lifespan),
+		flags: detail.ObjectFlag.Persistent,
 		origin: new Array<number>(16).fill(0),
 		class_id: _INameserver_Servant._get_class(),
 		urls: "ws://" + nameserver_ip + ":15001",

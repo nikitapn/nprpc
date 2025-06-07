@@ -305,8 +305,8 @@ public:
 } // namespace flat
 
 enum class ObjectFlag : uint32_t {
-  Lifespan = 0,
-  Tethered = 1
+  Persistent = 1,
+  Tethered = 2
 };
 struct ObjectId {
   nprpc::oid_t object_id;

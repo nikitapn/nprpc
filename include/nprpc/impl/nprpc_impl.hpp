@@ -270,7 +270,9 @@ class PoaImpl : public Poa
 
     oid.object_id = object_id_internal;
     oid.poa_idx   = get_index();
-    oid.flags     = static_cast<oflags_t>(pl_lifespan_) << static_cast<oflags_t>(detail::ObjectFlag::Lifespan);
+    oid.flags     = 0;
+    if (pl_lifespan_ == PoaPolicy::Lifespan::Persistent)
+      oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::Persistent);
     fill_guid(oid.origin);
     oid.class_id  = obj->get_class();
 
@@ -320,6 +322,7 @@ class PoaImpl : public Poa
 
     if (activation_flags & ObjectActivationFlags::SESSION_SPECIFIC) {
       obj->session_ctx_ = ctx;
+      oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::Tethered);
     }
 
     return result;

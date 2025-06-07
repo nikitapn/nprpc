@@ -24,13 +24,13 @@ export class AAA_Direct extends NPRPC.Flat.Flat {
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
   public get c() {
-    const offset = this.offset + 8;
+    const offset = this.offset + 12;
     const n = this.buffer.dv.getUint32(offset + 4, true);
     return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
   }
   public set c(str: string) {
     const bytes = u8enc.encode(str);
-    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 8, bytes.length, 1, 1);
+    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 12, bytes.length, 1, 1);
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
 }
@@ -452,17 +452,17 @@ export class CCC_Direct extends NPRPC.Flat.Flat {
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
   public get b() {
-    const offset = this.offset + 4;
+    const offset = this.offset + 8;
     const n = this.buffer.dv.getUint32(offset + 4, true);
     return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
   }
   public set b(str: string) {
     const bytes = u8enc.encode(str);
-    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 4, bytes.length, 1, 1);
+    const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 8, bytes.length, 1, 1);
     new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
   }
   public c() {
-    return new NPRPC.Flat.Optional_Direct1_boolean(this.buffer, this.offset + 8, 1, 1);
+    return new NPRPC.Flat.Optional_Direct1_boolean(this.buffer, this.offset + 16, 1, 1);
   }
 }
 } // namespace Flat 

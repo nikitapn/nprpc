@@ -135,7 +135,7 @@ ObjectPtr<Nameserver> RpcImpl::get_nameserver(
 
   oid.object_id = 0ull;
   oid.poa_idx   = 0;
-  oid.flags     = (1 << static_cast<int>(detail::ObjectFlag::Lifespan));
+  oid.flags     = static_cast<nprpc::oflags_t>(detail::ObjectFlag::Persistent);
   oid.origin.fill(0);
   oid.class_id  = INameserver_Servant::_get_class();
   oid.urls.assign(
@@ -212,7 +212,7 @@ NPRPC_API Object* create_object_from_flat(
   auto& oid = obj->get_data();
   nprpc::detail::helpers::assign_from_flat_ObjectId(direct, oid);
 
-  if (direct.flags() & (1 << static_cast<std::underlying_type_t<detail::ObjectFlag>>(detail::ObjectFlag::Tethered))) 
+  if (direct.flags() & static_cast<nprpc::oflags_t>(detail::ObjectFlag::Tethered)) 
   {
     // should always use existing session
     oid.urls       = remote_endpoint.to_string();

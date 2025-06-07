@@ -218,8 +218,7 @@ class Object : public ObjectId
   PoaPolicy::Lifespan policy_lifespan() const noexcept
   {
     return static_cast<PoaPolicy::Lifespan>(
-      flags() & (1 << static_cast<
-        std::underlying_type_t<detail::ObjectFlag>>(detail::ObjectFlag::Lifespan))
+      flags() & std::underlying_type_t<detail::ObjectFlag>(detail::ObjectFlag::Persistent)
     );
   }
 

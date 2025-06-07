@@ -45,15 +45,15 @@ ObjectIdLocal : flat {
 
 enum ObjectFlag {
   /**
-    * true  - transient object
-    * false - persistent object
+    * false  - transient object
+    * true   - persistent object
     */
-  Lifespan = 0,
+  Persistent = 1,
   /**
     * true  - only one client can access the object in the existing opened session (this is for objects that originate from webbrowser or clients behind NAT)
     * false - multiple clients can access the object by opening multiple sessions
     */
-  Tethered = 1,
+  Tethered  = 2,
 }
 
 [force_helpers=1]
