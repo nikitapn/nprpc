@@ -345,7 +345,7 @@ void TypescriptBuilder::emit_accessors(const std::string& flat_name, AstFieldDec
 		break;
 	}
 	case FieldType::String: {
-		const int offset_addr = align_offset(4, last_field_ended, 4);
+		const int offset_addr = align_offset(4, last_field_ended, 8);
 		// const int n_addr = align_offset(4, last_field_ended, 4);
 
 		out <<
@@ -1025,7 +1025,7 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 
 	out <<
 		"export class _" << servant_iname << " extends NPRPC.ObjectServant {\n"
-		"  public static _get_class(): string { return \"" << ctx_.current_file() << '/' << ns(ctx_.nm_cur()) << ifs->name << "\"; }\n"
+		"  public static _get_class(): string { return \"" << ctx_.current_file() << '/' << ctx_.nm_cur()->to_ts_namespace(false) << '.' /*ns(ctx_.nm_cur()) */ << ifs->name << "\"; }\n"
 		"  public readonly get_class = () => { return _"<< servant_iname << "._get_class(); }\n"
 		"  public readonly dispatch = (buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, from_parent: boolean) => {\n"
 		"    _" << servant_iname << "._dispatch(this, buf, remote_endpoint, from_parent);\n"

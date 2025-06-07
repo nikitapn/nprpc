@@ -144,7 +144,7 @@ export interface ITestBasic_Servant
 }
 
 export class _ITestBasic_Servant extends NPRPC.ObjectServant {
-  public static _get_class(): string { return "test/TestBasic"; }
+  public static _get_class(): string { return "test/test.TestBasic"; }
   public readonly get_class = () => { return _ITestBasic_Servant._get_class(); }
   public readonly dispatch = (buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, from_parent: boolean) => {
     _ITestBasic_Servant._dispatch(this, buf, remote_endpoint, from_parent);
@@ -346,8 +346,8 @@ export class TestOptional extends NPRPC.ObjectProxy {
     }
   let out = new Flat_test.test_M3_Direct(buf, 16);
   {
-    if (out._1().has_value) {
-      a = out._1().value
+    if (out._1.has_value) {
+      a = out._1.value
     } else {
       a = null
     }
@@ -365,7 +365,7 @@ export interface ITestOptional_Servant
 }
 
 export class _ITestOptional_Servant extends NPRPC.ObjectServant {
-  public static _get_class(): string { return "test/TestOptional"; }
+  public static _get_class(): string { return "test/test.TestOptional"; }
   public readonly get_class = () => { return _ITestOptional_Servant._get_class(); }
   public readonly dispatch = (buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, from_parent: boolean) => {
     _ITestOptional_Servant._dispatch(this, buf, remote_endpoint, from_parent);
@@ -560,7 +560,7 @@ export interface ITestNested_Servant
 }
 
 export class _ITestNested_Servant extends NPRPC.ObjectServant {
-  public static _get_class(): string { return "test/TestNested"; }
+  public static _get_class(): string { return "test/test.TestNested"; }
   public readonly get_class = () => { return _ITestNested_Servant._get_class(); }
   public readonly dispatch = (buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, from_parent: boolean) => {
     _ITestNested_Servant._dispatch(this, buf, remote_endpoint, from_parent);
@@ -625,7 +625,7 @@ export interface ITestBadInput_Servant
 }
 
 export class _ITestBadInput_Servant extends NPRPC.ObjectServant {
-  public static _get_class(): string { return "test/TestBadInput"; }
+  public static _get_class(): string { return "test/test.TestBadInput"; }
   public readonly get_class = () => { return _ITestBadInput_Servant._get_class(); }
   public readonly dispatch = (buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, from_parent: boolean) => {
     _ITestBadInput_Servant._dispatch(this, buf, remote_endpoint, from_parent);

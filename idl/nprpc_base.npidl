@@ -29,6 +29,14 @@ enum DebugLevel {
   DebugLevel_TraceAll,
 };
 
+enum EndPointType {
+  Tcp,
+  TcpTethered,
+  WebSocket,
+  SecuredWebSocket,
+  SharedMemory,
+};
+
 namespace detail {
 ObjectIdLocal : flat {
   poa_idx: poa_idx_t;
@@ -104,6 +112,9 @@ CallHeader: flat {
   function_idx: fn_idx_t;
   object_id: oid_t;
 }
+
+
+
 
 } // namespace impl
 

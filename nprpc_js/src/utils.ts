@@ -1,4 +1,4 @@
-import { Exception } from "./exception";
+import { Exception } from "./base";
 
 export interface ref<T> {
 	value: T;

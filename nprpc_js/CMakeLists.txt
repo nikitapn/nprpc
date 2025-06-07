@@ -20,7 +20,7 @@ add_custom_command(
 
 add_custom_command(
   OUTPUT nprpc_js.stamp
-  COMMAND  npm ci && npm run build
+  COMMAND  npm ci && npm run build-debug
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   DEPENDS ${NPRPC_BASE_DST} ${NPRPC_NAMESERVER_DST}
   COMMENT "Building nprpc js library"

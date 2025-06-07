@@ -264,6 +264,13 @@ enum class DebugLevel : uint32_t {
   DebugLevel_EveryMessageContent,
   DebugLevel_TraceAll
 };
+enum class EndPointType : uint32_t {
+  Tcp,
+  TcpTethered,
+  WebSocket,
+  SecuredWebSocket,
+  SharedMemory
+};
 namespace detail { 
 struct ObjectIdLocal {
   nprpc::poa_idx_t poa_idx;

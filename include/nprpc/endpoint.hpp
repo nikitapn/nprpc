@@ -9,19 +9,13 @@
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/asio/ip/address_v4.hpp>
 
+#include <nprpc_stub/nprpc_base.hpp>
+
 namespace nprpc {
 static constexpr std::string_view tcp_prefix = "tcp://";
 static constexpr std::string_view ws_prefix  = "ws://";
 static constexpr std::string_view wss_prefix = "wss://";
 static constexpr std::string_view mem_prefix = "mem://";
-
-enum class EndPointType {
-  Tcp,
-  TcpTethered,
-  WebSocket,
-  SecuredWebSocket,
-  SharedMemory,
-};
 
 class EndPoint
 {

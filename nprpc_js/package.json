@@ -5,8 +5,9 @@
   "repository": "https://github.com/nikitapn/nprpc.git",
   "main": "dist/index.js",
   "scripts": {
-    "build": "webpack --env debug=false",
-    "watch": "webpack --env debug=true"
+    "build-debug": "webpack --env production=false",
+    "build-prd": "webpack --env production=true",
+    "watch": "webpack --env production=false --env watch=true"
   },
   "author": "nikitapnn1@gmail.com",
   "license": "GPL-3.0",

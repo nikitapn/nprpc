@@ -1,6 +1,4 @@
-import * as Flat from './flat';
 import { FlatBuffer } from './flat_buffer';
-import { Exception } from "./exception";
 import { MyPromise } from "./utils";
 import {
   impl, detail, oid_t, poa_idx_t,
@@ -10,26 +8,20 @@ import {
   ExceptionUnknownMessageId, 
   ExceptionCommFailure, 
   ExceptionUnsecuredObject,
-  ExceptionBadAccess
+  ExceptionBadAccess,
+  EndPointType,
 } from "./gen/nprpc_base"
 
-export { Flat, FlatBuffer };
-export * from './exception'
-export * from "./nprpc";
-export * from "./gen/nprpc_base";
+import { Exception } from "./base";
 
 const header_size = 16;
 const invalid_object_id = 0xFFFFFFFFFFFFFFFFn;
 const localhost_ip4 = 0x7F000001;
 
 export let rpc: Rpc;
+let host_info: HostInfo = {secured: false, objects: {}};
 
 let g_debug_level: DebugLevel = DebugLevel.DebugLevel_Critical;
-
-export enum EndPointType {
-  WebSocket,
-  SecuredWebSocket,
-};
 
 export class EndPoint {
   constructor(
@@ -219,7 +211,7 @@ export class Connection {
     this.endpoint = endpoint;
     this.queue = new Array<Work>();
 
-    if (rpc.host_info.secured) {
+    if (host_info.secured) {
       this.ws = new WebSocket('wss://' + this.endpoint.hostname + ':' + this.endpoint.port.toString(10));
     } else {
       // prefer hostname over ip address
@@ -271,7 +263,8 @@ export class Rpc {
   public static async read_host(): Promise<HostInfo> {
     let x = await fetch("./host.json");
     if (!x.ok) throw "read_host error: " + x.statusText;
-  
+
+
     const reviver = (key:string, value: any) => {
       if (key === 'object_id') {
         return BigInt(value);
@@ -281,6 +274,8 @@ export class Rpc {
 
     let info = JSON.parse(await x.text(), reviver);
     if (info.secured == undefined) info.secured = false;
+
+    host_info.secured = info.secured;
 
     for (let key of Object.keys(info.objects)) {
       try {
@@ -299,7 +294,7 @@ export class Rpc {
     this.last_poa_id_ = 0;
     this.opened_connections_ = new Array<Connection>();
     this.poa_list_ = new Array<Poa>();
-    this.host_info = host_info;
+    host_info = this.host_info = host_info;
   }
 }
 
@@ -463,7 +458,8 @@ export class ObjectProxy {
   }
 
   public release(): number {
-    if (--this.local_ref_cnt_ != 0) return this.local_ref_cnt_;
+    if (--this.local_ref_cnt_ != 0)
+      return this.local_ref_cnt_;
 
     const msg_size = header_size + 16;
     let buf = FlatBuffer.create(msg_size);
@@ -485,7 +481,7 @@ export class ObjectProxy {
 
     const urls = oid.urls.split(";");
 
-    if (rpc.host_info.secured) {
+    if (host_info.secured) {
       const wss = urls.find(url => url.startsWith("wss://"));
       if (!wss) throw new Exception("Object has no urls for secured connection");
       this.endpoint_ = EndPoint.from_string(wss);
@@ -499,10 +495,10 @@ export class ObjectProxy {
       return;
 
     // if remote_endpoint is provided, use it to override the hostname
-    if (this.endpoint.hostname === "localhost" || 
-      this.endpoint.hostname === "127.0.0.1")
+    if (this.endpoint_.hostname === "localhost" || 
+      this.endpoint_.hostname === "127.0.0.1")
     {
-      this.endpoint.hostname = remote_endpoint.hostname;
+      this.endpoint_.hostname = remote_endpoint.hostname;
     }
   }
 }
@@ -596,8 +592,10 @@ export const oid_create_from_flat = detail.helpers.assign_from_flat_ObjectId;
 export const oid_assign_from_ts = detail.helpers.assign_from_ts_ObjectId;
 
 export const narrow = <T extends ObjectProxy>(from: ObjectProxy, to: new () => T): T => {
-  if (from.data.class_id !== (to as any).servant_t._get_class())
+  if (from.data.class_id !== (to as any).servant_t._get_class()) {
+    console.warn("fail: narrowing from " + from.data.class_id + " to " + (to as any).servant_t._get_class());
     return null;
+  }
 
   let obj = new to();
   obj.data = from.data;
@@ -632,9 +630,7 @@ export const create_object_from_flat = (
 }
 
 export const init = async (): Promise<Rpc> => {
-  if (rpc !== undefined)
-    return rpc;
-  return (rpc = new Rpc(await Rpc.read_host()));
+  return rpc ? rpc : (rpc = new Rpc(await Rpc.read_host()));
 }
 
 export const set_debug_level = (debug_level: DebugLevel): void => {

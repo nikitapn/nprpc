@@ -175,7 +175,7 @@ System.register("gen/test", ["my_modules/nprpc"], function (exports_2, context_2
                         _ITestBasic_Servant._dispatch(this, buf, remote_endpoint, from_parent);
                     };
                 }
-                static _get_class() { return "test/TestBasic"; }
+                static _get_class() { return "test/test.TestBasic"; }
                 static _dispatch(obj, buf, remote_endpoint, from_parent) {
                     let __ch = new NPRPC.impl.Flat_nprpc_base.CallHeader_Direct(buf, 16);
                     switch (__ch.function_idx) {
@@ -375,8 +375,8 @@ System.register("gen/test", ["my_modules/nprpc"], function (exports_2, context_2
                         }
                         let out = new Flat_test.test_M3_Direct(buf, 16);
                         {
-                            if (out._1().has_value) {
-                                a = out._1().value;
+                            if (out._1.has_value) {
+                                a = out._1.value;
                             }
                             else {
                                 a = null;
@@ -395,7 +395,7 @@ System.register("gen/test", ["my_modules/nprpc"], function (exports_2, context_2
                         _ITestOptional_Servant._dispatch(this, buf, remote_endpoint, from_parent);
                     };
                 }
-                static _get_class() { return "test/TestOptional"; }
+                static _get_class() { return "test/test.TestOptional"; }
                 static _dispatch(obj, buf, remote_endpoint, from_parent) {
                     let __ch = new NPRPC.impl.Flat_nprpc_base.CallHeader_Direct(buf, 16);
                     switch (__ch.function_idx) {
@@ -580,7 +580,7 @@ System.register("gen/test", ["my_modules/nprpc"], function (exports_2, context_2
                         _ITestNested_Servant._dispatch(this, buf, remote_endpoint, from_parent);
                     };
                 }
-                static _get_class() { return "test/TestNested"; }
+                static _get_class() { return "test/test.TestNested"; }
                 static _dispatch(obj, buf, remote_endpoint, from_parent) {
                     let __ch = new NPRPC.impl.Flat_nprpc_base.CallHeader_Direct(buf, 16);
                     switch (__ch.function_idx) {
@@ -642,7 +642,7 @@ System.register("gen/test", ["my_modules/nprpc"], function (exports_2, context_2
                         _ITestBadInput_Servant._dispatch(this, buf, remote_endpoint, from_parent);
                     };
                 }
-                static _get_class() { return "test/TestBadInput"; }
+                static _get_class() { return "test/test.TestBadInput"; }
                 static _dispatch(obj, buf, remote_endpoint, from_parent) {
                     let __ch = new NPRPC.impl.Flat_nprpc_base.CallHeader_Direct(buf, 16);
                     switch (__ch.function_idx) {

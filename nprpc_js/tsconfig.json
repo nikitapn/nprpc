@@ -2,9 +2,9 @@
 	"compilerOptions": {
 		"declaration": true,
 		"sourceMap": true,
-		// "esModuleInterop": true,
+		"esModuleInterop": true,
 		"moduleResolution": "node",
-		// "experimentalDecorators": true,
+		"experimentalDecorators": true,
 		"outDir": "dist",
 		"noImplicitAny": true,
 		"module": "esnext",
