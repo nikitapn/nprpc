@@ -7,6 +7,7 @@
 
 namespace nprpc {
 extern void set_context(impl::Session& session);
+extern void reset_context();
 }
 
 namespace nprpc::impl {
@@ -58,6 +59,7 @@ void Session::handle_request() {
 				if (!validate(*real_obj)) return;
 				set_context(*this);
 				real_obj->dispatch(rx_buffer_, ctx_, false);
+				reset_context();
 				not_found = false;
 			}
 		}

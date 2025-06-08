@@ -154,6 +154,8 @@ void AsyncConnector<Type>::on_ws_handshake(
     }
 
     cleanup();
+
+    ws->next_layer().expires_never(); // Disable any timeouts on the tcp_stream
     stream_promise_->set_value(std::move(*ws.release()));
   }
 }
@@ -187,6 +189,7 @@ void AsyncConnector<Type>::on_ssl_handshake(
 
   // // For plain SSL streams, we're done
   // cleanup();
+  // ws->next_layer().next_layer().expires_never(); // Disable any timeouts on the tcp_stream
   // stream_promise_.set_value(std::move(stream));
 }
 
