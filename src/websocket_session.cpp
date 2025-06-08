@@ -45,8 +45,8 @@ void WebSocketSession<Derived>::do_read() {
     return; // Already reading
   }
 
-  std::cout << "WebSocketSession::do_read() - starting async read" << std::endl;
-  
+  rx_buffer_().consume(rx_buffer_().size()); // Clear the buffer before reading
+
   derived().ws().async_read(
       rx_buffer_(),
       beast::bind_front_handler(
@@ -73,9 +73,6 @@ void WebSocketSession<Derived>::on_read(beast::error_code ec, std::size_t bytes_
   const uint32_t request_id = header.reserved();
 
   if (header.msg_type() == nprpc::impl::MessageType::Request) {
-
-    // std::cout << "WebSocketSession::on_read() - received request - id=" << request_id << std::endl;
-
     // Handle incoming request
     handle_request();
 
@@ -87,16 +84,8 @@ void WebSocketSession<Derived>::on_read(beast::error_code ec, std::size_t bytes_
     inject_request_id(rx_buffer_(), request_id);
     // write_queue_.emplace_back(std::move(buffer), std::move(completion_handler));
     write_queue_.emplace_back(rx_buffer_(true), std::move(completion_handler));
-    std::cout << "WebSocketSession::on_read() - queuing response - pending_requests size: " 
-               << pending_requests_.size() << ", id=" << request_id << std::endl;
     do_write();
   } else { // received an answer
-    // Extract request ID from header
-    // uint32_t request_id = extract_request_id(rx_buffer_());
-
-    std::cout << "WebSocketSession::on_read() - received response - pending_requests size: " 
-               << pending_requests_.size() << ", id=" << request_id << std::endl;
- 
     auto it = pending_requests_.find(request_id);
     if (it != pending_requests_.end()) {
       auto response = rx_buffer_(true);
@@ -105,9 +94,6 @@ void WebSocketSession<Derived>::on_read(beast::error_code ec, std::size_t bytes_
     }
   }
 
-  rx_buffer_().clear();
-  rx_buffer_.flip().clear();
-  
   // Continue reading immediately - this is the key difference!
   do_read();
 }
@@ -127,9 +113,6 @@ void WebSocketSession<Derived>::do_write() {
   }
 
   auto& msg = write_queue_.front();
-  auto header = nprpc::impl::flat::Header_Direct(msg.buffer, 0);
-  std::cout << "WebSocketSession::do_write() - writing message to WebSocket - id=" << header.reserved() << std::endl;
-
   derived().ws().text(false); // binary mode
   derived().ws().async_write(
       msg.buffer.data(),
@@ -141,7 +124,7 @@ void WebSocketSession<Derived>::do_write() {
 template <class Derived>
 void WebSocketSession<Derived>::on_write(beast::error_code ec, std::size_t bytes_transferred) {
   boost::ignore_unused(bytes_transferred);
-  
+
   if (ec == websocket::error::closed) {
     close();
     return;
@@ -160,11 +143,8 @@ void WebSocketSession<Derived>::on_write(beast::error_code ec, std::size_t bytes
     }
     write_queue_.pop_front();
   }
-  
+
   writing_.store(false);
-  
-  std::cout << "WebSocketSession::on_write() - write completed, write_queue_ size: " 
-            << write_queue_.size() << std::endl;
 
   // Continue writing if there are more messages
   if (!write_queue_.empty()) {
@@ -216,9 +196,6 @@ void WebSocketSession<Derived>::timeout_action() {
 template <class Derived>
 void WebSocketSession<Derived>::send_receive(flat_buffer &buffer, uint32_t timeout_ms) {
   assert(*(uint32_t *)buffer.data().data() == buffer.size() - 4);
-
-  std::cout << "WebSocketSession::send_receive() - sending message - size: " 
-            << buffer.size() << ", timeout: " << timeout_ms << " ms" << std::endl;
 
   if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
     dump_message(buffer, false);
@@ -284,7 +261,6 @@ void WebSocketSession<Derived>::send_receive_async(
         }
         // If write succeeded, we wait for the response in on_read
       };
-    std::cout << "WebSocketSession::send_receive_async() - queuing message for write - id=" << request_id << std::endl;
     write_queue_.emplace_back(std::move(buffer), std::move(write_completion));
     do_write();
   });
