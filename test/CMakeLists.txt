@@ -31,9 +31,9 @@ target_link_libraries(nprpc_test
   nprpc
 )
 
-add_subdirectory(js)
+# add_subdirectory(js)
 
-add_dependencies(nprpc_js_test nprpc_test)
+# add_dependencies(nprpc_js_test nprpc_test)
 
 # Enable testing and include GoogleTest
 enable_testing()

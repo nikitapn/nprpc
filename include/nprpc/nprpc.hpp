@@ -359,7 +359,8 @@ T* narrow(Object*& obj) noexcept
 {
   static_assert(std::is_base_of_v<Object, T>);
 
-  if (obj->get_class() != T::servant_t::_get_class()) return nullptr;
+  if (obj->get_class() != T::servant_t::_get_class())
+    return nullptr;
 
   auto result = new T(0);
   static_cast<Object&>(*result) = std::move(*obj);

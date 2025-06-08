@@ -8,6 +8,10 @@
 #include <nprpc/impl/session.hpp>
 
 #include <deque>
+#include <unordered_map>
+#include <atomic>
+#include <chrono>
+#include <functional>
 
 namespace nprpc::impl {
 
@@ -15,39 +19,51 @@ template <class Derived>
 class WebSocketSession
   : public Session
 {
-  struct work {
-    virtual void operator()() = 0;
-    virtual void on_failed(const boost::system::error_code &ec) noexcept = 0;
-    virtual void on_executed(flat_buffer &&rx_buffer) noexcept = 0;
-    virtual ~work() = default;
+  struct outgoing_message {
+    flat_buffer buffer;
+    std::function<void(const boost::system::error_code&)> completion_handler;
+    
+    outgoing_message(flat_buffer&& buf, std::function<void(const boost::system::error_code&)>&& handler)
+      : buffer(std::move(buf)), completion_handler(std::move(handler)) {}
   };
 
-  std::deque<std::shared_ptr<work>> requests_;
-  std::deque<std::unique_ptr<work>> answers_;
+  struct pending_request {
+    std::function<void(const boost::system::error_code&, flat_buffer&)> completion_handler;
+    std::chrono::steady_clock::time_point timeout_point;
+    
+    pending_request(std::function<void(const boost::system::error_code&, flat_buffer&)>&& handler, 
+                   std::chrono::milliseconds timeout)
+      : completion_handler(std::move(handler))
+      , timeout_point(std::chrono::steady_clock::now() + timeout) {}
+  };
 
-  bool reading_ = false;
-  bool writing_ = false;
-  bool request_sended_waiting_for_answer_ = false;
+  std::deque<outgoing_message> write_queue_;
+  std::unordered_map<uint32_t, pending_request> pending_requests_;
+  
+  std::atomic<uint32_t> next_request_id_{1};
+  std::atomic<bool> reading_{false};
+  std::atomic<bool> writing_{false};
+  std::atomic<bool> closed_{false};
 
   Derived &derived() { return static_cast<Derived &>(*this); }
 
   void on_read(beast::error_code ec, std::size_t bytes_transferred);
-  void on_write(
-    beast::error_code ec,
-    std::size_t bytes_transferred,
-    bool is_answer);
-  void add_request(std::shared_ptr<work> w);
+  void on_write(beast::error_code ec, std::size_t bytes_transferred);
+  void do_write();
+  
+  uint32_t generate_request_id() { return next_request_id_.fetch_add(1); }
+  
+  // Helper methods for request ID correlation
+  void inject_request_id(flat_buffer& buffer, uint32_t request_id);
+  uint32_t extract_request_id(const flat_buffer& buffer);
 
-  void reconnect() {
-    // This method should be implemented in the derived class
-    // to handle reconnection logic if needed.
-  }
 protected:
-
   void do_read();
   void close();
   virtual void timeout_action() override final;
 public:
+  void start_read_loop();
+  void start_write_loop();
 
   virtual void send_receive(
       flat_buffer &buffer,

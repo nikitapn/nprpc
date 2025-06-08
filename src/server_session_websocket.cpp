@@ -68,7 +68,7 @@ class websocket_session_with_acceptor : public Derived
       this->close();
       return fail(ec, "accept");
     }
-    this->do_read();
+    this->start_read_loop();
   }
 public:
   // Start the asynchronous operation

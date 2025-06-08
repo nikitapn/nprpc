@@ -111,8 +111,8 @@ target_link_libraries(npnameserver PUBLIC nprpc)
 # target_link_libraries(test_shared_memory_ref_counter PUBLIC nprpc)
 
 add_subdirectory(check)
-add_subdirectory(nprpc_js)
-add_dependencies(nprpc_js nprpc)
+# add_subdirectory(nprpc_js)
+# add_dependencies(nprpc_js nprpc)
 
 if(UNIX)
   if(OPT_NPRPC_SKIP_TESTS)

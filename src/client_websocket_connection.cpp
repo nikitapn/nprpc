@@ -16,7 +16,9 @@ std::shared_ptr<ClientPlainWebSocketSession>
     endpoint, ioc, std::chrono::milliseconds(5000));
   auto future = promise->get_future();
   auto ws = future.get();
-  return std::make_shared<ClientPlainWebSocketSession>(std::move(ws), endpoint);
+  auto session = std::make_shared<ClientPlainWebSocketSession>(std::move(ws), endpoint);
+  session->start_read_loop();
+  return session;
 }
 
 std::shared_ptr<ClientSSLWebSocketSession>
@@ -28,7 +30,9 @@ std::shared_ptr<ClientSSLWebSocketSession>
     endpoint, ioc, std::chrono::milliseconds(5000));
   auto future = promise->get_future();
   auto ws = future.get();
-  return std::make_shared<ClientSSLWebSocketSession>(std::move(ws), endpoint);
+  auto session = std::make_shared<ClientSSLWebSocketSession>(std::move(ws), endpoint);
+  session->start_read_loop();
+  return session;
 }
 
 } // namespace nprpc::impl
