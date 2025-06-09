@@ -190,6 +190,7 @@ class ObjectServant
   oid_t              oid() const noexcept { return object_id_; }
   poa_idx_t          poa_index() const noexcept { return poa_->get_index(); }
   NPRPC_API uint32_t add_ref() noexcept;
+  NPRPC_API uint32_t release() noexcept;
   auto activation_time() const noexcept { return activation_time_; }
   bool is_unused() const noexcept { return ref_cnt_.load() == 0; }
   bool is_deleted() const noexcept { return to_delete_.load(); }
@@ -197,7 +198,6 @@ class ObjectServant
   {
     return (!session_ctx_ || session_ctx_ == &ctx);
   }
-  uint32_t release() noexcept;
   virtual ~ObjectServant() = default;
 };
 

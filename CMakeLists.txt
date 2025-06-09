@@ -93,15 +93,26 @@ else()
   target_compile_options(nprpc PRIVATE -fPIC)
 endif()
 
+# Building the nameserver
+# Filter only nprpc_nameserver generated sources
+set(nprpc_nameserver_GENERATED_SOURCES "")
+foreach(file ${nprpc_stub_GENERATED_SOURCES})
+  if(file MATCHES "nprpc_nameserver")
+    list(APPEND nprpc_nameserver_GENERATED_SOURCES ${file})
+  endif()
+endforeach()
+
 # nameserver executable
 add_executable(npnameserver
   npnameserver/npnameserver.cpp
+  ${nprpc_nameserver_GENERATED_SOURCES}
 )
 target_include_directories(npnameserver 
   PRIVATE 
     ${CMAKE_SOURCE_DIR}/nprpc/include
-  )
+)
 target_link_libraries(npnameserver PUBLIC nprpc)
+add_dependencies(npnameserver nprpc)
 
 # Test executable for shared memory reference counter
 # add_executable(test_shared_memory_ref_counter
@@ -111,13 +122,17 @@ target_link_libraries(npnameserver PUBLIC nprpc)
 # target_link_libraries(test_shared_memory_ref_counter PUBLIC nprpc)
 
 add_subdirectory(check)
-add_subdirectory(nprpc_js)
-add_dependencies(nprpc_js nprpc)
 
 if(UNIX)
+  add_subdirectory(nprpc_js)
+  add_dependencies(nprpc_js nprpc)
+
   if(OPT_NPRPC_SKIP_TESTS)
     message(STATUS "Skipping tests as per OPT_NPRPC_SKIP_TESTS")
   else()
     add_subdirectory(test)
   endif()
+
 endif()
+
+add_dependencies(nprpc nprpc_stub_gen)

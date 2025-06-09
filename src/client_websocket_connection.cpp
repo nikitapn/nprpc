@@ -16,7 +16,7 @@ std::shared_ptr<ClientPlainWebSocketSession>
     endpoint, ioc, std::chrono::milliseconds(5000));
   auto future = promise->get_future();
   auto ws = future.get();
-  auto session = std::make_shared<ClientPlainWebSocketSession>(std::move(ws), endpoint);
+  auto session = std::make_shared<ClientPlainWebSocketSession>(std::move(*ws.release()), endpoint);
   session->start_read_loop();
   return session;
 }
@@ -30,7 +30,7 @@ std::shared_ptr<ClientSSLWebSocketSession>
     endpoint, ioc, std::chrono::milliseconds(5000));
   auto future = promise->get_future();
   auto ws = future.get();
-  auto session = std::make_shared<ClientSSLWebSocketSession>(std::move(ws), endpoint);
+  auto session = std::make_shared<ClientSSLWebSocketSession>(std::move(*ws.release()), endpoint);
   session->start_read_loop();
   return session;
 }

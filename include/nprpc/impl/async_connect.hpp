@@ -49,7 +49,7 @@ class AsyncConnector
   std::string host_;
   std::uint16_t port_;
   std::chrono::steady_clock::time_point deadline_;
-  std::shared_ptr<std::promise<StreamType>> stream_promise_;
+  std::shared_ptr<std::promise<std::unique_ptr<StreamType>>> stream_promise_;
 
   void on_resolve(
     const beast::error_code& ec,
@@ -92,11 +92,11 @@ public:
   }
 
   // Start the asynchronous operation
-  std::shared_ptr<std::promise<StreamType>> run();
+  std::shared_ptr<std::promise<std::unique_ptr<StreamType>>> run();
 };
 
 // Factory functions for different connection types
-inline std::shared_ptr<std::promise<typename type_tcp::stream_t>> 
+inline std::shared_ptr<std::promise<std::unique_ptr<typename type_tcp::stream_t>>> 
 async_connect_tcp(
   net::io_context& ioc,
   const EndPoint& endpoint,
@@ -109,7 +109,7 @@ async_connect_tcp(
     timeout)->run();
 }
 
-inline std::shared_ptr<std::promise<plain_ws>>
+inline std::shared_ptr<std::promise<std::unique_ptr<plain_ws>>>
 async_connect_ws(
   const EndPoint& endpoint,
   net::io_context& ioc,
@@ -123,7 +123,7 @@ async_connect_ws(
   )->run();
 }
 
-inline std::shared_ptr<std::promise<ssl_ws>>
+inline std::shared_ptr<std::promise<std::unique_ptr<ssl_ws>>>
 async_connect_wss(
   const EndPoint& endpoint,
   net::io_context& ioc,

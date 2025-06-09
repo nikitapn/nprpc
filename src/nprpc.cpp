@@ -101,7 +101,7 @@ NPRPC_API Rpc* RpcBuilder::build(boost::asio::io_context& ioc)
   return impl::g_orb;
 }
 
-uint32_t ObjectServant::release() noexcept
+NPRPC_API uint32_t ObjectServant::release() noexcept
 {
   if (static_cast<impl::PoaImpl*>(poa_)->get_lifespan() ==
       PoaPolicy::Lifespan::Persistent) {

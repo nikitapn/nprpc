@@ -14,9 +14,9 @@
 namespace nprpc::impl {
 
 template<typename Type>
-std::shared_ptr<std::promise<typename Type::stream_t>>
+std::shared_ptr<std::promise<std::unique_ptr<typename Type::stream_t>>>
 AsyncConnector<Type>::run() {
-  stream_promise_ = std::make_shared<std::promise<StreamType>>();
+  stream_promise_ = std::make_shared<std::promise<std::unique_ptr<StreamType>>>();
   // try to create address from hostname
   boost::system::error_code ec;
   net::ip::make_address_v4(host_, ec);
@@ -64,7 +64,7 @@ void AsyncConnector<Type>::on_resolve(
   auto asyncon = [this] <typename EndpointType> (EndpointType& ep) {
     // Make the connection on the IP address we get from a lookup
     // wrap in unique_ptr to manage the stream's lifetime
-    auto stream =  std::make_unique<
+    auto stream = std::make_unique<
       beast_tcp_stream_strand>(net::make_strand(ioc_));
     
     // Set a timeout on the operation
@@ -107,7 +107,7 @@ void AsyncConnector<Type>::on_connect(
   // For plain TCP streams, we're done
   if constexpr (std::is_same_v<Type, type_tcp>) {
     cleanup();
-    stream_promise_->set_value(std::move(*stream.release()));
+    stream_promise_->set_value(std::move(stream));
     return;
   }
   
@@ -171,7 +171,7 @@ void AsyncConnector<Type>::on_ws_handshake(
     cleanup();
 
     ws->next_layer().expires_never(); // Disable any timeouts on the tcp_stream
-    stream_promise_->set_value(std::move(*ws.release()));
+    stream_promise_->set_value(std::move(ws));
   }
 }
 
@@ -223,7 +223,7 @@ void AsyncConnector<Type>::on_ssl_ws_handshake(
     }
 
     cleanup();
-    stream_promise_->set_value(std::move(*ws.release()));
+    stream_promise_->set_value(std::move(ws));
   }
 }
 
