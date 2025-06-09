@@ -66,7 +66,11 @@ class AsyncConnector
 
   void on_ssl_handshake(
     const beast::error_code& ec,
-    StreamType&& stream);
+    std::unique_ptr<beast::ssl_stream<beast_tcp_stream_strand>>&& ssl_stream);
+    
+  void on_ssl_ws_handshake(
+    const beast::error_code& ec,
+    std::unique_ptr<ssl_ws>&& ws);
   
   void do_timeout();
   void cleanup();

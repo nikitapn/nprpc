@@ -277,6 +277,8 @@ struct Config {
   std::string                http_root_dir;
   std::vector<std::string>   spa_links;
   ssl::context               ssl_context{ssl::context::tlsv12_client};
+  std::string                ssl_client_self_signed_cert_path;
+  bool                       ssl_client_disable_verification = false;
 };
 } // namespace detail
 
@@ -343,6 +345,19 @@ class RpcBuilder {
     ssl_public_key_path_      = public_key_path;
     ssl_secret_key_path_      = private_key_path;
     ssl_dh_params_path_       = dh_params_path;
+    return *this;
+  }
+
+  RpcBuilder& enable_ssl_client_self_signed_cert(
+    std::string_view cert_path) noexcept
+  {
+    cfg_.ssl_client_self_signed_cert_path = cert_path;
+    return *this;
+  }
+
+  RpcBuilder& disable_ssl_client_verification() noexcept
+  {
+    cfg_.ssl_client_disable_verification = true;
     return *this;
   }
 

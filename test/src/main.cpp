@@ -106,6 +106,12 @@ public:
                 .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
                 .set_listen_tcp_port(22222)
                 .set_listen_http_port(22223)
+                .set_hostname("localhost")
+                .enable_ssl_server(
+                    "/home/nikita/projects/npsystem/certs/server.crt",
+                    "/home/nikita/projects/npsystem/certs/server.key",
+                    "/home/nikita/projects/npsystem/certs/dhparam.pem")
+                .enable_ssl_client_self_signed_cert("/home/nikita/projects/npsystem/certs/server.crt")
                 .build(thread_pool::get_instance().ctx());
 
             // Use the new PoaBuilder API  
@@ -210,6 +216,7 @@ TEST_F(NprpcTest, TestBasic) {
 
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
 }
 
 // Optional types test

@@ -77,7 +77,24 @@ NPRPC_API Rpc* RpcBuilder::build(boost::asio::io_context& ioc)
   }
 
   ctx.set_default_verify_paths();
-  ctx.set_verify_mode(ssl::verify_peer);
+  
+  // Configure SSL client settings based on RpcBuilder options
+  if (cfg_.ssl_client_disable_verification) {
+    std::cout << "SSL client verification disabled (for testing only)" << std::endl;
+    ctx.set_verify_mode(ssl::verify_none);
+  } else {
+    if (!cfg_.ssl_client_self_signed_cert_path.empty()) {
+      try {
+        ctx.load_verify_file(cfg_.ssl_client_self_signed_cert_path);
+        std::cout << "Loaded self-signed certificate for SSL client: " 
+                  << cfg_.ssl_client_self_signed_cert_path << std::endl;
+      } catch (const std::exception& ex) {
+        std::cerr << "Warning: Failed to load self-signed certificate: " 
+                  << ex.what() << std::endl;
+      }
+    }
+    ctx.set_verify_mode(ssl::verify_peer);
+  }
 
   impl::g_cfg = std::move(cfg_);
   impl::g_orb = new impl::RpcImpl(ioc);

@@ -9,6 +9,7 @@
 
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/post.hpp>
+#include <boost/asio/ssl.hpp>
 
 namespace nprpc::impl {
 
@@ -126,17 +127,31 @@ void AsyncConnector<Type>::on_connect(
   }
 
   // SSL handshake for SSL streams
-  // if constexpr (std::is_same_v<Type, type_wss>) {
-  //   stream.async_handshake(
-  //     ssl::stream_base::client,
-  //     net::bind_executor(ioc_,
-  //       [self = this->shared_from_this(), 
-  //        stream = std::move(stream)]
-  //       (const beast::error_code& ec) mutable {
-  //         self->on_ssl_handshake(ec, std::move(stream));
-  //       }));
-  //   return;
-  // }
+  if constexpr (std::is_same_v<Type, type_wss>) {
+    // Create SSL stream from TCP stream
+    auto ssl_stream = std::make_unique<beast::ssl_stream<beast_tcp_stream_strand>>(
+      std::move(*stream.release()), g_cfg.ssl_context);
+      
+    // Set SNI hostname for verification
+    if (!SSL_set_tlsext_host_name(ssl_stream->native_handle(), host_.c_str())) {
+      cleanup();
+      stream_promise_->set_exception(
+        std::make_exception_ptr(
+          std::runtime_error("Failed to set SNI hostname")));
+      return;
+    }
+    
+    // Perform SSL handshake
+    ssl_stream->async_handshake(
+      ssl::stream_base::client,
+      net::bind_executor(ioc_,
+        [self = this->shared_from_this(), 
+         ssl_stream = std::move(ssl_stream)]
+        (const beast::error_code& ec) mutable {
+          self->on_ssl_handshake(ec, std::move(ssl_stream));
+        }));
+    return;
+  }
 }
 
 template<typename Type>
@@ -163,34 +178,53 @@ void AsyncConnector<Type>::on_ws_handshake(
 template<typename Type>
 void AsyncConnector<Type>::on_ssl_handshake(
   const beast::error_code& ec,
-  StreamType&& stream)
+  std::unique_ptr<beast::ssl_stream<beast_tcp_stream_strand>>&& ssl_stream)
 {
-  // if (ec) {
-  //   cleanup();
-  //   stream_promise_.set_exception(
-  //     std::make_exception_ptr(
-  //       std::runtime_error("SSL handshake failed: " + ec.message())));
-  //   return;
-  // }
+  if (ec) {
+    cleanup();
+    stream_promise_->set_exception(
+      std::make_exception_ptr(
+        std::runtime_error("SSL handshake failed: " + ec.message())));
+    return;
+  }
 
-  // // For SSL WebSocket streams, perform WebSocket handshake
-  // if constexpr (Type::is_websocket) {
-  //   stream.next_layer().async_handshake(
-  //     host_,
-  //     "/",
-  //     net::bind_executor(ioc_,
-  //       [self = this->shared_from_this(), 
-  //        stream = std::move(stream)]
-  //       (const beast::error_code& ec) mutable {
-  //         self->on_ws_handshake(ec, std::move(stream));
-  //       }));
-  //   return;
-  // }
+  // For SSL WebSocket streams, perform WebSocket handshake
+  if constexpr (std::is_same_v<Type, type_wss>) {
+    auto ws = std::make_unique<ssl_ws>(std::move(*ssl_stream.release()));
+    
+    // Disable timeout on the underlying TCP stream  
+    beast::get_lowest_layer(*ws).expires_never();
+    
+    ws->async_handshake(
+      host_,
+      "/",
+      net::bind_executor(ioc_,
+        [self = this->shared_from_this(), 
+         ws = std::move(ws)]
+        (const beast::error_code& ec) mutable {
+          self->on_ssl_ws_handshake(ec, std::move(ws));
+        }));
+    return;
+  }
+}
 
-  // // For plain SSL streams, we're done
-  // cleanup();
-  // ws->next_layer().next_layer().expires_never(); // Disable any timeouts on the tcp_stream
-  // stream_promise_.set_value(std::move(stream));
+template<typename Type>
+void AsyncConnector<Type>::on_ssl_ws_handshake(
+  const beast::error_code& ec,
+  std::unique_ptr<ssl_ws>&& ws)
+{
+  if constexpr (std::is_same_v<Type, type_wss>) {
+    if (ec) {
+      cleanup();
+      stream_promise_->set_exception(
+        std::make_exception_ptr(
+          std::runtime_error("SSL WebSocket handshake failed: " + ec.message())));
+      return;
+    }
+
+    cleanup();
+    stream_promise_->set_value(std::move(*ws.release()));
+  }
 }
 
 template<typename Type>
