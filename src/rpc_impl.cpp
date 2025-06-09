@@ -197,14 +197,12 @@ ReferenceListImpl::~ReferenceListImpl()
   }
 }
 
-
 NPRPC_API Object* create_object_from_flat(
   detail::flat::ObjectId_Direct direct,
   EndPoint remote_endpoint)
 {
   if (direct.object_id() == invalid_object_id)
     return nullptr;
-
 
   auto  obj = std::unique_ptr<Object>(new Object());
   obj->local_ref_cnt_ = 1;

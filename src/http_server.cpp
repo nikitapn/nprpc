@@ -621,7 +621,7 @@ void init_http_server(boost::asio::io_context &ioc) {
   // Create and launch a listening port
   std::make_shared<listener>(
     ioc,
-    g_cfg.ssl_context,
+    g_cfg.ssl_context_server,
     tcp::endpoint{net::ip::make_address(g_cfg.listen_address), g_cfg.listen_http_port},
     std::make_shared<std::string const>(g_cfg.http_root_dir)
   )->run();

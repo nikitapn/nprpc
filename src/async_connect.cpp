@@ -130,7 +130,7 @@ void AsyncConnector<Type>::on_connect(
   if constexpr (std::is_same_v<Type, type_wss>) {
     // Create SSL stream from TCP stream
     auto ssl_stream = std::make_unique<beast::ssl_stream<beast_tcp_stream_strand>>(
-      std::move(*stream.release()), g_cfg.ssl_context);
+      std::move(*stream.release()), g_cfg.ssl_context_client);
       
     // Set SNI hostname for verification
     if (!SSL_set_tlsext_host_name(ssl_stream->native_handle(), host_.c_str())) {

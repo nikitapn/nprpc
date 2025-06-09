@@ -36,11 +36,10 @@ NPRPC_API Rpc* RpcBuilder::build(boost::asio::io_context& ioc)
   if (impl::g_orb) 
     throw Exception("rpc has been previously initialized");
 
-  auto& ctx = cfg_.ssl_context;
+  auto& ctx_server = cfg_.ssl_context_server;
+  auto& ctx_client = cfg_.ssl_context_client;
 
   if (use_ssl_websocket_server_) {
-    ctx = ssl::context{ssl::context::tlsv12};
-
     auto read_file_to_string = [](std::string const file) {
       std::ifstream is(file, std::ios_base::in);
       if (!is) { throw std::runtime_error("could not open certificate file: \"" + file + "\""); }
@@ -56,36 +55,40 @@ NPRPC_API Rpc* RpcBuilder::build(boost::asio::io_context& ioc)
     //       return "test";
     //     });
 
-    ctx.set_options(
+    ctx_server.set_options(
         boost::asio::ssl::context::default_workarounds |
         boost::asio::ssl::context::no_sslv2 |
         boost::asio::ssl::context::no_sslv3 |
-        (ssl_dh_params_path_.size() > 0 ? ssl::context::single_dh_use : 0));
+        boost::asio::ssl::context::no_tlsv1 |      // Also disable TLS 1.0
+        boost::asio::ssl::context::no_tlsv1_1 |    // Also disable TLS 1.1
+        boost::asio::ssl::context::single_dh_use |
+        boost::asio::ssl::context::no_compression  // Prevent CRIME attacks
+    );
 
-    ctx.use_certificate_chain(
+    ctx_server.use_certificate_chain(
         boost::asio::buffer(cert.data(), cert.size()));
 
-    ctx.use_private_key(
+    ctx_server.use_private_key(
         boost::asio::buffer(key.data(), key.size()),
         boost::asio::ssl::context::file_format::pem);
 
     if (ssl_dh_params_path_.size() > 0) {
       std::string const dh = read_file_to_string(ssl_dh_params_path_);
-      ctx.use_tmp_dh(
+      ctx_server.use_tmp_dh(
           boost::asio::buffer(dh.data(), dh.size()));
     }
   }
 
-  ctx.set_default_verify_paths();
+  // ctx.set_default_verify_paths();
   
   // Configure SSL client settings based on RpcBuilder options
   if (cfg_.ssl_client_disable_verification) {
     std::cout << "SSL client verification disabled (for testing only)" << std::endl;
-    ctx.set_verify_mode(ssl::verify_none);
+    ctx_client.set_verify_mode(ssl::verify_none);
   } else {
     if (!cfg_.ssl_client_self_signed_cert_path.empty()) {
       try {
-        ctx.load_verify_file(cfg_.ssl_client_self_signed_cert_path);
+        ctx_client.load_verify_file(cfg_.ssl_client_self_signed_cert_path);
         std::cout << "Loaded self-signed certificate for SSL client: " 
                   << cfg_.ssl_client_self_signed_cert_path << std::endl;
       } catch (const std::exception& ex) {
@@ -93,7 +96,7 @@ NPRPC_API Rpc* RpcBuilder::build(boost::asio::io_context& ioc)
                   << ex.what() << std::endl;
       }
     }
-    ctx.set_verify_mode(ssl::verify_peer);
+    ctx_client.set_verify_mode(ssl::verify_peer);
   }
 
   impl::g_cfg = std::move(cfg_);
