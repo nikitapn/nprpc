@@ -112,7 +112,7 @@ target_link_libraries(npnameserver PUBLIC nprpc)
 
 add_subdirectory(check)
 add_subdirectory(nprpc_js)
-# add_dependencies(nprpc_js nprpc)
+add_dependencies(nprpc_js nprpc)
 
 if(UNIX)
   if(OPT_NPRPC_SKIP_TESTS)
