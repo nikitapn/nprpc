@@ -103,7 +103,7 @@ Header: flat {
   size: u32;
   msg_id: MessageId;
   msg_type: MessageType;
-  reserved: u32;
+  request_id: u32;
 }
 
 CallHeader: flat {

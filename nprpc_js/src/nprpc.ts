@@ -81,7 +81,7 @@ interface HostInfo {
   objects: any;
 }
 
-interface Work {
+interface PendingRequest {
   buffer: FlatBuffer;
   promise: MyPromise<void, Error>;
 }
@@ -109,32 +109,62 @@ function get_object(buffer: FlatBuffer, poa_idx: poa_idx_t, object_id: bigint) {
 export class Connection {
   endpoint: EndPoint;
   ws: WebSocket;
-  queue: Work[];
+  pending_requests: Map<number, PendingRequest>;
+  next_request_id: number;
 
-  private async perform_one() {
-    this.ws.send(this.queue[0].buffer.writable_view);
+  private async perform_request(request_id: number, buffer: FlatBuffer) {
+    // Inject request ID into the message header
+    buffer.write_request_id(request_id);
+    this.ws.send(buffer.writable_view);
   }
 
   private on_open() {
-    if (this.queue.length) this.perform_one();
+    // WebSocket is ready, all pending requests will be sent when needed
   }
 
   public async send_receive(buffer: FlatBuffer, timeout_ms: number): Promise<any> {
-    let promise = new MyPromise<void, Error>();
-    this.queue.push({ buffer: buffer, promise: promise });
-    if (this.ws.readyState && this.queue.length == 1) this.perform_one();
+    const request_id = this.next_request_id++;
+    const promise = new MyPromise<void, Error>();
+    
+    // Store the pending request
+    this.pending_requests.set(request_id, { buffer: buffer, promise: promise });
+    
+    // Send the request if WebSocket is ready
+    if (this.ws.readyState === WebSocket.OPEN) {
+      this.perform_request(request_id, buffer);
+    } else {
+      // If WebSocket is not ready, wait for it to open
+      const originalOnOpen = this.ws.onopen;
+      this.ws.onopen = (event) => {
+        if (originalOnOpen) originalOnOpen.call(this.ws, event);
+        if (this.pending_requests.has(request_id)) {
+          this.perform_request(request_id, buffer);
+        }
+      };
+    }
+    
     return promise.$;
   }
 
   private on_read(ev: MessageEvent<any>) {
     let buf = FlatBuffer.from_array_buffer(ev.data as ArrayBuffer);
     if (buf.read_msg_type() == impl.MessageType.Answer) {
-      let task = this.queue[0];
-      task.buffer.set_buffer(ev.data as ArrayBuffer);
-      this.queue.shift();
-      task.promise.set_promise();
-      if (this.queue.length) this.perform_one();
+      // Extract request ID from the response
+      const request_id = buf.read_request_id();
+      const pending_request = this.pending_requests.get(request_id);
+      
+      if (pending_request) {
+        // Update the buffer with response data
+        pending_request.buffer.set_buffer(ev.data as ArrayBuffer);
+        this.pending_requests.delete(request_id);
+        pending_request.promise.set_promise();
+      } else {
+        console.warn("Received response for unknown request ID:", request_id);
+      }
     } else {
+      // Store the original request ID to preserve it in the response
+      const request_id = buf.read_request_id();
+      
       switch (buf.read_msg_id()) {
         case impl.MessageId.FunctionCall: {
           let ch = new impl.Flat_nprpc_base.CallHeader_Direct(buf, header_size);
@@ -192,24 +222,33 @@ export class Connection {
           make_simple_answer(buf, impl.MessageId.Error_UnknownMessageId);
           break;
       }
+      
+      // Restore the request ID before sending the response
+      buf.write_request_id(request_id);
       this.ws.send(buf.writable_view);
     }
   }
 
-  private on_close() { }
+  private on_close() { 
+    // Cancel all pending requests on connection close
+    for (const [request_id, pending_request] of this.pending_requests) {
+      pending_request.promise.set_exception(new Error("Connection closed") as any);
+    }
+    this.pending_requests.clear();
+  }
 
   private on_error(ev: Event) {
-    ///  if (buf.read_msg_type() == impl.MessageType.Answer) {
-    //    let task = this.queue[0];
-    //    task.buffer.set_buffer(ev.data as ArrayBuffer);
-    //    this.queue.shift();
-    //    task.promise.set_promise();
-    //  }
+    // Cancel all pending requests on connection error
+    for (const [request_id, pending_request] of this.pending_requests) {
+      pending_request.promise.set_exception(new Error("Connection error") as any);
+    }
+    this.pending_requests.clear();
   }
 
   constructor(endpoint: EndPoint) {
     this.endpoint = endpoint;
-    this.queue = new Array<Work>();
+    this.pending_requests = new Map<number, PendingRequest>();
+    this.next_request_id = 1; // Start from 1, avoid 0 as it might be treated as invalid
 
     if (host_info.secured) {
       this.ws = new WebSocket('wss://' + this.endpoint.hostname + ':' + this.endpoint.port.toString(10));
@@ -387,7 +426,7 @@ export class Poa {
     let oid: detail.ObjectId = {
       object_id: object_id_internal,
       poa_idx: this.index,
-      flags: (1 << detail.ObjectFlag.Tethered),
+      flags: detail.ObjectFlag.Tethered,
       origin: new Array<number>(16).fill(0), // origin is not used in JS
       class_id: obj.get_class(),
       urls: "", // urls is not used in JS
@@ -619,7 +658,7 @@ export const create_object_from_flat = (
   detail.helpers.assign_from_flat_ObjectId(direct);
   const oid: detail.ObjectId = obj.data;
 
-  if (direct.flags & (1 << detail.ObjectFlag.Tethered)) {
+  if (direct.flags & detail.ObjectFlag.Tethered) {
     oid.urls = remote_endpoint.to_string();
     obj.endpoint_ = remote_endpoint;
   } else {

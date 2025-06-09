@@ -143,7 +143,8 @@ ObjectPtr<Nameserver> RpcImpl::get_nameserver(
     "ws://"  + ip + ":15001;"
   );
 
-  obj->select_endpoint();
+  [[maybe_unused]] bool res = obj->select_endpoint();
+  assert(res && "Nameserver must have a valid endpoint");
 
   return obj;
 }
@@ -204,9 +205,8 @@ NPRPC_API Object* create_object_from_flat(
   if (direct.object_id() == invalid_object_id)
     return nullptr;
 
-  // assert(remote_endpoint.type() == EndPointType::TcpTethered);
 
-  auto  obj = new Object();
+  auto  obj = std::unique_ptr<Object>(new Object());
   obj->local_ref_cnt_ = 1;
 
   auto& oid = obj->get_data();
@@ -218,10 +218,15 @@ NPRPC_API Object* create_object_from_flat(
     oid.urls       = remote_endpoint.to_string();
     obj->endpoint_ = remote_endpoint;
   } else {
-    obj->select_endpoint(remote_endpoint);
+    if (!obj->select_endpoint(remote_endpoint)) {
+      // Something is malformed, we cannot select an endpoint
+      // maybe I need to wrap `dispatch` in a try-catch block?
+      throw nprpc::Exception(
+        "Cannot select endpoint for object: " + std::string(oid.class_id));
+    }
   }
 
-  return obj;
+  return obj.release();
 }
 
 NPRPC_API void fill_guid(std::array<std::uint8_t, 16>& guid) noexcept {

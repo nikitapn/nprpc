@@ -224,7 +224,9 @@ class Object : public ObjectId
 
   NPRPC_API uint32_t add_ref();
   NPRPC_API uint32_t release();
-  NPRPC_API void     select_endpoint(std::optional<EndPoint> remote_endpoint = std::nullopt);
+  // Returns true if the endpoint was selected, false otherwise
+  // and will indicate that something is wrong
+  NPRPC_API bool     select_endpoint(std::optional<EndPoint> remote_endpoint = std::nullopt) noexcept;
   
   uint32_t set_timeout(uint32_t timeout_ms) noexcept
   {

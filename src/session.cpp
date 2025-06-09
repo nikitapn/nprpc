@@ -58,7 +58,12 @@ void Session::handle_request() {
 			if (auto real_obj = (*obj).get(); real_obj) {
 				if (!validate(*real_obj)) return;
 				set_context(*this);
-				real_obj->dispatch(rx_buffer_, ctx_, false);
+				try { 
+					real_obj->dispatch(rx_buffer_, ctx_, false);
+				} catch (const std::exception& e) {
+					std::cerr << "Exception during dispatch: " << e.what() << '\n';
+					make_simple_answer(rx_buffer_(), MessageId::Error_BadInput);
+				}
 				reset_context();
 				not_found = false;
 			}

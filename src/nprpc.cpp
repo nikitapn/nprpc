@@ -199,56 +199,63 @@ NPRPC_API uint32_t Object::release()
   return 0;
 }
 
-NPRPC_API void Object::select_endpoint(std::optional<EndPoint> remote_endpoint)
+NPRPC_API bool Object::select_endpoint(std::optional<EndPoint> remote_endpoint) noexcept
 {
-  std::string& urls = data_.urls;
-  auto start = [&urls, this, &remote_endpoint] {
-    const auto same_machine = is_same_origin(impl::g_cfg.uuid);
-    auto try_replace_ip = [&] (size_t pos, std::string_view prefix) {
-      if (same_machine || !remote_endpoint )
-        return;
+  try {
+    std::string& urls = data_.urls;
+    size_t start = [&urls, this, &remote_endpoint] {
+      const auto same_machine = is_same_origin(impl::g_cfg.uuid);
+      auto try_replace_ip = [&] (size_t pos, std::string_view prefix) {
+        if (same_machine || !remote_endpoint )
+          return;
 
-      auto start = pos + prefix.length();
-      auto end = urls.find(':', start);
-      auto ipv4_str = urls.substr(start, end - start);
+        auto start = pos + prefix.length();
+        auto end = urls.find(':', start);
+        auto ipv4_str = urls.substr(start, end - start);
 
-      boost::system::error_code ec;
-      auto ipv4_addr = nprpc::impl::net::ip::make_address_v4(ipv4_str, ec);
-      if ((!ec && ipv4_addr.to_uint() == 0x7F000001) || ipv4_str == "localhost") {
-        // Change ip from localhost or 127.0.0.1 to ip of the remote endpoint
-        auto remote_ip = remote_endpoint->hostname();
-        assert(remote_ip.size() > 0 && "Remote endpoint must have a valid hostname");
-        urls = urls.substr(0, start) + std::string(remote_ip) + urls.substr(end);
+        boost::system::error_code ec;
+        auto ipv4_addr = nprpc::impl::net::ip::make_address_v4(ipv4_str, ec);
+        if ((!ec && ipv4_addr.to_uint() == 0x7F000001) || ipv4_str == "localhost") {
+          // Change ip from localhost or 127.0.0.1 to ip of the remote endpoint
+          auto remote_ip = remote_endpoint->hostname();
+          assert(remote_ip.size() > 0 && "Remote endpoint must have a valid hostname");
+          urls = urls.substr(0, start) + std::string(remote_ip) + urls.substr(end);
+        }
+      };
+
+      size_t pos = std::string::npos, pos2 = std::string::npos;
+      if (same_machine && ((pos = urls.find(mem_prefix)) != std::string::npos)) {
+        // Prefer shared memory if possible
+        return pos;
       }
-    };
+
+      if ((pos = urls.find(tcp_prefix)) != std::string::npos)
+        try_replace_ip(pos, tcp_prefix);
     
-    size_t pos = std::string::npos, pos2 = std::string::npos;
-    if (same_machine && ((pos = urls.find(mem_prefix)) != std::string::npos)) {
-      // Prefer shared memory if possible
+      if ((pos2 = urls.find(ws_prefix)) != std::string::npos)
+        try_replace_ip(pos2, ws_prefix);
+
+      if (pos != std::string::npos)
+        return pos;
+
+      if (pos2 != std::string::npos)
+        return pos2;
+
+      if ((pos = urls.find(wss_prefix)) == std::string::npos)
+        throw std::runtime_error("No valid endpoint found for object " + class_id() +
+                                " with urls: " + urls);
+
       return pos;
-    }
-
-    if ((pos = urls.find(tcp_prefix)) != std::string::npos)
-      try_replace_ip(pos, tcp_prefix);
-    
-    if ((pos2 = urls.find(ws_prefix)) != std::string::npos)
-      try_replace_ip(pos2, ws_prefix);
-
-    if (pos != std::string::npos)
-      return pos;
-
-    if (pos2 != std::string::npos)
-      return pos2;
-
-    if ((pos = urls.find(wss_prefix)) == std::string::npos)
-      throw std::runtime_error("No valid endpoint found");
-
-    return pos;
     } ();
 
-  auto end = urls.find(';', start);
-  auto size = (end != std::string::npos) ? end - start : std::string::npos;
-  endpoint_ = EndPoint(urls.substr(start, size));
+    auto end = urls.find(';', start);
+    auto size = (end != std::string::npos) ? end - start : std::string::npos;
+    endpoint_ = EndPoint(urls.substr(start, size));
+    return true;
+  } catch (const std::exception& ex) {
+    std::cerr << "Failed to select endpoint: " << ex.what() << '\n';
+  }
+  return false;
 }
 
 NPRPC_API uint32_t ObjectServant::add_ref() noexcept

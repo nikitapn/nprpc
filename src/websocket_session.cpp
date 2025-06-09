@@ -70,7 +70,7 @@ void WebSocketSession<Derived>::on_read(beast::error_code ec, std::size_t bytes_
   }
 
   nprpc::impl::flat::Header_Direct header(rx_buffer_(), 0);
-  const uint32_t request_id = header.reserved();
+  const uint32_t request_id = header.request_id();
 
   if (header.msg_type() == nprpc::impl::MessageType::Request) {
     // Handle incoming request
@@ -280,7 +280,7 @@ template <class Derived>
 void WebSocketSession<Derived>::inject_request_id(flat_buffer& buffer, uint32_t request_id) {
   if (buffer.size() >= sizeof(impl::Header)) {
     impl::flat::Header_Direct header(buffer, 0);
-    header.reserved() = request_id;
+    header.request_id() = request_id;
   }
 }
 
@@ -288,7 +288,7 @@ template <class Derived>
 uint32_t WebSocketSession<Derived>::extract_request_id(const flat_buffer& buffer) {
   if (buffer.size() >= sizeof(impl::Header)) {
     const impl::flat::Header_Direct header(const_cast<flat_buffer&>(buffer), 0);
-    return header.reserved();
+    return header.request_id();
   }
   return 0;
 }

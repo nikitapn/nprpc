@@ -388,7 +388,7 @@ struct Header {
   uint32_t size;
   MessageId msg_id;
   MessageType msg_type;
-  uint32_t reserved;
+  uint32_t request_id;
 };
 
 namespace flat {
@@ -396,7 +396,7 @@ struct Header {
   uint32_t size;
   MessageId msg_id;
   MessageType msg_type;
-  uint32_t reserved;
+  uint32_t request_id;
 };
 
 class Header_Direct {
@@ -419,8 +419,8 @@ public:
   MessageId& msg_id() noexcept { return base().msg_id;}
   const MessageType& msg_type() const noexcept { return base().msg_type;}
   MessageType& msg_type() noexcept { return base().msg_type;}
-  const uint32_t& reserved() const noexcept { return base().reserved;}
-  uint32_t& reserved() noexcept { return base().reserved;}
+  const uint32_t& request_id() const noexcept { return base().request_id;}
+  uint32_t& request_id() noexcept { return base().request_id;}
 };
 } // namespace flat
 

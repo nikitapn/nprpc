@@ -275,6 +275,7 @@ TEST_F(NprpcTest, TestOptional) {
     };
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
 }
 
 // Nested structures test
@@ -350,6 +351,7 @@ TEST_F(NprpcTest, TestNested) {
     };
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
 }
 
 // Large message test to verify async_write fix for messages >2.6MB
@@ -435,6 +437,7 @@ TEST_F(NprpcTest, TestLargeMessage) {
     };
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
 }
 
 // Bad input validation test
@@ -482,6 +485,7 @@ TEST_F(NprpcTest, TestBadInput) {
     };
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
 }
 
 

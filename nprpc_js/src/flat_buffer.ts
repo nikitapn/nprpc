@@ -65,6 +65,14 @@ export class FlatBuffer {
 		return this.dv.getUint32(16, true);
 	}
 
+	public write_request_id(request_id: number) {
+		this.dv.setUint32(12, request_id, true);
+	}
+
+	public read_request_id(): number {
+		return this.dv.getUint32(12, true);
+	}
+
 	public get writable_view(): DataView {
 		return new DataView(this.array_buffer, 0, this.size);
 	}
