@@ -147,21 +147,32 @@ class NPRPC_API Poa
 {
   poa_idx_t idx_;
 
- public:  
+ public:
+  /**
+   * @brief Activate an object servant in this POA.
+   * @param obj The object servant to activate.
+   * @param activation_flags Flags that control how the object is activated.
+   * @param ctx Optional session context for session-specific activation.
+   * @return The object ID of the activated object.
+   * @throws std::runtime_error if the object cannot be activated.
+   */ 
   virtual ObjectId activate_object(
     ObjectServant*  obj,
     uint32_t        activation_flags,
-    SessionContext* ctx = nullptr)                    = 0;
-  virtual void     deactivate_object(oid_t object_id) = 0;
+    SessionContext* ctx = nullptr) = 0;
+
+  /**
+   * @brief Deactivate an object servant in this POA.
+   * @param object_id The ID of the object to deactivate.
+   * @throws std::runtime_error if the object cannot be deactivated.
+   */
+  virtual void deactivate_object(oid_t object_id) = 0;
 
   poa_idx_t get_index() const noexcept { return idx_; }
-  
-  Poa(
-    poa_idx_t idx)
-      : idx_ {idx}
-  {
-  }
-  
+
+  Poa(poa_idx_t idx) : idx_ {idx} {}
+
+  // Poa lifetime is managed by RpcImpl, so no need to delete it manually via delete or wrap Poa in a smart pointer.
   virtual ~Poa() = default;
 };
 
@@ -263,6 +274,7 @@ class NPRPC_API Rpc
  public:
   // Create a new POA builder
   PoaBuilder create_poa() { return PoaBuilder(this); }
+  virtual void destroy_poa(Poa* poa) = 0;
   virtual void destroy() = 0;
   virtual ObjectPtr<Nameserver> get_nameserver(std::string_view nameserver_ip) = 0;
   virtual ~Rpc() = default;

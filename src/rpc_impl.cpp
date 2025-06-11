@@ -6,9 +6,14 @@
 namespace nprpc::impl {
 
 Poa* RpcImpl::create_poa_impl(uint32_t objects_max, PoaPolicy::Lifespan lifespan) {
-  auto idx = poa_size_.fetch_add(1);
-  auto poa = new PoaImpl(objects_max, idx);
-  poas_[idx] = std::unique_ptr<PoaImpl>(poa);
+  auto it = std::find(std::begin(poas_created_), std::end(poas_created_), false);
+  if (it == std::end(poas_created_)) {
+    throw std::runtime_error("Maximum number of POAs reached");
+  }
+  auto index = std::distance(std::begin(poas_created_), it);
+  auto poa = new PoaImpl(objects_max, index);
+  poas_[index] = std::unique_ptr<PoaImpl>(poa);
+  (*it) = true; // Mark this POA as created
 
   // Set the policy
   poa->pl_lifespan_ = lifespan;
@@ -28,6 +33,20 @@ void RpcImpl::destroy()
   g_orb = nullptr;
 }
 
+void RpcImpl::destroy_poa(Poa* poa)
+{
+  if (!poa) return;
+
+  auto idx = poa->get_index();
+  if (idx >= poas_.size()) {
+    throw std::out_of_range("Poa index out of range");
+  }
+
+  poas_[idx].reset();
+  poas_created_[idx] = false;
+}
+
+
 NPRPC_API std::shared_ptr<Session> RpcImpl::get_session(
   const EndPoint& endpoint)
 {
@@ -43,7 +62,7 @@ NPRPC_API std::shared_ptr<Session> RpcImpl::get_session(
     } else {
       switch(endpoint.type()) {
        case EndPointType::TcpTethered: 
-          throw nprpc::ExceptionCommFailure();
+          throw nprpc::ExceptionCommFailure("nprpc::impl::RpcImpl::get_session: Cannot create tethered TCP connection");
       case EndPointType::Tcp:
         con = std::make_shared<SocketConnection>(
           endpoint,
@@ -62,7 +81,8 @@ NPRPC_API std::shared_ptr<Session> RpcImpl::get_session(
         // );
         break;
       default:
-        throw nprpc::ExceptionCommFailure();
+        throw nprpc::ExceptionCommFailure("nprpc::impl::RpcImpl::get_session: Unknown endpoint type: " + 
+                                          std::to_string(static_cast<int>(endpoint.type())));
       }
 
       opened_sessions_.push_back(con);
@@ -153,6 +173,7 @@ RpcImpl::RpcImpl(
   boost::asio::io_context& ioc)
     : ioc_ {ioc}
 {
+  poas_created_.fill(false);
   init_socket(ioc_);
   init_http_server(ioc_);
 }

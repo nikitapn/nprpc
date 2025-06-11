@@ -10,7 +10,11 @@ using uuid_t    = u8[16];
 using ifs_idx_t = u8;
 using fn_idx_t  = u8;
 
-ExceptionCommFailure : exception {}
+ExceptionCommFailure : exception {
+  /** Error message */
+  what: string;
+}
+
 ExceptionTimeout : exception {}
 ExceptionObjectNotExist : exception {}
 ExceptionUnknownFunctionIndex : exception {}

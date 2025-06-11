@@ -14,12 +14,20 @@ using ifs_idx_t = uint8_t;
 using fn_idx_t = uint8_t;
 class ExceptionCommFailure : public ::nprpc::Exception {
 public:
+  std::string what;
+
   ExceptionCommFailure() : ::nprpc::Exception("ExceptionCommFailure") {} 
+  ExceptionCommFailure(std::string _what)
+    : ::nprpc::Exception("ExceptionCommFailure")
+    , what(_what)
+  {
+  }
 };
 
 namespace flat {
 struct ExceptionCommFailure {
   uint32_t __ex_id;
+  ::nprpc::flat::String what;
 };
 
 class ExceptionCommFailure_Direct {
@@ -38,6 +46,11 @@ public:
   }
   const uint32_t& __ex_id() const noexcept { return base().__ex_id;}
   uint32_t& __ex_id() noexcept { return base().__ex_id;}
+  void what(const char* str) { new (&base().what) ::nprpc::flat::String(buffer_, str); }
+  void what(const std::string& str) { new (&base().what) ::nprpc::flat::String(buffer_, str); }
+  auto what() noexcept { return (::nprpc::flat::Span<char>)base().what; }
+  auto what() const noexcept { return (::nprpc::flat::Span<const char>)base().what; }
+  auto what_d() noexcept {     return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(ExceptionCommFailure, what));  }
 };
 } // namespace flat
 

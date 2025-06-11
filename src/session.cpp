@@ -45,7 +45,8 @@ void Session::handle_request() {
 	}
 
 	auto cb = rx_buffer_().cdata();
-	switch (static_cast<const impl::Header*>(cb.data())->msg_id) {
+	auto header = static_cast<const impl::flat::Header*>(cb.data());
+	switch (header->msg_id) {
 	case MessageId::FunctionCall: {
 		impl::flat::CallHeader_Direct ch(rx_buffer_(), sizeof(impl::Header));
 		
@@ -58,11 +59,13 @@ void Session::handle_request() {
 			if (auto real_obj = (*obj).get(); real_obj) {
 				if (!validate(*real_obj)) return;
 				set_context(*this);
+				// save request ID for later use
+				auto request_id = header->request_id;
 				try { 
 					real_obj->dispatch(rx_buffer_, ctx_, false);
 				} catch (const std::exception& e) {
 					std::cerr << "Exception during dispatch: " << e.what() << '\n';
-					make_simple_answer(rx_buffer_(), MessageId::Error_BadInput);
+					make_simple_answer(rx_buffer_(), MessageId::Error_BadInput, request_id);
 				}
 				reset_context();
 				not_found = false;
