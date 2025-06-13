@@ -6,15 +6,17 @@
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid.hpp>
 
+#include <atomic>
+
 #ifdef _WIN32
-#include <windows.h>
+# include <windows.h>
 #else
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <semaphore.h>
+# include <sys/mman.h>
+# include <sys/stat.h>
+# include <fcntl.h>
+# include <unistd.h>
+# include <pthread.h>
+# include <semaphore.h>
 #endif
 
 #include <system_error>

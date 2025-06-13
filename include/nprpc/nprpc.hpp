@@ -277,6 +277,7 @@ class NPRPC_API Rpc
   virtual void destroy_poa(Poa* poa) = 0;
   virtual void destroy() = 0;
   virtual ObjectPtr<Nameserver> get_nameserver(std::string_view nameserver_ip) = 0;
+  virtual SessionContext* get_object_session_context(Object* obj) = 0;
   virtual ~Rpc() = default;
 };
 

@@ -6,6 +6,8 @@
 namespace nprpc::impl {
 
 Poa* RpcImpl::create_poa_impl(uint32_t objects_max, PoaPolicy::Lifespan lifespan) {
+  std::lock_guard<std::mutex> lk(poas_mut_);
+
   auto it = std::find(std::begin(poas_created_), std::end(poas_created_), false);
   if (it == std::end(poas_created_)) {
     throw std::runtime_error("Maximum number of POAs reached");
@@ -36,6 +38,8 @@ void RpcImpl::destroy()
 void RpcImpl::destroy_poa(Poa* poa)
 {
   if (!poa) return;
+   
+  std::lock_guard<std::mutex> lk(poas_mut_);
 
   auto idx = poa->get_index();
   if (idx >= poas_.size()) {
@@ -125,6 +129,20 @@ bool RpcImpl::has_session(
                       [endpoint](auto const& ptr) {
                         return ptr->remote_endpoint() == endpoint;
                       }) != opened_sessions_.end();
+}
+
+
+NPRPC_API SessionContext* RpcImpl::get_object_session_context(Object* obj)
+{
+  if (!obj) return nullptr;
+
+  // We need to find the session context based on the endpoint
+  auto session = g_orb->get_session(obj->get_endpoint());
+  if (session) {
+    return &session->ctx();
+  }
+
+  return nullptr;
 }
 
 bool RpcImpl::close_session(

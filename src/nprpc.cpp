@@ -111,6 +111,10 @@ NPRPC_API uint32_t ObjectServant::release() noexcept
     return 1;
   }
 
+  // std::cout << "ObjectServant::release() called for object with ID: "<< object_id_ <<
+    // "\n ref_cnt: " << ref_cnt_.load() <<
+    // "\n class_id: " << get_class() << std::endl;
+
   assert(is_unused() == false);
 
   auto cnt = ref_cnt_.fetch_sub(1, std::memory_order_acquire) - 1;

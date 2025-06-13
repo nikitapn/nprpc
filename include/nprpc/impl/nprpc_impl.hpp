@@ -139,6 +139,7 @@ class RpcImpl : public Rpc
   static constexpr std::uint16_t           invalid_port    = -1;
 
   boost::asio::io_context&                 ioc_;
+  std::mutex                               poas_mut_;
   std::array<
     std::unique_ptr<PoaImpl>,
     max_poa_objects>                       poas_;
@@ -170,6 +171,8 @@ class RpcImpl : public Rpc
     uint32_t                                           timeout_ms = 2500);
 
   NPRPC_API std::optional<ObjectGuard> get_object(poa_idx_t poa_idx, oid_t oid);
+
+  NPRPC_API SessionContext* get_object_session_context(Object* obj) override;
 
   boost::asio::io_context& ioc() noexcept { return ioc_; }
   // void start() override;
@@ -374,7 +377,7 @@ inline void make_simple_answer(
     id == MessageId::Error_BadInput
   );
 
-  static_assert(std::is_pod_v<impl::flat::Header>,
+  static_assert(std::is_standard_layout_v<impl::flat::Header>,
     "impl::flat::Header must be POD type");
 
   if (!request_id && buf.size() >= sizeof(impl::flat::Header)) {
