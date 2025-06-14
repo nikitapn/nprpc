@@ -291,8 +291,8 @@ struct Config {
   uint16_t                   listen_http_port  = 0;
   std::string                http_root_dir;
   std::vector<std::string>   spa_links;
-  ssl::context               ssl_context_server{ssl::context::tlsv12_server};
-  ssl::context               ssl_context_client{ssl::context::tlsv12_client};
+  ssl::context               ssl_context_server{ssl::context::tlsv13_server};
+  ssl::context               ssl_context_client{ssl::context::tlsv13_client};
   std::string                ssl_client_self_signed_cert_path;
   bool                       ssl_client_disable_verification = false;
 };

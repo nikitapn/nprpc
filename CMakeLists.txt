@@ -81,6 +81,7 @@ if(WIN32)
   target_link_libraries(nprpc PUBLIC
     libssl
     libcrypto
+    crypt32
   )
   target_compile_definitions(nprpc PRIVATE -DNPRPC_EXPORTS)
 else()

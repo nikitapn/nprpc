@@ -1580,8 +1580,8 @@ CppBuilder::CppBuilder(Context& ctx, std::filesystem::path file_path,
 	auto const header_file_path = filename.replace_extension(".hpp");
 	auto const cpp_file_path = filename.replace_extension(".cpp");
 	
-	oh.open(out_inc_path / header_file_path);
-	ocpp.open(out_src_path / cpp_file_path);
+	oh.open(out_inc_path / header_file_path, std::ios::binary);
+	ocpp.open(out_src_path / cpp_file_path, std::ios::binary);
 
 	if (!oh || !ocpp) {
 		throw std::runtime_error("Could not create output file...");

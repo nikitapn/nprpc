@@ -10,6 +10,37 @@
 #include <fstream>
 #include <functional>
 
+#ifdef _WIN32
+#include <boost/asio/ssl/context.hpp>
+#include <wincrypt.h>
+namespace {
+void add_windows_root_certs(boost::asio::ssl::context &ctx)
+{
+    HCERTSTORE hStore = CertOpenSystemStore(0, "ROOT");
+    if (hStore == NULL) {
+        return;
+    }
+
+    X509_STORE *store = X509_STORE_new();
+    PCCERT_CONTEXT pContext = NULL;
+    while ((pContext = CertEnumCertificatesInStore(hStore, pContext)) != NULL) {
+        X509 *x509 = d2i_X509(NULL,
+                              (const unsigned char **)&pContext->pbCertEncoded,
+                              pContext->cbCertEncoded);
+        if(x509 != NULL) {
+            X509_STORE_add_cert(store, x509);
+            X509_free(x509);
+        }
+    }
+
+    CertFreeCertificateContext(pContext);
+    CertCloseStore(hStore, 0);
+
+    SSL_CTX_set_cert_store(ctx.native_handle(), store);
+}
+} // namespace
+#endif // BOOST_OS_WINDOWS
+
 using namespace nprpc;
 
 namespace nprpc {
@@ -79,13 +110,25 @@ NPRPC_API Rpc* RpcBuilder::build(boost::asio::io_context& ioc)
     }
   }
 
-  // ctx.set_default_verify_paths();
-  
   // Configure SSL client settings based on RpcBuilder options
   if (cfg_.ssl_client_disable_verification) {
     std::cout << "SSL client verification disabled (for testing only)" << std::endl;
     ctx_client.set_verify_mode(ssl::verify_none);
   } else {
+#ifdef _WIN32
+    // On Windows, add system root certificates to the SSL context
+    add_windows_root_certs(ctx_client);
+#else
+    // On other platforms, set default verification paths
+    boost::system::error_code ec;
+    ctx_client.set_default_verify_paths(ec);
+    if (ec) {
+      std::cerr << "Warning: Failed to set default SSL verification paths: "
+                << ec.message() << std::endl;
+    } else {
+      std::cout << "SSL client verification paths set successfully." << std::endl;
+    }
+#endif // _WIN32
     if (!cfg_.ssl_client_self_signed_cert_path.empty()) {
       try {
         ctx_client.load_verify_file(cfg_.ssl_client_self_signed_cert_path);

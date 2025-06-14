@@ -1285,7 +1285,7 @@ TypescriptBuilder::TypescriptBuilder(Context& ctx, std::filesystem::path file_pa
 {
 	auto filename = file_path.filename();
 	filename.replace_extension(".ts");
-	out.open(out_dir / filename);
+	out.open(out_dir / filename, std::ios::binary);
 
 	if (ctx_.is_nprpc_base()) {
 		out << "import * as NPRPC from '@/base'\n\n";
