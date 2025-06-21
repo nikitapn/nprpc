@@ -149,7 +149,7 @@ NPRPC_API Rpc* RpcBuilder::build(boost::asio::io_context& ioc)
 
 NPRPC_API uint32_t ObjectServant::release() noexcept
 {
-  if (static_cast<impl::PoaImpl*>(poa_)->get_lifespan() ==
+  if (static_cast<impl::PoaImpl*>(poa_.get())->get_lifespan() ==
       PoaPolicy::Lifespan::Persistent) {
     return 1;
   }
@@ -162,7 +162,7 @@ NPRPC_API uint32_t ObjectServant::release() noexcept
 
   auto cnt = ref_cnt_.fetch_sub(1, std::memory_order_acquire) - 1;
   if (cnt == 0) {
-    static_cast<impl::PoaImpl*>(poa_)->deactivate_object(object_id_);
+    static_cast<impl::PoaImpl*>(poa_.get())->deactivate_object(object_id_);
     impl::PoaImpl::delete_object(this);
   }
 
@@ -200,6 +200,11 @@ NPRPC_API uint32_t Object::release()
 {
   auto cnt = --local_ref_cnt_;
   if (cnt != 0) return cnt;
+
+  if (::nprpc::impl::g_orb == nullptr) {
+    delete this;
+    return 0;
+  }
 
   if (policy_lifespan() == PoaPolicy::Lifespan::Transient) {
     const auto& endpoint = get_endpoint();

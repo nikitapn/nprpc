@@ -13,14 +13,11 @@ Poa* RpcImpl::create_poa_impl(uint32_t objects_max, PoaPolicy::Lifespan lifespan
     throw std::runtime_error("Maximum number of POAs reached");
   }
   auto index = std::distance(std::begin(poas_created_), it);
-  auto poa = new PoaImpl(objects_max, index);
-  poas_[index] = std::unique_ptr<PoaImpl>(poa);
+  auto poa = std::make_shared<PoaImpl>(objects_max, static_cast<uint16_t>(index), lifespan);
+  poas_[index] = poa;
   (*it) = true; // Mark this POA as created
 
-  // Set the policy
-  poa->pl_lifespan_ = lifespan;
-
-  return poa;
+  return poa.get();
 }
 
 extern void init_socket(boost::asio::io_context& ioc);
@@ -269,6 +266,106 @@ NPRPC_API Object* create_object_from_flat(
 NPRPC_API void fill_guid(std::array<std::uint8_t, 16>& guid) noexcept {
   auto& g = impl::g_cfg.uuid;
   std::copy(g.begin(), g.end(), guid.begin());
+}
+
+ObjectId PoaImpl::activate_object(
+    ObjectServant*  obj,
+    uint32_t        activation_flags,
+    SessionContext* ctx)
+{
+  ObjectId result;
+  auto& oid                = result.get_data();
+  auto  object_id_internal = id_to_ptr_.add(obj);
+
+  if (object_id_internal == invalid_object_id)
+    throw Exception("Poa fixed size has been exceeded");
+
+  obj->poa_             = shared_from_this();
+  obj->object_id_       = object_id_internal;
+  obj->activation_time_ = std::chrono::system_clock::now();
+
+  oid.object_id = object_id_internal;
+  oid.poa_idx   = get_index();
+  oid.flags     = 0;
+  if (pl_lifespan_ == PoaPolicy::Lifespan::Persistent)
+    oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::Persistent);
+  fill_guid(oid.origin);
+  oid.class_id  = obj->get_class();
+
+  using namespace std::string_literals;
+  // hostname is preferred over localhost
+  const std::string default_url =
+    g_cfg.hostname.empty() ? "127.0.0.1"s : g_cfg.hostname;
+
+  if (activation_flags & ObjectActivationFlags::ALLOW_TCP) {
+    oid.urls +=
+      (std::string(tcp_prefix) + default_url + ":" + std::to_string(g_cfg.listen_tcp_port)) + ';';
+  }
+
+  if (activation_flags & ObjectActivationFlags::ALLOW_WEBSOCKET) {
+    oid.urls +=
+      (std::string(ws_prefix) + default_url + ":" + std::to_string(g_cfg.listen_http_port)) +
+      ';';
+  }
+
+  if (activation_flags & ObjectActivationFlags::ALLOW_SSL_WEBSOCKET) {
+    if (g_cfg.hostname.empty()) {
+      throw std::runtime_error("SSL websocket requires hostname");
+    }
+    oid.urls += (std::string(wss_prefix) + g_cfg.hostname + ":" +
+                 std::to_string(g_cfg.listen_http_port));
+  }
+
+  if (activation_flags & ObjectActivationFlags::ALLOW_MEMORY_MAPPED) {
+    /* TODO: implement shared memory
+    oid.urls +=
+      (std::string(mem_prefix) + g_cfg.http_root_dir + ":" +
+       std::to_string(g_cfg.shared_memory_port)) +
+      ';';
+      */
+  }
+
+  if (pl_lifespan_ == PoaPolicy::Lifespan::Transient) {
+    // std::lock_guard<std::mutex> lk(g_orb->new_activated_objects_mut_);
+    // g_orb->new_activated_objects_.push_back(obj);
+    if (!ctx)
+      throw std::runtime_error(
+        "Object created with transient policy requires session context for "
+        "activation");
+
+    ctx->ref_list.add_ref(obj);
+  }
+
+  if (activation_flags & ObjectActivationFlags::SESSION_SPECIFIC) {
+    obj->session_ctx_ = ctx;
+    oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::Tethered);
+  }
+
+  return result;
+}
+
+void PoaImpl::deactivate_object(oid_t object_id)
+{
+  auto obj = id_to_ptr_.get(object_id);
+  if (obj) {
+    obj->to_delete_.store(true);
+    id_to_ptr_.remove(object_id);
+  } else {
+    std::cerr << "deactivate_object: object not found. id = " << object_id
+              << '\n';
+  }
+}
+
+void PoaImpl::delete_object(ObjectServant* obj)
+{
+  if (obj->in_use_cnt_.load(std::memory_order_acquire) == 0) {
+    obj->destroy();
+  } else {
+    std::cerr << "delete_object: object is in use. id = " << obj->oid()
+              << '\n';
+    boost::asio::post(impl::g_orb->ioc(),
+                      std::bind(&PoaImpl::delete_object, obj));
+  }
 }
 
 } // namespace nprpc::impl

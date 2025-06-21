@@ -141,7 +141,7 @@ class RpcImpl : public Rpc
   boost::asio::io_context&                 ioc_;
   std::mutex                               poas_mut_;
   std::array<
-    std::unique_ptr<PoaImpl>,
+    std::shared_ptr<PoaImpl>,
     max_poa_objects>                       poas_;
   std::array<bool, max_poa_objects>        poas_created_;
   mutable std::mutex                       connections_mut_;
@@ -229,18 +229,12 @@ class ObjectGuard
   ObjectGuard& operator=(const ObjectGuard&) = delete;
 };
 
-class PoaImpl : public Poa
+class PoaImpl
+  : public Poa
+  , public std::enable_shared_from_this<PoaImpl>
 {
-  friend RpcImpl;
   IdToPtr<ObjectServant*> id_to_ptr_;
-
-  explicit PoaImpl(
-    uint32_t objects_max, uint16_t idx)
-      : Poa(idx), id_to_ptr_ {objects_max}
-  {
-  }
-
-  PoaPolicy::Lifespan pl_lifespan_;
+  PoaPolicy::Lifespan     pl_lifespan_;
  public:
   auto get_lifespan() const noexcept
   {
@@ -249,126 +243,38 @@ class PoaImpl : public Poa
 
   virtual ~PoaImpl()
   {
-    if (pl_lifespan_ == PoaPolicy::Lifespan::Persistent)
-      return;
-    // TODO: remove references
   }
 
-  std::optional<ObjectGuard> get_object(
-    oid_t oid) noexcept
+  std::optional<ObjectGuard> get_object(oid_t oid) noexcept
   {
     auto obj = id_to_ptr_.get(oid);
     if (obj) return ObjectGuard(obj);
     return std::nullopt;
   }
 
-  virtual ObjectId activate_object(
+  ObjectId activate_object(
     ObjectServant*  obj,
     uint32_t        activation_flags,
-    SessionContext* ctx)
+    SessionContext* ctx) override;
+
+  void deactivate_object(oid_t object_id) override;
+ 
+  static void delete_object(ObjectServant* obj);
+
+  PoaImpl(uint32_t objects_max, uint16_t idx, PoaPolicy::Lifespan lifespan)
+      : Poa(idx)
+      , id_to_ptr_{objects_max}
+      , pl_lifespan_{lifespan}
   {
-    ObjectId result;
-    auto& oid                = result.get_data();
-    auto  object_id_internal = id_to_ptr_.add(obj);
-
-    if (object_id_internal == invalid_object_id)
-      throw Exception("Poa fixed size has been exceeded");
-
-    obj->poa_             = this;
-    obj->object_id_       = object_id_internal;
-    obj->activation_time_ = std::chrono::system_clock::now();
-
-    oid.object_id = object_id_internal;
-    oid.poa_idx   = get_index();
-    oid.flags     = 0;
-    if (pl_lifespan_ == PoaPolicy::Lifespan::Persistent)
-      oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::Persistent);
-    fill_guid(oid.origin);
-    oid.class_id  = obj->get_class();
-
-    using namespace std::string_literals;
-    // hostname is preferred over localhost
-    const std::string default_url =
-      g_cfg.hostname.empty() ? "127.0.0.1"s : g_cfg.hostname;
-
-    if (activation_flags & ObjectActivationFlags::ALLOW_TCP) {
-      oid.urls +=
-        (std::string(tcp_prefix) + default_url + ":" + std::to_string(g_cfg.listen_tcp_port)) + ';';
-    }
-
-    if (activation_flags & ObjectActivationFlags::ALLOW_WEBSOCKET) {
-      oid.urls +=
-        (std::string(ws_prefix) + default_url + ":" + std::to_string(g_cfg.listen_http_port)) +
-        ';';
-    }
-
-    if (activation_flags & ObjectActivationFlags::ALLOW_SSL_WEBSOCKET) {
-      if (g_cfg.hostname.empty()) {
-        throw std::runtime_error("SSL websocket requires hostname");
-      }
-      oid.urls += (std::string(wss_prefix) + g_cfg.hostname + ":" +
-                   std::to_string(g_cfg.listen_http_port));
-    }
-
-    if (activation_flags & ObjectActivationFlags::ALLOW_MEMORY_MAPPED) {
-      /* TODO: implement shared memory
-      oid.urls +=
-        (std::string(mem_prefix) + g_cfg.http_root_dir + ":" +
-         std::to_string(g_cfg.shared_memory_port)) +
-        ';';
-        */
-    }
-
-    if (pl_lifespan_ == PoaPolicy::Lifespan::Transient) {
-      // std::lock_guard<std::mutex> lk(g_orb->new_activated_objects_mut_);
-      // g_orb->new_activated_objects_.push_back(obj);
-      if (!ctx)
-        throw std::runtime_error(
-          "Object created with transient policy requires session context for "
-          "activation");
-
-      ctx->ref_list.add_ref(obj);
-    }
-
-    if (activation_flags & ObjectActivationFlags::SESSION_SPECIFIC) {
-      obj->session_ctx_ = ctx;
-      oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::Tethered);
-    }
-
-    return result;
-  }
-
-  virtual void deactivate_object(
-    oid_t object_id) override
-  {
-    auto obj = id_to_ptr_.get(object_id);
-    if (obj) {
-      obj->to_delete_.store(true);
-      id_to_ptr_.remove(object_id);
-    } else {
-      std::cerr << "deactivate_object: object not found. id = " << object_id
-                << '\n';
-    }
-  }
-
-  static void delete_object(
-    ObjectServant* obj)
-  {
-    if (obj->in_use_cnt_.load(std::memory_order_acquire) == 0) {
-      obj->destroy();
-    } else {
-      std::cerr << "delete_object: object is in use. id = " << obj->oid()
-                << '\n';
-      boost::asio::post(impl::g_orb->ioc(),
-                        std::bind(&PoaImpl::delete_object, obj));
-    }
   }
 };
 
 inline void make_simple_answer(
   flat_buffer& buf, MessageId id, uint32_t request_id = 0)
 {
-  assert(id == MessageId::Success             || 
+  assert(
+    id == MessageId::Success                  ||
+    id == MessageId::Error_PoaNotExist        ||
     id == MessageId::Error_ObjectNotExist     ||
     id == MessageId::Error_CommFailure        ||
     id == MessageId::Error_UnknownFunctionIdx ||
@@ -378,7 +284,7 @@ inline void make_simple_answer(
   );
 
   static_assert(std::is_standard_layout_v<impl::flat::Header>,
-    "impl::flat::Header must be POD type");
+    "impl::flat::Header must be a standard layout type");
 
   if (!request_id && buf.size() >= sizeof(impl::flat::Header)) {
     auto header = static_cast<const impl::flat::Header*>(buf.cdata().data());

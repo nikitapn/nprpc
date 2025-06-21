@@ -181,9 +181,8 @@ class ObjectServant
   friend impl::PoaImpl;
   friend impl::ObjectGuard;
 
-  Poa*  poa_;
-  oid_t object_id_;
-
+  std::shared_ptr<Poa>                  poa_;
+  oid_t                                 object_id_;
   std::atomic_uint32_t                  ref_cnt_ {0};
   std::atomic_uint32_t                  in_use_cnt_ {0};
   std::atomic_bool                      to_delete_ {false};
@@ -197,7 +196,7 @@ class ObjectServant
                                     bool                   from_parent) = 0;
   virtual void             destroy() noexcept { delete this; }
 
-  Poa*               poa() const noexcept { return poa_; }
+  Poa*               poa() const noexcept { return poa_.get(); }
   oid_t              oid() const noexcept { return object_id_; }
   poa_idx_t          poa_index() const noexcept { return poa_->get_index(); }
   NPRPC_API uint32_t add_ref() noexcept;
