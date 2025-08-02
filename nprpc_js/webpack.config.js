@@ -1,7 +1,7 @@
 const path = require('path');
 const FixDeclarationPathsPlugin = require('./fix-declaration-paths');
 
-module.exports = env => {
+const umdConfig = (env) => {
   let production = env.production == 'true' ? true : false;
   let watch = env.watch == 'true' ? true : false;
   return {
@@ -39,3 +39,22 @@ module.exports = env => {
     },
   }
 };
+
+const esmConfig = (env) => {
+  return {
+    ...umdConfig(env),
+    output: {
+      filename: 'index.esm.js',
+      path: path.resolve(__dirname, 'dist'),
+      library: {
+        type: 'module',
+      },
+      module: true,
+    },
+    experiments: {
+      outputModule: true,
+    },
+  }
+};
+
+module.exports = (env) => [umdConfig(env), esmConfig(env)];

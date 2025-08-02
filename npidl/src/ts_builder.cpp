@@ -817,7 +817,7 @@ void TypescriptBuilder::emit_using(AstAliasDecl* u) {
 }
 
 void TypescriptBuilder::emit_enum(AstEnumDecl* e) {
-	out << "export const enum " << e->name << " { //" << toktype << e->token_id << '\n';
+	out << "export enum " << e->name << " { //" << toktype << e->token_id << '\n';
 	std::int64_t ix = 0;
 	for (size_t i = 0; i < e->items.size(); ++i) {
 		out << "  " << e->items[i].first;
