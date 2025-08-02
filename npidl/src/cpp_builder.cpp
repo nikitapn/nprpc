@@ -493,10 +493,15 @@ void CppBuilder::emit_accessors(const std::string& flat_name, AstFieldDecl* f, s
 	}
 }
 
-void CppBuilder::assign_from_cpp_type(AstTypeDecl* type, std::string op1, std::string op2, std::ostream& os, 
-	bool from_iterator, 
+void CppBuilder::assign_from_cpp_type(
+	AstTypeDecl* type,
+	std::string op1,
+	std::string op2,
+	std::ostream& os,
+	bool from_iterator,
 	bool top_type,
-	bool/* direct_type */) {
+	bool/* direct_type */)
+{
 	using namespace std::string_view_literals;
 	auto accessor = top_type ? "."sv : "()."sv;
 
@@ -574,12 +579,11 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type, std::string op1, std::s
 		os << bd << op1 << accessor << "alloc();\n";
 
 		auto wt = copt(type)->real_type();
-
 		if (wt->id == FieldType::Struct || wt->id == FieldType::Vector || wt->id == FieldType::Array) {
 			os << bd << "auto value = " << op1 << accessor << "value();\n";
-			assign_from_cpp_type(copt(type)->type, "value", op2 + ".value()", os, false, true, true);
+			assign_from_cpp_type(wt, "value", op2 + ".value()", os, false, true, true);
 		} else {
-			assign_from_cpp_type(copt(type)->type, op1 + std::string(accessor) + "value", op2 + ".value()", os, false, false);
+			assign_from_cpp_type(wt, op1 + std::string(accessor) + "value", op2 + ".value()", os, false, false);
 		}
 
 		os << bd0 << "} else { \n";
@@ -667,7 +671,7 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type, std::string op1, std::
 		break;
 
 	case FieldType::Optional: {
-		auto wt = copt(type)->type;
+		auto wt = copt(type)->real_type();
 		// auto wtr = copt(type)->real_type();
 
 		auto const bd0 = bd;

@@ -395,7 +395,8 @@ constexpr auto copt(AstTypeDecl* type) noexcept {
 
 inline AstTypeDecl* AstWrapType::real_type() {
 	auto wt = type;
-	if (wt->id == FieldType::Alias) wt = calias(wt)->get_real_type();
+	if (wt->id == FieldType::Alias)
+		wt = calias(wt)->get_real_type();
 	return wt;
 }
 
