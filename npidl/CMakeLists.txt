@@ -13,6 +13,7 @@ add_executable(npidl
 
 target_include_directories(npidl PRIVATE
   ${CMAKE_SOURCE_DIR}/nprpc/include
+  ${CMAKE_SOURCE_DIR}/nplib/include
 )
 
 if(UNIX)

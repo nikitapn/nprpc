@@ -45,7 +45,6 @@ void Builder::make_arguments_structs(AstFunctionDecl* fn) {
 
 		auto s = new AstStructDecl();
 		s->name = ctx_.current_file() + "_M" + std::to_string(++ctx_.m_struct_n_);
-		
 
 		std::transform(args.begin(), args.end(), std::back_inserter(s->fields), [ix = 0, s, fn](AstFunctionArgument* arg) mutable {
 			auto f = new AstFieldDecl();
@@ -302,8 +301,9 @@ void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type, s
 		break;
 	case FieldType::Optional:
 		if (copt(type)->real_type()->id == FieldType::Struct) {
-			os << "::nprpc::flat::Optional_Direct<";
-			emit_flat_type(copt(type)->type, os); os << ", "; emit_flat_type(copt(type)->type, os); os << "_Direct>";
+			os << "::nprpc::flat::Optional_Direct<" <<
+				emit_flat_type(copt(type)->type) << ", " <<
+				emit_flat_type(copt(type)->type) << "_Direct>";
 		} else {
 			os << "::nprpc::flat::Optional_Direct<";
 			emit_flat_type(copt(type)->type, os);
@@ -737,7 +737,7 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
 	};
 
 	if (target == Target::Regular) {
-		make_struct(std::bind(&CppBuilder::emit_type, this, _1, _2));
+		make_struct(std::bind(static_cast<void(CppBuilder::*)(AstTypeDecl*, std::ostream&)>(&CppBuilder::emit_type), this, _1, _2));
 	} else if (target == Target::Exception) {
 		os << "class " << s->name << " : public ::nprpc::Exception {\n"
 			"public:\n"
@@ -784,7 +784,7 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
 	if (target != Target::FunctionArgument)
 		os << "namespace flat {\n";
 	
-	make_struct(std::bind(&CppBuilder::emit_flat_type, this, _1, _2));
+	make_struct(std::bind(static_cast<void(CppBuilder::*)(AstTypeDecl*, std::ostream&)>(&CppBuilder::emit_flat_type), this, _1, _2));
 
 	auto const accessor_name = s->name + "_Direct";
 

@@ -1,0 +1,7 @@
+{
+  "spec": ["dist/test/**/*.js"],
+  "timeout": 30000,
+  "reporter": "spec",
+  "recursive": true,
+  "exit": true
+}

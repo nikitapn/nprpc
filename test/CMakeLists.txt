@@ -8,32 +8,52 @@ npidl_generate_idl_files("${IDL_FILES}" nprpc_test_stub)
 
 add_custom_target(
   nprpc_test_gen
-  DEPENDS ${nprpc_test_stub_GENERATED_SOURCES} ${nprpc_test_stub_GENERATED_HEADERS}
-  COMMENT "Generating all nprpc_test_stub files"
+  DEPENDS 
+    ${nprpc_test_stub_GENERATED_SOURCES}
+    ${nprpc_test_stub_GENERATED_HEADERS}
+    ${nprpc_test_stub_GENERATED_TS}
+  COMMENT
+    "Generating all nprpc_test_stub files"
 )
 
+# Main test executable for C++ tests
 add_executable(nprpc_test
   src/main.cpp
   ${nprpc_test_stub_GENERATED_SOURCES}
 )
-
 add_dependencies(nprpc_test nprpc_test_gen npnameserver)
-
 target_include_directories(nprpc_test
   PRIVATE
     ${CMAKE_SOURCE_DIR}/nprpc/include
     ${CMAKE_SOURCE_DIR}/nplib/include
     ${nprpc_test_stub_INCLUDE_DIR}  # For generated headers
 )
-
 target_link_libraries(nprpc_test
   GTest::gtest_main
   nprpc
 )
+target_compile_definitions(nprpc_test
+  PRIVATE
+    NPRPC_USE_GTEST
+)
 
-# add_subdirectory(js)
+# Server for JavaScript tests
+add_executable(nprpc_server_test
+  src/server.cpp
+  ${nprpc_test_stub_GENERATED_SOURCES}
+)
+add_dependencies(nprpc_server_test nprpc_test)
+target_include_directories(nprpc_server_test
+  PRIVATE
+    ${CMAKE_SOURCE_DIR}/nprpc/include
+    ${CMAKE_SOURCE_DIR}/nplib/include
+    ${nprpc_test_stub_INCLUDE_DIR}  # For generated headers
+)
+target_link_libraries(nprpc_server_test
+  nprpc
+)
 
-# add_dependencies(nprpc_js_test nprpc_test)
+add_subdirectory(js)
 
 # Enable testing and include GoogleTest
 enable_testing()
@@ -83,5 +103,14 @@ add_custom_target(run_large_message_test
   DEPENDS nprpc_test
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Running large message test..."
+)
+
+# Run tests automatically after building the main test executable
+add_custom_command(
+  TARGET nprpc_test
+  POST_BUILD
+  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --test-dir ${CMAKE_CURRENT_BINARY_DIR}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Automatically running nprpc tests after build..."
 )
 

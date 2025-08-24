@@ -8,52 +8,18 @@
 #include <array>
 #include <functional>
 #include <algorithm>
+#include <fstream>
 
-class Builder {
-protected:
-	Context& ctx_;
-	bool always_full_namespace_ = false;
-
-	void always_full_namespace(bool flag) { always_full_namespace_ = flag; }
-	void make_arguments_structs(AstFunctionDecl* fn);
-	void emit_arguments_structs(std::function<void(AstStructDecl*)> fn);
-public:
-	virtual void emit_constant(const std::string& name, AstNumber* number) = 0;
-	virtual void emit_struct(AstStructDecl* s) = 0;
-	virtual void emit_exception(AstStructDecl* s) = 0;
-	virtual void emit_namespace_begin() = 0;
-	virtual void emit_namespace_end() = 0;
-	virtual void emit_interface(AstInterfaceDecl* ifs) = 0;
-	virtual void emit_file_footer() = 0;
-	virtual void emit_using(AstAliasDecl* u) = 0;
-	virtual void emit_enum(AstEnumDecl* e) = 0;
-	
-	Builder(Context& ctx) : ctx_(ctx) {}
-	virtual ~Builder() = default;
+template<typename Fn>
+struct OstreamWrapper {
+		Fn fn;
 };
 
-class BuildGroup {
-	Context& ctx_;
-	size_t size_;
-	static constexpr size_t N = 2;
-	std::array<std::unique_ptr<Builder>, N> builders_;
-public:
-	template<typename F, typename... Args>
-	void emit(F fptr, Args&&... args) {
-		auto mf = std::mem_fn(fptr);
-		std::for_each(builders_.begin(), builders_.begin() + size_, 
-			[&](auto& ptr) { mf(ptr.get(), std::forward<Args>(args)...); }
-		);
-	}
-
-	template<typename T, typename... Args>
-	void add(Args&&... args) {
-		assert(size_ < N);
-		builders_[size_++] = std::make_unique<T>(ctx_, std::forward<Args>(args)...);
-	}
-
-	BuildGroup(Context& ctx) : ctx_{ ctx }, size_{ 0 } {}
-};
+template<typename Fn>
+inline std::ostream& operator<<(std::ostream& os, const OstreamWrapper<Fn>& wrapper) {
+	wrapper.fn(os);
+	return os;
+}
 
 class BlockDepth {
 	friend std::ostream& operator<<(std::ostream&, const BlockDepth&);
@@ -70,7 +36,8 @@ public:
 	}
 
 	BlockDepth& operator --() {
-		assert(depth_);
+		// assert(depth_);
+		if (depth_ == 0) depth_ = 1;
 		--depth_;
 		return *this;
 	}
@@ -116,3 +83,72 @@ inline std::ostream& operator<<(std::ostream& os, const BlockDepth& block) {
 	return os;
 }
 
+class Builder {
+protected:
+	Context& ctx_;
+	BlockDepth block_depth_;
+	bool always_full_namespace_ = false;
+
+	void always_full_namespace(bool flag) { always_full_namespace_ = flag; }
+	void make_arguments_structs(AstFunctionDecl* fn);
+	void emit_arguments_structs(std::function<void(AstStructDecl*)> fn);
+
+	auto bb(bool newline = true) {
+		return OstreamWrapper{[this, newline](std::ostream& os) {
+			if (newline)
+				os << block_depth_ << "{\n";
+			++block_depth_;
+		}};
+	}
+
+	auto eb(bool newline = true) {
+		return OstreamWrapper{[this, newline](std::ostream& os) {
+			--block_depth_;
+			if (newline)
+				os << block_depth_ << "}\n";
+		}};
+	}
+
+	auto bl() {
+		return OstreamWrapper{[this](std::ostream& os) {
+			os << block_depth_;
+		}};
+	}
+
+public:
+	virtual void emit_constant(const std::string& name, AstNumber* number) = 0;
+	virtual void emit_struct(AstStructDecl* s) = 0;
+	virtual void emit_exception(AstStructDecl* s) = 0;
+	virtual void emit_namespace_begin() = 0;
+	virtual void emit_namespace_end() = 0;
+	virtual void emit_interface(AstInterfaceDecl* ifs) = 0;
+	virtual void emit_file_footer() = 0;
+	virtual void emit_using(AstAliasDecl* u) = 0;
+	virtual void emit_enum(AstEnumDecl* e) = 0;
+	
+	Builder(Context& ctx) : ctx_(ctx) {}
+	virtual ~Builder() = default;
+};
+
+class BuildGroup {
+	Context& ctx_;
+	size_t size_;
+	static constexpr size_t N = 2;
+	std::array<std::unique_ptr<Builder>, N> builders_;
+public:
+	template<typename F, typename... Args>
+	void emit(F fptr, Args&&... args) {
+		auto mf = std::mem_fn(fptr);
+		std::for_each(builders_.begin(), builders_.begin() + size_, 
+			[&](auto& ptr) { mf(ptr.get(), std::forward<Args>(args)...); }
+		);
+	}
+
+	template<typename T, typename... Args>
+	void add(Args&&... args) {
+		assert(size_ < N);
+		builders_[size_++] = std::make_unique<T>(ctx_, std::forward<Args>(args)...);
+	}
+
+	BuildGroup(Context& ctx) : ctx_{ ctx }, size_{ 0 } {}
+};

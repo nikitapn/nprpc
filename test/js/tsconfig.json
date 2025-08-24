@@ -1,10 +1,17 @@
 {
   "compilerOptions": {
-    "target": "es6",
-    "module": "system",
-    "outFile": "dist/index.js",
+    "target": "es2020",
+    "module": "commonjs",
+    "outDir": "dist",
     "sourceMap": true,
     "moduleResolution": "node",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": false,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "noImplicitAny": false,
     "baseUrl": "./",
     "paths": {
       "*": [
@@ -17,5 +24,6 @@
       "node_modules/@types"
     ]
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*", "test/**/*"],
+  "exclude": ["node_modules", "dist"]
 }

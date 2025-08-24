@@ -3,6 +3,11 @@
 
 namespace test {
 
+interface ServerControl {
+	// All tests performed, safe to shutdown the server
+	void Shutdown();
+}
+
 AAA: flat {
 	a: u32;
 	b: string;
@@ -15,9 +20,12 @@ interface TestBasic {
 	void Out(a: out u32, b: out boolean, c: out vector<u8>);
 }
 
+using bytestream = vector<u8>;
+
 interface TestOptional {
 	boolean InEmpty(a?: in u32);
 	boolean In(a?: in u32, b?: in AAA);
+//	boolean InVec(a?: in bytestream);
 
 	void OutEmpty(a?: out u32);
 	void Out(a?: out u32);

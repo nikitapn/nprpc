@@ -8,9 +8,23 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "test": "test"
+    "test": "mocha",
+    "test:basic": "npm run build && mocha dist/test/basic.test.js",
+    "test:watch": "npm run build && mocha --watch",
+    "test:debug": "npm run build && mocha dist/test/**/*.js --timeout 60000 --grep",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "nprpc": "file:../../nprpc_js/dist",
+    "ws": "^8.13.0"
   },
   "devDependencies": {
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "mocha": "^10.2.0",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "^20.5.0",
+    "@types/ws": "^8.5.5",
+    "chai": "^4.3.7",
+    "@types/chai": "^4.3.5"
   }
 }

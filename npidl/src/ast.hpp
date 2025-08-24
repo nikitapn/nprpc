@@ -531,6 +531,7 @@ class Context {
 
 	std::string module_name;
 	std::string base_name;
+	std::filesystem::path file_path;
 public:
 	AFFAList affa_list;
 	int m_struct_n_ = 0;
@@ -540,6 +541,10 @@ public:
 
 	const std::string& current_file() const noexcept {
 		return base_name;
+	}
+
+	std::string current_file_path() const noexcept {
+		return std::filesystem::canonical(file_path).string();
 	}
 
 	const std::string& module() const noexcept {
@@ -586,7 +591,8 @@ public:
 		return base_name == "nprpc_nameserver";
 	}
 
-	void open(std::filesystem::path file_path) {
+	void open(std::filesystem::path _file_path) {
+		file_path = std::move(_file_path);
 		base_name = file_path.filename().replace_extension().string();
 		std::transform(base_name.begin(), base_name.end(), base_name.begin(), [](char c) {
 			return c == '.' ? '_' : ::tolower(c); });

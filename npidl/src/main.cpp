@@ -15,15 +15,19 @@
 #include <utility>
 #include <type_traits>
 #include <functional>
+#include <charconv>
+#include <variant>
+
+#include <boost/program_options.hpp>
+#include <boost/container/small_vector.hpp>
+
 #include "ast.hpp"
 #include "cpp_builder.hpp"
 #include "ts_builder.hpp"
 #include "utils.hpp"
-#include <boost/program_options.hpp>
-#include <boost/container/small_vector.hpp>
 
-#include <charconv>
-#include <variant>
+#include <nplib/utils/colored_cout.h>
+
 
 struct Token {
 	TokenId id;
@@ -1185,9 +1189,9 @@ int main(int argc, char* argv[]) {
 
 		return 0;
 	} catch (parser_error& e) {
-		std::cerr << "In file " << ctx.current_file() << "\n\tParser error in line: " << e.line << " column: " << e.col << " : " << e.what() << '\n';
+		std::cerr << clr::red << "Parser error in:\n\t" << clr::cyan << ctx.current_file_path() << ':' << e.line << ':' << e.col << ": " << clr::reset << e.what() << '\n';
 	} catch (lexical_error& e) {
-		std::cerr << "In file " << ctx.current_file() << "\n\tLexical error in line: " << e.line << " column: " << e.col << " : " << e.what() << '\n';
+		std::cerr << clr::red << "Lexer error in:\n\t" << clr::cyan << ctx.current_file_path() << ':' << e.line << ':' << e.col << ": " << clr::reset << e.what() << '\n';
 	} catch (std::exception& ex) {
 		std::cerr << ex.what() << '\n';
 	}

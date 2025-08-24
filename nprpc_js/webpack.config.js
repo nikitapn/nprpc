@@ -35,6 +35,7 @@ const umdConfig = (env) => {
       libraryTarget: 'umd',
       library: 'nprpc_runtime',
       umdNamedDefine: true,
+      globalObject: 'typeof self !== \'undefined\' ? self : this',
       path: path.resolve(__dirname, 'dist'),
     },
   }
@@ -57,4 +58,18 @@ const esmConfig = (env) => {
   }
 };
 
-module.exports = (env) => [umdConfig(env), esmConfig(env)];
+// Node.js compatible CommonJS build
+const nodeConfig = (env) => {
+  let production = env.production == 'true' ? true : false;
+  return {
+    ...umdConfig(env),
+    target: 'node',
+    output: {
+      filename: 'index.node.js',
+      libraryTarget: 'commonjs2',
+      path: path.resolve(__dirname, 'dist'),
+    },
+  }
+};
+
+module.exports = (env) => [umdConfig(env), esmConfig(env), nodeConfig(env)];

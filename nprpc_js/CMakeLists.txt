@@ -21,6 +21,8 @@ set(CONFIG_FILES
 # Define output files that webpack generates
 set(JS_OUTPUT_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/dist/index.js"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dist/index.esm.js"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dist/index.node.js"
     "${CMAKE_CURRENT_SOURCE_DIR}/dist/index.d.ts"
 )
 

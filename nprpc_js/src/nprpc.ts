@@ -10,6 +10,7 @@ import {
   ExceptionUnsecuredObject,
   ExceptionBadAccess,
   EndPointType,
+  Flat_nprpc_base
 } from "./gen/nprpc_base"
 
 import { Exception } from "./base";
@@ -274,7 +275,9 @@ export class Rpc {
   private opened_connections_: Connection[];
   /** @internal */
   private poa_list_: Poa[];
-  
+
+
+  /** @internal */
   get_connection(endpoint: EndPoint): Connection {
     let founded: Connection = this.opened_connections_.find(c => c.endpoint.equal(endpoint));
     if (founded) return founded;
@@ -290,6 +293,7 @@ export class Rpc {
     return poa; 
   }
 
+  /** @internal */
   public get_poa(poa_idx: number): Poa {
     if (poa_idx >= this.poa_list_.length || poa_idx < 0) return null;
     return this.poa_list_[poa_idx];
@@ -299,6 +303,7 @@ export class Rpc {
     return this.get_connection(endpoint).send_receive(buffer, timeout_ms);
   }
 
+  /** @internal */
   public static async read_host(): Promise<HostInfo> {
     let x = await fetch("./host.json");
     if (!x.ok) throw "read_host error: " + x.statusText;
@@ -329,6 +334,7 @@ export class Rpc {
     return info;
   }
 
+  /** @internal */
   constructor(host_info: HostInfo) {
     this.last_poa_id_ = 0;
     this.opened_connections_ = new Array<Connection>();
@@ -517,7 +523,6 @@ export class ObjectProxy {
 
   public select_endpoint(remote_endpoint?: EndPoint): void {
     const oid = this.data;
-
     const urls = oid.urls.split(";");
 
     if (host_info.secured) {
@@ -530,7 +535,7 @@ export class ObjectProxy {
       this.endpoint_ = EndPoint.from_string(ws);
     }
 
-    if (remote_endpoint === undefined)
+    if (!remote_endpoint)
       return;
 
     // if remote_endpoint is provided, use it to override the hostname
@@ -615,7 +620,8 @@ export const handle_standart_reply = (buf: FlatBuffer): number => {
     case impl.MessageId.Error_ObjectNotExist:
       throw new ExceptionObjectNotExist();
     case impl.MessageId.Error_CommFailure:
-      throw new ExceptionCommFailure();
+      let ex_flat = new Flat_nprpc_base.ExceptionCommFailure_Direct(buf, 16);
+      throw new ExceptionCommFailure(ex_flat.what);
     case impl.MessageId.Error_UnknownFunctionIdx:
       throw new ExceptionUnknownFunctionIndex();
     case impl.MessageId.Error_UnknownMessageId:
@@ -654,12 +660,10 @@ export const create_object_from_flat = (
   if (direct.object_id == invalid_object_id)
     return null;
 
-  let obj = new ObjectProxy();
-  detail.helpers.assign_from_flat_ObjectId(direct);
-  const oid: detail.ObjectId = obj.data;
+  const obj = new ObjectProxy(detail.helpers.assign_from_flat_ObjectId(direct));
 
   if (direct.flags & detail.ObjectFlag.Tethered) {
-    oid.urls = remote_endpoint.to_string();
+    obj.data.urls = remote_endpoint.to_string();
     obj.endpoint_ = remote_endpoint;
   } else {
     obj.select_endpoint(remote_endpoint);
@@ -668,8 +672,8 @@ export const create_object_from_flat = (
   return obj;
 }
 
-export const init = async (): Promise<Rpc> => {
-  return rpc ? rpc : (rpc = new Rpc(await Rpc.read_host()));
+export const init = async (use_host_json: boolean = true): Promise<Rpc> => {
+  return rpc ? rpc : (rpc = new Rpc(use_host_json ? await Rpc.read_host() : {} as HostInfo));
 }
 
 export const set_debug_level = (debug_level: DebugLevel): void => {

@@ -36,8 +36,19 @@ private:
 	void emit_flat_type(AstTypeDecl* type, std::ostream& os);
 	void emit_struct2(AstStructDecl* s, bool is_exception);
 	void emit_struct_helpers();
+	void emit_variable(AstTypeDecl* type, std::string name, std::ostream& os);
 
 	_ns ns(Namespace* nm);
+
+	auto emit_type(AstTypeDecl* type) {
+		return OstreamWrapper{[type, this](std::ostream& os) { this->emit_type(type, os); }};
+	}
+
+	auto emit_flat_type(AstTypeDecl* type) {
+		return OstreamWrapper{[type, this](std::ostream& os) { this->emit_flat_type(type, os); }};
+	}
+
+
 public:
 	virtual void emit_constant(const std::string& name, AstNumber* number);
 	virtual void emit_struct(AstStructDecl* s);
