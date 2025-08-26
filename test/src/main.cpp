@@ -1,5 +1,3 @@
-#include "common/data.hpp"
-
 #include <iostream>
 #include <chrono>
 #include <numeric>
@@ -83,6 +81,14 @@ TEST_F(NprpcTest, TestOptional) {
             EXPECT_TRUE(a.has_value());
             EXPECT_EQ(a.value(), 100u);
 
+            auto opt = obj->ReturnOpt1();
+            EXPECT_EQ(opt.str, "test_string");
+            EXPECT_TRUE(opt.stream.has_value());
+            EXPECT_EQ(opt.stream->size(), 10u);
+            for (uint8_t i = 0; i < 10; ++i) {
+                EXPECT_EQ(opt.stream->at(i), i);
+            }
+
         } catch (nprpc::Exception& ex) {
             FAIL() << "Exception in TestOptional: " << ex.what();
         }
@@ -96,39 +102,8 @@ TEST_F(NprpcTest, TestOptional) {
 TEST_F(NprpcTest, TestNested) {
     // set test timeout to 60 seconds
     Test::RecordProperty("timeout", "60");
-
-
-    class TestNestedImpl : public test::ITestNested_Servant {
-    public:
-        virtual void Out(::nprpc::flat::Optional_Direct<test::flat::BBB, test::flat::BBB_Direct> a) {
-            a.alloc();
-            auto value = a.value();
-
-            value.a(1024);
-
-            {
-                auto span = value.a();
-                std::uint32_t ix = 0;
-                for (auto i : span) {
-                    i.a() = ix++;
-                    i.b(tstr1);
-                    i.c(tstr2);
-                }
-            }
-
-            value.b(2048);
-
-            auto span = value.b();
-            bool b = false;
-            for (auto i : span) {
-                i.a(tstr1);
-                i.b(tstr2);
-                i.c().alloc();
-                i.c().value() = (b ^= 1);
-            }
-        }
-    } servant;
-
+    #include "common/tests/nested.inl"
+    TestNestedImpl servant;
     auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
         try {
             auto obj = make_stuff_happen<test::TestNested>(servant, flags);
@@ -146,16 +121,16 @@ TEST_F(NprpcTest, TestNested) {
             std::uint32_t ix = 0;
             for (auto& i : value.a) {
                 EXPECT_EQ(i.a, ix++);
-                EXPECT_EQ(std::string_view(i.b), std::string_view(tstr1));
-                EXPECT_EQ(std::string_view(i.c), std::string_view(tstr2));
+                EXPECT_EQ(std::string_view(i.b), std::string_view(nested_test_str1));
+                EXPECT_EQ(std::string_view(i.c), std::string_view(nested_test_str2));
             }
 
             EXPECT_EQ(value.b.size(), 2048ull);
 
             bool b = false;
             for (auto& i : value.b) {
-                EXPECT_EQ(std::string_view(i.a), std::string_view(tstr1));
-                EXPECT_EQ(std::string_view(i.b), std::string_view(tstr2));
+                EXPECT_EQ(std::string_view(i.a), std::string_view(nested_test_str1));
+                EXPECT_EQ(std::string_view(i.b), std::string_view(nested_test_str2));
                 EXPECT_TRUE(i.c.has_value());
                 EXPECT_EQ(i.c.value(), b ^= 1);
             }
@@ -172,45 +147,8 @@ TEST_F(NprpcTest, TestNested) {
 TEST_F(NprpcTest, TestLargeMessage) {
     // Set test timeout to 120 seconds for large data transfer
     Test::RecordProperty("timeout", "120");
-
-    class TestBasicImpl : public test::ITestBasic_Servant {
-    public:
-        virtual bool ReturnBoolean() {
-            return true;
-        }
-
-        virtual bool In(uint32_t a, ::nprpc::flat::Boolean b, ::nprpc::flat::Span<uint8_t> c) {
-            EXPECT_EQ(a, 42u);
-            EXPECT_TRUE(b.get());
-
-            // Verify we received exactly 3MB of data
-            EXPECT_EQ(c.size(), 3 * 1024 * 1024u);
-
-            // Verify pattern in first and last bytes
-            EXPECT_EQ(c[0], 0xAB);
-            EXPECT_EQ(c[c.size() - 1], 0xCD);
-
-            return true;
-        }
-
-        virtual void Out(uint32_t& a, ::nprpc::flat::Boolean& b, ::nprpc::flat::Vector_Direct1<uint8_t> c) {
-            a = 42;
-            b = true;
-
-            // Create 3MB of test data
-            const size_t large_size = 3 * 1024 * 1024; // 3MB
-            c.length(large_size);
-            auto span = c();
-            
-            // Fill with test pattern - first byte 0xAB, last byte 0xCD, middle with sequence
-            span[0] = 0xAB;
-            span[large_size - 1] = 0xCD;
-            for (size_t i = 1; i < large_size - 1; ++i) {
-                span[i] = static_cast<uint8_t>(i % 256);
-            }
-        }
-    } servant;
-
+    #include "common/tests/large_message.inl"
+    TestLargeMessage servant;
     auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
         try {   
             auto obj = make_stuff_happen<test::TestBasic>(servant, flags);

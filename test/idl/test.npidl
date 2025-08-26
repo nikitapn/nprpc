@@ -22,6 +22,11 @@ interface TestBasic {
 
 using bytestream = vector<u8>;
 
+Opt1 : flat {
+	str: string;
+	stream?: bytestream;
+};
+
 interface TestOptional {
 	boolean InEmpty(a?: in u32);
 	boolean In(a?: in u32, b?: in AAA);
@@ -29,6 +34,8 @@ interface TestOptional {
 
 	void OutEmpty(a?: out u32);
 	void Out(a?: out u32);
+
+	Opt1 ReturnOpt1();
 }
 
 

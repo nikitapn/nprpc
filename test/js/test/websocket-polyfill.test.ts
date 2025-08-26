@@ -11,7 +11,6 @@ describe('NPRPC WebSocket Polyfill Test', function() {
     
     it('should have WebSocket available globally', function() {
         expect(typeof (global as any).WebSocket).to.equal('function');
-        console.log('✓ WebSocket polyfill is available');
     });
 
     it('should be able to create NPRPC Connection instance', function() {
@@ -24,7 +23,6 @@ describe('NPRPC WebSocket Polyfill Test', function() {
             expect(endpoint).to.not.be.undefined;
             expect(endpoint.hostname).to.equal('localhost');
             expect(endpoint.port).to.equal(15001);
-            console.log('✓ NPRPC EndPoint created successfully');
         } catch (error) {
             throw new Error(`Failed to create NPRPC EndPoint: ${error}`);
         }
@@ -42,8 +40,7 @@ describe('NPRPC WebSocket Polyfill Test', function() {
             // since no server is running - that's expected for this test
             const connection = new NPRPC.Connection(endpoint);
             expect(connection).to.not.be.undefined;
-            console.log('✓ NPRPC Connection instance created successfully');
-            
+
             // Clean up - close the connection
             setTimeout(() => {
                 try {
@@ -52,7 +49,6 @@ describe('NPRPC WebSocket Polyfill Test', function() {
                     // Ignore cleanup errors
                 }
             }, 100);
-            
         } catch (error) {
             throw new Error(`Failed to create NPRPC Connection: ${error}`);
         }
@@ -63,7 +59,6 @@ describe('NPRPC WebSocket Polyfill Test', function() {
             const nameserver = NPRPC.get_nameserver('127.0.0.1');
             expect(nameserver).to.not.be.undefined;
             expect(nameserver.data.urls).to.include('ws://127.0.0.1:15001');
-            console.log('✓ NPRPC Nameserver proxy created successfully');
         } catch (error) {
             throw new Error(`Failed to create nameserver proxy: ${error}`);
         }

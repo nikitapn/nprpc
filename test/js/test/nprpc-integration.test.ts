@@ -85,13 +85,11 @@ describe('NPRPC Integration Tests', function() {
 
         before(async function() {
             testBasic = await resolveTestObject('nprpc_test_basic', test.TestBasic);
-            console.log('TestBasic object resolved successfully');
         });
 
         it('should return boolean true', async function() {
             const result = await testBasic.ReturnBoolean();
             expect(result).to.be.true;
-            console.log('✓ ReturnBoolean test passed');
         });
 
         it('should handle input parameters correctly', async function() {
@@ -103,7 +101,6 @@ describe('NPRPC Integration Tests', function() {
 
             const result = await testBasic.In(100, true, testData);
             expect(result).to.be.true;
-            console.log('✓ Input parameters test passed');
         });
 
         it('should handle output parameters correctly', async function() {
@@ -124,8 +121,6 @@ describe('NPRPC Integration Tests', function() {
             for (let i = 0; i < 256; i++) {
                 expect(cArray.value[i]).to.equal(i);
             }
-            
-            console.log('✓ Output parameters test passed');
         });
     });
 
@@ -134,13 +129,11 @@ describe('NPRPC Integration Tests', function() {
 
         before(async function() {
             testOptional = await resolveTestObject('nprpc_test_optional', test.TestOptional);
-            console.log('TestOptional object resolved successfully');
         });
 
         it('should handle empty optional values', async function() {
             const result = await testOptional.InEmpty(); // No parameter = empty optional
             expect(result).to.be.true;
-            console.log('✓ Empty optional test passed');
         });
 
         it('should handle optional values with data', async function() {
@@ -152,7 +145,6 @@ describe('NPRPC Integration Tests', function() {
             };
             const result = await testOptional.In(100, testAAA);
             expect(result).to.be.true;
-            console.log('✓ Optional with data test passed');
         });
 
         it('should return empty optional values', async function() {
@@ -162,7 +154,6 @@ describe('NPRPC Integration Tests', function() {
                 const a = NPRPC.make_ref<number>();
                 await testOptional.OutEmpty(a);
                 expect(a.value).to.be.undefined; // Should remain undefined for empty optional
-                console.log('✓ Empty optional output test passed');
             } catch (error) {
                 console.error('OutEmpty call failed:', error);
                 throw error;
@@ -174,7 +165,18 @@ describe('NPRPC Integration Tests', function() {
                 const a = NPRPC.make_ref<number>();
                 await testOptional.Out(a);
                 expect(a.value).to.equal(100); // Should be set by server
-                console.log('✓ Optional output test passed');
+            } catch (error) {
+                console.error('Out call failed:', error);
+                throw error;
+            }
+        });
+        
+        it('should return optional', async function() {
+            try {
+                const opt = await testOptional.ReturnOpt1();
+                expect(opt.str).to.equal('test_string');
+                expect(opt.stream).to.be.an('array').that.has.lengthOf(10);
+                expect(opt.stream).to.deep.equal([0,1,2,3,4,5,6,7,8,9]);
             } catch (error) {
                 console.error('Out call failed:', error);
                 throw error;
@@ -182,13 +184,30 @@ describe('NPRPC Integration Tests', function() {
         });
     });
 
-    // describe('Connection Tests', function() {
-    //     it('should maintain stable connection', async function() {
-    //         // Test that we can still call nameserver after running tests
-    //         const objRef = NPRPC.make_ref();
-    //         const found = await nameserver.Resolve('test_connectivity_check', objRef);
-    //         expect(found).to.be.false; // Object doesn't exist, but call should succeed
-    //         console.log('✓ Connection stability test passed');
-    //     });
-    // });
+    describe('TestNested Interface', function() {
+        let testNested: test.TestNested;
+        before(async function() {
+            testNested = await resolveTestObject('nprpc_test_nested', test.TestNested);
+        });
+
+        it('should handle nested structures correctly', async function() {
+            try {
+                // let reference = NPRPC.make_ref<test.BBB>();
+                // TODO: fix npidl generation for nested structs
+                // Need to add empty struct constuction `a.value = {}`
+                //   let vv = opt.value.a_d(), index_2 = 0;
+                //   (a.value.a as Array<any>) = new Array<any>(vv.elements_size)
+                //   for (let e of vv) {
+                //     a.value.a[index_2].a = e.a;
+                //     a.value.a[index_2].b = e.b;
+                //     a.value.a[index_2].c = e.c;
+                //     ++index_2;
+                //   }
+                // const result = await testNested.Out(reference);
+            } catch (error) {
+                console.error('Out call failed:', error);
+                throw error;
+            }
+        });
+    });
 });

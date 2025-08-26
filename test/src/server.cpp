@@ -52,8 +52,13 @@ int main(int argc, char** argv) {
   TestOptionalImpl test_optional;
   nprpctest::make_stuff_happen<test::TestOptional>(test_optional, flags, "nprpc_test_optional");
 
-  //   #include "common/tests/nested.inl"
-  //   nprpctest::make_stuff_happen<test::TestNested>(servant, flags);
+  #include "common/tests/nested.inl"
+  TestNestedImpl test_nested;
+  nprpctest::make_stuff_happen<test::TestNested>(test_nested, flags, "nprpc_test_nested");
+
+  #include "common/tests/large_message.inl"
+  TestLargeMessage test_large_message;
+  nprpctest::make_stuff_happen<test::TestBasic>(test_large_message, flags, "nprpc_test_large_message");
 
   // Wait for shutdown signal from JavaScript client
   std::unique_lock<std::mutex> lk(cv_m);
