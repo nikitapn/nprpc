@@ -10,8 +10,8 @@ import * as test from '../src/gen/test';
 import { ServerManager } from './server-manager';
 
 // Test data constants (matching C++ tests)
-const tstr1 = "test_string_1_very_long_test_string_1_very_long_test_string_1_very_long_test_string_1_very_long";
-const tstr2 = "test_string_2_very_long_test_string_2_very_long_test_string_2_very_long_test_string_2_very_long";
+const nested_test_str1 = "34k535n3jknjknfdjgndfgnj4kjn545kr3k4n3k45j n34k kgfdg334r34rnkfndkgn[34l5k32;45l324lk;5j324k5j32lk4;5j34lknmt3l2k4ng54;nt295t0-2jt2ithnjkgnsfdgmndf;gkj3m450934j5234k5n345n345lkjn643kj6n4kljnkbvnvcb456456456gfhfgh56y";
+const nested_test_str2 = "d34234k24j1;lk24j12lk341234n45n345n3kj45n2345jn34lk5jn34kj5n3lk5jn2354lk3j2n4532-49503245i32k4095i34rjjngdfn;dfgns;kgfsd;lfkgsd;lgfkmgo4523[459j324509345i302945hjnkjngdgmsfg,msdb'sdf'3;4l5k32[59j2345igfgdsgfdg34345345bbdfgdsgdgdsfgdfvcbxcvbdfg34trjg";
 
 describe('NPRPC Integration Tests', function() {
     this.timeout(30000); // 30 second timeout for all tests
@@ -192,20 +192,46 @@ describe('NPRPC Integration Tests', function() {
 
         it('should handle nested structures correctly', async function() {
             try {
-                // let reference = NPRPC.make_ref<test.BBB>();
-                // TODO: fix npidl generation for nested structs
-                // Need to add empty struct constuction `a.value = {}`
-                //   let vv = opt.value.a_d(), index_2 = 0;
-                //   (a.value.a as Array<any>) = new Array<any>(vv.elements_size)
-                //   for (let e of vv) {
-                //     a.value.a[index_2].a = e.a;
-                //     a.value.a[index_2].b = e.b;
-                //     a.value.a[index_2].c = e.c;
-                //     ++index_2;
-                //   }
-                // const result = await testNested.Out(reference);
+                const reference = NPRPC.make_ref<test.BBB>();
+                await testNested.Out(reference);
+
+                expect(reference.value).to.not.be.undefined;
+                const value = reference.value;
+                expect(value.a).to.be.an('array').that.has.lengthOf(1024);
+                for (let i = 0; i < 1024; i++) {
+                    expect(value.a[i].a).to.equal(i);
+                    expect(value.a[i].b).to.equal(nested_test_str1);
+                    expect(value.a[i].c).to.equal(nested_test_str2);
+                }
+                expect(value.b).to.be.an('array').that.has.lengthOf(2048);
+                let b = false;
+                for (let i = 0; i < 2048; i++) {
+                    expect(value.b[i].a).to.equal(nested_test_str1);
+                    expect(value.b[i].b).to.equal(nested_test_str2);
+                    expect(value.b[i].c).to.not.be.undefined;
+                    expect(value.b[i].c).to.equal(b = !b);
+                }
             } catch (error) {
                 console.error('Out call failed:', error);
+                throw error;
+            }
+        });
+
+        it('should handle deeply nested structures correctly', async function() {
+            try {
+                const result = await testNested.ReturnNested();
+                expect(result.x).to.equal('top_level_string');
+                expect(result.z).to.equal(1n);
+                expect(result.y).to.not.be.undefined;
+                expect(result.y.x).to.equal('level1_string');
+                expect(result.y.z).to.equal(2n);
+                expect(result.y.y).to.not.be.undefined;
+                expect(result.y.y.x).to.equal('level2_string');
+                expect(result.y.y.z).to.equal(3n);
+                expect(result.y.y.y).to.be.an('array').that.has.lengthOf(10);
+                expect(result.y.y.y).to.deep.equal([1,2,3,4,5,6,7,8,9,10]);
+            } catch (error) {
+                console.error('ReturnNested call failed:', error);
                 throw error;
             }
         });

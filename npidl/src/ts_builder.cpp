@@ -733,6 +733,7 @@ void TypescriptBuilder::assign_from_flat_type(
 		break;
 	case FieldType::Struct: {
 		auto s = cflat(type);
+		out << bl() << op1 << " = {} as " << s->name << ";\n";
 		for (auto field : s->fields)
 			assign_from_flat_type(field->type, op1 + (from_iterator ? "." : ".") + field->name, op2 + '.' + field->name, false, false);
 		break;

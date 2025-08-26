@@ -50,8 +50,27 @@ BBB : flat {
 	b: vector<CCC>;
 }
 
+Level2 : flat {
+	x: string;
+	y: vector<u8>;
+	z: u64;
+}
+
+Level1 : flat {
+	x: string;
+	y: Level2;
+	z: u64;
+}
+
+TopLevel : flat {
+	x: string;
+	y: Level1;
+	z: u64;
+}
+
 interface TestNested {
 	void Out(a?: out BBB);
+	TopLevel ReturnNested();
 }
 
 [trusted=false]

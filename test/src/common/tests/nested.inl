@@ -6,9 +6,7 @@ public:
     virtual void Out(::nprpc::flat::Optional_Direct<test::flat::BBB, test::flat::BBB_Direct> a) {
         a.alloc();
         auto value = a.value();
-
         value.a(1024);
-
         {
             auto span = value.a();
             std::uint32_t ix = 0;
@@ -20,7 +18,6 @@ public:
         }
 
         value.b(2048);
-
         auto span = value.b();
         bool b = false;
         for (auto i : span) {
@@ -29,5 +26,22 @@ public:
             i.c().alloc();
             i.c().value() = (b ^= 1);
         }
+    }
+
+    virtual test::TopLevel ReturnNested() {
+        test::TopLevel top {
+            .x = "top_level_string",
+            .y = {
+                .x = "level1_string",
+                .y = {
+                    .x = "level2_string",
+                    .y = {1,2,3,4,5,6,7,8,9,10},
+                    .z = 3ull
+                },
+                .z = 2ull
+            },
+            .z = 1ull
+        };
+        return top;
     }
 };

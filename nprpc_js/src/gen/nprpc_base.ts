@@ -302,6 +302,7 @@ function nprpc_base_throw_exception(buf: NPRPC.FlatBuffer): void {
 export namespace detail.helpers {
   export const assign_from_flat_ObjectId = (src: Flat_nprpc_base.ObjectId_Direct): ObjectId => {
     let dest: ObjectId = {} as ObjectId;
+    dest = {} as ObjectId;
     dest.object_id = src.object_id;
     dest.poa_idx = src.poa_idx;
     dest.flags = src.flags;
