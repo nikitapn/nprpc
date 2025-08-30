@@ -61,8 +61,8 @@ export class Nameserver extends NPRPC.ObjectProxy {
 }
 export interface INameserver_Servant
 {
-  Bind(obj: NPRPC.ObjectProxy, name: string): void;
-  Resolve(name: string, obj: NPRPC.detail.Flat_nprpc_base.ObjectId_Direct): boolean/*boolean*/;
+  Bind(obj: /*in*/NPRPC.detail.ObjectId, name: /*in*/string): void;
+  Resolve(name: /*in*/string, obj: /*out*/NPRPC.ref<NPRPC.ObjectProxy>): boolean/*boolean*/;
 }
 export class _INameserver_Servant extends NPRPC.ObjectServant {
   public static _get_class(): string { return "nprpc_nameserver/nprpc.Nameserver"; }
@@ -75,7 +75,7 @@ export class _INameserver_Servant extends NPRPC.ObjectServant {
     switch(__ch.function_idx) {
       case 0: {
         let ia = new Flat_nprpc_nameserver.nprpc_nameserver_M1_Direct(buf, 32);
-        (obj as any).Bind(        NPRPC.create_object_from_flat(ia._1, remote_endpoint),         ia._2);
+        (obj as any).Bind(NPRPC.create_object_from_flat(ia._1, remote_endpoint), ia._2);
         NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);
         break;
       }
@@ -87,7 +87,7 @@ export class _INameserver_Servant extends NPRPC.ObjectServant {
         obuf.commit(72);
         let oa = new Flat_nprpc_nameserver.nprpc_nameserver_M3_Direct(obuf,16);
         let __ret_val: boolean/*boolean*/;
-        __ret_val = (obj as any).Resolve(        ia._1,         oa._2);
+        __ret_val = (obj as any).Resolve(ia._1,         oa._2);
         oa._1 = __ret_val;
         obuf.write_len(obuf.size - 4);
         obuf.write_msg_id(NPRPC.impl.MessageId.BlockResponse);

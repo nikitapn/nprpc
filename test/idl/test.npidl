@@ -2,12 +2,23 @@
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 
 namespace test {
+using Id = u32;
+using IdArray = vector<Id>;
+using bytestream = vector<u8>;
 
 interface ServerControl {
 	// All tests performed, safe to shutdown the server
 	void Shutdown();
 }
 
+[force_helpers=1]
+FlatStruct : flat {
+	a: i32;
+	b: u32;
+	c: float32;
+}
+
+[force_helpers=1]
 AAA: flat {
 	a: u32;
 	b: string;
@@ -18,10 +29,10 @@ interface TestBasic {
 	boolean ReturnBoolean();
 	boolean In(a: in u32, b: in boolean, c: in vector<u8>);
 	void Out(a: out u32, b: out boolean, c: out vector<u8>);
+	IdArray ReturnIdArray();
 }
 
-using bytestream = vector<u8>;
-
+[force_helpers=1]
 Opt1 : flat {
 	str: string;
 	stream?: bytestream;
@@ -39,29 +50,34 @@ interface TestOptional {
 }
 
 
+[force_helpers=1]
 CCC : flat {
 	a: string;
 	b: string;
 	c?: boolean;
 }
 
+[force_helpers=1]
 BBB : flat {
 	a: vector<AAA>;
 	b: vector<CCC>;
 }
 
+[force_helpers=1]
 Level2 : flat {
 	x: string;
 	y: vector<u8>;
 	z: u64;
 }
 
+[force_helpers=1]
 Level1 : flat {
 	x: string;
 	y: Level2;
 	z: u64;
 }
 
+[force_helpers=1]
 TopLevel : flat {
 	x: string;
 	y: Level1;

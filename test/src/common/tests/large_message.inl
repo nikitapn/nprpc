@@ -34,4 +34,9 @@ public:
             span[i] = static_cast<uint8_t>(i % 256);
         }
     }
+
+    virtual test::IdArray ReturnIdArray () {
+      test::IdArray arr {1,2,3,4,5,6,7,8,9,10};
+      return arr;
+    }
 };

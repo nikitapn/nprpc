@@ -99,7 +99,7 @@ describe('NPRPC Integration Tests', function() {
                 testData[i] = i;
             }
 
-            const result = await testBasic.In(100, true, testData);
+            const result = await testBasic.In(100, true, new Uint8Array(testData));
             expect(result).to.be.true;
         });
 
@@ -107,7 +107,7 @@ describe('NPRPC Integration Tests', function() {
             // Create ref objects for output parameters
             const aRef = NPRPC.make_ref();
             const bRef = NPRPC.make_ref();
-            const cArray = NPRPC.make_ref<number[]>();
+            const cArray = NPRPC.make_ref<Uint8Array>();
             
             // Call the Out method
             await testBasic.Out(aRef, bRef, cArray);
@@ -121,6 +121,12 @@ describe('NPRPC Integration Tests', function() {
             for (let i = 0; i < 256; i++) {
                 expect(cArray.value[i]).to.equal(i);
             }
+        });
+
+        it('should return array of IDs as Array<number>', async function() {
+            const result = await testBasic.ReturnIdArray();
+            expect(result).to.be.an('array').that.has.lengthOf(10);
+            expect(result).to.be.an('array').that.deep.equals([1,2,3,4,5,6,7,8,9,10]);
         });
     });
 
@@ -175,8 +181,8 @@ describe('NPRPC Integration Tests', function() {
             try {
                 const opt = await testOptional.ReturnOpt1();
                 expect(opt.str).to.equal('test_string');
-                expect(opt.stream).to.be.an('array').that.has.lengthOf(10);
-                expect(opt.stream).to.deep.equal([0,1,2,3,4,5,6,7,8,9]);
+                expect(opt.stream).to.be.an('uint8array').that.has.lengthOf(10);
+                expect(opt.stream).to.deep.equal(new Uint8Array([0,1,2,3,4,5,6,7,8,9]));
             } catch (error) {
                 console.error('Out call failed:', error);
                 throw error;
@@ -228,8 +234,8 @@ describe('NPRPC Integration Tests', function() {
                 expect(result.y.y).to.not.be.undefined;
                 expect(result.y.y.x).to.equal('level2_string');
                 expect(result.y.y.z).to.equal(3n);
-                expect(result.y.y.y).to.be.an('array').that.has.lengthOf(10);
-                expect(result.y.y.y).to.deep.equal([1,2,3,4,5,6,7,8,9,10]);
+                expect(result.y.y.y).to.be.an('uint8array').that.has.lengthOf(10);
+                expect(result.y.y.y).to.deep.equal(new Uint8Array([1,2,3,4,5,6,7,8,9,10]));
             } catch (error) {
                 console.error('ReturnNested call failed:', error);
                 throw error;

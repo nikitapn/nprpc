@@ -10,6 +10,7 @@ interface Container {
     readonly elements_offset: number;
     readonly elements_size: number;
 }
+type FundamentalArray = Uint8Array | Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | Float32Array | Float64Array;
 declare class Vector extends Flat implements Container {
     get elements_offset(): number;
     get elements_size(): number;
@@ -36,13 +37,16 @@ export declare const Vector_Direct1_u8: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Uint8Array;
         readonly array: number[];
         readonly array_buffer: ArrayBuffer;
         readonly data_view: DataView;
@@ -66,13 +70,16 @@ export declare const Vector_Direct1_i8: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Int8Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -94,13 +101,16 @@ export declare const Vector_Direct1_u16: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Uint16Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -122,13 +132,16 @@ export declare const Vector_Direct1_i16: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Int16Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -150,13 +163,16 @@ export declare const Vector_Direct1_u32: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Uint32Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -178,13 +194,16 @@ export declare const Vector_Direct1_i32: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Int32Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -209,13 +228,16 @@ export declare const Vector_Direct1_u64: {
         readonly elements_size: number;
         at(ix: number): bigint;
         set(ix: number, value: bigint): void;
+        copy_from_typed_array(arr: BigInt64Array | BigUint64Array): void;
         copy_from_ts_array(arr: bigint[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): bigint;
         set(ix: number, value: bigint): void;
+        copy_from_typed_array(arr: BigUint64Array): void;
         copy_from_ts_array(arr: bigint[]): void;
+        readonly typed_array: BigUint64Array;
         readonly array: bigint[];
         buffer: FlatBuffer;
         offset: number;
@@ -240,13 +262,16 @@ export declare const Vector_Direct1_i64: {
         readonly elements_size: number;
         at(ix: number): bigint;
         set(ix: number, value: bigint): void;
+        copy_from_typed_array(arr: BigInt64Array | BigUint64Array): void;
         copy_from_ts_array(arr: bigint[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): bigint;
         set(ix: number, value: bigint): void;
+        copy_from_typed_array(arr: BigInt64Array): void;
         copy_from_ts_array(arr: bigint[]): void;
+        readonly typed_array: BigInt64Array;
         readonly array: bigint[];
         buffer: FlatBuffer;
         offset: number;
@@ -268,13 +293,16 @@ export declare const Vector_Direct1_f32: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Float32Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -296,13 +324,16 @@ export declare const Vector_Direct1_f64: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Float64Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -330,13 +361,16 @@ export declare const Array_Direct1_u8: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Uint8Array;
         readonly array: number[];
         readonly array_buffer: ArrayBuffer;
         readonly data_view: DataView;
@@ -360,13 +394,16 @@ export declare const Array_Direct1_i8: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Int8Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -388,13 +425,16 @@ export declare const Array_Direct1_u16: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Uint16Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -416,13 +456,16 @@ export declare const Array_Direct1_i16: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Int16Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -444,13 +487,16 @@ export declare const Array_Direct1_u32: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Uint32Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -472,13 +518,16 @@ export declare const Array_Direct1_i32: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Int32Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -503,13 +552,16 @@ export declare const Array_Direct1_u64: {
         readonly elements_size: number;
         at(ix: number): bigint;
         set(ix: number, value: bigint): void;
+        copy_from_typed_array(arr: BigInt64Array | BigUint64Array): void;
         copy_from_ts_array(arr: bigint[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): bigint;
         set(ix: number, value: bigint): void;
+        copy_from_typed_array(arr: BigUint64Array): void;
         copy_from_ts_array(arr: bigint[]): void;
+        readonly typed_array: BigUint64Array;
         readonly array: bigint[];
         buffer: FlatBuffer;
         offset: number;
@@ -534,13 +586,16 @@ export declare const Array_Direct1_i64: {
         readonly elements_size: number;
         at(ix: number): bigint;
         set(ix: number, value: bigint): void;
+        copy_from_typed_array(arr: BigInt64Array | BigUint64Array): void;
         copy_from_ts_array(arr: bigint[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): bigint;
         set(ix: number, value: bigint): void;
+        copy_from_typed_array(arr: BigInt64Array): void;
         copy_from_ts_array(arr: bigint[]): void;
+        readonly typed_array: BigInt64Array;
         readonly array: bigint[];
         buffer: FlatBuffer;
         offset: number;
@@ -562,13 +617,16 @@ export declare const Array_Direct1_f32: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Float32Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -590,13 +648,16 @@ export declare const Array_Direct1_f64: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Float64Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -624,13 +685,16 @@ declare const String_Direct1_base: {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     };
 } & {
     new (...args: any[]): {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Uint8Array;
         readonly array: number[];
         readonly array_buffer: ArrayBuffer;
         readonly data_view: DataView;
@@ -711,11 +775,14 @@ export declare class Optional_Direct1_Vector_u8 extends Optional {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     } & {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Uint8Array;
         readonly array: number[];
         readonly array_buffer: ArrayBuffer;
         readonly data_view: DataView;
@@ -741,11 +808,14 @@ export declare class Optional_Direct1_Vector_i8 extends Optional {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     } & {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Int8Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -768,11 +838,14 @@ export declare class Optional_Direct1_Vector_u16 extends Optional {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     } & {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Uint16Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -795,11 +868,14 @@ export declare class Optional_Direct1_Vector_i16 extends Optional {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     } & {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Int16Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -822,11 +898,14 @@ export declare class Optional_Direct1_Vector_u32 extends Optional {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     } & {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Uint32Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -849,11 +928,14 @@ export declare class Optional_Direct1_Vector_i32 extends Optional {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     } & {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Int32Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -876,11 +958,14 @@ export declare class Optional_Direct1_Vector_f32 extends Optional {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     } & {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Float32Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;
@@ -903,11 +988,14 @@ export declare class Optional_Direct1_Vector_f64 extends Optional {
         readonly elements_size: number;
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
     } & {
         at(ix: number): number;
         set(ix: number, value: number): void;
+        copy_from_typed_array(arr: FundamentalArray): void;
         copy_from_ts_array(arr: number[]): void;
+        readonly typed_array: Float64Array;
         readonly array: number[];
         buffer: FlatBuffer;
         offset: number;

@@ -185,6 +185,39 @@ static std::string_view fundamental_to_ts(TokenId id) {
 	}
 }
 
+static std::string_view get_typed_array_name(TokenId id) {
+	switch (id) {
+	case TokenId::Boolean:
+		// TODO: need implement packing and unpacking bits into bytes
+		// in C++ builder and here
+		assert(false && "Typed array for boolean is not implemented");
+		return "Uint8Array";
+	case TokenId::Int8:
+		return "Int8Array";
+	case TokenId::UInt8:
+		return "Uint8Array";
+	case TokenId::Int16:
+		return "Int16Array";
+	case TokenId::UInt16:
+		return "Uint16Array";
+	case TokenId::Int32:
+		return "Int32Array";
+	case TokenId::UInt32:
+		return "Uint32Array";
+	case TokenId::Int64:
+		return "BigInt64Array";
+	case TokenId::UInt64:
+		return "BigUint64Array";
+	case TokenId::Float32:
+		return "Float32Array";
+	case TokenId::Float64:
+		return "Float64Array";
+	default:
+		assert(false);
+		return "/*unknown typed array*/";
+	}
+}
+
 void TypescriptBuilder::emit_type(AstTypeDecl* type, std::ostream& os) {
 	switch (type->id) {
 	case FieldType::Fundamental:
@@ -195,8 +228,18 @@ void TypescriptBuilder::emit_type(AstTypeDecl* type, std::ostream& os) {
 		break;
 	case FieldType::Vector:
 	case FieldType::Array:
-		os << "Array<" << emit_type(cwt(type)->type) << ">";
+	{
+		auto ut = cwt(type)->type;
+		if (ut->id == FieldType::Fundamental) {
+			// Using typed arrays for fundamental types
+			os << get_typed_array_name(cft(ut)->token_id);
+		} else {
+			// If there is going to be an alias for fundamental types, we consider using it here too
+			// (might be some database ids or something else, that is represented as u32 but should be distinct type)
+			os << "Array<" << emit_type(ut) << ">";
+		}
 		break;
+	}
 	case FieldType::String:
 		os << "string";
 		break;
@@ -270,7 +313,7 @@ void TypescriptBuilder::emit_flat_type(AstTypeDecl* type, std::ostream& os) {
 		if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
 			out << "NPRPC.Flat.Vector_Direct1_" << toktype << cft(wt)->token_id;
 		} else if (wt->id == FieldType::Struct) {
-			out << "NPRPC.Flat.Vector_Direct2<"; emit_flat_type(wt, out); out << "_Direct>";
+			out << "NPRPC.Flat.Vector_Direct2<" << emit_flat_type(wt) << "_Direct>";
 		}
 		break;
 	}
@@ -587,12 +630,17 @@ void TypescriptBuilder::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, 
 		os << ns(ctx_.nm_cur()) << cflat(type)->name;
 		break;
 	case FieldType::Array:
-	case FieldType::Vector:
-		os << "Array<";
-		emit_parameter_type_for_proxy_call_r(cwt(type)->type, os, input);
-		os << ">";
-		if (type->id == FieldType::Array) os << "/*" << car(type)->length << "*/";
+	case FieldType::Vector: {
+		auto ut = cwt(type)->type;
+		if (ut->id == FieldType::Fundamental) {
+			os << get_typed_array_name(cft(ut)->token_id);
+		} else {
+			os << "Array<"; emit_parameter_type_for_proxy_call_r(ut, os, input); os << ">";
+		}
+		if (type->id == FieldType::Array)
+			os << "/*" << car(type)->length << "*/";
 		break;
+	}
 	case FieldType::String:
 		os << "string";
 		break;
@@ -651,17 +699,19 @@ void TypescriptBuilder::assign_from_ts_type(AstTypeDecl* type, std::string op1, 
 		out << bl() << op1 << '(' << op2 << ".length);\n";
 		[[fallthrough]];
 	case FieldType::Array: {
-		auto wt = cwt(type)->real_type();
-		if (is_fundamental(wt)) {
+		auto ut = cwt(type)->type;
+		auto real_type = cwt(type)->real_type();
+		if (is_fundamental(real_type)) {
 			// auto [size, align] = get_type_size_align(wt);
-			out << bl() << op1 << "_d().copy_from_ts_array(" << op2 << "); \n";
+			out << bl() << op1 << "_d()." << (ut->id == FieldType::Fundamental ? "copy_from_typed_array(": "copy_from_ts_array(") 
+				<< op2 << "); \n";
 		} else {
 			out <<
 				bb() <<
 					bl() << "let vv = " << op1 << "_d(), index = 0;\n" <<
 				  bl() << "for (let e of vv)\n" <<
 					bb();
-						assign_from_ts_type(wt, "e", op2 + "[index]", true); out <<
+						assign_from_ts_type(real_type, "e", op2 + "[index]", true); out <<
 						bl() << "++index;\n" <<
 					eb() <<
 				eb();
@@ -740,18 +790,18 @@ void TypescriptBuilder::assign_from_flat_type(
 	}
 	case FieldType::Array:
 	case FieldType::Vector: {
-		auto wt = cwt(type)->real_type();
+		auto ut = cwt(type)->type;
+		auto real_type = cwt(type)->real_type();
 		if (top_object && direct) {
-			// expecting out passed by reference
-			out << bl() << op1 << ".value = " << op2 << "_d();\n";
+			out << bl() << op1 << " = " << op2 << "_d();\n";
 			break;
 		}
 		auto idxs = "index_" + std::to_string(_idx++);
-		if (is_fundamental(wt)) {
+		if (is_fundamental(real_type)) {
 			// assert(!top_object);
 			out <<
 				bb() <<
-					bl() << op1 << " = " << op2 << "_d()" << ".array;\n" <<
+					bl() << op1 << " = " << op2 << "_d()" << (ut->id == FieldType::Fundamental ? ".typed_array" : ".array;\n") <<
 				eb();
 		} else {
 			out <<
@@ -763,7 +813,7 @@ void TypescriptBuilder::assign_from_flat_type(
 				out << bl() << "(" << op1 << " as Array<any>) = new Array<any>(vv.elements_size)\n";
 			out <<
 				bl() << "for (let e of vv) {\n" << bb(false);
-						assign_from_flat_type(wt, op1 + '[' + idxs + ']', "e", true, false);
+						assign_from_flat_type(real_type, op1 + '[' + idxs + ']', "e", true, false);
 			out <<
 						bl() << "++" << idxs << ";\n" <<
 					eb() <<
@@ -1131,7 +1181,7 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 	for (auto fn : ifs->fns) {
 		out << bl() << fn->name;
 		emit_function_arguments(false, fn, out,
-			std::bind(&TypescriptBuilder::emit_parameter_type_for_servant_callback, this, _1, _2)
+			std::bind(&TypescriptBuilder::emit_parameter_type_for_proxy_call, this, _1, _2)
 		);
 		out << ": " << emit_type(fn->ret_value) << ";\n";
 	}
@@ -1243,9 +1293,18 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 				}
 			} else {
 				if (arg->type->id == FieldType::Object) {
-					out << bl() << "NPRPC.create_object_from_flat(ia._" << ++in_ix << ", remote_endpoint)";
+					out << "NPRPC.create_object_from_flat(ia._" << ++in_ix << ", remote_endpoint)";
+				} else if (arg->direct || is_fundamental(arg->type)) {
+					out << "ia._" << ++in_ix;
+				} else if (arg->type->id == FieldType::Struct) {
+					ctx_.mark_struct_as_having_helpers(cflat(arg->type));
+					auto helper_name = get_helper_function_name(cflat(arg->type), true);
+					out << helper_name << "(ia._" << ++in_ix << ")";
 				} else {
-					out << bl () << "ia._" << ++in_ix;
+					// array, vector, enum, string, alias
+					// we can pass them directly
+					// TODO: convert vector/array from flat to normal object?
+					out <<"ia._" << ++in_ix;
 					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::Array)
 						out << "_d()";
 				}
@@ -1279,7 +1338,7 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 			always_full_namespace(true);
 			out <<
 				eb() << // try
-				bl() << "catch(e: any) {\n" << bb(false) <<
+				bl() << "catch(e) {\n" << bb(false) <<
 				bl() << "if (!(e instanceof " << emit_type(fn->ex) << ")) throw e;\n" <<
 				bl() << "let obuf = buf;\n" <<
 				bl() << "obuf.consume(obuf.size);\n" <<
@@ -1351,9 +1410,8 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 			;
 }
 
-
 void TypescriptBuilder::emit_struct_helpers() {
-		for (auto s : ctx_.structs_with_helpers) {
+		for (auto s : ctx_.get_structs_with_helpers()) {
 			out << bl() << "export namespace " << ns(s->nm) << "helpers {\n" << bb(false);
 			auto saved_namespace = ctx_.set_namespace(s->nm);
 			// flat -> ts
@@ -1367,7 +1425,7 @@ void TypescriptBuilder::emit_struct_helpers() {
 			out << " = {} as " << emit_type(s) << ";\n";
 			assign_from_flat_type(s, "dest", "src", false, true);
 			out << 
-					bl() << "return dest" <<
+					bl() << "return dest\n" <<
 				eb();
 			// ts -> flat
 			out << bl() << "export const assign_from_ts_" << s->name << " = (dest: ";
@@ -1382,7 +1440,7 @@ void TypescriptBuilder::emit_struct_helpers() {
 	}
 }
 
-TypescriptBuilder::_ns TypescriptBuilder::ns(Namespace* nm) {
+TypescriptBuilder::_ns TypescriptBuilder::ns(Namespace* nm) const {
 	return { *this, nm };
 }
 

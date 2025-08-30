@@ -433,7 +433,7 @@ export class Poa {
       object_id: object_id_internal,
       poa_idx: this.index,
       flags: detail.ObjectFlag.Tethered,
-      origin: new Array<number>(16).fill(0), // origin is not used in JS
+      origin: new Uint8Array(16).fill(0), // origin is not used in JS
       class_id: obj.get_class(),
       urls: "", // urls is not used in JS
     };

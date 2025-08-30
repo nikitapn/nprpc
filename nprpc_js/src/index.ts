@@ -17,7 +17,7 @@ export function get_nameserver(nameserver_ip: string): Nameserver {
 		object_id: 0n,
 		poa_idx: 0,
 		flags: detail.ObjectFlag.Persistent,
-		origin: new Array<number>(16).fill(0),
+		origin: new Uint8Array(16).fill(0),
 		class_id: _INameserver_Servant._get_class(),
 		urls: "ws://" + nameserver_ip + ":15001",
 	};

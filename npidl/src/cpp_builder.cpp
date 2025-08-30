@@ -514,7 +514,7 @@ void CppBuilder::assign_from_cpp_type(
 	case FieldType::Struct: {
 		auto s = cflat(type);
 		if (s->flat) {
-			os << bd << "memcpy(" << op1 << "().__data(), &" << op2 << ", " << s->size << ");\n";
+			os << bd << "memcpy(" << op1 << (top_type ? "" : "()") << ".__data(), &" << op2 << ", " << s->size << ");\n";
 		} else {
 			for (auto field : s->fields) {
 				assign_from_cpp_type(field->type, 
@@ -1062,7 +1062,7 @@ void CppBuilder::emit_helpers() {
 
 void CppBuilder::emit_struct_helpers() {
 
-	for (auto s : ctx_.structs_with_helpers) {
+	for (auto s : ctx_.get_structs_with_helpers()) {
 		oh << "namespace " << s->nm->to_cpp17_namespace() << "::helpers {\n";
 		auto saved_namespace = ctx_.set_namespace(s->nm);
 		oh << "inline void assign_from_flat_" << s->name << "(";

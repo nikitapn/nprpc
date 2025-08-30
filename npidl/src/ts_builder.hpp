@@ -12,7 +12,7 @@
 class TypescriptBuilder : public Builder {
 public:
 struct _ns {
-		TypescriptBuilder& bulder_;
+		const TypescriptBuilder& bulder_;
 		Namespace* nm;
 	};
 private:
@@ -38,7 +38,7 @@ private:
 	void emit_struct_helpers();
 	void emit_variable(AstTypeDecl* type, std::string name, std::ostream& os);
 
-	_ns ns(Namespace* nm);
+	_ns ns(Namespace* nm) const;
 
 	auto emit_type(AstTypeDecl* type) {
 		return OstreamWrapper{[type, this](std::ostream& os) { this->emit_type(type, os); }};
@@ -46,6 +46,13 @@ private:
 
 	auto emit_flat_type(AstTypeDecl* type) {
 		return OstreamWrapper{[type, this](std::ostream& os) { this->emit_flat_type(type, os); }};
+	}
+
+
+	std::string get_helper_function_name(AstStructDecl* s, bool from_flat) const {
+		std::stringstream ss;
+		ss << "helpers." << (from_flat ? "assign_from_flat_" : "assign_from_ts_") + s->name;
+		return ss.str();
 	}
 
 

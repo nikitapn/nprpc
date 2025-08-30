@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <variant>
 #include <algorithm>
+#include <unordered_set>
 
 constexpr int fundamental_type_first = 256;
 constexpr int fundamental_type_last = fundamental_type_first + 16;
@@ -532,12 +533,12 @@ class Context {
 	std::string module_name;
 	std::string base_name;
 	std::filesystem::path file_path;
+	std::unordered_set<AstStructDecl*> structs_with_helpers_;
 public:
 	AFFAList affa_list;
 	int m_struct_n_ = 0;
 	std::vector<AstStructDecl*> exceptions;
 	std::vector<AstInterfaceDecl*> interfaces;
-	std::vector<AstStructDecl*> structs_with_helpers;
 
 	const std::string& current_file() const noexcept {
 		return base_name;
@@ -581,6 +582,14 @@ public:
 		auto old = nm_cur_;
 		nm_cur_ = nm;
 		return old;
+	}
+
+	auto get_structs_with_helpers() const {
+		return structs_with_helpers_;
+	}
+
+	void mark_struct_as_having_helpers(AstStructDecl* s) {
+		structs_with_helpers_.insert(s);
 	}
 
 	bool is_nprpc_base() const noexcept {

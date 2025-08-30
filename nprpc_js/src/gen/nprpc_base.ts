@@ -6,7 +6,7 @@ const u8dec = new TextDecoder();
 export type oid_t = bigint/*u64*/;
 export type poa_idx_t = number/*u16*/;
 export type oflags_t = number/*u16*/;
-export type uuid_t = Array<number/*u8*/>;
+export type uuid_t = Uint8Array;
 export type ifs_idx_t = number/*u8*/;
 export type fn_idx_t = number/*u8*/;
 export class ExceptionCommFailure extends NPRPC.Exception {
@@ -307,16 +307,16 @@ export namespace detail.helpers {
     dest.poa_idx = src.poa_idx;
     dest.flags = src.flags;
     {
-      dest.origin = src.origin_d().array;
-    }
+      dest.origin = src.origin_d().typed_array    }
     dest.class_id = src.class_id;
     dest.urls = src.urls;
-    return dest  }
+    return dest
+  }
   export const assign_from_ts_ObjectId = (dest: Flat_nprpc_base.ObjectId_Direct, src: ObjectId) => {
     dest.object_id = src.object_id;
     dest.poa_idx = src.poa_idx;
     dest.flags = src.flags;
-    dest.origin_d().copy_from_ts_array(src.origin); 
+    dest.origin_d().copy_from_typed_array(src.origin); 
     dest.class_id = src.class_id;
     dest.urls = src.urls;
   }

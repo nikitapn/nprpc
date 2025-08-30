@@ -778,7 +778,7 @@ class Parser {
 
 		for (const auto& a : attr) {
 			if (a.first == "force_helpers" && a.second == "1")
-				ctx_.structs_with_helpers.push_back(s);
+				ctx_.mark_struct_as_having_helpers(s);
 			else
 				throw_error("Unknown attribute: " + a.first + " for struct " + s->name);
 		}

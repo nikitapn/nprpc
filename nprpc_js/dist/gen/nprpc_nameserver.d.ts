@@ -5,8 +5,8 @@ export declare class Nameserver extends NPRPC.ObjectProxy {
     Resolve(name: string, obj: NPRPC.ref<NPRPC.ObjectProxy>): Promise<boolean>;
 }
 export interface INameserver_Servant {
-    Bind(obj: NPRPC.ObjectProxy, name: string): void;
-    Resolve(name: string, obj: NPRPC.detail.Flat_nprpc_base.ObjectId_Direct): boolean;
+    Bind(obj: NPRPC.detail.ObjectId, name: string): void;
+    Resolve(name: string, obj: NPRPC.ref<NPRPC.ObjectProxy>): boolean;
 }
 export declare class _INameserver_Servant extends NPRPC.ObjectServant {
     static _get_class(): string;

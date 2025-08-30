@@ -2,7 +2,7 @@ import * as NPRPC from '../base';
 export type oid_t = bigint;
 export type poa_idx_t = number;
 export type oflags_t = number;
-export type uuid_t = Array<number>;
+export type uuid_t = Uint8Array;
 export type ifs_idx_t = number;
 export type fn_idx_t = number;
 export declare class ExceptionCommFailure extends NPRPC.Exception {
@@ -143,11 +143,14 @@ export declare namespace detail {
                 readonly elements_size: number;
                 at(ix: number): number;
                 set(ix: number, value: number): void;
+                copy_from_typed_array(arr: Uint8Array<ArrayBufferLike> | Int8Array<ArrayBufferLike> | Uint8Array<ArrayBufferLike> | Int16Array<ArrayBufferLike> | Uint16Array<ArrayBufferLike> | Int32Array<ArrayBufferLike> | Uint32Array<ArrayBufferLike> | Float32Array<ArrayBufferLike> | Float64Array<ArrayBufferLike>): void;
                 copy_from_ts_array(arr: number[]): void;
             } & {
                 at(ix: number): number;
                 set(ix: number, value: number): void;
+                copy_from_typed_array(arr: Uint8Array<ArrayBufferLike> | Int8Array<ArrayBufferLike> | Uint8Array<ArrayBufferLike> | Int16Array<ArrayBufferLike> | Uint16Array<ArrayBufferLike> | Int32Array<ArrayBufferLike> | Uint32Array<ArrayBufferLike> | Float32Array<ArrayBufferLike> | Float64Array<ArrayBufferLike>): void;
                 copy_from_ts_array(arr: number[]): void;
+                readonly typed_array: Uint8Array;
                 readonly array: number[];
                 readonly array_buffer: ArrayBuffer;
                 readonly data_view: DataView;

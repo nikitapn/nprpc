@@ -25,4 +25,9 @@ public:
         auto span = c();
         std::iota(std::begin(span), std::end(span), 0);
     }
+
+    virtual test::IdArray ReturnIdArray () {
+      test::IdArray arr {1,2,3,4,5,6,7,8,9,10};
+      return arr;
+    }
 };

@@ -47,15 +47,29 @@ interface Container {
 	readonly elements_size: number;
 }
 
+
+type FundamentalArray = 
+		Uint8Array
+	| Int8Array
+	| Uint8Array
+	| Int16Array
+	| Uint16Array
+	| Int32Array
+	| Uint32Array
+	| Float32Array
+	| Float64Array
+
 interface NumberAccessor {
 	at(ix: number): number;
 	set(ix: number, value: number): void;
+	copy_from_typed_array(arr: FundamentalArray): void;
 	copy_from_ts_array(arr: number[]): void;
 }
 
 interface BigIntAccessor {
 	at(ix: number): bigint;
 	set(ix: number, value: bigint): void;
+	copy_from_typed_array(arr: BigInt64Array | BigUint64Array): void;
 	copy_from_ts_array(arr: bigint[]): void;
 }
 
@@ -123,18 +137,17 @@ function Accessor_U8<TBase extends GConstructor<FlatContainer>>(Base: TBase) {
 		public set(ix: number, value: number): void {
 			this.buffer.dv.setUint8(this.elements_offset + ix, value);
 		}
+		public copy_from_typed_array(arr: FundamentalArray): void {
+			new Uint8Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
 		public copy_from_ts_array(arr: number[]): void {
 			new Uint8Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
-			// Alternatively, we can use a loop:
-			// let offset = this.elements_offset;
-			// for (let n of arr) {
-			// 	this.buffer.dv.setUint8(offset, n);
-			// 	offset += 1;
-			// }
+		}
+		public get typed_array(): Uint8Array {
+			return new Uint8Array(this.buffer.array_buffer, this.elements_offset, this.elements_size);
 		}
 		public get array(): number[] {
-			return Array.from(
-				new Uint8Array(this.buffer.array_buffer, this.elements_offset, this.elements_size));
+			return Array.from(this.typed_array);
 		}
 		public get array_buffer(): ArrayBuffer {
 			let offset: number = this.elements_offset;
@@ -154,18 +167,17 @@ function Accessor_I8<TBase extends GConstructor<FlatContainer>>(Base: TBase) {
 		public set(ix: number, value: number) {
 			this.buffer.dv.setInt8(this.elements_offset + ix, value);
 		}
+		public copy_from_typed_array(arr: FundamentalArray): void {
+			new Int8Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
 		public copy_from_ts_array(arr: number[]): void {
 			new Int8Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
-			//Alternatively, we can use a loop:
-			// let offset = this.elements_offset;
-			// for (let n of arr) {
-			// 	this.buffer.dv.setInt8(offset, n);
-			// 	offset += 1;
-			// }
+		}
+		public get typed_array(): Int8Array {
+			return new Int8Array(this.buffer.array_buffer, this.elements_offset, this.elements_size);
 		}
 		public get array(): number[] {
-			return Array.from(
-				new Int8Array(this.buffer.array_buffer, this.elements_offset, this.elements_size));
+			return Array.from(this.typed_array);
 		}
 	};
 }
@@ -178,16 +190,17 @@ function Accessor_U16<TBase extends GConstructor<FlatContainer>>(Base: TBase) {
 		public set(ix: number, value: number): void {
 			this.buffer.dv.setUint16(this.elements_offset + 2*ix, value, true);
 		}
+		public copy_from_typed_array(arr: FundamentalArray): void {
+			new Uint16Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
 		public copy_from_ts_array(arr: number[]): void {
-			let offset = this.elements_offset;
-			for (let n of arr) {
-				this.buffer.dv.setUint16(offset, n, true);
-				offset += 2;
-			}
+			new Uint16Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
+		public get typed_array(): Uint16Array {
+			return new Uint16Array(this.buffer.array_buffer, this.elements_offset, this.elements_size);
 		}
 		public get array(): number[] {
-			return Array.from(
-				new Uint16Array(this.buffer.array_buffer, this.elements_offset, this.elements_size));
+			return Array.from(this.typed_array);
 		}
 	};
 }
@@ -200,16 +213,17 @@ function Accessor_I16<TBase extends GConstructor<FlatContainer>>(Base: TBase) {
 		public set(ix: number, value: number) {
 			this.buffer.dv.setInt16(this.elements_offset + 2*ix, value, true);
 		}
+		public copy_from_typed_array(arr: FundamentalArray): void {
+			new Int16Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
 		public copy_from_ts_array(arr: number[]): void {
-			let offset = this.elements_offset;
-			for (let n of arr) {
-				this.buffer.dv.setInt16(offset, n, true);
-				offset += 2;
-			}
+			new Int16Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
+		public get typed_array(): Int16Array {
+			return new Int16Array(this.buffer.array_buffer, this.elements_offset, this.elements_size);
 		}
 		public get array(): number[] {
-			return Array.from(
-				new Int16Array(this.buffer.array_buffer, this.elements_offset, this.elements_size));
+			return Array.from(this.typed_array);
 		}
 	};
 }
@@ -222,16 +236,17 @@ function Accessor_U32<TBase extends GConstructor<FlatContainer>>(Base: TBase) {
 		public set(ix: number, value: number): void {
 			this.buffer.dv.setUint32(this.elements_offset + 4*ix, value, true);
 		}
+		public copy_from_typed_array(arr: FundamentalArray): void {
+			new Uint32Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
 		public copy_from_ts_array(arr: number[]): void {
-			let offset = this.elements_offset;
-			for (let n of arr) {
-				this.buffer.dv.setUint32(offset, n, true);
-				offset += 4;
-			}
+			new Uint32Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
+		public get typed_array(): Uint32Array {
+			return new Uint32Array(this.buffer.array_buffer, this.elements_offset, this.elements_size);
 		}
 		public get array(): number[] {
-			return Array.from(
-				new Uint32Array(this.buffer.array_buffer, this.elements_offset, this.elements_size));
+			return Array.from(this.typed_array);
 		}
 	};
 }
@@ -244,16 +259,17 @@ function Accessor_I32<TBase extends GConstructor<FlatContainer>>(Base: TBase) {
 		public set(ix: number, value: number) {
 			this.buffer.dv.setInt32(this.elements_offset + 4*ix, value, true);
 		}
+		public copy_from_typed_array(arr: FundamentalArray): void {
+			new Int32Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
 		public copy_from_ts_array(arr: number[]): void {
-			let offset = this.elements_offset;
-			for (let n of arr) {
-				this.buffer.dv.setInt32(offset, n, true);
-				offset += 4;
-			}
+			new Int32Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
+		public get typed_array(): Int32Array {
+			return new Int32Array(this.buffer.array_buffer, this.elements_offset, this.elements_size);
 		}
 		public get array(): number[] {
-			return Array.from(
-				new Int32Array(this.buffer.array_buffer, this.elements_offset, this.elements_size));
+			return Array.from(this.typed_array);
 		}
 	};
 }
@@ -266,16 +282,17 @@ function Accessor_U64<TBase extends GConstructor<FlatContainer>>(Base: TBase) {
 		public set(ix: number, value: bigint) {
 			this.buffer.dv.setBigUint64(this.elements_offset + 8*ix, value, true);
 		}
+		public copy_from_typed_array(arr: BigUint64Array): void {
+			new BigUint64Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
 		public copy_from_ts_array(arr: bigint[]): void {
-			let offset = this.elements_offset;
-			for (let n of arr) {
-				this.buffer.dv.setBigUint64(offset, n, true);
-				offset += 8;
-			}
+			new BigUint64Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
+		public get typed_array(): BigUint64Array {
+			return new BigUint64Array(this.buffer.array_buffer, this.elements_offset, this.elements_size);
 		}
 		public get array(): bigint[] {
-			return Array.from(
-				new BigUint64Array(this.buffer.array_buffer, this.elements_offset, this.elements_size));
+			return Array.from(this.typed_array);
 		}
 	};
 }
@@ -288,16 +305,17 @@ function Accessor_I64<TBase extends GConstructor<FlatContainer>>(Base: TBase) {
 		public set(ix: number, value: bigint) {
 			this.buffer.dv.setBigInt64(this.elements_offset + 8*ix, value, true);
 		}
+		public copy_from_typed_array(arr: BigInt64Array): void {
+			new BigInt64Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
 		public copy_from_ts_array(arr: bigint[]): void {
-			let offset = this.elements_offset;
-			for (let n of arr) {
-				this.buffer.dv.setBigInt64(offset, n, true);
-				offset += 8;
-			}
+			new BigInt64Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
+		public get typed_array(): BigInt64Array {
+			return new BigInt64Array(this.buffer.array_buffer, this.elements_offset, this.elements_size);
 		}
 		public get array(): bigint[] {
-			return Array.from(
-				new BigInt64Array(this.buffer.array_buffer, this.elements_offset, this.elements_size));
+			return Array.from(this.typed_array);
 		}
 	};
 }
@@ -310,16 +328,17 @@ function Accessor_F32<TBase extends GConstructor<FlatContainer>>(Base: TBase) {
 		public set(ix: number, value: number) {
 			this.buffer.dv.setFloat32(this.elements_offset + 4*ix, value, true);
 		}
+		public copy_from_typed_array(arr: FundamentalArray): void {
+			new Float32Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
 		public copy_from_ts_array(arr: number[]): void {
-			let offset = this.elements_offset;
-			for (let n of arr) {
-				this.buffer.dv.setFloat32(offset, n, true);
-				offset += 4;
-			}
+			new Float32Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
+		public get typed_array(): Float32Array {
+			return new Float32Array(this.buffer.array_buffer, this.elements_offset, this.elements_size);
 		}
 		public get array(): number[] {
-			return Array.from(
-				new Float32Array(this.buffer.array_buffer, this.elements_offset, this.elements_size));
+			return Array.from(this.typed_array);
 		}
 	};
 }
@@ -332,16 +351,17 @@ function Accessor_F64<TBase extends GConstructor<FlatContainer>>(Base: TBase) {
 		public set(ix: number, value: number) {
 			this.buffer.dv.setFloat64(this.elements_offset + 8*ix, value, true);
 		}
-		public copy_from_ts_array(arr: number[]): void {
-			let offset = this.elements_offset;
-			for (let n of arr) {
-				this.buffer.dv.setFloat64(offset, n, true);
-				offset += 8;
-			}
+		public copy_from_typed_array(arr: FundamentalArray): void {
+			new Float64Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
 		}
+		public copy_from_ts_array(arr: number[]): void {
+			new Float64Array(this.buffer.array_buffer, this.elements_offset, this.elements_size).set(arr);
+		}
+		public get typed_array(): Float64Array {
+			return new Float64Array(this.buffer.array_buffer, this.elements_offset, this.elements_size);
+		}	
 		public get array(): number[] {
-			return Array.from(
-				new Float64Array(this.buffer.array_buffer, this.elements_offset, this.elements_size));
+			return Array.from(this.typed_array);
 		}
 	};
 }
