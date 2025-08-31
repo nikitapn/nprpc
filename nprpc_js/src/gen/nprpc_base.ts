@@ -307,7 +307,8 @@ export namespace detail.helpers {
     dest.poa_idx = src.poa_idx;
     dest.flags = src.flags;
     {
-      dest.origin = src.origin_d().typed_array    }
+      dest.origin = src.origin_d().typed_array
+    }
     dest.class_id = src.class_id;
     dest.urls = src.urls;
     return dest

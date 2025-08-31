@@ -801,7 +801,7 @@ void TypescriptBuilder::assign_from_flat_type(
 			// assert(!top_object);
 			out <<
 				bb() <<
-					bl() << op1 << " = " << op2 << "_d()" << (ut->id == FieldType::Fundamental ? ".typed_array" : ".array;\n") <<
+					bl() << op1 << " = " << op2 << "_d()" << (ut->id == FieldType::Fundamental ? ".typed_array\n" : ".array;\n") <<
 				eb();
 		} else {
 			out <<
