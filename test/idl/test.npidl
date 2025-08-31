@@ -27,9 +27,16 @@ AAA: flat {
 
 interface TestBasic {
 	boolean ReturnBoolean();
+	IdArray ReturnIdArray();
+	u32 ReturnU32();
+
 	boolean In(a: in u32, b: in boolean, c: in vector<u8>);
 	void Out(a: out u32, b: out boolean, c: out vector<u8>);
-	IdArray ReturnIdArray();
+}
+
+interface TestLargeMessage {
+	boolean In(a: in u32, b: in boolean, c: in vector<u8>);
+	void Out(a: out u32, b: out boolean, c: out vector<u8>);
 }
 
 [force_helpers=1]

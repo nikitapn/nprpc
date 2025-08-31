@@ -247,7 +247,7 @@ void TypescriptBuilder::emit_type(AstTypeDecl* type, std::ostream& os) {
 		os << "void";
 		break;
 	case FieldType::Object:
-		os << "NPRPC.detail.ObjectId";
+		os << "NPRPC.ObjectProxy";
 		break;
 	case FieldType::Alias:
 		os << ns(calias(type)->nm) << calias(type)->name;
@@ -856,7 +856,7 @@ void TypescriptBuilder::assign_from_flat_type(
 		assign_from_flat_type(calias(type)->get_real_type(), op1, op2, from_iterator, top_object);
 		break;
 	case FieldType::Object:
-		if (top_object) {
+		if (true || top_object) {
 			// expecting out passed by reference
 			out << bl() << op1 << " = NPRPC.create_object_from_flat(" << op2 << ", this.endpoint);\n";
 		} else {

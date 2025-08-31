@@ -90,6 +90,11 @@ describe('NPRPC Integration Tests', function() {
         it('should return boolean true', async function() {
             const result = await testBasic.ReturnBoolean();
             expect(result).to.be.true;
+        }); 
+        
+        it('should return u32', async function() {
+            const result = await testBasic.ReturnU32();
+            expect(result).to.equal(42);
         });
 
         it('should handle input parameters correctly', async function() {

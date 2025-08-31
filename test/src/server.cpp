@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
 
   #include "common/tests/large_message.inl"
   TestLargeMessage test_large_message;
-  nprpctest::make_stuff_happen<test::TestBasic>(test_large_message, flags, "nprpc_test_large_message");
+  nprpctest::make_stuff_happen<test::TestLargeMessage>(test_large_message, flags, "nprpc_test_large_message");
 
   // Wait for shutdown signal from JavaScript client
   std::unique_lock<std::mutex> lk(cv_m);

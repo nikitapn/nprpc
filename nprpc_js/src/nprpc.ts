@@ -279,8 +279,8 @@ export class Rpc {
 
   /** @internal */
   get_connection(endpoint: EndPoint): Connection {
-    let founded: Connection = this.opened_connections_.find(c => c.endpoint.equal(endpoint));
-    if (founded) return founded;
+    let existed = this.opened_connections_.find(c => c.endpoint.equal(endpoint));
+    if (existed) return existed;
 
     let con = new Connection(endpoint);
     this.opened_connections_.push(con);
@@ -290,12 +290,13 @@ export class Rpc {
   public create_poa(poa_size: number): Poa {
     let poa = new Poa(this.last_poa_id_++, poa_size);
     this.poa_list_.push(poa)
-    return poa; 
+    return poa;
   }
 
   /** @internal */
   public get_poa(poa_idx: number): Poa {
-    if (poa_idx >= this.poa_list_.length || poa_idx < 0) return null;
+    if (poa_idx >= this.poa_list_.length || poa_idx < 0)
+      return null;
     return this.poa_list_[poa_idx];
   }
 
@@ -306,13 +307,14 @@ export class Rpc {
   /** @internal */
   public static async read_host(): Promise<HostInfo> {
     let x = await fetch("./host.json");
-    if (!x.ok) throw "read_host error: " + x.statusText;
+    if (!x.ok)
+      throw "read_host error: " + x.statusText;
 
 
     const reviver = (key:string, value: any) => {
-      if (key === 'object_id') {
+      if (key === 'object_id')
         return BigInt(value);
-      }
+
       return value;
     }
 
@@ -634,7 +636,10 @@ export const handle_standart_reply = (buf: FlatBuffer): number => {
 }
 
 export const oid_create_from_flat = detail.helpers.assign_from_flat_ObjectId;
-export const oid_assign_from_ts = detail.helpers.assign_from_ts_ObjectId;
+export function oid_assign_from_ts(dest: detail.Flat_nprpc_base.ObjectId_Direct, src: detail.ObjectId | ObjectProxy): void {
+  const oid: detail.ObjectId = (src instanceof ObjectProxy) ? src.data : src
+  detail.helpers.assign_from_ts_ObjectId(dest, oid);
+}
 
 export const narrow = <T extends ObjectProxy>(from: ObjectProxy, to: new () => T): T => {
   if (from.data.class_id !== (to as any).servant_t._get_class()) {
@@ -653,16 +658,22 @@ export const narrow = <T extends ObjectProxy>(from: ObjectProxy, to: new () => T
   return obj;
 }
 
-export const create_object_from_flat = (
-  direct: detail.Flat_nprpc_base.ObjectId_Direct,
+/**
+ * Create ObjectProxy from ObjectId and remote endpoint
+ * @param oid ObjectId
+ * @param remote_endpoint Remote endpoint (used if ObjectId is tethered)
+ * @returns ObjectProxy or null if oid is invalid
+ */
+export const create_object_from_oid = (
+  oid: detail.ObjectId,
   remote_endpoint: EndPoint): ObjectProxy =>
 {
-  if (direct.object_id == invalid_object_id)
+  if (oid.object_id == invalid_object_id)
     return null;
 
-  const obj = new ObjectProxy(detail.helpers.assign_from_flat_ObjectId(direct));
+  const obj = new ObjectProxy(oid);
 
-  if (direct.flags & detail.ObjectFlag.Tethered) {
+  if (oid.flags & detail.ObjectFlag.Tethered) {
     obj.data.urls = remote_endpoint.to_string();
     obj.endpoint_ = remote_endpoint;
   } else {
@@ -671,6 +682,9 @@ export const create_object_from_flat = (
 
   return obj;
 }
+
+export const create_object_from_flat = (direct: detail.Flat_nprpc_base.ObjectId_Direct,remote_endpoint: EndPoint): ObjectProxy =>
+  create_object_from_oid(detail.helpers.assign_from_flat_ObjectId(direct), remote_endpoint);
 
 export const init = async (use_host_json: boolean = true): Promise<Rpc> => {
   return rpc ? rpc : (rpc = new Rpc(use_host_json ? await Rpc.read_host() : {} as HostInfo));

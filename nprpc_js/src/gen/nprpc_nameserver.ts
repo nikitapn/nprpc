@@ -101,7 +101,7 @@ export class _INameserver_Servant extends NPRPC.ObjectServant {
 }
 
 export interface nprpc_nameserver_M1 {
-  _1: NPRPC.detail.ObjectId;
+  _1: NPRPC.ObjectProxy;
   _2: string;
 }
 
@@ -142,7 +142,7 @@ export namespace Flat_nprpc_nameserver {
 }
 export interface nprpc_nameserver_M3 {
   _1: boolean/*boolean*/;
-  _2: NPRPC.detail.ObjectId;
+  _2: NPRPC.ObjectProxy;
 }
 
 export namespace Flat_nprpc_nameserver {

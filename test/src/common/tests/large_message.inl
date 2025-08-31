@@ -1,4 +1,4 @@
-class TestLargeMessage : public test::ITestBasic_Servant {
+class TestLargeMessage : public test::ITestLargeMessage_Servant {
 public:
     virtual bool ReturnBoolean() {
         return true;
@@ -33,10 +33,5 @@ public:
         for (size_t i = 1; i < large_size - 1; ++i) {
             span[i] = static_cast<uint8_t>(i % 256);
         }
-    }
-
-    virtual test::IdArray ReturnIdArray () {
-      test::IdArray arr {1,2,3,4,5,6,7,8,9,10};
-      return arr;
     }
 };

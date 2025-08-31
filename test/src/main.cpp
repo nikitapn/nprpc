@@ -51,6 +51,9 @@ TEST_F(NprpcTest, TestBasic) {
             for (auto i : ints) {
                 EXPECT_EQ(ix++, i);
             }
+
+            // ReturnU32 test
+            EXPECT_EQ(obj->ReturnU32(), 42u);
         } catch (nprpc::Exception& ex) {
             FAIL() << "Exception in TestBasic: " << ex.what();
         }
@@ -151,7 +154,7 @@ TEST_F(NprpcTest, TestLargeMessage) {
     TestLargeMessage servant;
     auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
         try {   
-            auto obj = make_stuff_happen<test::TestBasic>(servant, flags);
+            auto obj = make_stuff_happen<test::TestLargeMessage>(servant, flags);
             obj->set_timeout(5000); // Set a longer timeout for this test
 
             // Test sending 3MB of data

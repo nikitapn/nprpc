@@ -1,6 +1,10 @@
 
 class TestBasicImpl : public test::ITestBasic_Servant {
 public:
+    virtual uint32_t ReturnU32() {
+        return 42;
+    }
+
     virtual bool ReturnBoolean() {
         return true;
     }
