@@ -65,6 +65,7 @@ void Session::handle_request() {
 					real_obj->dispatch(rx_buffer_, ctx_, false);
 				} catch (const std::exception& e) {
 					std::cerr << "Exception during dispatch: " << e.what() << '\n';
+					// TODO: find out why Web client does not handle Error_BadInput properly
 					make_simple_answer(rx_buffer_(), MessageId::Error_BadInput, request_id);
 				}
 				reset_context();

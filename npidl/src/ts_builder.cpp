@@ -727,7 +727,7 @@ void TypescriptBuilder::assign_from_ts_type(AstTypeDecl* type, std::string op1, 
 					bl() << "let opt = " << op1 << ";\n" <<
 					bl() << "if (" << op2 <<") {\n" << bb(false) <<
 						bl() << "opt.alloc();\n" <<
-						bl() << "opt.value = " << op2 << "\n" <<
+						bl() << "opt.value = " << op2 << "!\n" <<
 					eb(false) <<
 					bl() << "} else {\n" << bb(false) <<
 						bl() << "opt.set_nullopt();\n" <<
@@ -842,7 +842,7 @@ void TypescriptBuilder::assign_from_flat_type(
 					bl() << "let opt = " << op2 << ";\n" <<
 					bl() << "if (opt.has_value) {\n" << bb(false); // <<
 						// bl() << "let value = opt.value;\n";
-						assign_from_flat_type(wt, op1, "opt.value", false, false); out <<
+						assign_from_flat_type(wt, op1 + '!', "opt.value", false, false); out <<
 					eb(false) <<
 					bl() << "} else {\n" << bb(false) <<
 						bl() << op1 << " = undefined\n" <<
