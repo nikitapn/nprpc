@@ -38,6 +38,13 @@ private:
 	void emit_struct_helpers();
 	void emit_variable(AstTypeDecl* type, std::string name, std::ostream& os);
 
+	// New marshalling approach
+	void emit_heap_views();
+	void emit_marshal_function(AstStructDecl* s);
+	void emit_unmarshal_function(AstStructDecl* s);
+	void emit_field_marshal(AstFieldDecl* f, int& offset, const std::string& data_name);
+	void emit_field_unmarshal(AstFieldDecl* f, int& offset, const std::string& result_name);
+
 	_ns ns(Namespace* nm) const;
 
 	auto emit_type(AstTypeDecl* type) {

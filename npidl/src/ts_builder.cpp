@@ -919,6 +919,10 @@ void TypescriptBuilder::emit_constant(const std::string& name, AstNumber* number
 
 void TypescriptBuilder::emit_struct(AstStructDecl* s) {
 	emit_struct2(s, false);
+	emit_marshal_function(s);
+	out << '\n';
+	emit_unmarshal_function(s);
+	out << '\n';
 }
 
 void TypescriptBuilder::emit_exception(AstStructDecl* s) {
@@ -1444,6 +1448,281 @@ TypescriptBuilder::_ns TypescriptBuilder::ns(Namespace* nm) const {
 	return { *this, nm };
 }
 
+void TypescriptBuilder::emit_heap_views() {
+	// HeapViews is now part of FlatBuffer, no need to generate it here
+}
+
+void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::string& data_name) {
+	const std::string field_access = data_name + "." + f->name;
+	
+	switch (f->type->id) {
+	case FieldType::Fundamental: {
+		const auto token = cft(f->type)->token_id;
+		const int size = get_fundamental_size(token);
+		offset = align_offset(size, offset, size);
+		
+		switch (token) {
+		case TokenId::Boolean:
+			out << bl() << "buf.heap.HEAPU8[offset + " << offset << "] = " << field_access << " ? 1 : 0;\n";
+			break;
+		case TokenId::Int8:
+			out << bl() << "buf.heap.HEAP8[offset + " << offset << "] = " << field_access << ";\n";
+			break;
+		case TokenId::UInt8:
+			out << bl() << "buf.heap.HEAPU8[offset + " << offset << "] = " << field_access << ";\n";
+			break;
+		case TokenId::Int16:
+			out << bl() << "buf.heap.HEAP16[(offset + " << offset << ") >> 1] = " << field_access << ";\n";
+			break;
+		case TokenId::UInt16:
+			out << bl() << "buf.heap.HEAPU16[(offset + " << offset << ") >> 1] = " << field_access << ";\n";
+			break;
+		case TokenId::Int32:
+			out << bl() << "buf.heap.HEAP32[(offset + " << offset << ") >> 2] = " << field_access << ";\n";
+			break;
+		case TokenId::UInt32:
+			out << bl() << "buf.heap.HEAPU32[(offset + " << offset << ") >> 2] = " << field_access << ";\n";
+			break;
+		case TokenId::Int64:
+			out << bl() << "buf.heap.HEAP64[(offset + " << offset << ") >> 3] = " << field_access << ";\n";
+			break;
+		case TokenId::UInt64:
+			out << bl() << "buf.heap.HEAPU64[(offset + " << offset << ") >> 3] = " << field_access << ";\n";
+			break;
+		case TokenId::Float32:
+			out << bl() << "buf.heap.HEAPF32[(offset + " << offset << ") >> 2] = " << field_access << ";\n";
+			break;
+		case TokenId::Float64:
+			out << bl() << "buf.heap.HEAPF64[(offset + " << offset << ") >> 3] = " << field_access << ";\n";
+			break;
+		default:
+			assert(false);
+		}
+		break;
+	}
+	case FieldType::Enum: {
+		const int size = get_fundamental_size(cft(f->type)->token_id);
+		offset = align_offset(size, offset, size);
+		out << bl() << "buf.heap.HEAP32[(offset + " << offset << ") >> 2] = " << field_access << ";\n";
+		break;
+	}
+	case FieldType::String: {
+		offset = align_offset(4, offset, 8);
+		out << bl() << "marshal_string(buf, offset + " << offset << ", " << field_access << ");\n";
+		break;
+	}
+	case FieldType::Struct: {
+		auto s = cflat(f->type);
+		offset = align_offset(s->align, offset, s->size);
+		out << bl() << "marshal_" << s->name << "(buf, offset + " << offset << ", " << field_access << ");\n";
+		break;
+	}
+	case FieldType::Object: {
+		offset = align_offset(align_of_object, offset, size_of_object);
+		out << bl() << "NPRPC.marshal_object_id(buf, offset + " << offset << ", " << field_access << ");\n";
+		break;
+	}
+	case FieldType::Vector:
+	case FieldType::Array: {
+		auto wt = cwt(f->type)->real_type();
+		auto [v_size, v_align] = get_type_size_align(f->type);
+		auto [ut_size, ut_align] = get_type_size_align(wt);
+		offset = align_offset(v_align, offset, v_size);
+		
+		if (is_fundamental(wt)) {
+			out << bl() << "NPRPC.marshal_typed_array(buf, offset + " << offset << ", " 
+			    << field_access << ", " << ut_size << ", " << ut_align << ");\n";
+		} else {
+			out << bl() << "NPRPC.marshal_struct_array(buf, offset + " << offset << ", " 
+			    << field_access << ", marshal_" << cflat(wt)->name << ", " << ut_size << ", " << ut_align << ");\n";
+		}
+		break;
+	}
+	case FieldType::Optional: {
+		auto wt = cwt(f->type)->real_type();
+		auto [v_size, v_align] = get_type_size_align(f->type);
+		auto [wt_size, wt_align] = get_type_size_align(wt);
+		offset = align_offset(v_align, offset, v_size);
+		
+		out << 
+			bl() << "if (" << field_access << " !== undefined) {\n" << bb(false);
+		
+		if (is_fundamental(wt)) {
+			out << bl() << "NPRPC.marshal_optional_fundamental(buf, offset + " << offset 
+			    << ", " << field_access << ", " << get_fundamental_size(cft(wt)->token_id) << ");\n";
+		} else {
+			out << bl() << "NPRPC.marshal_optional_struct(buf, offset + " << offset 
+			    << ", " << field_access << ", marshal_" << cflat(wt)->name << ", " 
+			    << wt_size << ", " << wt_align << ");\n";
+		}
+		
+		out << 
+			eb(false) <<
+			bl() << "} else {\n" << bb(false) <<
+				bl() << "buf.heap.HEAPU8[offset + " << offset << "] = 0; // nullopt\n" <<
+			eb();
+		break;
+	}
+	case FieldType::Alias: {
+		auto temp_field = *f;
+		temp_field.type = calias(f->type)->get_real_type();
+		emit_field_marshal(&temp_field, offset, data_name);
+		return;
+	}
+	default:
+		assert(false);
+	}
+}
+
+void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std::string& result_name) {
+	const std::string field_name = result_name + "." + f->name;
+	
+	switch (f->type->id) {
+	case FieldType::Fundamental: {
+		const auto token = cft(f->type)->token_id;
+		const int size = get_fundamental_size(token);
+		offset = align_offset(size, offset, size);
+		
+		switch (token) {
+		case TokenId::Boolean:
+			out << bl() << field_name << " = buf.heap.HEAPU8[offset + " << offset << "] !== 0;\n";
+			break;
+		case TokenId::Int8:
+			out << bl() << field_name << " = buf.heap.HEAP8[offset + " << offset << "];\n";
+			break;
+		case TokenId::UInt8:
+			out << bl() << field_name << " = buf.heap.HEAPU8[offset + " << offset << "];\n";
+			break;
+		case TokenId::Int16:
+			out << bl() << field_name << " = buf.heap.HEAP16[(offset + " << offset << ") >> 1];\n";
+			break;
+		case TokenId::UInt16:
+			out << bl() << field_name << " = buf.heap.HEAPU16[(offset + " << offset << ") >> 1];\n";
+			break;
+		case TokenId::Int32:
+			out << bl() << field_name << " = buf.heap.HEAP32[(offset + " << offset << ") >> 2];\n";
+			break;
+		case TokenId::UInt32:
+			out << bl() << field_name << " = buf.heap.HEAPU32[(offset + " << offset << ") >> 2];\n";
+			break;
+		case TokenId::Int64:
+			out << bl() << field_name << " = buf.heap.HEAP64[(offset + " << offset << ") >> 3];\n";
+			break;
+		case TokenId::UInt64:
+			out << bl() << field_name << " = buf.heap.HEAPU64[(offset + " << offset << ") >> 3];\n";
+			break;
+		case TokenId::Float32:
+			out << bl() << field_name << " = buf.heap.HEAPF32[(offset + " << offset << ") >> 2];\n";
+			break;
+		case TokenId::Float64:
+			out << bl() << field_name << " = buf.heap.HEAPF64[(offset + " << offset << ") >> 3];\n";
+			break;
+		default:
+			assert(false);
+		}
+		break;
+	}
+	case FieldType::Enum: {
+		const int size = get_fundamental_size(cft(f->type)->token_id);
+		offset = align_offset(size, offset, size);
+		out << bl() << field_name << " = buf.heap.HEAP32[(offset + " << offset << ") >> 2];\n";
+		break;
+	}
+	case FieldType::String: {
+		offset = align_offset(4, offset, 8);
+		out << bl() << field_name << " = NPRPC.unmarshal_string(buf, offset + " << offset << ");\n";
+		break;
+	}
+	case FieldType::Struct: {
+		auto s = cflat(f->type);
+		offset = align_offset(s->align, offset, s->size);
+		out << bl() << field_name << " = unmarshal_" << s->name << "(heap, offset + " << offset << ");\n";
+		break;
+	}
+	case FieldType::Object: {
+		offset = align_offset(align_of_object, offset, size_of_object);
+		out << bl() << field_name << " = NPRPC.unmarshal_object_id(buf, offset + " << offset << ");\n";
+		break;
+	}
+	case FieldType::Vector:
+	case FieldType::Array: {
+		auto wt = cwt(f->type)->real_type();
+		auto [v_size, v_align] = get_type_size_align(f->type);
+		auto [ut_size, ut_align] = get_type_size_align(wt);
+		offset = align_offset(v_align, offset, v_size);
+		
+		if (is_fundamental(wt)) {
+			out << bl() << field_name << " = NPRPC.unmarshal_typed_array(buf, offset + " << offset 
+			    << ", " << ut_size << ");\n";
+		} else {
+			out << bl() << field_name << " = NPRPC.unmarshal_struct_array(buf, offset + " << offset 
+			    << ", unmarshal_" << cflat(wt)->name << ", " << ut_size << ");\n";
+		}
+		break;
+	}
+	case FieldType::Optional: {
+		auto wt = cwt(f->type)->real_type();
+		auto [v_size, v_align] = get_type_size_align(f->type);
+		offset = align_offset(v_align, offset, v_size);
+		
+		out << 
+			bl() << "if (buf.heap.HEAPU8[offset + " << offset << "] !== 0) {\n" << bb(false);
+		
+		if (is_fundamental(wt)) {
+			out << bl() << field_name << " = NPRPC.unmarshal_optional_fundamental(buf, offset + " << offset 
+			    << ", " << get_fundamental_size(cft(wt)->token_id) << ");\n";
+		} else {
+			out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buf, offset + " << offset 
+			    << ", unmarshal_" << cflat(wt)->name << ");\n";
+		}
+		
+		out << 
+			eb(false) <<
+			bl() << "} else {\n" << bb(false) <<
+				bl() << field_name << " = undefined;\n" <<
+			eb();
+		break;
+	}
+	case FieldType::Alias: {
+		auto temp_field = *f;
+		temp_field.type = calias(f->type)->get_real_type();
+		emit_field_unmarshal(&temp_field, offset, result_name);
+		return;
+	}
+	default:
+		assert(false);
+	}
+}
+
+void TypescriptBuilder::emit_marshal_function(AstStructDecl* s) {
+	calc_struct_size_align(s);
+	
+	out << bl() << "function marshal_" << s->name << "(buf: NPRPC.FlatBuffer, offset: number, data: " << s->name << "): void {\n";
+	bb();
+	
+	int current_offset = 0;
+	for (auto field : s->fields) {
+		emit_field_marshal(field, current_offset, "data");
+	}
+	
+	eb();
+}
+
+void TypescriptBuilder::emit_unmarshal_function(AstStructDecl* s) {
+	out << bl() << "function unmarshal_" << s->name << "(buf: NPRPC.FlatBuffer, offset: number): " << s->name << " {\n";
+	bb();
+	
+	out << bl() << "const result = {} as " << s->name << ";\n";
+	
+	int current_offset = 0;
+	for (auto field : s->fields) {
+		emit_field_unmarshal(field, current_offset, "result");
+	}
+	
+	out << bl() << "return result;\n";
+	eb();
+}
+
 TypescriptBuilder::TypescriptBuilder(Context& ctx, std::filesystem::path file_path, std::filesystem::path out_dir)
 	: Builder(ctx)
 {
@@ -1464,4 +1743,5 @@ TypescriptBuilder::TypescriptBuilder(Context& ctx, std::filesystem::path file_pa
 		"const u8dec = new TextDecoder();\n\n"
 		;
 
+	emit_heap_views();
 }

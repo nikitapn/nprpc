@@ -5,9 +5,10 @@ export { Exception } from './base'
 export * from './nprpc'
 export * from './utils'
 export * as Flat from './flat'
-export { FlatBuffer } from './flat_buffer'
+export { FlatBuffer, HeapViews } from './flat_buffer'
 export * from './gen/nprpc_base'
 export * from './gen/nprpc_nameserver'
+export * from './marshal_helpers'
 
 import { Nameserver, _INameserver_Servant } from './gen/nprpc_nameserver'
 import { detail } from './gen/nprpc_base';
