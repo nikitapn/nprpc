@@ -9,21 +9,19 @@ export class Nameserver extends NPRPC.ObjectProxy {
   }
 
 
-  public async Bind(obj: /*in*/NPRPC.detail.ObjectId, name: /*in*/string): Promise<void> {
+  public async Bind(obj: /*in*/NPRPC.ObjectProxy, name: /*in*/string): Promise<void> {
     let interface_idx = (arguments.length == 2 ? 0 : arguments[arguments.length - 1]);
-    let buf = NPRPC.FlatBuffer.create();
+    const buf = NPRPC.FlatBuffer.create();
     buf.prepare(216);
     buf.commit(88);
     buf.write_msg_id(NPRPC.impl.MessageId.FunctionCall);
     buf.write_msg_type(NPRPC.impl.MessageType.Request);
-    let __ch = new NPRPC.impl.Flat_nprpc_base.CallHeader_Direct(buf, 16);
-    __ch.object_id = this.data.object_id;
-    __ch.poa_idx = this.data.poa_idx;
-    __ch.interface_idx = interface_idx;
-    __ch.function_idx = 0;
-    let _ = new Flat_nprpc_nameserver.nprpc_nameserver_M1_Direct(buf,32);
-    NPRPC.oid_assign_from_ts(_._1, obj);
-    _._2 = name;
+    // Write CallHeader directly
+    buf.heap.HEAPU16[(16 + 0) >> 1] = this.data.poa_idx;
+    buf.heap.HEAPU8[16 + 2] = interface_idx;
+    buf.heap.HEAPU8[16 + 3] = 0;
+    buf.heap.HEAPU64[(16 + 8) >> 3] = this.data.object_id;
+    marshal_nprpc_nameserver_M1(buf, 32, {_1: obj.data, _2: name});
     buf.write_len(buf.size - 4);
     await NPRPC.rpc.call(this.endpoint, buf, this.timeout);
     let std_reply = NPRPC.handle_standart_reply(buf);
@@ -33,18 +31,17 @@ export class Nameserver extends NPRPC.ObjectProxy {
   }
   public async Resolve(name: /*in*/string, obj: /*out*/NPRPC.ref<NPRPC.ObjectProxy>): Promise<boolean/*boolean*/> {
     let interface_idx = (arguments.length == 2 ? 0 : arguments[arguments.length - 1]);
-    let buf = NPRPC.FlatBuffer.create();
+    const buf = NPRPC.FlatBuffer.create();
     buf.prepare(168);
     buf.commit(40);
     buf.write_msg_id(NPRPC.impl.MessageId.FunctionCall);
     buf.write_msg_type(NPRPC.impl.MessageType.Request);
-    let __ch = new NPRPC.impl.Flat_nprpc_base.CallHeader_Direct(buf, 16);
-    __ch.object_id = this.data.object_id;
-    __ch.poa_idx = this.data.poa_idx;
-    __ch.interface_idx = interface_idx;
-    __ch.function_idx = 1;
-    let _ = new Flat_nprpc_nameserver.nprpc_nameserver_M2_Direct(buf,32);
-    _._1 = name;
+    // Write CallHeader directly
+    buf.heap.HEAPU16[(16 + 0) >> 1] = this.data.poa_idx;
+    buf.heap.HEAPU8[16 + 2] = interface_idx;
+    buf.heap.HEAPU8[16 + 3] = 1;
+    buf.heap.HEAPU64[(16 + 8) >> 3] = this.data.object_id;
+    marshal_nprpc_nameserver_M2(buf, 32, {_1: name});
     buf.write_len(buf.size - 4);
     await NPRPC.rpc.call(this.endpoint, buf, this.timeout);
     let std_reply = NPRPC.handle_standart_reply(buf);
@@ -52,16 +49,14 @@ export class Nameserver extends NPRPC.ObjectProxy {
       console.log("received an unusual reply for function with output arguments");
       throw new NPRPC.Exception("Unknown Error");
     }
-    let out = new Flat_nprpc_nameserver.nprpc_nameserver_M3_Direct(buf, 16);
-    obj.value = NPRPC.create_object_from_flat(out._2, this.endpoint);
-    let __ret_value: boolean/*boolean*/;
-    __ret_value = out._1;
-    return __ret_value;
+    const out = unmarshal_nprpc_nameserver_M3(buf, 16);
+    obj.value = NPRPC.create_object_from_oid(out._2, this.endpoint);
+    return out._1;
   }
 }
 export interface INameserver_Servant
 {
-  Bind(obj: /*in*/NPRPC.detail.ObjectId, name: /*in*/string): void;
+  Bind(obj: /*in*/NPRPC.ObjectProxy, name: /*in*/string): void;
   Resolve(name: /*in*/string, obj: /*out*/NPRPC.ref<NPRPC.ObjectProxy>): boolean/*boolean*/;
 }
 export class _INameserver_Servant extends NPRPC.ObjectServant {
@@ -71,24 +66,26 @@ export class _INameserver_Servant extends NPRPC.ObjectServant {
     _INameserver_Servant._dispatch(this, buf, remote_endpoint, from_parent);
   }
   static _dispatch(obj: _INameserver_Servant, buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, from_parent: boolean): void {
-    let __ch = new NPRPC.impl.Flat_nprpc_base.CallHeader_Direct(buf, 16);
-    switch(__ch.function_idx) {
+    // Read CallHeader directly
+    const function_idx = buf.heap.HEAPU8[16 + 3];
+    switch(function_idx) {
       case 0: {
-        let ia = new Flat_nprpc_nameserver.nprpc_nameserver_M1_Direct(buf, 32);
-        (obj as any).Bind(NPRPC.create_object_from_flat(ia._1, remote_endpoint), ia._2);
+        const ia = unmarshal_nprpc_nameserver_M1(buf, 32);
+        (obj as any).Bind(ia._1, ia._2);
         NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);
         break;
       }
       case 1: {
-        let ia = new Flat_nprpc_nameserver.nprpc_nameserver_M2_Direct(buf, 32);
-        let obuf = buf;
+        let _out_2: NPRPC.ObjectProxy;
+        const ia = unmarshal_nprpc_nameserver_M2(buf, 32);
+        const obuf = buf;
         obuf.consume(obuf.size);
         obuf.prepare(200);
         obuf.commit(72);
-        let oa = new Flat_nprpc_nameserver.nprpc_nameserver_M3_Direct(obuf,16);
         let __ret_val: boolean/*boolean*/;
-        __ret_val = (obj as any).Resolve(ia._1,         oa._2);
-        oa._1 = __ret_val;
+        __ret_val = (obj as any).Resolve(ia._1,         _out_2);
+        const out_data = {_1: __ret_val, _2: _out_2.data};
+        marshal_nprpc_nameserver_M3(obuf, 16, out_data);
         obuf.write_len(obuf.size - 4);
         obuf.write_msg_id(NPRPC.impl.MessageId.BlockResponse);
         obuf.write_msg_type(NPRPC.impl.MessageType.Answer);
@@ -101,7 +98,7 @@ export class _INameserver_Servant extends NPRPC.ObjectServant {
 }
 
 export interface nprpc_nameserver_M1 {
-  _1: NPRPC.ObjectProxy;
+  _1: NPRPC.detail.ObjectId;
   _2: string;
 }
 
@@ -122,6 +119,18 @@ export namespace Flat_nprpc_nameserver {
     }
   }
 }
+function marshal_nprpc_nameserver_M1(buf: NPRPC.FlatBuffer, offset: number, data: nprpc_nameserver_M1): void {
+NPRPC.marshal_object_id(buf, offset + 0, data._1);
+NPRPC.marshal_string(buf, offset + 48, data._2);
+}
+
+function unmarshal_nprpc_nameserver_M1(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M1 {
+const result = {} as nprpc_nameserver_M1;
+result._1 = NPRPC.unmarshal_object_id(buf, offset + 0);
+result._2 = NPRPC.unmarshal_string(buf, offset + 48);
+return result;
+}
+
 export interface nprpc_nameserver_M2 {
   _1: string;
 }
@@ -140,9 +149,19 @@ export namespace Flat_nprpc_nameserver {
     }
   }
 }
+function marshal_nprpc_nameserver_M2(buf: NPRPC.FlatBuffer, offset: number, data: nprpc_nameserver_M2): void {
+NPRPC.marshal_string(buf, offset + 0, data._1);
+}
+
+function unmarshal_nprpc_nameserver_M2(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M2 {
+const result = {} as nprpc_nameserver_M2;
+result._1 = NPRPC.unmarshal_string(buf, offset + 0);
+return result;
+}
+
 export interface nprpc_nameserver_M3 {
   _1: boolean/*boolean*/;
-  _2: NPRPC.ObjectProxy;
+  _2: NPRPC.detail.ObjectId;
 }
 
 export namespace Flat_nprpc_nameserver {
@@ -154,3 +173,15 @@ export namespace Flat_nprpc_nameserver {
     }
   }
 }
+function marshal_nprpc_nameserver_M3(buf: NPRPC.FlatBuffer, offset: number, data: nprpc_nameserver_M3): void {
+buf.heap.HEAPU8[offset + 0] = data._1 ? 1 : 0;
+NPRPC.marshal_object_id(buf, offset + 8, data._2);
+}
+
+function unmarshal_nprpc_nameserver_M3(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M3 {
+const result = {} as nprpc_nameserver_M3;
+result._1 = buf.heap.HEAPU8[offset + 0] !== 0;
+result._2 = NPRPC.unmarshal_object_id(buf, offset + 8);
+return result;
+}
+

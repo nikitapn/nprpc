@@ -139,6 +139,18 @@ export namespace Flat_nprpc_base {
     public set object_id(value: bigint) { this.buffer.dv.setBigUint64(this.offset+8,value,true); }
   }
 }
+function marshal_ObjectIdLocal(buf: NPRPC.FlatBuffer, offset: number, data: ObjectIdLocal): void {
+buf.heap.HEAPU16[(offset + 0) >> 1] = data.poa_idx;
+buf.heap.HEAPU64[(offset + 8) >> 3] = data.object_id;
+}
+
+function unmarshal_ObjectIdLocal(buf: NPRPC.FlatBuffer, offset: number): ObjectIdLocal {
+const result = {} as ObjectIdLocal;
+result.poa_idx = buf.heap.HEAPU16[(offset + 0) >> 1];
+result.object_id = buf.heap.HEAPU64[(offset + 8) >> 3];
+return result;
+}
+
 export enum ObjectFlag { //u32
   Persistent = 1,
   Tethered = 2
@@ -184,6 +196,26 @@ export namespace Flat_nprpc_base {
     }
   }
 }
+function marshal_ObjectId(buf: NPRPC.FlatBuffer, offset: number, data: ObjectId): void {
+buf.heap.HEAPU64[(offset + 0) >> 3] = data.object_id;
+buf.heap.HEAPU16[(offset + 8) >> 1] = data.poa_idx;
+buf.heap.HEAPU16[(offset + 10) >> 1] = data.flags;
+NPRPC.marshal_typed_array(buf, offset + 12, data.origin, 1, 1);
+NPRPC.marshal_string(buf, offset + 28, data.class_id);
+NPRPC.marshal_string(buf, offset + 36, data.urls);
+}
+
+function unmarshal_ObjectId(buf: NPRPC.FlatBuffer, offset: number): ObjectId {
+const result = {} as ObjectId;
+result.object_id = buf.heap.HEAPU64[(offset + 0) >> 3];
+result.poa_idx = buf.heap.HEAPU16[(offset + 8) >> 1];
+result.flags = buf.heap.HEAPU16[(offset + 10) >> 1];
+result.origin = NPRPC.unmarshal_typed_array(buf, offset + 12, 1) as Uint8Array;
+result.class_id = NPRPC.unmarshal_string(buf, offset + 28);
+result.urls = NPRPC.unmarshal_string(buf, offset + 36);
+return result;
+}
+
 } // namespace detail
 
 export namespace impl { 
@@ -227,6 +259,22 @@ export namespace Flat_nprpc_base {
     public set request_id(value: number) { this.buffer.dv.setUint32(this.offset+12,value,true); }
   }
 }
+function marshal_Header(buf: NPRPC.FlatBuffer, offset: number, data: Header): void {
+buf.heap.HEAPU32[(offset + 0) >> 2] = data.size;
+buf.heap.HEAP32[(offset + 4) >> 2] = data.msg_id;
+buf.heap.HEAP32[(offset + 8) >> 2] = data.msg_type;
+buf.heap.HEAPU32[(offset + 12) >> 2] = data.request_id;
+}
+
+function unmarshal_Header(buf: NPRPC.FlatBuffer, offset: number): Header {
+const result = {} as Header;
+result.size = buf.heap.HEAPU32[(offset + 0) >> 2];
+result.msg_id = buf.heap.HEAP32[(offset + 4) >> 2];
+result.msg_type = buf.heap.HEAP32[(offset + 8) >> 2];
+result.request_id = buf.heap.HEAPU32[(offset + 12) >> 2];
+return result;
+}
+
 export interface CallHeader {
   poa_idx: poa_idx_t;
   interface_idx: ifs_idx_t;
@@ -246,6 +294,22 @@ export namespace Flat_nprpc_base {
     public set object_id(value: bigint) { this.buffer.dv.setBigUint64(this.offset+8,value,true); }
   }
 }
+function marshal_CallHeader(buf: NPRPC.FlatBuffer, offset: number, data: CallHeader): void {
+buf.heap.HEAPU16[(offset + 0) >> 1] = data.poa_idx;
+buf.heap.HEAPU8[offset + 2] = data.interface_idx;
+buf.heap.HEAPU8[offset + 3] = data.function_idx;
+buf.heap.HEAPU64[(offset + 8) >> 3] = data.object_id;
+}
+
+function unmarshal_CallHeader(buf: NPRPC.FlatBuffer, offset: number): CallHeader {
+const result = {} as CallHeader;
+result.poa_idx = buf.heap.HEAPU16[(offset + 0) >> 1];
+result.interface_idx = buf.heap.HEAPU8[offset + 2];
+result.function_idx = buf.heap.HEAPU8[offset + 3];
+result.object_id = buf.heap.HEAPU64[(offset + 8) >> 3];
+return result;
+}
+
 } // namespace impl
 
 

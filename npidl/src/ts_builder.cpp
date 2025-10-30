@@ -657,8 +657,10 @@ void TypescriptBuilder::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, 
 		os << "void";
 		break;
 	case FieldType::Object:
-		if (input) os << "NPRPC.detail.ObjectId";
-		else os << "NPRPC.ObjectProxy";
+		// Both input and output use ObjectProxy in the proxy API
+		// Input: we extract .data to get ObjectId for marshalling
+		// Output: we convert ObjectId to ObjectProxy using create_object_from_oid
+		os << "NPRPC.ObjectProxy";
 		break;
 	default:
 		assert(false);
@@ -875,8 +877,16 @@ void TypescriptBuilder::emit_struct2(AstStructDecl* s, bool is_exception) {
 	// native typescript
 	if (!is_exception) {
 		out << "export interface " << s->name << " {\n";
-		for (auto const f : s->fields)
-			out << "  " << f->name << (f->is_optional() ? "?: " : ": ") << emit_type(f->type) << ";\n";
+		for (auto const f : s->fields) {
+			out << "  " << f->name << (f->is_optional() ? "?: " : ": ");
+			// For function argument structs with object types, use ObjectId instead of ObjectProxy
+			if (f->function_argument && f->type->id == FieldType::Object) {
+				out << "NPRPC.detail.ObjectId";
+			} else {
+				out << emit_type(f->type);
+			}
+			out << ";\n";
+		}
 	} else {
 		out <<
 			bl() << "export class " << s->name << " extends NPRPC.Exception {\n" << bb(false) <<
@@ -974,7 +984,13 @@ void TypescriptBuilder::emit_file_footer() {
 	}
 
 	// other
-	emit_arguments_structs(std::bind(&TypescriptBuilder::emit_struct2, this, _1, false));
+	emit_arguments_structs([this](AstStructDecl* s) {
+		emit_struct2(s, false);
+		emit_marshal_function(s);
+		out << '\n';
+		emit_unmarshal_function(s);
+		out << '\n';
+	});
 	emit_struct_helpers();
 }
 
@@ -1096,29 +1112,37 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 		const auto fixed_size = get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
 		const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
 		out << 
-			bl() << "let buf = NPRPC.FlatBuffer.create();\n" <<
+			bl() << "const buf = NPRPC.FlatBuffer.create();\n" <<
 			bl() << "buf.prepare(" << capacity << ");\n" <<
 			bl() << "buf.commit(" << fixed_size << ");\n" <<
 			bl() << "buf.write_msg_id(NPRPC.impl.MessageId.FunctionCall);\n" <<
 			bl() << "buf.write_msg_type(NPRPC.impl.MessageType.Request);\n" <<
-			bl() << "let __ch = new NPRPC.impl.Flat_nprpc_base.CallHeader_Direct(buf, " << size_of_header << ");\n" <<
-			bl() << "__ch.object_id = this.data.object_id;\n" <<
-			bl() << "__ch.poa_idx = this.data.poa_idx;\n" <<
-			bl() << "__ch.interface_idx = interface_idx;\n" <<
-			bl() << "__ch.function_idx = " << fn->idx << ";\n"
+			bl() << "// Write CallHeader directly\n" <<
+			bl() << "buf.heap.HEAPU16[(" << size_of_header << " + 0) >> 1] = this.data.poa_idx;\n" <<
+			bl() << "buf.heap.HEAPU8[" << size_of_header << " + 2] = interface_idx;\n" <<
+			bl() << "buf.heap.HEAPU8[" << size_of_header << " + 3] = " << fn->idx << ";\n" <<
+			bl() << "buf.heap.HEAPU64[(" << size_of_header << " + 8) >> 3] = this.data.object_id;\n"
 			;
 
 		if (fn->in_s) {
-			out <<
-				bl() << "let _ = new Flat_" << ctx_.current_file() << '.' << fn->in_s->name << "_Direct(buf," << get_arguments_offset() << ");\n"
-				;
-		}
-
-		int ix = 0;
-		for (auto in : fn->args) {
-			if (in->modifier == ArgumentModifier::Out)
-				continue;
-			assign_from_ts_type(in->type, "_._" + std::to_string(++ix), in->name);
+			// Use new marshal function instead of _Direct wrapper
+			out << bl() << "marshal_" << fn->in_s->name << "(buf, " << get_arguments_offset() << ", {";
+			
+			int ix = 0;
+			for (auto in : fn->args) {
+				if (in->modifier == ArgumentModifier::Out)
+					continue;
+				if (ix > 0) out << ", ";
+				out << "_" << (ix + 1) << ": ";
+				// For Object types, extract the ObjectId from ObjectProxy
+				if (in->type->id == FieldType::Object) {
+					out << in->name << ".data";
+				} else {
+					out << in->name;
+				}
+				++ix;
+			}
+			out << "});\n";
 		}
 
 		out << bl() << "buf.write_len(buf.size - 4);\n";
@@ -1150,21 +1174,25 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 				eb()
 				;
 
-			// (sizeof the message + sizeof BlockResponse) next struct will be always aligned by 8
-			out << bl() << "let out = new Flat_" << ctx_.current_file() << '.' << fn->out_s->name << "_Direct(buf, " << size_of_header << ");\n";
+			// Use new unmarshal function instead of _Direct wrapper
+			out << bl() << "const out = unmarshal_" << fn->out_s->name << "(buf, " << size_of_header << ");\n";
 
 			int ix = fn->is_void() ? 0 : 1;
 
-			for (auto out : fn->args) {
-				if (out->modifier == ArgumentModifier::In)
+			for (auto out_arg : fn->args) {
+				if (out_arg->modifier == ArgumentModifier::In)
 					continue;
-				assign_from_flat_type(out->type, out->name + ".value", "out._" + std::to_string(++ix), false, true, out->direct);
+				++ix;
+				// For Object types, convert ObjectId to ObjectProxy
+				if (out_arg->type->id == FieldType::Object) {
+					out << bl() << out_arg->name << ".value = NPRPC.create_object_from_oid(out._" << ix << ", this.endpoint);\n";
+				} else {
+					out << bl() << out_arg->name << ".value = out._" << ix << ";\n";
+				}
 			}
 
 			if (!fn->is_void()) {
-				emit_variable(fn->ret_value, "__ret_value", out);
-				assign_from_flat_type(fn->ret_value, "__ret_value", "out._1");
-				out << bl() << "return __ret_value;\n";
+				out << bl() << "return out._1;\n";
 			}
 		}
 
@@ -1204,7 +1232,8 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 
 	// Servant dispatch ====================================================
 	out << 
-		bl() << "let __ch = new NPRPC.impl.Flat_nprpc_base.CallHeader_Direct(buf, " << size_of_header << ");\n"
+		bl() << "// Read CallHeader directly\n" <<
+		bl() << "const function_idx = buf.heap.HEAPU8[" << size_of_header << " + 3];\n"
 		;
 		
 	if (ifs->plist.empty()) {
@@ -1212,7 +1241,8 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 	} else {
 		out <<
 			bl() << "if (from_parent == false) {\n" << bb(false) <<
-				bl() <<"switch(__ch.interface_idx) {\n" << bb(false) <<
+				bl() << "const interface_idx = buf.heap.HEAPU8[" << size_of_header << " + 2];\n" <<
+				bl() <<"switch(interface_idx) {\n" << bb(false) <<
 					bl() << "case 0:\n" << bb(false) <<
 						bl() << "break;\n" <<
 					eb(false)
@@ -1242,13 +1272,13 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 	}
 
 	out <<
-			bl() << "switch(__ch.function_idx) {\n" << bb(false)
+			bl() << "switch(function_idx) {\n" << bb(false)
 			;
 
 	for (auto fn : ifs->fns) {
 		out << bl() << "case " << fn->idx << ": {\n" << bb(false);
 		int out_ix = fn->is_void() ? 0 : 1;
-		if (fn->out_s && fn->out_s->flat) {
+		if (fn->out_s) {
 			for (auto arg : fn->args) {
 				if (arg->modifier == ArgumentModifier::Out) {
 					out << bl() << "let _out_" << ++out_ix << ": " << emit_type(arg->type) << ";\n";
@@ -1258,7 +1288,7 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 
 		if (fn->in_s) {
 			out <<
-				bl() << "let ia = new " << flat_nm << '.' << fn->in_s->name << "_Direct(buf, " << get_arguments_offset() << ");\n"
+				bl() << "const ia = unmarshal_" << fn->in_s->name << "(buf, " << get_arguments_offset() << ");\n"
 				;
 		}
 
@@ -1266,11 +1296,10 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 			const auto offset = size_of_header;
 			const auto initial_size = offset + fn->out_s->size;
 			out <<
-				bl() << "let obuf = buf;\n" <<
+				bl() << "const obuf = buf;\n" <<
 				bl() << "obuf.consume(obuf.size);\n" <<
 				bl() << "obuf.prepare(" << initial_size + 128 << ");\n" <<
-				bl() << "obuf.commit(" << initial_size << ");\n" <<
-				bl() << "let oa = new " << flat_nm << '.' << fn->out_s->name << "_Direct(obuf," << offset << ");\n"
+				bl() << "obuf.commit(" << initial_size << ");\n"
 				;
 		}
 
@@ -1288,30 +1317,11 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 		for (auto arg : fn->args) {
 			if (arg->modifier == ArgumentModifier::Out) {
 				assert(fn->out_s);
-				if (!fn->out_s->flat) {
-					out << bl() << "oa._" << ++out_ix;
-					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::Array || arg->type->id == FieldType::String)
-						out << "_d";
-				} else {
-					out << bl() << "_out_" << ++out_ix;
-				}
+				// For output arguments, we'll create refs to pass
+				out << bl() << "_out_" << ++out_ix;
 			} else {
-				if (arg->type->id == FieldType::Object) {
-					out << "NPRPC.create_object_from_flat(ia._" << ++in_ix << ", remote_endpoint)";
-				} else if (arg->direct || is_fundamental(arg->type)) {
-					out << "ia._" << ++in_ix;
-				} else if (arg->type->id == FieldType::Struct) {
-					ctx_.mark_struct_as_having_helpers(cflat(arg->type));
-					auto helper_name = get_helper_function_name(cflat(arg->type), true);
-					out << helper_name << "(ia._" << ++in_ix << ")";
-				} else {
-					// array, vector, enum, string, alias
-					// we can pass them directly
-					// TODO: convert vector/array from flat to normal object?
-					out <<"ia._" << ++in_ix;
-					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::Array)
-						out << "_d()";
-				}
+				// For input arguments, just pass from the unmarshalled object
+				out << "ia._" << ++in_ix;
 			}
 			if (++idx != fn->args.size())
 				out << ", ";
@@ -1344,18 +1354,21 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 				eb() << // try
 				bl() << "catch(e) {\n" << bb(false) <<
 				bl() << "if (!(e instanceof " << emit_type(fn->ex) << ")) throw e;\n" <<
-				bl() << "let obuf = buf;\n" <<
+				bl() << "const obuf = buf;\n" <<
 				bl() << "obuf.consume(obuf.size);\n" <<
 				bl() << "obuf.prepare(" << initial_size << ");\n" <<
 				bl() << "obuf.commit(" << initial_size << ");\n" <<
-				bl() << "let oa = new "<< ns(fn->ex->nm) << flat_nm << '.' << fn->ex->name << "_Direct(obuf," << offset << ");\n" <<
-				bl() << "oa.__ex_id = " << fn->ex->exception_id << ";\n"
-				;
+				bl() << "const ex_data = {__ex_id: " << fn->ex->exception_id;
 			always_full_namespace(false);
 			for (size_t i = 1; i < fn->ex->fields.size(); ++i) {
 				auto mb = fn->ex->fields[i];
-				assign_from_ts_type(mb->type, "oa." + mb->name, "e." + mb->name);
+				out << ", " << mb->name << ": e." << mb->name;
 			}
+			out << "};\n";
+			always_full_namespace(true);
+			out <<
+				bl() << ns(fn->ex->nm) << "marshal_" << fn->ex->name << "(obuf, " << offset << ", ex_data);\n";
+			always_full_namespace(false);
 			out << 
 					bl() << "obuf.write_len(obuf.size - 4);\n" <<
 					bl() << "obuf.write_msg_id(NPRPC.impl.MessageId.Exception);\n" <<
@@ -1367,31 +1380,41 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 		if (!fn->out_s) {
 			out << bl() << "NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);\n";
 		} else {
-			if (fn->out_s->flat) { // it means that we are writing output data in the input buffer, 
-				// so we must pass stack variables first and then assign result back to the buffer
+			if (fn->out_s->flat) { // it means that we are writing output data in the input buffer
 				const auto offset = size_of_header;
 				const auto initial_size = offset + fn->out_s->size;
 				out <<
-					bl() << "let obuf = buf;\n" <<
+					bl() << "const obuf = buf;\n" <<
 					bl() << "obuf.consume(obuf.size);\n" <<
 					bl() << "obuf.prepare(" << initial_size << ");\n" <<
-					bl() << "obuf.commit(" << initial_size << ");\n" <<
-					bl() << "let oa = new " << flat_nm << '.' << fn->out_s->name << "_Direct(obuf," << offset << ");\n"
+					bl() << "obuf.commit(" << initial_size << ");\n"
 					;
-				int ix = fn->is_void() ? 0 : 1;
-				if (!fn->is_void())
-					assign_from_ts_type(fn->ret_value, "oa._1", "__ret_val");
-				for (auto out : fn->args) {
-					if (out->modifier == ArgumentModifier::In)
-						continue;
-					auto n = std::to_string(++ix);
-					assign_from_ts_type(out->type, "oa._" + n, "_out_" + n);
-				}
-			} else if (!fn->is_void()) {
-				assign_from_ts_type(fn->ret_value, "oa._1", "__ret_val");
 			}
-
+			
+			// Build output object
+			out << bl() << "const out_data = {";
+			int ix = 0;
+			if (!fn->is_void()) {
+				out << "_1: __ret_val";
+				ix = 1;
+			}
+			for (auto out_arg : fn->args) {
+				if (out_arg->modifier == ArgumentModifier::In)
+					continue;
+				if (ix > 0) out << ", ";
+				++ix;
+				out << "_" << ix << ": ";
+				// For Object types, extract the ObjectId from the ObjectProxy
+				if (out_arg->type->id == FieldType::Object) {
+					out << "_out_" << ix << ".data";
+				} else {
+					out << "_out_" << ix;
+				}
+			}
+			out << "};\n";
+			
 			out <<
+				bl() << "marshal_" << fn->out_s->name << "(obuf, " << size_of_header << ", out_data);\n" <<
 				bl() << "obuf.write_len(obuf.size - 4);\n" <<
 				bl() << "obuf.write_msg_id(NPRPC.impl.MessageId.BlockResponse);\n" <<
 				bl() << "obuf.write_msg_type(NPRPC.impl.MessageType.Answer);\n"
@@ -1459,41 +1482,41 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 	case FieldType::Fundamental: {
 		const auto token = cft(f->type)->token_id;
 		const int size = get_fundamental_size(token);
-		offset = align_offset(size, offset, size);
+		const int field_offset = align_offset(size, offset, size);
 		
 		switch (token) {
 		case TokenId::Boolean:
-			out << bl() << "buf.heap.HEAPU8[offset + " << offset << "] = " << field_access << " ? 1 : 0;\n";
+			out << bl() << "buf.heap.HEAPU8[offset + " << field_offset << "] = " << field_access << " ? 1 : 0;\n";
 			break;
 		case TokenId::Int8:
-			out << bl() << "buf.heap.HEAP8[offset + " << offset << "] = " << field_access << ";\n";
+			out << bl() << "buf.heap.HEAP8[offset + " << field_offset << "] = " << field_access << ";\n";
 			break;
 		case TokenId::UInt8:
-			out << bl() << "buf.heap.HEAPU8[offset + " << offset << "] = " << field_access << ";\n";
+			out << bl() << "buf.heap.HEAPU8[offset + " << field_offset << "] = " << field_access << ";\n";
 			break;
 		case TokenId::Int16:
-			out << bl() << "buf.heap.HEAP16[(offset + " << offset << ") >> 1] = " << field_access << ";\n";
+			out << bl() << "buf.heap.HEAP16[(offset + " << field_offset << ") >> 1] = " << field_access << ";\n";
 			break;
 		case TokenId::UInt16:
-			out << bl() << "buf.heap.HEAPU16[(offset + " << offset << ") >> 1] = " << field_access << ";\n";
+			out << bl() << "buf.heap.HEAPU16[(offset + " << field_offset << ") >> 1] = " << field_access << ";\n";
 			break;
 		case TokenId::Int32:
-			out << bl() << "buf.heap.HEAP32[(offset + " << offset << ") >> 2] = " << field_access << ";\n";
+			out << bl() << "buf.heap.HEAP32[(offset + " << field_offset << ") >> 2] = " << field_access << ";\n";
 			break;
 		case TokenId::UInt32:
-			out << bl() << "buf.heap.HEAPU32[(offset + " << offset << ") >> 2] = " << field_access << ";\n";
+			out << bl() << "buf.heap.HEAPU32[(offset + " << field_offset << ") >> 2] = " << field_access << ";\n";
 			break;
 		case TokenId::Int64:
-			out << bl() << "buf.heap.HEAP64[(offset + " << offset << ") >> 3] = " << field_access << ";\n";
+			out << bl() << "buf.heap.HEAP64[(offset + " << field_offset << ") >> 3] = " << field_access << ";\n";
 			break;
 		case TokenId::UInt64:
-			out << bl() << "buf.heap.HEAPU64[(offset + " << offset << ") >> 3] = " << field_access << ";\n";
+			out << bl() << "buf.heap.HEAPU64[(offset + " << field_offset << ") >> 3] = " << field_access << ";\n";
 			break;
 		case TokenId::Float32:
-			out << bl() << "buf.heap.HEAPF32[(offset + " << offset << ") >> 2] = " << field_access << ";\n";
+			out << bl() << "buf.heap.HEAPF32[(offset + " << field_offset << ") >> 2] = " << field_access << ";\n";
 			break;
 		case TokenId::Float64:
-			out << bl() << "buf.heap.HEAPF64[(offset + " << offset << ") >> 3] = " << field_access << ";\n";
+			out << bl() << "buf.heap.HEAPF64[(offset + " << field_offset << ") >> 3] = " << field_access << ";\n";
 			break;
 		default:
 			assert(false);
@@ -1502,24 +1525,24 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 	}
 	case FieldType::Enum: {
 		const int size = get_fundamental_size(cft(f->type)->token_id);
-		offset = align_offset(size, offset, size);
-		out << bl() << "buf.heap.HEAP32[(offset + " << offset << ") >> 2] = " << field_access << ";\n";
+		const int field_offset = align_offset(size, offset, size);
+		out << bl() << "buf.heap.HEAP32[(offset + " << field_offset << ") >> 2] = " << field_access << ";\n";
 		break;
 	}
 	case FieldType::String: {
-		offset = align_offset(4, offset, 8);
-		out << bl() << "marshal_string(buf, offset + " << offset << ", " << field_access << ");\n";
+		const int field_offset = align_offset(4, offset, 8);
+		out << bl() << "NPRPC.marshal_string(buf, offset + " << field_offset << ", " << field_access << ");\n";
 		break;
 	}
 	case FieldType::Struct: {
 		auto s = cflat(f->type);
-		offset = align_offset(s->align, offset, s->size);
-		out << bl() << "marshal_" << s->name << "(buf, offset + " << offset << ", " << field_access << ");\n";
+		const int field_offset = align_offset(s->align, offset, s->size);
+		out << bl() << "marshal_" << s->name << "(buf, offset + " << field_offset << ", " << field_access << ");\n";
 		break;
 	}
 	case FieldType::Object: {
-		offset = align_offset(align_of_object, offset, size_of_object);
-		out << bl() << "NPRPC.marshal_object_id(buf, offset + " << offset << ", " << field_access << ");\n";
+		const int field_offset = align_offset(align_of_object, offset, size_of_object);
+		out << bl() << "NPRPC.marshal_object_id(buf, offset + " << field_offset << ", " << field_access << ");\n";
 		break;
 	}
 	case FieldType::Vector:
@@ -1527,13 +1550,13 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 		auto wt = cwt(f->type)->real_type();
 		auto [v_size, v_align] = get_type_size_align(f->type);
 		auto [ut_size, ut_align] = get_type_size_align(wt);
-		offset = align_offset(v_align, offset, v_size);
+		const int field_offset = align_offset(v_align, offset, v_size);
 		
 		if (is_fundamental(wt)) {
-			out << bl() << "NPRPC.marshal_typed_array(buf, offset + " << offset << ", " 
+			out << bl() << "NPRPC.marshal_typed_array(buf, offset + " << field_offset << ", " 
 			    << field_access << ", " << ut_size << ", " << ut_align << ");\n";
 		} else {
-			out << bl() << "NPRPC.marshal_struct_array(buf, offset + " << offset << ", " 
+			out << bl() << "NPRPC.marshal_struct_array(buf, offset + " << field_offset << ", " 
 			    << field_access << ", marshal_" << cflat(wt)->name << ", " << ut_size << ", " << ut_align << ");\n";
 		}
 		break;
@@ -1542,16 +1565,16 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 		auto wt = cwt(f->type)->real_type();
 		auto [v_size, v_align] = get_type_size_align(f->type);
 		auto [wt_size, wt_align] = get_type_size_align(wt);
-		offset = align_offset(v_align, offset, v_size);
+		const int field_offset = align_offset(v_align, offset, v_size);
 		
 		out << 
 			bl() << "if (" << field_access << " !== undefined) {\n" << bb(false);
 		
 		if (is_fundamental(wt)) {
-			out << bl() << "NPRPC.marshal_optional_fundamental(buf, offset + " << offset 
+			out << bl() << "NPRPC.marshal_optional_fundamental(buf, offset + " << field_offset 
 			    << ", " << field_access << ", " << get_fundamental_size(cft(wt)->token_id) << ");\n";
 		} else {
-			out << bl() << "NPRPC.marshal_optional_struct(buf, offset + " << offset 
+			out << bl() << "NPRPC.marshal_optional_struct(buf, offset + " << field_offset 
 			    << ", " << field_access << ", marshal_" << cflat(wt)->name << ", " 
 			    << wt_size << ", " << wt_align << ");\n";
 		}
@@ -1559,7 +1582,7 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 		out << 
 			eb(false) <<
 			bl() << "} else {\n" << bb(false) <<
-				bl() << "buf.heap.HEAPU8[offset + " << offset << "] = 0; // nullopt\n" <<
+				bl() << "buf.heap.HEAPU8[offset + " << field_offset << "] = 0; // nullopt\n" <<
 			eb();
 		break;
 	}
@@ -1581,41 +1604,41 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 	case FieldType::Fundamental: {
 		const auto token = cft(f->type)->token_id;
 		const int size = get_fundamental_size(token);
-		offset = align_offset(size, offset, size);
+		const int field_offset = align_offset(size, offset, size);
 		
 		switch (token) {
 		case TokenId::Boolean:
-			out << bl() << field_name << " = buf.heap.HEAPU8[offset + " << offset << "] !== 0;\n";
+			out << bl() << field_name << " = buf.heap.HEAPU8[offset + " << field_offset << "] !== 0;\n";
 			break;
 		case TokenId::Int8:
-			out << bl() << field_name << " = buf.heap.HEAP8[offset + " << offset << "];\n";
+			out << bl() << field_name << " = buf.heap.HEAP8[offset + " << field_offset << "];\n";
 			break;
 		case TokenId::UInt8:
-			out << bl() << field_name << " = buf.heap.HEAPU8[offset + " << offset << "];\n";
+			out << bl() << field_name << " = buf.heap.HEAPU8[offset + " << field_offset << "];\n";
 			break;
 		case TokenId::Int16:
-			out << bl() << field_name << " = buf.heap.HEAP16[(offset + " << offset << ") >> 1];\n";
+			out << bl() << field_name << " = buf.heap.HEAP16[(offset + " << field_offset << ") >> 1];\n";
 			break;
 		case TokenId::UInt16:
-			out << bl() << field_name << " = buf.heap.HEAPU16[(offset + " << offset << ") >> 1];\n";
+			out << bl() << field_name << " = buf.heap.HEAPU16[(offset + " << field_offset << ") >> 1];\n";
 			break;
 		case TokenId::Int32:
-			out << bl() << field_name << " = buf.heap.HEAP32[(offset + " << offset << ") >> 2];\n";
+			out << bl() << field_name << " = buf.heap.HEAP32[(offset + " << field_offset << ") >> 2];\n";
 			break;
 		case TokenId::UInt32:
-			out << bl() << field_name << " = buf.heap.HEAPU32[(offset + " << offset << ") >> 2];\n";
+			out << bl() << field_name << " = buf.heap.HEAPU32[(offset + " << field_offset << ") >> 2];\n";
 			break;
 		case TokenId::Int64:
-			out << bl() << field_name << " = buf.heap.HEAP64[(offset + " << offset << ") >> 3];\n";
+			out << bl() << field_name << " = buf.heap.HEAP64[(offset + " << field_offset << ") >> 3];\n";
 			break;
 		case TokenId::UInt64:
-			out << bl() << field_name << " = buf.heap.HEAPU64[(offset + " << offset << ") >> 3];\n";
+			out << bl() << field_name << " = buf.heap.HEAPU64[(offset + " << field_offset << ") >> 3];\n";
 			break;
 		case TokenId::Float32:
-			out << bl() << field_name << " = buf.heap.HEAPF32[(offset + " << offset << ") >> 2];\n";
+			out << bl() << field_name << " = buf.heap.HEAPF32[(offset + " << field_offset << ") >> 2];\n";
 			break;
 		case TokenId::Float64:
-			out << bl() << field_name << " = buf.heap.HEAPF64[(offset + " << offset << ") >> 3];\n";
+			out << bl() << field_name << " = buf.heap.HEAPF64[(offset + " << field_offset << ") >> 3];\n";
 			break;
 		default:
 			assert(false);
@@ -1624,24 +1647,24 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 	}
 	case FieldType::Enum: {
 		const int size = get_fundamental_size(cft(f->type)->token_id);
-		offset = align_offset(size, offset, size);
-		out << bl() << field_name << " = buf.heap.HEAP32[(offset + " << offset << ") >> 2];\n";
+		const int field_offset = align_offset(size, offset, size);
+		out << bl() << field_name << " = buf.heap.HEAP32[(offset + " << field_offset << ") >> 2];\n";
 		break;
 	}
 	case FieldType::String: {
-		offset = align_offset(4, offset, 8);
-		out << bl() << field_name << " = NPRPC.unmarshal_string(buf, offset + " << offset << ");\n";
+		const int field_offset = align_offset(4, offset, 8);
+		out << bl() << field_name << " = NPRPC.unmarshal_string(buf, offset + " << field_offset << ");\n";
 		break;
 	}
 	case FieldType::Struct: {
 		auto s = cflat(f->type);
-		offset = align_offset(s->align, offset, s->size);
-		out << bl() << field_name << " = unmarshal_" << s->name << "(heap, offset + " << offset << ");\n";
+		const int field_offset = align_offset(s->align, offset, s->size);
+		out << bl() << field_name << " = unmarshal_" << s->name << "(buf, offset + " << field_offset << ");\n";
 		break;
 	}
 	case FieldType::Object: {
-		offset = align_offset(align_of_object, offset, size_of_object);
-		out << bl() << field_name << " = NPRPC.unmarshal_object_id(buf, offset + " << offset << ");\n";
+		const int field_offset = align_offset(align_of_object, offset, size_of_object);
+		out << bl() << field_name << " = NPRPC.unmarshal_object_id(buf, offset + " << field_offset << ");\n";
 		break;
 	}
 	case FieldType::Vector:
@@ -1649,13 +1672,14 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 		auto wt = cwt(f->type)->real_type();
 		auto [v_size, v_align] = get_type_size_align(f->type);
 		auto [ut_size, ut_align] = get_type_size_align(wt);
-		offset = align_offset(v_align, offset, v_size);
+		const int field_offset = align_offset(v_align, offset, v_size);
 		
 		if (is_fundamental(wt)) {
-			out << bl() << field_name << " = NPRPC.unmarshal_typed_array(buf, offset + " << offset 
-			    << ", " << ut_size << ");\n";
+			// Cast to specific typed array type (e.g., Uint8Array for uuid_t)
+			out << bl() << field_name << " = NPRPC.unmarshal_typed_array(buf, offset + " << field_offset 
+			    << ", " << ut_size << ") as " << get_typed_array_name(cft(wt)->token_id) << ";\n";
 		} else {
-			out << bl() << field_name << " = NPRPC.unmarshal_struct_array(buf, offset + " << offset 
+			out << bl() << field_name << " = NPRPC.unmarshal_struct_array(buf, offset + " << field_offset 
 			    << ", unmarshal_" << cflat(wt)->name << ", " << ut_size << ");\n";
 		}
 		break;
@@ -1663,16 +1687,16 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 	case FieldType::Optional: {
 		auto wt = cwt(f->type)->real_type();
 		auto [v_size, v_align] = get_type_size_align(f->type);
-		offset = align_offset(v_align, offset, v_size);
+		const int field_offset = align_offset(v_align, offset, v_size);
 		
 		out << 
-			bl() << "if (buf.heap.HEAPU8[offset + " << offset << "] !== 0) {\n" << bb(false);
+			bl() << "if (buf.heap.HEAPU8[offset + " << field_offset << "] !== 0) {\n" << bb(false);
 		
 		if (is_fundamental(wt)) {
-			out << bl() << field_name << " = NPRPC.unmarshal_optional_fundamental(buf, offset + " << offset 
+			out << bl() << field_name << " = NPRPC.unmarshal_optional_fundamental(buf, offset + " << field_offset 
 			    << ", " << get_fundamental_size(cft(wt)->token_id) << ");\n";
 		} else {
-			out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buf, offset + " << offset 
+			out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buf, offset + " << field_offset 
 			    << ", unmarshal_" << cflat(wt)->name << ");\n";
 		}
 		
@@ -1705,7 +1729,7 @@ void TypescriptBuilder::emit_marshal_function(AstStructDecl* s) {
 		emit_field_marshal(field, current_offset, "data");
 	}
 	
-	eb();
+	out << eb();
 }
 
 void TypescriptBuilder::emit_unmarshal_function(AstStructDecl* s) {
@@ -1719,8 +1743,7 @@ void TypescriptBuilder::emit_unmarshal_function(AstStructDecl* s) {
 		emit_field_unmarshal(field, current_offset, "result");
 	}
 	
-	out << bl() << "return result;\n";
-	eb();
+	out << bl() << "return result;\n" << eb();
 }
 
 TypescriptBuilder::TypescriptBuilder(Context& ctx, std::filesystem::path file_path, std::filesystem::path out_dir)
