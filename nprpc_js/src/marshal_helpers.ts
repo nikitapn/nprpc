@@ -34,8 +34,6 @@ export function unmarshal_typed_array(buf: FlatBuffer, offset: number, elem_size
 	const relative_offset = buf.dv.getUint32(offset, true);
 	const n = buf.dv.getUint32(offset + 4, true);
 	
-	console.log(`[unmarshal_typed_array] offset=${offset}, rel_offset=${relative_offset}, n=${n}, elem_size=${elem_size}`);
-	
 	if (n === 0) {
 		switch (elem_size) {
 			case 1: return new Uint8Array(0);
@@ -78,33 +76,40 @@ export function unmarshal_struct_array(buf: FlatBuffer, offset: number, unmarsha
 }
 
 export function marshal_optional_fundamental(buf: FlatBuffer, offset: number, value: any, elem_size: number): void {
-	buf.dv.setUint8(offset, 1); // has value
-	const value_offset = offset + elem_size;
+	// Optional layout: 4-byte relative offset (same as optional struct)
+	// Allocate space for the fundamental value
+	const data_offset = _alloc1(buf, offset, elem_size, elem_size);
+	// Write the value to the allocated space
 	switch (elem_size) {
-		case 1: buf.dv.setUint8(value_offset, value); break;
-		case 2: buf.dv.setUint16(value_offset, value, true); break;
-		case 4: buf.dv.setUint32(value_offset, value, true); break;
-		case 8: buf.dv.setBigUint64(value_offset, value, true); break;
+		case 1: buf.dv.setUint8(data_offset, value); break;
+		case 2: buf.dv.setUint16(data_offset, value, true); break;
+		case 4: buf.dv.setUint32(data_offset, value, true); break;
+		case 8: buf.dv.setBigUint64(data_offset, value, true); break;
 	}
 }
 
 export function unmarshal_optional_fundamental(buf: FlatBuffer, offset: number, elem_size: number): any | undefined {
-	const value_offset = offset + elem_size;
+	// Optional layout: 4-byte relative offset at 'offset'
+	// Caller already checked that offset is non-zero, so read the value
+	const rel_offset = buf.dv.getUint32(offset, true);
+	const data_offset = offset + rel_offset;
 	switch (elem_size) {
-		case 1: return buf.dv.getUint8(value_offset);
-		case 2: return buf.dv.getUint16(value_offset, true);
-		case 4: return buf.dv.getUint32(value_offset, true);
-		case 8: return buf.dv.getBigUint64(value_offset, true);
+		case 1: return buf.dv.getUint8(data_offset);
+		case 2: return buf.dv.getUint16(data_offset, true);
+		case 4: return buf.dv.getUint32(data_offset, true);
+		case 8: return buf.dv.getBigUint64(data_offset, true);
 	}
 }
 
 export function marshal_optional_struct(buf: FlatBuffer, offset: number, value: any, marshal_fn: (buf: FlatBuffer, offset: number, data: any) => void, elem_size: number, elem_align: number): void {
-	buf.dv.setUint8(offset, 1); // has value
+	// Optional layout in C++: just a uint32_t relative offset (0 = no value)
+	// No separate has_value byte - the offset itself indicates presence
 	const data_offset = _alloc1(buf, offset, elem_size, elem_align);
 	marshal_fn(buf, data_offset, value);
 }
 
-export function unmarshal_optional_struct(buf: FlatBuffer, offset: number, unmarshal_fn: (buf: FlatBuffer, offset: number) => any): any | undefined {
+export function unmarshal_optional_struct(buf: FlatBuffer, offset: number, unmarshal_fn: (buf: FlatBuffer, offset: number) => any, elem_align: number): any | undefined {
+	// Optional layout: just a uint32_t relative offset at 'offset'
 	const rel_offset = buf.dv.getUint32(offset, true);
 	if (rel_offset === 0) return undefined;
 	return unmarshal_fn(buf, offset + rel_offset);

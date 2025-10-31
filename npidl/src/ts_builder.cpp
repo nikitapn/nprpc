@@ -1558,6 +1558,7 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 		break;
 	}
 	case FieldType::Optional: {
+		// All optionals have the same layout: 4-byte relative offset (0 = no value)
 		auto wt = cwt(f->type)->real_type();
 		auto [v_size, v_align] = get_type_size_align(f->type);
 		const int field_offset = align_offset(v_align, offset, v_size);
@@ -1574,20 +1575,22 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 			    << ", " << field_access << ", marshal_" << cflat(wt)->name << ", " 
 			    << wt_size << ", " << wt_align << ");\n";
 		} else if (wt->id == FieldType::String) {
-			// Optional string: has_value byte + string structure
-			out << bl() << "buf.dv.setUint8(offset + " << field_offset << ", 1);\n";
-			out << bl() << "NPRPC.marshal_string(buf, offset + " << field_offset << ", " << field_access << ");\n";
+			// Optional string uses marshal_optional_struct with marshal_string
+			out << bl() << "NPRPC.marshal_optional_struct(buf, offset + " << field_offset 
+			    << ", " << field_access << ", NPRPC.marshal_string, 8, 4);\n";
 		} else if (wt->id == FieldType::Vector || wt->id == FieldType::Array) {
-			// Optional vector/array: has_value byte + indirect ptr + size
+			// Optional vector/array also uses the optional_struct pattern
 			auto real_elem_type = cwt(wt)->real_type();
 			auto [ut_size, ut_align] = get_type_size_align(real_elem_type);
-			out << bl() << "buf.dv.setUint8(offset + " << field_offset << ", 1);\n";
 			if (is_fundamental(real_elem_type)) {
-				out << bl() << "NPRPC.marshal_typed_array(buf, offset + " << field_offset << ", " 
-				    << field_access << ", " << ut_size << ", " << ut_align << ");\n";
+				// Wrap marshal_typed_array in a lambda
+				out << bl() << "NPRPC.marshal_optional_struct(buf, offset + " << field_offset 
+				    << ", " << field_access << ", (b, o, v) => NPRPC.marshal_typed_array(b, o, v, " 
+				    << ut_size << ", " << ut_align << "), 8, 4);\n";
 			} else if (real_elem_type->id == FieldType::Struct) {
-				out << bl() << "NPRPC.marshal_struct_array(buf, offset + " << field_offset << ", " 
-				    << field_access << ", marshal_" << cflat(real_elem_type)->name << ", " << ut_size << ", " << ut_align << ");\n";
+				out << bl() << "NPRPC.marshal_optional_struct(buf, offset + " << field_offset 
+				    << ", " << field_access << ", (b, o, v) => NPRPC.marshal_struct_array(b, o, v, marshal_" 
+				    << cflat(real_elem_type)->name << ", " << ut_size << ", " << ut_align << "), 8, 4);\n";
 			} else {
 				assert(false && "Unsupported vector element type in optional for marshalling");
 			}
@@ -1598,7 +1601,7 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 		out << 
 			eb(false) <<
 			bl() << "} else {\n" << bb(false) <<
-				bl() << "buf.dv.setUint8(offset + " << field_offset << ", 0); // nullopt\n" <<
+				bl() << "buf.dv.setUint32(offset + " << field_offset << ", 0, true); // nullopt\n" <<
 			eb();
 		break;
 	}
@@ -1749,32 +1752,39 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 		break;
 	}
 	case FieldType::Optional: {
+		// All optionals have the same layout: 4-byte relative offset (0 = no value)
 		auto wt = cwt(f->type)->real_type();
 		auto [v_size, v_align] = get_type_size_align(f->type);
 		const int field_offset = align_offset(v_align, offset, v_size);
 		
+		// Check if the relative offset is non-zero
 		out << 
-			bl() << "if (buf.dv.getUint8(offset + " << field_offset << ") !== 0) {\n" << bb(false);
+			bl() << "if (buf.dv.getUint32(offset + " << field_offset << ", true) !== 0) {\n" << bb(false);
 		
 		if (is_fundamental(wt)) {
 			out << bl() << field_name << " = NPRPC.unmarshal_optional_fundamental(buf, offset + " << field_offset 
 			    << ", " << get_fundamental_size(cft(wt)->token_id) << ");\n";
 		} else if (wt->id == FieldType::Struct) {
+			auto [wt_size, wt_align] = get_type_size_align(wt);
 			out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buf, offset + " << field_offset 
-			    << ", unmarshal_" << cflat(wt)->name << ");\n";
+			    << ", unmarshal_" << cflat(wt)->name << ", " << wt_align << ");\n";
 		} else if (wt->id == FieldType::String) {
-			// Optional string
-			out << bl() << field_name << " = NPRPC.unmarshal_string(buf, offset + " << field_offset << ");\n";
+			// Optional string uses unmarshal_optional_struct with unmarshal_string
+			out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buf, offset + " << field_offset 
+			    << ", NPRPC.unmarshal_string, 4);\n";
 		} else if (wt->id == FieldType::Vector || wt->id == FieldType::Array) {
 			// Optional vector/array
 			auto real_elem_type = cwt(wt)->real_type();
 			auto [ut_size, ut_align] = get_type_size_align(real_elem_type);
 			if (is_fundamental(real_elem_type)) {
-				out << bl() << field_name << " = NPRPC.unmarshal_typed_array(buf, offset + " << field_offset 
-				    << ", " << ut_size << ") as " << get_typed_array_name(cft(real_elem_type)->token_id) << ";\n";
+				auto typed_array_name = get_typed_array_name(cft(real_elem_type)->token_id);
+				out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buf, offset + " << field_offset 
+				    << ", (b, o) => NPRPC.unmarshal_typed_array(b, o, " << ut_size << ") as " 
+				    << typed_array_name << ", 4) as " << typed_array_name << ";\n";
 			} else if (real_elem_type->id == FieldType::Struct) {
-				out << bl() << field_name << " = NPRPC.unmarshal_struct_array(buf, offset + " << field_offset 
-				    << ", unmarshal_" << cflat(real_elem_type)->name << ", " << ut_size << ");\n";
+				out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buf, offset + " << field_offset 
+				    << ", (b, o) => NPRPC.unmarshal_struct_array(b, o, unmarshal_" 
+				    << cflat(real_elem_type)->name << ", " << ut_size << "), 4);\n";
 			} else {
 				assert(false && "Unsupported vector element type in optional for unmarshalling");
 			}

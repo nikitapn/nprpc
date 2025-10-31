@@ -6,6 +6,7 @@ set(TS_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/flat.ts"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/index_internal.ts"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/index.ts"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/marshal_helpers.ts"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/nprpc.ts"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/utils.ts"
 )
