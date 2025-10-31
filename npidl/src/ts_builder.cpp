@@ -231,11 +231,11 @@ void TypescriptBuilder::emit_type(AstTypeDecl* type, std::ostream& os) {
 	{
 		auto ut = cwt(type)->type;
 		if (ut->id == FieldType::Fundamental) {
-			// Using typed arrays for fundamental types
+			// Using typed arrays for direct fundamental types (e.g., vector<u32>)
 			os << get_typed_array_name(cft(ut)->token_id);
 		} else {
-			// If there is going to be an alias for fundamental types, we consider using it here too
-			// (might be some database ids or something else, that is represented as u32 but should be distinct type)
+			// For aliases, enums, structs, etc. - preserve the type name
+			// (e.g., using DatabaseId = u32; vector<DatabaseId> → Array<DatabaseId>)
 			os << "Array<" << emit_type(ut) << ">";
 		}
 		break;
@@ -1555,16 +1555,17 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 		if (is_fundamental(wt)) {
 			out << bl() << "NPRPC.marshal_typed_array(buf, offset + " << field_offset << ", " 
 			    << field_access << ", " << ut_size << ", " << ut_align << ");\n";
-		} else {
+		} else if (wt->id == FieldType::Struct) {
 			out << bl() << "NPRPC.marshal_struct_array(buf, offset + " << field_offset << ", " 
 			    << field_access << ", marshal_" << cflat(wt)->name << ", " << ut_size << ", " << ut_align << ");\n";
+		} else {
+			assert(false && "Unsupported array element type for marshalling");
 		}
 		break;
 	}
 	case FieldType::Optional: {
 		auto wt = cwt(f->type)->real_type();
 		auto [v_size, v_align] = get_type_size_align(f->type);
-		auto [wt_size, wt_align] = get_type_size_align(wt);
 		const int field_offset = align_offset(v_align, offset, v_size);
 		
 		out << 
@@ -1573,10 +1574,31 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 		if (is_fundamental(wt)) {
 			out << bl() << "NPRPC.marshal_optional_fundamental(buf, offset + " << field_offset 
 			    << ", " << field_access << ", " << get_fundamental_size(cft(wt)->token_id) << ");\n";
-		} else {
+		} else if (wt->id == FieldType::Struct) {
+			auto [wt_size, wt_align] = get_type_size_align(wt);
 			out << bl() << "NPRPC.marshal_optional_struct(buf, offset + " << field_offset 
 			    << ", " << field_access << ", marshal_" << cflat(wt)->name << ", " 
 			    << wt_size << ", " << wt_align << ");\n";
+		} else if (wt->id == FieldType::String) {
+			// Optional string: has_value byte + string structure
+			out << bl() << "buf.heap.HEAPU8[offset + " << field_offset << "] = 1;\n";
+			out << bl() << "NPRPC.marshal_string(buf, offset + " << field_offset << ", " << field_access << ");\n";
+		} else if (wt->id == FieldType::Vector || wt->id == FieldType::Array) {
+			// Optional vector/array: has_value byte + indirect ptr + size
+			auto real_elem_type = cwt(wt)->real_type();
+			auto [ut_size, ut_align] = get_type_size_align(real_elem_type);
+			out << bl() << "buf.heap.HEAPU8[offset + " << field_offset << "] = 1;\n";
+			if (is_fundamental(real_elem_type)) {
+				out << bl() << "NPRPC.marshal_typed_array(buf, offset + " << field_offset << ", " 
+				    << field_access << ", " << ut_size << ", " << ut_align << ");\n";
+			} else if (real_elem_type->id == FieldType::Struct) {
+				out << bl() << "NPRPC.marshal_struct_array(buf, offset + " << field_offset << ", " 
+				    << field_access << ", marshal_" << cflat(real_elem_type)->name << ", " << ut_size << ", " << ut_align << ");\n";
+			} else {
+				assert(false && "Unsupported vector element type in optional for marshalling");
+			}
+		} else {
+			assert(false && "Unsupported optional element type for marshalling");
 		}
 		
 		out << 
@@ -1587,8 +1609,28 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 		break;
 	}
 	case FieldType::Alias: {
+		auto real_type = calias(f->type)->get_real_type();
+		// Check if this is an alias to a VECTOR (not array) of fundamentals
+		// Arrays stay as TypedArrays, but vector aliases use JavaScript arrays for semantic meaning
+		if (real_type->id == FieldType::Vector) {
+			auto elem_type = cwt(real_type)->real_type();
+			if (is_fundamental(elem_type)) {
+				// Convert Array<T> to TypedArray for marshalling
+				auto [v_size, v_align] = get_type_size_align(real_type);
+				auto [ut_size, ut_align] = get_type_size_align(elem_type);
+				const int field_offset = align_offset(v_align, offset, v_size);
+				auto typed_array_name = get_typed_array_name(cft(elem_type)->token_id);
+				auto temp_var = "temp_" + f->name;
+				out << bl() << "const " << temp_var << " = new " << typed_array_name << "(" << field_access << ");\n";
+				// Marshal the typed array directly (don't recurse, to avoid appending field name again)
+				out << bl() << "NPRPC.marshal_typed_array(buf, offset + " << field_offset << ", " 
+				    << temp_var << ", " << ut_size << ", " << ut_align << ");\n";
+				return;
+			}
+		}
+		// For other aliases (including array aliases), just resolve and marshal
 		auto temp_field = *f;
-		temp_field.type = calias(f->type)->get_real_type();
+		temp_field.type = real_type;
 		emit_field_marshal(&temp_field, offset, data_name);
 		return;
 	}
@@ -1678,9 +1720,11 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 			// Cast to specific typed array type (e.g., Uint8Array for uuid_t)
 			out << bl() << field_name << " = NPRPC.unmarshal_typed_array(buf, offset + " << field_offset 
 			    << ", " << ut_size << ") as " << get_typed_array_name(cft(wt)->token_id) << ";\n";
-		} else {
+		} else if (wt->id == FieldType::Struct) {
 			out << bl() << field_name << " = NPRPC.unmarshal_struct_array(buf, offset + " << field_offset 
 			    << ", unmarshal_" << cflat(wt)->name << ", " << ut_size << ");\n";
+		} else {
+			assert(false && "Unsupported array element type for unmarshalling");
 		}
 		break;
 	}
@@ -1695,9 +1739,27 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 		if (is_fundamental(wt)) {
 			out << bl() << field_name << " = NPRPC.unmarshal_optional_fundamental(buf, offset + " << field_offset 
 			    << ", " << get_fundamental_size(cft(wt)->token_id) << ");\n";
-		} else {
+		} else if (wt->id == FieldType::Struct) {
 			out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buf, offset + " << field_offset 
 			    << ", unmarshal_" << cflat(wt)->name << ");\n";
+		} else if (wt->id == FieldType::String) {
+			// Optional string
+			out << bl() << field_name << " = NPRPC.unmarshal_string(buf, offset + " << field_offset << ");\n";
+		} else if (wt->id == FieldType::Vector || wt->id == FieldType::Array) {
+			// Optional vector/array
+			auto real_elem_type = cwt(wt)->real_type();
+			auto [ut_size, ut_align] = get_type_size_align(real_elem_type);
+			if (is_fundamental(real_elem_type)) {
+				out << bl() << field_name << " = NPRPC.unmarshal_typed_array(buf, offset + " << field_offset 
+				    << ", " << ut_size << ") as " << get_typed_array_name(cft(real_elem_type)->token_id) << ";\n";
+			} else if (real_elem_type->id == FieldType::Struct) {
+				out << bl() << field_name << " = NPRPC.unmarshal_struct_array(buf, offset + " << field_offset 
+				    << ", unmarshal_" << cflat(real_elem_type)->name << ", " << ut_size << ");\n";
+			} else {
+				assert(false && "Unsupported vector element type in optional for unmarshalling");
+			}
+		} else {
+			assert(false && "Unsupported optional element type for unmarshalling");
 		}
 		
 		out << 
@@ -1708,8 +1770,33 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 		break;
 	}
 	case FieldType::Alias: {
+		auto real_type = calias(f->type)->get_real_type();
+		// Check if this is an alias to a VECTOR (not array) of fundamentals
+		// Arrays stay as TypedArrays, but vector aliases use JavaScript arrays for semantic meaning
+		if (real_type->id == FieldType::Vector) {
+			auto elem_type = cwt(real_type)->real_type();
+			if (is_fundamental(elem_type)) {
+				// Unmarshal as TypedArray then convert to Array<T>
+				auto temp_var = "temp_" + f->name;
+				out << bl() << "const " << temp_var << " = ";
+				auto temp_field = *f;
+				temp_field.type = real_type;
+				temp_field.name = temp_var;
+				// Generate the unmarshal call inline
+				auto [v_size, v_align] = get_type_size_align(real_type);
+				auto [ut_size, ut_align] = get_type_size_align(elem_type);
+				const int field_offset = align_offset(v_align, offset, v_size);
+				auto typed_array_name = get_typed_array_name(cft(elem_type)->token_id);
+				out << "NPRPC.unmarshal_typed_array(buf, offset + " << field_offset 
+				    << ", " << ut_size << ") as " << typed_array_name << ";\n";
+				// Convert TypedArray to Array
+				out << bl() << result_name << "." << f->name << " = Array.from(" << temp_var << ");\n";
+				return;
+			}
+		}
+		// For other aliases (including array aliases), just resolve and unmarshal
 		auto temp_field = *f;
-		temp_field.type = calias(f->type)->get_real_type();
+		temp_field.type = real_type;
 		emit_field_unmarshal(&temp_field, offset, result_name);
 		return;
 	}
