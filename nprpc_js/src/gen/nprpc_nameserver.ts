@@ -17,10 +17,10 @@ export class Nameserver extends NPRPC.ObjectProxy {
     buf.write_msg_id(NPRPC.impl.MessageId.FunctionCall);
     buf.write_msg_type(NPRPC.impl.MessageType.Request);
     // Write CallHeader directly
-    buf.heap.HEAPU16[(16 + 0) >> 1] = this.data.poa_idx;
-    buf.heap.HEAPU8[16 + 2] = interface_idx;
-    buf.heap.HEAPU8[16 + 3] = 0;
-    buf.heap.HEAPU64[(16 + 8) >> 3] = this.data.object_id;
+    buf.dv.setUint16(16 + 0, this.data.poa_idx, true);
+    buf.dv.setUint8(16 + 2, interface_idx);
+    buf.dv.setUint8(16 + 3, 0);
+    buf.dv.setBigUint64(16 + 8, this.data.object_id, true);
     marshal_nprpc_nameserver_M1(buf, 32, {_1: obj.data, _2: name});
     buf.write_len(buf.size - 4);
     await NPRPC.rpc.call(this.endpoint, buf, this.timeout);
@@ -37,10 +37,10 @@ export class Nameserver extends NPRPC.ObjectProxy {
     buf.write_msg_id(NPRPC.impl.MessageId.FunctionCall);
     buf.write_msg_type(NPRPC.impl.MessageType.Request);
     // Write CallHeader directly
-    buf.heap.HEAPU16[(16 + 0) >> 1] = this.data.poa_idx;
-    buf.heap.HEAPU8[16 + 2] = interface_idx;
-    buf.heap.HEAPU8[16 + 3] = 1;
-    buf.heap.HEAPU64[(16 + 8) >> 3] = this.data.object_id;
+    buf.dv.setUint16(16 + 0, this.data.poa_idx, true);
+    buf.dv.setUint8(16 + 2, interface_idx);
+    buf.dv.setUint8(16 + 3, 1);
+    buf.dv.setBigUint64(16 + 8, this.data.object_id, true);
     marshal_nprpc_nameserver_M2(buf, 32, {_1: name});
     buf.write_len(buf.size - 4);
     await NPRPC.rpc.call(this.endpoint, buf, this.timeout);
@@ -67,7 +67,7 @@ export class _INameserver_Servant extends NPRPC.ObjectServant {
   }
   static _dispatch(obj: _INameserver_Servant, buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, from_parent: boolean): void {
     // Read CallHeader directly
-    const function_idx = buf.heap.HEAPU8[16 + 3];
+    const function_idx = buf.dv.getUint8(16 + 3);
     switch(function_idx) {
       case 0: {
         const ia = unmarshal_nprpc_nameserver_M1(buf, 32);
@@ -103,13 +103,13 @@ export interface nprpc_nameserver_M1 {
 }
 
 export function marshal_nprpc_nameserver_M1(buf: NPRPC.FlatBuffer, offset: number, data: nprpc_nameserver_M1): void {
-NPRPC.marshal_object_id(buf, offset + 0, data._1);
+NPRPC.detail.marshal_ObjectId(buf, offset + 0, data._1);
 NPRPC.marshal_string(buf, offset + 48, data._2);
 }
 
 export function unmarshal_nprpc_nameserver_M1(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M1 {
 const result = {} as nprpc_nameserver_M1;
-result._1 = NPRPC.unmarshal_object_id(buf, offset + 0);
+result._1 = NPRPC.detail.unmarshal_ObjectId(buf, offset + 0);
 result._2 = NPRPC.unmarshal_string(buf, offset + 48);
 return result;
 }
@@ -134,14 +134,14 @@ export interface nprpc_nameserver_M3 {
 }
 
 export function marshal_nprpc_nameserver_M3(buf: NPRPC.FlatBuffer, offset: number, data: nprpc_nameserver_M3): void {
-buf.heap.HEAPU8[offset + 0] = data._1 ? 1 : 0;
-NPRPC.marshal_object_id(buf, offset + 8, data._2);
+buf.dv.setUint8(offset + 0, data._1 ? 1 : 0);
+NPRPC.detail.marshal_ObjectId(buf, offset + 8, data._2);
 }
 
 export function unmarshal_nprpc_nameserver_M3(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M3 {
 const result = {} as nprpc_nameserver_M3;
-result._1 = buf.heap.HEAPU8[offset + 0] !== 0;
-result._2 = NPRPC.unmarshal_object_id(buf, offset + 8);
+result._1 = buf.dv.getUint8(offset + 0) !== 0;
+result._2 = NPRPC.detail.unmarshal_ObjectId(buf, offset + 8);
 return result;
 }
 

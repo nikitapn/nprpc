@@ -106,14 +106,14 @@ export interface ObjectIdLocal {
 }
 
 export function marshal_ObjectIdLocal(buf: NPRPC.FlatBuffer, offset: number, data: ObjectIdLocal): void {
-buf.heap.HEAPU16[(offset + 0) >> 1] = data.poa_idx;
-buf.heap.HEAPU64[(offset + 8) >> 3] = data.object_id;
+buf.dv.setUint16(offset + 0, data.poa_idx, true);
+buf.dv.setBigUint64(offset + 8, data.object_id, true);
 }
 
 export function unmarshal_ObjectIdLocal(buf: NPRPC.FlatBuffer, offset: number): ObjectIdLocal {
 const result = {} as ObjectIdLocal;
-result.poa_idx = buf.heap.HEAPU16[(offset + 0) >> 1];
-result.object_id = buf.heap.HEAPU64[(offset + 8) >> 3];
+result.poa_idx = buf.dv.getUint16(offset + 0, true);
+result.object_id = buf.dv.getBigUint64(offset + 8, true);
 return result;
 }
 
@@ -132,20 +132,21 @@ export interface ObjectId {
 }
 
 export function marshal_ObjectId(buf: NPRPC.FlatBuffer, offset: number, data: ObjectId): void {
-buf.heap.HEAPU64[(offset + 0) >> 3] = data.object_id;
-buf.heap.HEAPU16[(offset + 8) >> 1] = data.poa_idx;
-buf.heap.HEAPU16[(offset + 10) >> 1] = data.flags;
-NPRPC.marshal_typed_array(buf, offset + 12, data.origin, 1, 1);
+buf.dv.setBigUint64(offset + 0, data.object_id, true);
+buf.dv.setUint16(offset + 8, data.poa_idx, true);
+buf.dv.setUint16(offset + 10, data.flags, true);
+const __arr = new Uint8Array(buf.array_buffer, offset + 12, 16);
+__arr.set(data.origin);
 NPRPC.marshal_string(buf, offset + 28, data.class_id);
 NPRPC.marshal_string(buf, offset + 36, data.urls);
 }
 
 export function unmarshal_ObjectId(buf: NPRPC.FlatBuffer, offset: number): ObjectId {
 const result = {} as ObjectId;
-result.object_id = buf.heap.HEAPU64[(offset + 0) >> 3];
-result.poa_idx = buf.heap.HEAPU16[(offset + 8) >> 1];
-result.flags = buf.heap.HEAPU16[(offset + 10) >> 1];
-result.origin = NPRPC.unmarshal_typed_array(buf, offset + 12, 1) as Uint8Array;
+result.object_id = buf.dv.getBigUint64(offset + 0, true);
+result.poa_idx = buf.dv.getUint16(offset + 8, true);
+result.flags = buf.dv.getUint16(offset + 10, true);
+result.origin = new Uint8Array(buf.array_buffer, offset + 12, 16);
 result.class_id = NPRPC.unmarshal_string(buf, offset + 28);
 result.urls = NPRPC.unmarshal_string(buf, offset + 36);
 return result;
@@ -183,18 +184,18 @@ export interface Header {
 }
 
 export function marshal_Header(buf: NPRPC.FlatBuffer, offset: number, data: Header): void {
-buf.heap.HEAPU32[(offset + 0) >> 2] = data.size;
-buf.heap.HEAP32[(offset + 4) >> 2] = data.msg_id;
-buf.heap.HEAP32[(offset + 8) >> 2] = data.msg_type;
-buf.heap.HEAPU32[(offset + 12) >> 2] = data.request_id;
+buf.dv.setUint32(offset + 0, data.size, true);
+buf.dv.setInt32(offset + 4, data.msg_id, true);
+buf.dv.setInt32(offset + 8, data.msg_type, true);
+buf.dv.setUint32(offset + 12, data.request_id, true);
 }
 
 export function unmarshal_Header(buf: NPRPC.FlatBuffer, offset: number): Header {
 const result = {} as Header;
-result.size = buf.heap.HEAPU32[(offset + 0) >> 2];
-result.msg_id = buf.heap.HEAP32[(offset + 4) >> 2];
-result.msg_type = buf.heap.HEAP32[(offset + 8) >> 2];
-result.request_id = buf.heap.HEAPU32[(offset + 12) >> 2];
+result.size = buf.dv.getUint32(offset + 0, true);
+result.msg_id = buf.dv.getInt32(offset + 4, true);
+result.msg_type = buf.dv.getInt32(offset + 8, true);
+result.request_id = buf.dv.getUint32(offset + 12, true);
 return result;
 }
 
@@ -206,18 +207,18 @@ export interface CallHeader {
 }
 
 export function marshal_CallHeader(buf: NPRPC.FlatBuffer, offset: number, data: CallHeader): void {
-buf.heap.HEAPU16[(offset + 0) >> 1] = data.poa_idx;
-buf.heap.HEAPU8[offset + 2] = data.interface_idx;
-buf.heap.HEAPU8[offset + 3] = data.function_idx;
-buf.heap.HEAPU64[(offset + 8) >> 3] = data.object_id;
+buf.dv.setUint16(offset + 0, data.poa_idx, true);
+buf.dv.setUint8(offset + 2, data.interface_idx);
+buf.dv.setUint8(offset + 3, data.function_idx);
+buf.dv.setBigUint64(offset + 8, data.object_id, true);
 }
 
 export function unmarshal_CallHeader(buf: NPRPC.FlatBuffer, offset: number): CallHeader {
 const result = {} as CallHeader;
-result.poa_idx = buf.heap.HEAPU16[(offset + 0) >> 1];
-result.interface_idx = buf.heap.HEAPU8[offset + 2];
-result.function_idx = buf.heap.HEAPU8[offset + 3];
-result.object_id = buf.heap.HEAPU64[(offset + 8) >> 3];
+result.poa_idx = buf.dv.getUint16(offset + 0, true);
+result.interface_idx = buf.dv.getUint8(offset + 2);
+result.function_idx = buf.dv.getUint8(offset + 3);
+result.object_id = buf.dv.getBigUint64(offset + 8, true);
 return result;
 }
 

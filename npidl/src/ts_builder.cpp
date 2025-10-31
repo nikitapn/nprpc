@@ -1112,10 +1112,10 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 			bl() << "buf.write_msg_id(NPRPC.impl.MessageId.FunctionCall);\n" <<
 			bl() << "buf.write_msg_type(NPRPC.impl.MessageType.Request);\n" <<
 			bl() << "// Write CallHeader directly\n" <<
-			bl() << "buf.heap.HEAPU16[(" << size_of_header << " + 0) >> 1] = this.data.poa_idx;\n" <<
-			bl() << "buf.heap.HEAPU8[" << size_of_header << " + 2] = interface_idx;\n" <<
-			bl() << "buf.heap.HEAPU8[" << size_of_header << " + 3] = " << fn->idx << ";\n" <<
-			bl() << "buf.heap.HEAPU64[(" << size_of_header << " + 8) >> 3] = this.data.object_id;\n"
+			bl() << "buf.dv.setUint16(" << size_of_header << " + 0, this.data.poa_idx, true);\n" <<
+			bl() << "buf.dv.setUint8(" << size_of_header << " + 2, interface_idx);\n" <<
+			bl() << "buf.dv.setUint8(" << size_of_header << " + 3, " << fn->idx << ");\n" <<
+			bl() << "buf.dv.setBigUint64(" << size_of_header << " + 8, this.data.object_id, true);\n"
 			;
 
 		if (fn->in_s) {
@@ -1227,7 +1227,7 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 	// Servant dispatch ====================================================
 	out << 
 		bl() << "// Read CallHeader directly\n" <<
-		bl() << "const function_idx = buf.heap.HEAPU8[" << size_of_header << " + 3];\n"
+		bl() << "const function_idx = buf.dv.getUint8(" << size_of_header << " + 3);\n"
 		;
 		
 	if (ifs->plist.empty()) {
@@ -1235,7 +1235,7 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 	} else {
 		out <<
 			bl() << "if (from_parent == false) {\n" << bb(false) <<
-				bl() << "const interface_idx = buf.heap.HEAPU8[" << size_of_header << " + 2];\n" <<
+				bl() << "const interface_idx = buf.dv.getUint8(" << size_of_header << " + 2);\n" <<
 				bl() <<"switch(interface_idx) {\n" << bb(false) <<
 					bl() << "case 0:\n" << bb(false) <<
 						bl() << "break;\n" <<
@@ -1455,37 +1455,37 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 		
 		switch (token) {
 		case TokenId::Boolean:
-			out << bl() << "buf.heap.HEAPU8[offset + " << field_offset << "] = " << field_access << " ? 1 : 0;\n";
+			out << bl() << "buf.dv.setUint8(offset + " << field_offset << ", " << field_access << " ? 1 : 0);\n";
 			break;
 		case TokenId::Int8:
-			out << bl() << "buf.heap.HEAP8[offset + " << field_offset << "] = " << field_access << ";\n";
+			out << bl() << "buf.dv.setInt8(offset + " << field_offset << ", " << field_access << ");\n";
 			break;
 		case TokenId::UInt8:
-			out << bl() << "buf.heap.HEAPU8[offset + " << field_offset << "] = " << field_access << ";\n";
+			out << bl() << "buf.dv.setUint8(offset + " << field_offset << ", " << field_access << ");\n";
 			break;
 		case TokenId::Int16:
-			out << bl() << "buf.heap.HEAP16[(offset + " << field_offset << ") >> 1] = " << field_access << ";\n";
+			out << bl() << "buf.dv.setInt16(offset + " << field_offset << ", " << field_access << ", true);\n";
 			break;
 		case TokenId::UInt16:
-			out << bl() << "buf.heap.HEAPU16[(offset + " << field_offset << ") >> 1] = " << field_access << ";\n";
+			out << bl() << "buf.dv.setUint16(offset + " << field_offset << ", " << field_access << ", true);\n";
 			break;
 		case TokenId::Int32:
-			out << bl() << "buf.heap.HEAP32[(offset + " << field_offset << ") >> 2] = " << field_access << ";\n";
+			out << bl() << "buf.dv.setInt32(offset + " << field_offset << ", " << field_access << ", true);\n";
 			break;
 		case TokenId::UInt32:
-			out << bl() << "buf.heap.HEAPU32[(offset + " << field_offset << ") >> 2] = " << field_access << ";\n";
+			out << bl() << "buf.dv.setUint32(offset + " << field_offset << ", " << field_access << ", true);\n";
 			break;
 		case TokenId::Int64:
-			out << bl() << "buf.heap.HEAP64[(offset + " << field_offset << ") >> 3] = " << field_access << ";\n";
+			out << bl() << "buf.dv.setBigInt64(offset + " << field_offset << ", " << field_access << ", true);\n";
 			break;
 		case TokenId::UInt64:
-			out << bl() << "buf.heap.HEAPU64[(offset + " << field_offset << ") >> 3] = " << field_access << ";\n";
+			out << bl() << "buf.dv.setBigUint64(offset + " << field_offset << ", " << field_access << ", true);\n";
 			break;
 		case TokenId::Float32:
-			out << bl() << "buf.heap.HEAPF32[(offset + " << field_offset << ") >> 2] = " << field_access << ";\n";
+			out << bl() << "buf.dv.setFloat32(offset + " << field_offset << ", " << field_access << ", true);\n";
 			break;
 		case TokenId::Float64:
-			out << bl() << "buf.heap.HEAPF64[(offset + " << field_offset << ") >> 3] = " << field_access << ";\n";
+			out << bl() << "buf.dv.setFloat64(offset + " << field_offset << ", " << field_access << ", true);\n";
 			break;
 		default:
 			assert(false);
@@ -1495,7 +1495,7 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 	case FieldType::Enum: {
 		const int size = get_fundamental_size(cft(f->type)->token_id);
 		const int field_offset = align_offset(size, offset, size);
-		out << bl() << "buf.heap.HEAP32[(offset + " << field_offset << ") >> 2] = " << field_access << ";\n";
+		out << bl() << "buf.dv.setInt32(offset + " << field_offset << ", " << field_access << ", true);\n";
 		break;
 	}
 	case FieldType::String: {
@@ -1511,11 +1511,36 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 	}
 	case FieldType::Object: {
 		const int field_offset = align_offset(align_of_object, offset, size_of_object);
-		out << bl() << "NPRPC.marshal_object_id(buf, offset + " << field_offset << ", " << field_access << ");\n";
+		out << bl() << "NPRPC.detail.marshal_ObjectId(buf, offset + " << field_offset << ", " << field_access << ");\n";
 		break;
 	}
-	case FieldType::Vector:
 	case FieldType::Array: {
+		// Fixed-size array - data is inline at the offset
+		auto wt = cwt(f->type)->real_type();
+		auto arr = static_cast<AstArrayDecl*>(f->type);
+		auto [v_size, v_align] = get_type_size_align(f->type);
+		auto [ut_size, ut_align] = get_type_size_align(wt);
+		const int field_offset = align_offset(v_align, offset, v_size);
+		
+		if (is_fundamental(wt)) {
+			// For fixed-size arrays of fundamentals, copy data directly to buffer
+			auto typed_array_name = get_typed_array_name(cft(wt)->token_id);
+			out << bl() << "const __arr = new " << typed_array_name << "(buf.array_buffer, offset + " 
+			    << field_offset << ", " << arr->length << ");\n";
+			out << bl() << "__arr.set(" << field_access << ");\n";
+		} else if (wt->id == FieldType::Struct) {
+			// For fixed-size arrays of structs, marshal each element in place
+			out << bl() << "for (let i = 0; i < " << arr->length << "; ++i) {\n" << bb(false);
+			out << bl() << "marshal_" << cflat(wt)->name << "(buf, offset + " << field_offset 
+			    << " + i * " << ut_size << ", " << field_access << "[i]);\n";
+			out << eb();
+		} else {
+			assert(false && "Unsupported array element type for marshalling");
+		}
+		break;
+	}
+	case FieldType::Vector: {
+		// Dynamic vector - data is indirect (ptr + length)
 		auto wt = cwt(f->type)->real_type();
 		auto [v_size, v_align] = get_type_size_align(f->type);
 		auto [ut_size, ut_align] = get_type_size_align(wt);
@@ -1528,7 +1553,7 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 			out << bl() << "NPRPC.marshal_struct_array(buf, offset + " << field_offset << ", " 
 			    << field_access << ", marshal_" << cflat(wt)->name << ", " << ut_size << ", " << ut_align << ");\n";
 		} else {
-			assert(false && "Unsupported array element type for marshalling");
+			assert(false && "Unsupported vector element type for marshalling");
 		}
 		break;
 	}
@@ -1550,13 +1575,13 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 			    << wt_size << ", " << wt_align << ");\n";
 		} else if (wt->id == FieldType::String) {
 			// Optional string: has_value byte + string structure
-			out << bl() << "buf.heap.HEAPU8[offset + " << field_offset << "] = 1;\n";
+			out << bl() << "buf.dv.setUint8(offset + " << field_offset << ", 1);\n";
 			out << bl() << "NPRPC.marshal_string(buf, offset + " << field_offset << ", " << field_access << ");\n";
 		} else if (wt->id == FieldType::Vector || wt->id == FieldType::Array) {
 			// Optional vector/array: has_value byte + indirect ptr + size
 			auto real_elem_type = cwt(wt)->real_type();
 			auto [ut_size, ut_align] = get_type_size_align(real_elem_type);
-			out << bl() << "buf.heap.HEAPU8[offset + " << field_offset << "] = 1;\n";
+			out << bl() << "buf.dv.setUint8(offset + " << field_offset << ", 1);\n";
 			if (is_fundamental(real_elem_type)) {
 				out << bl() << "NPRPC.marshal_typed_array(buf, offset + " << field_offset << ", " 
 				    << field_access << ", " << ut_size << ", " << ut_align << ");\n";
@@ -1573,7 +1598,7 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 		out << 
 			eb(false) <<
 			bl() << "} else {\n" << bb(false) <<
-				bl() << "buf.heap.HEAPU8[offset + " << field_offset << "] = 0; // nullopt\n" <<
+				bl() << "buf.dv.setUint8(offset + " << field_offset << ", 0); // nullopt\n" <<
 			eb();
 		break;
 	}
@@ -1619,37 +1644,37 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 		
 		switch (token) {
 		case TokenId::Boolean:
-			out << bl() << field_name << " = buf.heap.HEAPU8[offset + " << field_offset << "] !== 0;\n";
+			out << bl() << field_name << " = buf.dv.getUint8(offset + " << field_offset << ") !== 0;\n";
 			break;
 		case TokenId::Int8:
-			out << bl() << field_name << " = buf.heap.HEAP8[offset + " << field_offset << "];\n";
+			out << bl() << field_name << " = buf.dv.getInt8(offset + " << field_offset << ");\n";
 			break;
 		case TokenId::UInt8:
-			out << bl() << field_name << " = buf.heap.HEAPU8[offset + " << field_offset << "];\n";
+			out << bl() << field_name << " = buf.dv.getUint8(offset + " << field_offset << ");\n";
 			break;
 		case TokenId::Int16:
-			out << bl() << field_name << " = buf.heap.HEAP16[(offset + " << field_offset << ") >> 1];\n";
+			out << bl() << field_name << " = buf.dv.getInt16(offset + " << field_offset << ", true);\n";
 			break;
 		case TokenId::UInt16:
-			out << bl() << field_name << " = buf.heap.HEAPU16[(offset + " << field_offset << ") >> 1];\n";
+			out << bl() << field_name << " = buf.dv.getUint16(offset + " << field_offset << ", true);\n";
 			break;
 		case TokenId::Int32:
-			out << bl() << field_name << " = buf.heap.HEAP32[(offset + " << field_offset << ") >> 2];\n";
+			out << bl() << field_name << " = buf.dv.getInt32(offset + " << field_offset << ", true);\n";
 			break;
 		case TokenId::UInt32:
-			out << bl() << field_name << " = buf.heap.HEAPU32[(offset + " << field_offset << ") >> 2];\n";
+			out << bl() << field_name << " = buf.dv.getUint32(offset + " << field_offset << ", true);\n";
 			break;
 		case TokenId::Int64:
-			out << bl() << field_name << " = buf.heap.HEAP64[(offset + " << field_offset << ") >> 3];\n";
+			out << bl() << field_name << " = buf.dv.getBigInt64(offset + " << field_offset << ", true);\n";
 			break;
 		case TokenId::UInt64:
-			out << bl() << field_name << " = buf.heap.HEAPU64[(offset + " << field_offset << ") >> 3];\n";
+			out << bl() << field_name << " = buf.dv.getBigUint64(offset + " << field_offset << ", true);\n";
 			break;
 		case TokenId::Float32:
-			out << bl() << field_name << " = buf.heap.HEAPF32[(offset + " << field_offset << ") >> 2];\n";
+			out << bl() << field_name << " = buf.dv.getFloat32(offset + " << field_offset << ", true);\n";
 			break;
 		case TokenId::Float64:
-			out << bl() << field_name << " = buf.heap.HEAPF64[(offset + " << field_offset << ") >> 3];\n";
+			out << bl() << field_name << " = buf.dv.getFloat64(offset + " << field_offset << ", true);\n";
 			break;
 		default:
 			assert(false);
@@ -1659,7 +1684,7 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 	case FieldType::Enum: {
 		const int size = get_fundamental_size(cft(f->type)->token_id);
 		const int field_offset = align_offset(size, offset, size);
-		out << bl() << field_name << " = buf.heap.HEAP32[(offset + " << field_offset << ") >> 2];\n";
+		out << bl() << field_name << " = buf.dv.getInt32(offset + " << field_offset << ", true);\n";
 		break;
 	}
 	case FieldType::String: {
@@ -1675,11 +1700,37 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 	}
 	case FieldType::Object: {
 		const int field_offset = align_offset(align_of_object, offset, size_of_object);
-		out << bl() << field_name << " = NPRPC.unmarshal_object_id(buf, offset + " << field_offset << ");\n";
+		out << bl() << field_name << " = NPRPC.detail.unmarshal_ObjectId(buf, offset + " << field_offset << ");\n";
 		break;
 	}
-	case FieldType::Vector:
 	case FieldType::Array: {
+		// Fixed-size array - data is inline at the offset
+		auto wt = cwt(f->type)->real_type();
+		auto arr = static_cast<AstArrayDecl*>(f->type);
+		auto [v_size, v_align] = get_type_size_align(f->type);
+		auto [ut_size, ut_align] = get_type_size_align(wt);
+		const int field_offset = align_offset(v_align, offset, v_size);
+		
+		if (is_fundamental(wt)) {
+			// For fixed-size arrays of fundamentals, create view directly on buffer
+			auto typed_array_name = get_typed_array_name(cft(wt)->token_id);
+			out << bl() << field_name << " = new " << typed_array_name 
+			    << "(buf.array_buffer, offset + " << field_offset 
+			    << ", " << arr->length << ");\n";
+		} else if (wt->id == FieldType::Struct) {
+			// For fixed-size arrays of structs, unmarshal each element
+			out << bl() << field_name << " = new Array(" << arr->length << ");\n";
+			out << bl() << "for (let i = 0; i < " << arr->length << "; ++i) {\n" << bb(false);
+			out << bl() << field_name << "[i] = unmarshal_" << cflat(wt)->name 
+			    << "(buf, offset + " << field_offset << " + i * " << ut_size << ");\n";
+			out << eb();
+		} else {
+			assert(false && "Unsupported array element type for unmarshalling");
+		}
+		break;
+	}
+	case FieldType::Vector: {
+		// Dynamic vector - data is indirect (ptr + length)
 		auto wt = cwt(f->type)->real_type();
 		auto [v_size, v_align] = get_type_size_align(f->type);
 		auto [ut_size, ut_align] = get_type_size_align(wt);
@@ -1693,7 +1744,7 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 			out << bl() << field_name << " = NPRPC.unmarshal_struct_array(buf, offset + " << field_offset 
 			    << ", unmarshal_" << cflat(wt)->name << ", " << ut_size << ");\n";
 		} else {
-			assert(false && "Unsupported array element type for unmarshalling");
+			assert(false && "Unsupported vector element type for unmarshalling");
 		}
 		break;
 	}
@@ -1703,7 +1754,7 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 		const int field_offset = align_offset(v_align, offset, v_size);
 		
 		out << 
-			bl() << "if (buf.heap.HEAPU8[offset + " << field_offset << "] !== 0) {\n" << bb(false);
+			bl() << "if (buf.dv.getUint8(offset + " << field_offset << ") !== 0) {\n" << bb(false);
 		
 		if (is_fundamental(wt)) {
 			out << bl() << field_name << " = NPRPC.unmarshal_optional_fundamental(buf, offset + " << field_offset 
