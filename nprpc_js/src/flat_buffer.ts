@@ -117,3 +117,48 @@ export class FlatBuffer {
 		console.log(s);
 	}
 }
+
+// Allocation functions for flat buffer layout
+
+/**
+ * Allocates space for a vector (dynamic array) in the flat buffer.
+ * Writes relative offset and length at vector_offset, returns data offset.
+ */
+export function _alloc(buffer: FlatBuffer, vector_offset: number, n: number, element_size: number, align: number): number {
+	if (n == 0) {
+		buffer.dv.setUint32(vector_offset, 0, true);
+		buffer.dv.setUint32(vector_offset + 4, 0, true);
+		return 0;
+	}
+
+	let rem = buffer.offset % align;
+	let offset = rem ? buffer.offset + (align - rem) : buffer.offset;
+	{
+		let added_size = n * element_size + (offset - buffer.offset);
+
+		buffer.prepare(added_size);
+		buffer.commit(added_size);
+	}
+	buffer.dv.setUint32(vector_offset, offset - vector_offset, true);
+	buffer.dv.setUint32(vector_offset + 4, n, true);
+
+	return offset;
+}
+
+/**
+ * Allocates space for a single element (used for optionals and strings) in the flat buffer.
+ * Writes relative offset at flat_offset, returns data offset.
+ */
+export function _alloc1(buffer: FlatBuffer, flat_offset: number, element_size: number, align: number): number {
+	let rem = buffer.offset % align;
+	let offset = rem ? buffer.offset + (align - rem) : buffer.offset;
+	{
+		let added_size = element_size + (offset - buffer.offset);
+		buffer.prepare(added_size);
+		buffer.commit(added_size);
+	}
+
+	buffer.dv.setUint32(flat_offset, offset - flat_offset, true);
+
+	return offset;
+}

@@ -2,8 +2,7 @@
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 
 // Marshalling helper functions for the new simplified approach
-import { FlatBuffer, HeapViews } from './flat_buffer';
-import { Flat, _alloc, _alloc1 } from './flat';
+import { FlatBuffer, HeapViews, _alloc, _alloc1 } from './flat_buffer';
 
 const u8enc = new TextEncoder();
 const u8dec = new TextDecoder();

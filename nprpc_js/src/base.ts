@@ -1,7 +1,6 @@
 
 export * from './utils'
-export * as Flat from './flat';
-export { FlatBuffer } from './flat_buffer';
+export { FlatBuffer, _alloc, _alloc1 } from './flat_buffer';
 export * from './marshal_helpers'
 
 export class Exception extends Error {

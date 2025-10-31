@@ -3,7 +3,6 @@
 set(TS_SOURCES 
     "${CMAKE_CURRENT_SOURCE_DIR}/src/base.ts"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/flat_buffer.ts"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/flat.ts"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/index_internal.ts"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/index.ts"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/marshal_helpers.ts"
