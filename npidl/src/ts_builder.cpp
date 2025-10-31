@@ -902,16 +902,8 @@ void TypescriptBuilder::emit_struct2(AstStructDecl* s, bool is_exception) {
 
 	out << eb() << "\n";
 
-	// flat type
-	auto const accessor_name = s->name + "_Direct";
-	out << bl() << "export namespace Flat_" << ctx_.current_file() << " {\n" << bb(false);
-	out << bl() << "export class " << accessor_name << " extends NPRPC.Flat.Flat {\n" << bb(false);
-	int offset = 0;
-	for (auto& f : s->fields)
-		emit_accessors(s->name, f, offset);
-	out << 
-			eb() << // class
-		eb(); // namespace
+	// Note: _Direct classes are no longer generated - we use marshal/unmarshal functions instead
+	// The emit_accessors() function still exists but is unused and can be removed in the future
 }
 
 void TypescriptBuilder::emit_constant(const std::string& name, AstNumber* number) {
@@ -938,6 +930,9 @@ void TypescriptBuilder::emit_struct(AstStructDecl* s) {
 void TypescriptBuilder::emit_exception(AstStructDecl* s) {
 	assert(s->is_exception());
 	emit_struct2(s, true);
+	// Only generate unmarshal for exceptions - they're never marshalled, only thrown and unmarshalled
+	emit_unmarshal_function(s);
+	out << '\n';
 }
 
 void TypescriptBuilder::emit_file_footer() {
@@ -954,24 +949,23 @@ void TypescriptBuilder::emit_file_footer() {
 		for (auto ex : exs) {
 			out <<
 				bl() << "case " << ex->exception_id << ":\n" <<
-				bb() <<
-					bl() << "let ex_flat = new Flat_" << ctx_.current_file() << '.' << ns(ex->nm) << ex->name << "_Direct(buf, " << size_of_header << ");\n"
+				bb()
 				;
-			for (size_t i = 1; i < ex->fields.size(); ++i) {
-				auto f = ex->fields[i];
-				const auto var_name = "ex_" + std::to_string(i);
-				emit_variable(f->type, var_name, out);
-				assign_from_flat_type(f->type, var_name, "ex_flat." + f->name);
+			// Use unmarshal function instead of _Direct class
+			if (ex->fields.size() > 1) {
+				out << bl() << "let ex_obj = unmarshal_" << ex->name << "(buf, " << size_of_header << ");\n";
+				out << bl() << "throw new " << ns(ex->nm) << ex->name << "(";
+				for (size_t i = 1; i < ex->fields.size(); ++i) {
+					out << "ex_obj." << ex->fields[i]->name;
+					if (i + 1 < ex->fields.size())
+						out << ", ";
+				}
+				out << ");\n";
+			} else {
+				// Exception has no fields beyond id
+				out << bl() << "throw new " << ns(ex->nm) << ex->name << "();\n";
 			}
-			out << bl() << "throw new " << ns(ex->nm) << ex->name << "(";
-			for (size_t i = 1; i < ex->fields.size(); ++i) {
-				out << "ex_" << i;
-				if (i + 1 < ex->fields.size())
-					out << ", ";
-			}
-			out << ");\n" <<
-				eb() // case
-				;
+			out << eb(); // case
 		}
 		always_full_namespace(false);
 		out <<
@@ -1438,33 +1432,8 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 }
 
 void TypescriptBuilder::emit_struct_helpers() {
-		for (auto s : ctx_.get_structs_with_helpers()) {
-			out << bl() << "export namespace " << ns(s->nm) << "helpers {\n" << bb(false);
-			auto saved_namespace = ctx_.set_namespace(s->nm);
-			// flat -> ts
-			out << bl() << "export const assign_from_flat_" << s->name << " = (src: ";
-			emit_parameter_type_for_servant_callback_r(s, out, false); 
-			out << "): ";
-			emit_parameter_type_for_proxy_call_r(s, out, false); 
-			out << " => {\n" << bb(false) <<
-				bl() << "let dest: ";
-			emit_parameter_type_for_proxy_call_r(s, out, false); 
-			out << " = {} as " << emit_type(s) << ";\n";
-			assign_from_flat_type(s, "dest", "src", false, true);
-			out << 
-					bl() << "return dest\n" <<
-				eb();
-			// ts -> flat
-			out << bl() << "export const assign_from_ts_" << s->name << " = (dest: ";
-			emit_parameter_type_for_servant_callback_r(s, out, false);
-			out << ", src: ";
-			emit_parameter_type_for_proxy_call_r(s, out, false); 
-			out << ") => {\n" << bb(false);
-			assign_from_ts_type(s, "dest", "src");
-			out << eb();
-			ctx_.set_namespace(saved_namespace);
-			out << bl() << "} // namespace " << s->nm->name() << ".helpers\n" << eb(false);
-	}
+	// Helper functions removed - marshal/unmarshal functions are used instead
+	// Old code generated assign_from_flat_* and assign_from_ts_* helpers that used _Direct classes
 }
 
 TypescriptBuilder::_ns TypescriptBuilder::ns(Namespace* nm) const {
@@ -1808,7 +1777,7 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 void TypescriptBuilder::emit_marshal_function(AstStructDecl* s) {
 	calc_struct_size_align(s);
 	
-	out << bl() << "function marshal_" << s->name << "(buf: NPRPC.FlatBuffer, offset: number, data: " << s->name << "): void {\n";
+	out << bl() << "export function marshal_" << s->name << "(buf: NPRPC.FlatBuffer, offset: number, data: " << s->name << "): void {\n";
 	bb();
 	
 	int current_offset = 0;
@@ -1820,14 +1789,16 @@ void TypescriptBuilder::emit_marshal_function(AstStructDecl* s) {
 }
 
 void TypescriptBuilder::emit_unmarshal_function(AstStructDecl* s) {
-	out << bl() << "function unmarshal_" << s->name << "(buf: NPRPC.FlatBuffer, offset: number): " << s->name << " {\n";
+	out << bl() << "export function unmarshal_" << s->name << "(buf: NPRPC.FlatBuffer, offset: number): " << s->name << " {\n";
 	bb();
 	
 	out << bl() << "const result = {} as " << s->name << ";\n";
 	
 	int current_offset = 0;
-	for (auto field : s->fields) {
-		emit_field_unmarshal(field, current_offset, "result");
+	// For exceptions, skip field 0 (__ex_id) as it's implicit and not part of the class
+	size_t start_index = s->is_exception() ? 1 : 0;
+	for (size_t i = start_index; i < s->fields.size(); ++i) {
+		emit_field_unmarshal(s->fields[i], current_offset, "result");
 	}
 	
 	out << bl() << "return result;\n" << eb();

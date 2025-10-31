@@ -102,32 +102,14 @@ export interface nprpc_nameserver_M1 {
   _2: string;
 }
 
-export namespace Flat_nprpc_nameserver {
-  export class nprpc_nameserver_M1_Direct extends NPRPC.Flat.Flat {
-    public get _1() {
-      return new NPRPC.detail.Flat_nprpc_base.ObjectId_Direct(this.buffer, this.offset + 0);
-    }
-    public get _2() {
-      const offset = this.offset + 48;
-      const n = this.buffer.dv.getUint32(offset + 4, true);
-      return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
-    }
-    public set _2(str: string) {
-      const bytes = u8enc.encode(str);
-      const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 48, bytes.length, 1, 1);
-      new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
-    }
-  }
-}
-function marshal_nprpc_nameserver_M1(buf: NPRPC.FlatBuffer, offset: number, data: nprpc_nameserver_M1): void {
+export function marshal_nprpc_nameserver_M1(buf: NPRPC.FlatBuffer, offset: number, data: nprpc_nameserver_M1): void {
 NPRPC.marshal_object_id(buf, offset + 0, data._1);
 NPRPC.marshal_string(buf, offset + 48, data._2);
 }
 
-function unmarshal_nprpc_nameserver_M1(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M1 {
+export function unmarshal_nprpc_nameserver_M1(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M1 {
 const result = {} as nprpc_nameserver_M1;
-result._1 = NPRPC.unmarshal_object_id(buf, offset + 0);
-result._2 = NPRPC.unmarshal_string(buf, offset + 48);
+result._2 = NPRPC.unmarshal_string(buf, offset + 0);
 return result;
 }
 
@@ -135,27 +117,12 @@ export interface nprpc_nameserver_M2 {
   _1: string;
 }
 
-export namespace Flat_nprpc_nameserver {
-  export class nprpc_nameserver_M2_Direct extends NPRPC.Flat.Flat {
-    public get _1() {
-      const offset = this.offset + 0;
-      const n = this.buffer.dv.getUint32(offset + 4, true);
-      return n > 0 ? u8dec.decode(new DataView(this.buffer.array_buffer, offset + this.buffer.dv.getUint32(offset, true), n)) : ""
-    }
-    public set _1(str: string) {
-      const bytes = u8enc.encode(str);
-      const offset = NPRPC.Flat._alloc(this.buffer, this.offset + 0, bytes.length, 1, 1);
-      new Uint8Array(this.buffer.array_buffer, offset).set(bytes);
-    }
-  }
-}
-function marshal_nprpc_nameserver_M2(buf: NPRPC.FlatBuffer, offset: number, data: nprpc_nameserver_M2): void {
+export function marshal_nprpc_nameserver_M2(buf: NPRPC.FlatBuffer, offset: number, data: nprpc_nameserver_M2): void {
 NPRPC.marshal_string(buf, offset + 0, data._1);
 }
 
-function unmarshal_nprpc_nameserver_M2(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M2 {
+export function unmarshal_nprpc_nameserver_M2(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M2 {
 const result = {} as nprpc_nameserver_M2;
-result._1 = NPRPC.unmarshal_string(buf, offset + 0);
 return result;
 }
 
@@ -164,24 +131,14 @@ export interface nprpc_nameserver_M3 {
   _2: NPRPC.detail.ObjectId;
 }
 
-export namespace Flat_nprpc_nameserver {
-  export class nprpc_nameserver_M3_Direct extends NPRPC.Flat.Flat {
-    public get _1() { return (this.buffer.dv.getUint8(this.offset+0) === 0x01); }
-    public set _1(value: boolean) { this.buffer.dv.setUint8(this.offset+0, value === true ? 0x01 : 0x00); }
-    public get _2() {
-      return new NPRPC.detail.Flat_nprpc_base.ObjectId_Direct(this.buffer, this.offset + 8);
-    }
-  }
-}
-function marshal_nprpc_nameserver_M3(buf: NPRPC.FlatBuffer, offset: number, data: nprpc_nameserver_M3): void {
+export function marshal_nprpc_nameserver_M3(buf: NPRPC.FlatBuffer, offset: number, data: nprpc_nameserver_M3): void {
 buf.heap.HEAPU8[offset + 0] = data._1 ? 1 : 0;
 NPRPC.marshal_object_id(buf, offset + 8, data._2);
 }
 
-function unmarshal_nprpc_nameserver_M3(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M3 {
+export function unmarshal_nprpc_nameserver_M3(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M3 {
 const result = {} as nprpc_nameserver_M3;
-result._1 = buf.heap.HEAPU8[offset + 0] !== 0;
-result._2 = NPRPC.unmarshal_object_id(buf, offset + 8);
+result._2 = NPRPC.unmarshal_object_id(buf, offset + 0);
 return result;
 }
 

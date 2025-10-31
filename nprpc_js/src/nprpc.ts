@@ -10,7 +10,7 @@ import {
   ExceptionUnsecuredObject,
   ExceptionBadAccess,
   EndPointType,
-  Flat_nprpc_base
+  unmarshal_ExceptionCommFailure
 } from "./gen/nprpc_base"
 
 import { Exception } from "./base";
@@ -168,7 +168,7 @@ export class Connection {
       
       switch (buf.read_msg_id()) {
         case impl.MessageId.FunctionCall: {
-          let ch = new impl.Flat_nprpc_base.CallHeader_Direct(buf, header_size);
+          let ch = impl.unmarshal_CallHeader(buf, header_size);
 
           if (g_debug_level >= DebugLevel.DebugLevel_EveryCall) {
             console.log("FunctionCall. interface_idx: " + ch.interface_idx + " , fn_idx: " + ch.function_idx 
@@ -183,7 +183,7 @@ export class Connection {
           break;
         }
         case impl.MessageId.AddReference: {
-          let msg = new detail.Flat_nprpc_base.ObjectIdLocal_Direct(buf, header_size);
+          let msg = detail.unmarshal_ObjectIdLocal(buf, header_size);
 
           //detail::ObjectIdLocal oid{ msg.poa_idx(), msg.object_id() };
           if (g_debug_level >= DebugLevel.DebugLevel_EveryCall) {
@@ -204,7 +204,7 @@ export class Connection {
           break;
         }
         case impl.MessageId.ReleaseObject: {
-          let msg = new detail.Flat_nprpc_base.ObjectIdLocal_Direct(buf, header_size);
+          let msg = detail.unmarshal_ObjectIdLocal(buf, header_size);
           //detail::ObjectIdLocal oid{ msg.poa_idx(), msg.object_id() };
 
           //if (g_cfg.debug_level >= DebugLevel_EveryCall) {
@@ -494,9 +494,11 @@ export class ObjectProxy {
     buf.write_len(msg_size - 4);
     buf.write_msg_id(impl.MessageId.AddReference);
     buf.write_msg_type(impl.MessageType.Request);
-    let msg = new detail.Flat_nprpc_base.ObjectIdLocal_Direct(buf, header_size);
-    msg.poa_idx = this.data.poa_idx;
-    msg.object_id = this.data.object_id;
+    let msg: detail.ObjectIdLocal = {
+      poa_idx: this.data.poa_idx,
+      object_id: this.data.object_id
+    };
+    detail.marshal_ObjectIdLocal(buf, header_size, msg);
     buf.commit(msg_size);
 
     rpc.call(this.endpoint, buf, this.timeout).then().catch();
@@ -513,9 +515,11 @@ export class ObjectProxy {
     buf.write_len(msg_size - 4);
     buf.write_msg_id(impl.MessageId.ReleaseObject);
     buf.write_msg_type(impl.MessageType.Request);
-    let msg = new detail.Flat_nprpc_base.ObjectIdLocal_Direct(buf, header_size);
-    msg.poa_idx = this.data.poa_idx;
-    msg.object_id = this.data.object_id;
+    let msg: detail.ObjectIdLocal = {
+      poa_idx: this.data.poa_idx,
+      object_id: this.data.object_id
+    };
+    detail.marshal_ObjectIdLocal(buf, header_size, msg);
     buf.commit(msg_size);
 
     rpc.call(this.endpoint, buf, this.timeout).then().catch();
@@ -622,8 +626,8 @@ export const handle_standart_reply = (buf: FlatBuffer): number => {
     case impl.MessageId.Error_ObjectNotExist:
       throw new ExceptionObjectNotExist();
     case impl.MessageId.Error_CommFailure:
-      let ex_flat = new Flat_nprpc_base.ExceptionCommFailure_Direct(buf, 16);
-      throw new ExceptionCommFailure(ex_flat.what);
+      let ex_obj = unmarshal_ExceptionCommFailure(buf, 16);
+      throw new ExceptionCommFailure(ex_obj.what);
     case impl.MessageId.Error_UnknownFunctionIdx:
       throw new ExceptionUnknownFunctionIndex();
     case impl.MessageId.Error_UnknownMessageId:
@@ -635,11 +639,9 @@ export const handle_standart_reply = (buf: FlatBuffer): number => {
   }
 }
 
-export const oid_create_from_flat = detail.helpers.assign_from_flat_ObjectId;
-export function oid_assign_from_ts(dest: detail.Flat_nprpc_base.ObjectId_Direct, src: detail.ObjectId | ObjectProxy): void {
-  const oid: detail.ObjectId = (src instanceof ObjectProxy) ? src.data : src
-  detail.helpers.assign_from_ts_ObjectId(dest, oid);
-}
+// Old helper functions removed - they used _Direct classes that no longer exist
+// export const oid_create_from_flat = ...
+// export function oid_assign_from_ts(...) { ... }
 
 export const narrow = <T extends ObjectProxy>(from: ObjectProxy, to: new () => T): T => {
   if (from.data.class_id !== (to as any).servant_t._get_class()) {
@@ -683,8 +685,8 @@ export const create_object_from_oid = (
   return obj;
 }
 
-export const create_object_from_flat = (direct: detail.Flat_nprpc_base.ObjectId_Direct,remote_endpoint: EndPoint): ObjectProxy =>
-  create_object_from_oid(detail.helpers.assign_from_flat_ObjectId(direct), remote_endpoint);
+// Old helper function removed - used _Direct classes that no longer exist
+// export const create_object_from_flat = ...
 
 export const init = async (use_host_json: boolean = true): Promise<Rpc> => {
   return rpc ? rpc : (rpc = new Rpc(use_host_json ? await Rpc.read_host() : {} as HostInfo));
