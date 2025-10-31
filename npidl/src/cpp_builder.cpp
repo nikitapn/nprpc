@@ -45,6 +45,7 @@ void Builder::make_arguments_structs(AstFunctionDecl* fn) {
 
 		auto s = new AstStructDecl();
 		s->name = ctx_.current_file() + "_M" + std::to_string(++ctx_.m_struct_n_);
+		s->exception_id = -1; // Mark as non-exception
 
 		std::transform(args.begin(), args.end(), std::back_inserter(s->fields), [ix = 0, s, fn](AstFunctionArgument* arg) mutable {
 			auto f = new AstFieldDecl();

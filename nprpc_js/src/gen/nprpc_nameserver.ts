@@ -109,7 +109,8 @@ NPRPC.marshal_string(buf, offset + 48, data._2);
 
 export function unmarshal_nprpc_nameserver_M1(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M1 {
 const result = {} as nprpc_nameserver_M1;
-result._2 = NPRPC.unmarshal_string(buf, offset + 0);
+result._1 = NPRPC.unmarshal_object_id(buf, offset + 0);
+result._2 = NPRPC.unmarshal_string(buf, offset + 48);
 return result;
 }
 
@@ -123,6 +124,7 @@ NPRPC.marshal_string(buf, offset + 0, data._1);
 
 export function unmarshal_nprpc_nameserver_M2(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M2 {
 const result = {} as nprpc_nameserver_M2;
+result._1 = NPRPC.unmarshal_string(buf, offset + 0);
 return result;
 }
 
@@ -138,7 +140,8 @@ NPRPC.marshal_object_id(buf, offset + 8, data._2);
 
 export function unmarshal_nprpc_nameserver_M3(buf: NPRPC.FlatBuffer, offset: number): nprpc_nameserver_M3 {
 const result = {} as nprpc_nameserver_M3;
-result._2 = NPRPC.unmarshal_object_id(buf, offset + 0);
+result._1 = buf.heap.HEAPU8[offset + 0] !== 0;
+result._2 = NPRPC.unmarshal_object_id(buf, offset + 8);
 return result;
 }
 
