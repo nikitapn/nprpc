@@ -88,13 +88,16 @@ export function marshal_optional_fundamental(buf: FlatBuffer, offset: number, va
 	}
 }
 
-export function unmarshal_optional_fundamental(buf: FlatBuffer, offset: number, elem_size: number): any | undefined {
+export function unmarshal_optional_fundamental(buf: FlatBuffer, offset: number, elem_size: number, is_bool: boolean = false): any | undefined {
 	// Optional layout: 4-byte relative offset at 'offset'
 	// Caller already checked that offset is non-zero, so read the value
 	const rel_offset = buf.dv.getUint32(offset, true);
 	const data_offset = offset + rel_offset;
 	switch (elem_size) {
-		case 1: return buf.dv.getUint8(data_offset);
+		case 1: {
+			const val = buf.dv.getUint8(data_offset);
+			return is_bool ? (val !== 0) : val;
+		}
 		case 2: return buf.dv.getUint16(data_offset, true);
 		case 4: return buf.dv.getUint32(data_offset, true);
 		case 8: return buf.dv.getBigUint64(data_offset, true);

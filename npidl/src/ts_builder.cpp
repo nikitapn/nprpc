@@ -1762,8 +1762,9 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 			bl() << "if (buf.dv.getUint32(offset + " << field_offset << ", true) !== 0) {\n" << bb(false);
 		
 		if (is_fundamental(wt)) {
+			const auto is_bool = cft(wt)->token_id == TokenId::Boolean;
 			out << bl() << field_name << " = NPRPC.unmarshal_optional_fundamental(buf, offset + " << field_offset 
-			    << ", " << get_fundamental_size(cft(wt)->token_id) << ");\n";
+			    << ", " << get_fundamental_size(cft(wt)->token_id) << ", " << (is_bool ? "true" : "false") << ");\n";
 		} else if (wt->id == FieldType::Struct) {
 			auto [wt_size, wt_align] = get_type_size_align(wt);
 			out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buf, offset + " << field_offset 
