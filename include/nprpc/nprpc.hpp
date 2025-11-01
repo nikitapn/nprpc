@@ -112,10 +112,9 @@ enum Enum : uint32_t {
   ALLOW_TCP                = 1 << 1,
   ALLOW_WEBSOCKET          = 1 << 2,
   ALLOW_SSL_WEBSOCKET      = 1 << 3,
-  // TODO: implement memory mapped files transport
-  ALLOW_MEMORY_MAPPED      = 1 << 4,
+  ALLOW_SHARED_MEMORY      = 1 << 4,
   ALLOW_ALL =
-    ALLOW_TCP | ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET /* | ALLOW_SHARED_MEMORY */,
+    ALLOW_TCP | ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET | ALLOW_SHARED_MEMORY,
 };
 }
 

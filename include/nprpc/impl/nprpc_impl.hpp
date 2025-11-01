@@ -35,6 +35,7 @@ class PoaImpl;
 
 NPRPC_API extern Config   g_cfg;
 NPRPC_API extern RpcImpl* g_orb;
+NPRPC_API extern std::string g_server_listener_uuid;
 
 struct IOWork {
   virtual void operator()()                       = 0;

@@ -95,6 +95,8 @@ TEST_F(NprpcTest, TestBasic) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+    // TODO: Enable when SharedMemoryServerSession is implemented
+    // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
 }
 
 // Optional types test

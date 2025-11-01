@@ -2,6 +2,10 @@
 #include <nprpc/impl/shared_memory_connection.hpp>
 #include <nprpc_stub/nprpc_nameserver.hpp>
 
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
+
 #include <cassert>
 
 namespace nprpc::impl {
@@ -23,6 +27,7 @@ Poa* RpcImpl::create_poa_impl(uint32_t objects_max, PoaPolicy::Lifespan lifespan
 
 extern void init_socket(boost::asio::io_context& ioc);
 extern void init_http_server(boost::asio::io_context& ioc);
+extern void init_shared_memory_listener(boost::asio::io_context& ioc);
 
 NPRPC_API Config   g_cfg;
 NPRPC_API RpcImpl* g_orb;
@@ -187,8 +192,11 @@ RpcImpl::RpcImpl(
     : ioc_ {ioc}
 {
   poas_created_.fill(false);
+  
+  
   init_socket(ioc_);
   init_http_server(ioc_);
+  init_shared_memory_listener(ioc_);
 }
 
 void ReferenceListImpl::add_ref(ObjectServant* obj)
@@ -315,19 +323,14 @@ ObjectId PoaImpl::activate_object(
 
   if (activation_flags & ObjectActivationFlags::ALLOW_SSL_WEBSOCKET) {
     if (g_cfg.hostname.empty()) {
-      throw std::runtime_error("SSL websocket requires hostname");
+      throw std::runtime_error("SSL websocket requires a hostname");
     }
     oid.urls += (std::string(wss_prefix) + g_cfg.hostname + ":" +
                  std::to_string(g_cfg.listen_http_port));
   }
 
-  if (activation_flags & ObjectActivationFlags::ALLOW_MEMORY_MAPPED) {
-    /* TODO: implement shared memory
-    oid.urls +=
-      (std::string(mem_prefix) + g_cfg.http_root_dir + ":" +
-       std::to_string(g_cfg.shared_memory_port)) +
-      ';';
-      */
+  if (activation_flags & ObjectActivationFlags::ALLOW_SHARED_MEMORY) {
+    oid.urls += (std::string(mem_prefix) + g_server_listener_uuid) + ';';
   }
 
   if (pl_lifespan_ == PoaPolicy::Lifespan::Transient) {

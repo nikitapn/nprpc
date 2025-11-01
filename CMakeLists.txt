@@ -38,6 +38,7 @@ add_library(nprpc SHARED
   src/shared_memory_channel.cpp
   src/shared_memory_connection.cpp
   src/shared_memory_listener.cpp
+  src/shared_memory_init.cpp
   include/nprpc/impl/async_connect.hpp
   src/async_connect.cpp
   src/server_session_socket.cpp
