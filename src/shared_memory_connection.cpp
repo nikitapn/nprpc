@@ -1,4 +1,5 @@
 #include <nprpc/impl/shared_memory_connection.hpp>
+#include <nprpc/impl/shared_memory_listener.hpp>
 #include <nprpc/common.hpp>
 #include <iostream>
 #include <future>
@@ -190,22 +191,18 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint, boost::
     ctx_.remote_endpoint = endpoint;
     timeout_timer_.expires_at(boost::posix_time::pos_infin);
 
-    // Parse endpoint to extract channel ID
-    // Expected format: mem://channel_id:port where hostname() contains the channel ID
-    std::string channel_id(endpoint.hostname());
-    if (channel_id.empty()) {
-        throw nprpc::Exception("Invalid shared memory endpoint: missing channel ID");
+    // Parse endpoint to extract listener name
+    // Expected format: mem://listener_name (no port needed for shared memory)
+    std::string listener_name(endpoint.memory_channel_id());
+    if (listener_name.empty()) {
+        throw nprpc::Exception("Invalid shared memory endpoint: missing listener name");
     }
 
-    // Determine if we're server or client based on endpoint
-    // For now, assume clients always connect (create_queues = false)
-    bool is_server = false;
-    bool create_queues = false;
-
+    // Connect to the listener, which will establish a dedicated channel
     try {
-        channel_ = std::make_unique<SharedMemoryChannel>(ioc_, channel_id, is_server, create_queues);
+        channel_ = connect_to_shared_memory_listener(ioc_, listener_name);
     } catch (const std::exception& e) {
-        std::string error_msg = "Could not create shared memory channel: ";
+        std::string error_msg = "Could not connect to shared memory listener: ";
         error_msg += e.what();
         throw nprpc::Exception(error_msg.c_str());
     }

@@ -36,6 +36,7 @@ add_library(nprpc SHARED
   src/rpc_impl.cpp
   src/shared_memory_channel.cpp
   src/shared_memory_connection.cpp
+  src/shared_memory_listener.cpp
   include/nprpc/impl/async_connect.hpp
   src/async_connect.cpp
   src/server_session_socket.cpp
@@ -115,12 +116,21 @@ target_include_directories(npnameserver
 target_link_libraries(npnameserver PUBLIC nprpc)
 add_dependencies(npnameserver nprpc)
 
-# Test executable for shared memory reference counter
-# add_executable(test_shared_memory_ref_counter
-#   test_shared_memory_ref_counter.cpp
-# )
-# target_include_directories(test_shared_memory_ref_counter PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
-# target_link_libraries(test_shared_memory_ref_counter PUBLIC nprpc)
+# Test executable for shared memory endpoint
+add_executable(test_shared_memory_endpoint
+  test/src/test_shared_memory_endpoint.cpp
+)
+target_include_directories(test_shared_memory_endpoint PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
+target_link_libraries(test_shared_memory_endpoint PUBLIC nprpc gtest)
+add_test(NAME SharedMemoryEndpoint COMMAND test_shared_memory_endpoint)
+
+# Test executable for shared memory listener
+add_executable(test_shared_memory_listener
+  test/src/test_shared_memory_listener.cpp
+)
+target_include_directories(test_shared_memory_listener PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
+target_link_libraries(test_shared_memory_listener PUBLIC nprpc gtest pthread)
+add_test(NAME SharedMemoryListener COMMAND test_shared_memory_listener)
 
 add_subdirectory(check)
 

@@ -44,6 +44,10 @@ class EndPoint
 
   std::string to_string() const noexcept
   {
+    if (type_ == EndPointType::SharedMemory) {
+      // Shared memory doesn't use port numbers
+      return std::string(to_string(type_)) + hostname_;
+    }
     return std::string(to_string(type_)) + hostname_ + ":" +
            std::to_string(port_);
   }
@@ -64,8 +68,18 @@ class EndPoint
   std::uint16_t    port() const noexcept { return port_; }
   bool             empty() const noexcept { return hostname_.empty(); }
   bool             is_ssl() const noexcept { return type_ == EndPointType::SecuredWebSocket; }
+  
+  // For shared memory endpoints, return the channel ID (stored in hostname_)
+  std::string_view memory_channel_id() const noexcept { 
+    return (type_ == EndPointType::SharedMemory) ? hostname_ : std::string_view{}; 
+  }
+  
   std::string      get_full() const noexcept
   {
+    if (type_ == EndPointType::SharedMemory) {
+      // For shared memory, just return the channel ID
+      return hostname_;
+    }
     return hostname_ + ":" + std::to_string(port_);
   }
 
@@ -83,7 +97,7 @@ class EndPoint
       throw std::invalid_argument("URL cannot be empty");
     }
 
-    auto split = [this](std::string_view url, std::string_view prefix) {
+    auto split = [this](std::string_view url, std::string_view prefix, bool require_port = true) {
       auto to_uint16 = [](const std::string_view& str) {
         std::uint16_t port;
         auto [ptr, ec] =
@@ -97,22 +111,31 @@ class EndPoint
       auto start = prefix.length();
       auto end = url.find(':', start);
       
-      this->hostname_ = url.substr(start, end - start);
-      this->port_ = to_uint16(url.substr(end + 1));
+      if (end == std::string_view::npos) {
+        // No port specified
+        if (require_port) {
+          throw std::invalid_argument("Missing port number");
+        }
+        this->hostname_ = url.substr(start);
+        this->port_ = 0;
+      } else {
+        this->hostname_ = url.substr(start, end - start);
+        this->port_ = to_uint16(url.substr(end + 1));
+      }
     };
 
     if (url.find(tcp_prefix) == 0) {
       type_ = EndPointType::Tcp;
-      split(url, tcp_prefix);
+      split(url, tcp_prefix, true);
     } else if (url.find(ws_prefix) == 0) {
       type_ = EndPointType::WebSocket;
-      split(url, ws_prefix);
+      split(url, ws_prefix, true);
     } else if (url.find(wss_prefix) == 0) {
       type_ = EndPointType::SecuredWebSocket;
-      split(url, wss_prefix);
+      split(url, wss_prefix, true);
     } else if (url.find(mem_prefix) == 0) {
       type_ = EndPointType::SharedMemory;
-      split(url, mem_prefix);
+      split(url, mem_prefix, false);  // Port is optional for shared memory
     } else {
       throw std::invalid_argument("Invalid URL format");
     }
