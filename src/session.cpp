@@ -45,6 +45,14 @@ void Session::handle_request() {
 	}
 
 	auto cb = rx_buffer_().cdata();
+	
+	// Validate message contains at least a header before accessing it
+	if (cb.size() < sizeof(impl::flat::Header)) {
+		std::cerr << "Message too small for header: " << cb.size() << " bytes\n";
+		make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Error_BadInput);
+		return;
+	}
+	
 	auto header = static_cast<const impl::flat::Header*>(cb.data());
 	switch (header->msg_id) {
 	case MessageId::FunctionCall: {

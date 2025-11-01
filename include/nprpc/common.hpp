@@ -51,4 +51,16 @@ void fail(beast::error_code ec, char const *what);
 // Adjust this value based on your application's needs
 static constexpr uint32_t max_message_size = 32 * 1024 * 1024; // 32 MB
 
+// Maximum number of pending (in-flight) requests per WebSocket session
+// Prevents memory exhaustion from async request flooding
+static constexpr size_t max_pending_requests = 1000;
+
+// Maximum number of queued outgoing messages per session
+// Prevents memory exhaustion from slow clients
+static constexpr size_t max_write_queue_size = 100;
+
+// Maximum number of object references per session
+// Prevents reference count exhaustion attacks
+static constexpr size_t max_references_per_session = 10000;
+
 } // namespace nprpc::impl

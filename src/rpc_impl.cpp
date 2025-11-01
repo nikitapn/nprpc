@@ -195,6 +195,13 @@ RpcImpl::RpcImpl(
 
 void ReferenceListImpl::add_ref(ObjectServant* obj)
 {
+  // Check if we've exceeded the maximum references per session
+  if (refs_.size() >= max_references_per_session) {
+    std::cerr << "Maximum references per session exceeded (" << max_references_per_session 
+              << "), rejecting AddReference for: " << obj->get_class() << '\n';
+    return;
+  }
+
   if (auto it =
         std::find_if(begin(refs_),
                      end(refs_),

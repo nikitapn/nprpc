@@ -99,6 +99,9 @@ void WebSocketSession<Derived>::on_read(beast::error_code ec, std::size_t bytes_
       auto response = rx_buffer_(true);
       it->second.completion_handler(boost::system::error_code{}, response);
       pending_requests_.erase(it);
+    } else {
+      // Received response for unknown request - possible attack or bug
+      std::cerr << "Received response for unknown request ID: " << request_id << '\n';
     }
   }
 
@@ -117,6 +120,15 @@ void WebSocketSession<Derived>::do_write() {
   
   if (write_queue_.empty()) {
     writing_.store(false);
+    return;
+  }
+
+  // Check write queue size - if too large, client is too slow
+  if (write_queue_.size() > max_write_queue_size) {
+    std::cerr << "Write queue exceeded maximum size (" << max_write_queue_size 
+              << "), closing slow connection\n";
+    writing_.store(false);
+    close();
     return;
   }
 
@@ -251,6 +263,15 @@ void WebSocketSession<Derived>::send_receive_async(
     completion_handler = std::move(completion_handler), timeout_ms]() mutable {
     // Store the pending request
     if (completion_handler) {
+      // Check if we've exceeded the maximum pending requests limit
+      if (pending_requests_.size() >= max_pending_requests) {
+        std::cerr << "Maximum pending requests limit reached (" << max_pending_requests 
+                  << "), rejecting new async call\n";
+        flat_buffer empty_response{};
+        (*completion_handler)(boost::asio::error::no_buffer_space, empty_response);
+        return;
+      }
+      
       pending_requests_.emplace(request_id, pending_request{
         std::move(*completion_handler),
         std::chrono::milliseconds(timeout_ms)
