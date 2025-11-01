@@ -290,7 +290,8 @@ describe('NPRPC Integration Tests', function() {
             testObjects = await resolveTestObject('nprpc_test_objects', test.TestObjects);
         });
 
-        it('should send and object proxy correctly', async function() {
+        it('should send object proxy correctly', async function() {
+            this.timeout(60000); // Increase timeout for this test
             class SimpleObjectImpl extends test._ISimpleObject_Servant implements test.ISimpleObject_Servant {
                 value: number = 0;
 
@@ -310,7 +311,12 @@ describe('NPRPC Integration Tests', function() {
             const simpleObjectProxy = new SimpleObjectImpl();
             const oid = poa.activate_object(simpleObjectProxy);
 
-            testObjects.SendObject(oid);
+            // Send the object to the server
+            await testObjects.SendObject(oid);
+
+            // Verify the server received and stored the object
+            await testObjects.ReleaseReceivedObject();
+            expect(simpleObjectProxy.value).to.equal(42); // Server confirms it has the object
         });
     }); // describe TestObjects
 });

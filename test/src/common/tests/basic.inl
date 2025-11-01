@@ -1,15 +1,15 @@
 
 class TestBasicImpl : public test::ITestBasic_Servant {
 public:
-    virtual uint32_t ReturnU32() {
+    uint32_t ReturnU32() override{
         return 42;
     }
 
-    virtual bool ReturnBoolean() {
+    bool ReturnBoolean() override{
         return true;
     }
 
-    virtual bool In(uint32_t a, ::nprpc::flat::Boolean b, ::nprpc::flat::Span<uint8_t> c) {
+    bool In(uint32_t a, ::nprpc::flat::Boolean b, ::nprpc::flat::Span<uint8_t> c) override {
         EXPECT_EQ(a, 100u);
         EXPECT_TRUE(b.get());
 
@@ -21,7 +21,7 @@ public:
         return true;
     }
 
-    virtual void Out(uint32_t& a, ::nprpc::flat::Boolean& b, ::nprpc::flat::Vector_Direct1<uint8_t> c) {
+    void Out(uint32_t& a, ::nprpc::flat::Boolean& b, ::nprpc::flat::Vector_Direct1<uint8_t> c) override {
         a = 100;
         b = true;
 
@@ -30,13 +30,13 @@ public:
         std::iota(std::begin(span), std::end(span), 0);
     }
 
-    virtual void OutStruct (test::flat::AAA_Direct& a) {
+    void OutStruct (test::flat::AAA_Direct& a) override{
         a.a() = 12345;
         a.b("Hello from OutStruct");
         a.c("Another string");
     }
 
-    virtual void OutArrayOfStructs (::nprpc::flat::Vector_Direct2<test::flat::SimpleStruct, test::flat::SimpleStruct_Direct> a) {
+    void OutArrayOfStructs (::nprpc::flat::Vector_Direct2<test::flat::SimpleStruct, test::flat::SimpleStruct_Direct> a) override{
       a.length(10);
       auto span = a();
       int i = 1;
@@ -45,12 +45,12 @@ public:
       }
     }
 
-    virtual test::IdArray ReturnIdArray () {
+    test::IdArray ReturnIdArray () override {
       test::IdArray arr {1,2,3,4,5,6,7,8,9,10};
       return arr;
     }
 
-    virtual void InException () {
+    void InException () override {
       throw test::SimpleException{"This is a test exception", 123};
     }
 };

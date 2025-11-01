@@ -18,18 +18,19 @@ inline void log(
 }
 
 # define EXPECT_TRUE(x) if (!(x)) {  \
-    log("EXPECT_TRUE failed: " #x);  \
-    std::abort();                    \
+    std::stringstream ss;             \
+    ss << "EXPECT_TRUE failed: " #x;  \
+    throw test::AssertionFailed{ss.str()}; \
 }
 # define EXPECT_FALSE(x) if (x) {    \
-    log("EXPECT_FALSE failed: " #x); \
-    std::abort();                    \
+    std::stringstream ss;             \
+    ss << "EXPECT_FALSE failed: " #x; \
+    throw test::AssertionFailed{ss.str()}; \
 }
 # define EXPECT_EQ(x, y) if (!((x) == (y))) {                                                                    \
     std::stringstream ss;                                                                                        \
-    ss <<"EXPECT_EQ failed: " #x " == " #y " (" << (x) << " != " << (y) << ") ";                                 \
-    log(ss.str());                                                                                               \
-    std::abort();                                                                                                \
+    ss <<"EXPECT_EQ failed: " #x " == " #y " (" << (x) << " != " << (y) << ")";                                 \
+    throw test::AssertionFailed{ss.str()};                                                                       \
 }
 #else
 # define GTEST_OVERRIDE override

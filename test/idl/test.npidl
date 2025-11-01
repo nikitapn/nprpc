@@ -6,6 +6,10 @@ using Id = u32;
 using IdArray = vector<Id>;
 using bytestream = vector<u8>;
 
+AssertionFailed : exception {
+	message: string;
+}
+
 interface ServerControl {
 	// All tests performed, safe to shutdown the server
 	void Shutdown();
@@ -36,15 +40,15 @@ SimpleException : exception {
 }
 
 interface TestBasic {
-	boolean ReturnBoolean();
-	IdArray ReturnIdArray();
-	u32 ReturnU32();
+	boolean ReturnBoolean() raises (AssertionFailed);
+	IdArray ReturnIdArray() raises (AssertionFailed);
+	u32 ReturnU32() raises (AssertionFailed);
 
-	boolean In(a: in u32, b: in boolean, c: in vector<u8>);
-	void Out(a: out u32, b: out boolean, c: out vector<u8>);
+	boolean In(a: in u32, b: in boolean, c: in vector<u8>) raises (AssertionFailed);
+	void Out(a: out u32, b: out boolean, c: out vector<u8>) raises (AssertionFailed);
 
-	void OutStruct(a: out AAA);
-	void OutArrayOfStructs(a: out vector<SimpleStruct>);
+	void OutStruct(a: out AAA) raises (AssertionFailed);
+	void OutArrayOfStructs(a: out vector<SimpleStruct>) raises (AssertionFailed);
 
 	void InException() raises (SimpleException);
 }
@@ -61,23 +65,23 @@ Opt1 : flat {
 };
 
 interface TestOptional {
-	boolean InEmpty(a?: in u32);
-	boolean In(a?: in u32, b?: in AAA);
+	boolean InEmpty(a?: in u32) raises (AssertionFailed);
+	boolean In(a?: in u32, b?: in AAA) raises (AssertionFailed);
 //	boolean InVec(a?: in bytestream);
 
-	void OutEmpty(a?: out u32);
-	void Out(a?: out u32);
+	void OutEmpty(a?: out u32) raises (AssertionFailed);
+	void Out(a?: out u32) raises (AssertionFailed);
 
-	Opt1 ReturnOpt1();
+	Opt1 ReturnOpt1() raises (AssertionFailed);
 }
 
 interface SimpleObject {
-	u32 GetValue();
-	void SetValue(a: in u32);
+	async SetValue(a: in u32);
 }
 
 interface TestObjects {
-	void SendObject(o: in /* SimpleObject */ object);
+	void SendObject(o: in /* SimpleObject */ object) raises (AssertionFailed);
+	void ReleaseReceivedObject() raises (AssertionFailed);
 }
 
 [force_helpers=1]
@@ -115,8 +119,8 @@ TopLevel : flat {
 }
 
 interface TestNested {
-	void Out(a?: out BBB);
-	TopLevel ReturnNested();
+	void Out(a?: out BBB) raises (AssertionFailed);
+	TopLevel ReturnNested() raises (AssertionFailed);
 }
 
 [trusted=false]
