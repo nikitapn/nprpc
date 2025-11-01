@@ -69,6 +69,14 @@ void WebSocketSession<Derived>::on_read(beast::error_code ec, std::size_t bytes_
     return fail(ec, "read");
   }
 
+  // Additional safety check: verify message size
+  if (rx_buffer_().size() > max_message_size) {
+    std::cerr << "Rejected oversized WebSocket message: " << rx_buffer_().size() 
+              << " bytes (max: " << max_message_size << " bytes)\n";
+    close();
+    return;
+  }
+
   nprpc::impl::flat::Header_Direct header(rx_buffer_(), 0);
   const uint32_t request_id = header.request_id();
 

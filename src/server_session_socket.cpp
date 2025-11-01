@@ -112,7 +112,11 @@ public:
 
     assert(len == 4);
 
-    if (size_to_read_ > max_message_size) return;
+    if (size_to_read_ > max_message_size) {
+      std::cerr << "Rejected oversized message: " << size_to_read_ 
+                << " bytes (max: " << max_message_size << " bytes)\n";
+      return;
+    }
 
     *(uint32_t*)rx_buffer_().data().data() = size_to_read_;
     rx_buffer_().commit(4);

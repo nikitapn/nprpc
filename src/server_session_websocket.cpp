@@ -41,6 +41,9 @@ class websocket_session_with_acceptor : public Derived
     this->ws().set_option(
       websocket::stream_base::timeout::suggested(beast::role_type::server));
 
+    // Set maximum message size to prevent memory exhaustion attacks
+    this->ws().read_message_max(max_message_size);
+
     // Set a decorator to change the Server of the handshake
     this->ws().set_option(
       websocket::stream_base::decorator(

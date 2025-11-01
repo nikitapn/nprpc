@@ -46,6 +46,9 @@ using ssl_ws = websocket::stream<
 // Report a failure
 void fail(beast::error_code ec, char const *what);
 
+// Maximum allowed message size to prevent memory exhaustion attacks
+// This limit is enforced at the transport level before allocating memory
+// Adjust this value based on your application's needs
 static constexpr uint32_t max_message_size = 32 * 1024 * 1024; // 32 MB
 
 } // namespace nprpc::impl
