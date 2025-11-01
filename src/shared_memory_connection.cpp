@@ -1,11 +1,17 @@
-#include <nprpc/impl/nprpc_impl.hpp>
-#include <nprpc/impl/shared_memory_channel.hpp>
+#include <nprpc/impl/shared_memory_connection.hpp>
 #include <nprpc/common.hpp>
 #include <iostream>
 #include <future>
 
 namespace nprpc::impl {
-void SharedMemoryConnection::add_work(std::unique_ptr<work>&& w) {
+
+void SharedMemoryConnection::timeout_action() {
+    // For shared memory, timeout means the other side is unresponsive
+    std::cerr << "SharedMemoryConnection timeout" << std::endl;
+    close();
+}
+
+void SharedMemoryConnection::add_work(std::unique_ptr<IOWork>&& w) {
     boost::asio::post(ioc_, [w{std::move(w)}, this]() mutable {
         std::lock_guard<std::mutex> lock(mutex_);
         wq_.push_back(std::move(w));
@@ -20,7 +26,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
         dump_message(buffer, false);
     }
 
-    struct work_impl : work {
+    struct work_impl : IOWork {
         flat_buffer& buf;
         SharedMemoryConnection& this_;
         uint32_t timeout_ms;
@@ -28,6 +34,16 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
 
         void operator()() noexcept override {
             this_.set_timeout(timeout_ms);
+            
+            // Validate message size (security check)
+            if (buf.size() > max_message_size) {
+                std::cerr << "SharedMemoryConnection: Message too large: " << buf.size() << std::endl;
+                on_failed(boost::system::error_code(
+                    boost::asio::error::message_size,
+                    boost::system::system_category()));
+                this_.pop_and_execute_next_task();
+                return;
+            }
             
             // Send data through shared memory channel
             if (!this_.channel_->send(buf.data().data(), buf.size())) {
@@ -89,7 +105,23 @@ void SharedMemoryConnection::send_receive_async(
 {
     assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
-    struct work_impl : work {
+    // Check pending requests limit (security check)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (pending_requests_ >= max_pending_requests) {
+            std::cerr << "SharedMemoryConnection: Too many pending requests: " 
+                      << pending_requests_ << std::endl;
+            if (completion_handler) {
+                (*completion_handler)(boost::system::error_code(
+                    boost::asio::error::no_buffer_space,
+                    boost::system::system_category()), buffer);
+            }
+            return;
+        }
+        pending_requests_++;
+    }
+
+    struct work_impl : IOWork {
         flat_buffer buf;
         SharedMemoryConnection& this_;
         uint32_t timeout_ms;
@@ -97,6 +129,16 @@ void SharedMemoryConnection::send_receive_async(
         
         void operator()() noexcept override {
             this_.set_timeout(timeout_ms);
+            
+            // Validate message size (security check)
+            if (buf.size() > max_message_size) {
+                std::cerr << "SharedMemoryConnection: Message too large: " << buf.size() << std::endl;
+                on_failed(boost::system::error_code(
+                    boost::asio::error::message_size,
+                    boost::system::system_category()));
+                this_.pop_and_execute_next_task();
+                return;
+            }
             
             if (!this_.channel_->send(buf.data().data(), buf.size())) {
                 on_failed(boost::system::error_code(
@@ -108,10 +150,18 @@ void SharedMemoryConnection::send_receive_async(
         }
 
         void on_failed(const boost::system::error_code& ec) noexcept override {
+            {
+                std::lock_guard<std::mutex> lock(this_.mutex_);
+                this_.pending_requests_--;
+            }
             if (handler) handler.value()(ec, buf);
         }
 
         void on_executed() noexcept override {
+            {
+                std::lock_guard<std::mutex> lock(this_.mutex_);
+                this_.pending_requests_--;
+            }
             if (handler) handler.value()(boost::system::error_code{}, buf);
         }
 
@@ -137,22 +187,42 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint, boost::
     : Session(ioc.get_executor())
     , ioc_(ioc)
 {
-    remote_endpoint_ = endpoint;
+    ctx_.remote_endpoint = endpoint;
     timeout_timer_.expires_at(boost::posix_time::pos_infin);
 
-    // Create shared memory channel
-    /*bool is_server = endpoint.is_local();
+    // Parse endpoint to extract channel ID
+    // Expected format: mem://channel_id:port where hostname() contains the channel ID
+    std::string channel_id(endpoint.hostname());
+    if (channel_id.empty()) {
+        throw nprpc::Exception("Invalid shared memory endpoint: missing channel ID");
+    }
+
+    // Determine if we're server or client based on endpoint
+    // For now, assume clients always connect (create_queues = false)
+    bool is_server = false;
+    bool create_queues = false;
+
     try {
-        channel_ = std::make_unique<SharedMemoryChannel>(ioc_, is_server);
+        channel_ = std::make_unique<SharedMemoryChannel>(ioc_, channel_id, is_server, create_queues);
     } catch (const std::exception& e) {
-        throw nprpc::Exception(
-            ("Could not create shared memory channel: "s + e.what()).c_str());
-    }*/
+        std::string error_msg = "Could not create shared memory channel: ";
+        error_msg += e.what();
+        throw nprpc::Exception(error_msg.c_str());
+    }
 
     // Set up data receive handler
     channel_->on_data_received = [this](std::vector<char>&& data) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (wq_.empty()) return;  // No pending operations
+        if (wq_.empty()) {
+            std::cerr << "SharedMemoryConnection: Received unsolicited response" << std::endl;
+            return;
+        }
+
+        // Validate header size (security check)
+        if (data.size() < sizeof(impl::flat::Header)) {
+            std::cerr << "SharedMemoryConnection: Message too small: " << data.size() << std::endl;
+            return;
+        }
 
         auto& current_buffer = current_rx_buffer();
         current_buffer.consume(current_buffer.size());

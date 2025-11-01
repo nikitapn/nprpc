@@ -1,4 +1,5 @@
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/shared_memory_connection.hpp>
 #include <nprpc_stub/nprpc_nameserver.hpp>
 
 #include <cassert>
@@ -76,10 +77,7 @@ NPRPC_API std::shared_ptr<Session> RpcImpl::get_session(
         con = make_client_ssl_websocket_session(endpoint, ioc_);
         break;
       case EndPointType::SharedMemory:
-        // con = std::make_shared<SharedMemoryConnection>(
-        //   endpoint,
-        //   ioc_
-        // );
+        con = std::make_shared<SharedMemoryConnection>(endpoint, ioc_);
         break;
       default:
         throw nprpc::ExceptionCommFailure("nprpc::impl::RpcImpl::get_session: Unknown endpoint type: " + 

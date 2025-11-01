@@ -1,208 +1,170 @@
 #include <nprpc/impl/shared_memory_channel.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/common.hpp>
+#include <iostream>
+
+namespace bip = boost::interprocess;
 
 namespace nprpc::impl {
 
-NPRPC_API SharedMemoryChannel::SharedMemoryChannel(
-  boost::asio::io_context& ioc, bool is_server) 
-    : is_server_(is_server)
-    , ioc_(ioc) 
+SharedMemoryChannel::SharedMemoryChannel(
+    boost::asio::io_context& ioc,
+    const std::string& channel_id,
+    bool is_server,
+    bool create_queues)
+    : channel_id_(channel_id)
+    , is_server_(is_server)
+    , ioc_(ioc)
+    , recv_buffer_(MAX_MESSAGE_SIZE)
 {
-    std::string event_name = std::string(EVENT_PREFIX) + 
-        (is_server ? "s" : "c") + std::to_string(getpid());
+    // Server writes to s2c, reads from c2s
+    // Client writes to c2s, reads from s2c
+    send_queue_name_ = channel_id + (is_server ? "_s2c" : "_c2s");
+    recv_queue_name_ = channel_id + (is_server ? "_c2s" : "_s2c");
 
-#ifdef _WIN32
-    if (is_server) {
-        // Server creates both mappings
-        mapping_s2c_ = CreateFileMappingA(
-            INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
-            0, sizeof(SharedRingBuffer), SERVER_TO_CLIENT_NAME);
-        
-        mapping_c2s_ = CreateFileMappingA(
-            INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
-            0, sizeof(SharedRingBuffer), CLIENT_TO_SERVER_NAME);
+    try {
+        if (create_queues) {
+            // Remove any existing queues from crashed processes
+            bip::message_queue::remove(send_queue_name_.c_str());
+            bip::message_queue::remove(recv_queue_name_.c_str());
 
-        if (!mapping_s2c_ || !mapping_c2s_) {
-            throw std::runtime_error("Failed to create shared memory");
-        }
+            // Create new queues with message size and max queue depth
+            send_queue_ = std::make_unique<bip::message_queue>(
+                bip::create_only,
+                send_queue_name_.c_str(),
+                MAX_QUEUE_MESSAGES,
+                MAX_MESSAGE_SIZE);
 
-        buffer_s2c_ = static_cast<SharedRingBuffer*>(
-            MapViewOfFile(mapping_s2c_, FILE_MAP_ALL_ACCESS, 0, 0, 0));
-        buffer_c2s_ = static_cast<SharedRingBuffer*>(
-            MapViewOfFile(mapping_c2s_, FILE_MAP_ALL_ACCESS, 0, 0, 0));
+            recv_queue_ = std::make_unique<bip::message_queue>(
+                bip::create_only,
+                recv_queue_name_.c_str(),
+                MAX_QUEUE_MESSAGES,
+                MAX_MESSAGE_SIZE);
 
-        // Initialize as empty ring buffers
-        new (buffer_s2c_) SharedRingBuffer();
-        new (buffer_c2s_) SharedRingBuffer();
-        
-        buffer_s2c_->header.magic = SharedRingBufferHeader::MAGIC;
-        buffer_c2s_->header.magic = SharedRingBufferHeader::MAGIC;
-    } else {
-        // Client opens existing mappings
-        mapping_s2c_ = OpenFileMappingA(
-            FILE_MAP_ALL_ACCESS, FALSE, SERVER_TO_CLIENT_NAME);
-        mapping_c2s_ = OpenFileMappingA(
-            FILE_MAP_ALL_ACCESS, FALSE, CLIENT_TO_SERVER_NAME);
+            if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+                std::cout << "Created message queues: " << send_queue_name_ 
+                          << ", " << recv_queue_name_ << std::endl;
+            }
+        } else {
+            // Open existing queues
+            send_queue_ = std::make_unique<bip::message_queue>(
+                bip::open_only,
+                send_queue_name_.c_str());
 
-        if (!mapping_s2c_ || !mapping_c2s_) {
-            throw std::runtime_error("Failed to open shared memory");
-        }
+            recv_queue_ = std::make_unique<bip::message_queue>(
+                bip::open_only,
+                recv_queue_name_.c_str());
 
-        buffer_s2c_ = static_cast<SharedRingBuffer*>(
-            MapViewOfFile(mapping_s2c_, FILE_MAP_ALL_ACCESS, 0, 0, 0));
-        buffer_c2s_ = static_cast<SharedRingBuffer*>(
-            MapViewOfFile(mapping_c2s_, FILE_MAP_ALL_ACCESS, 0, 0, 0));
-    }
-
-    // Create/open events for signaling
-    event_read_ = CreateEventA(nullptr, FALSE, FALSE, 
-        (event_name + "_r").c_str());
-    event_write_ = CreateEventA(nullptr, FALSE, FALSE, 
-        (event_name + "_w").c_str());
-
-#else
-    if (is_server) {
-        // Server creates both shared memory segments
-        fd_s2c_ = shm_open(SERVER_TO_CLIENT_NAME, 
-            O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
-        fd_c2s_ = shm_open(CLIENT_TO_SERVER_NAME, 
-            O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
-
-        if (fd_s2c_ == -1 || fd_c2s_ == -1) {
-            throw std::runtime_error("Failed to create shared memory");
-        }
-
-        ftruncate(fd_s2c_, sizeof(SharedRingBuffer));
-        ftruncate(fd_c2s_, sizeof(SharedRingBuffer));
-
-        buffer_s2c_ = static_cast<SharedRingBuffer*>(mmap(
-            nullptr, sizeof(SharedRingBuffer), 
-            PROT_READ | PROT_WRITE, MAP_SHARED, fd_s2c_, 0));
-        buffer_c2s_ = static_cast<SharedRingBuffer*>(mmap(
-            nullptr, sizeof(SharedRingBuffer), 
-            PROT_READ | PROT_WRITE, MAP_SHARED, fd_c2s_, 0));
-
-        // Initialize as empty ring buffers
-        new (buffer_s2c_) SharedRingBuffer();
-        new (buffer_c2s_) SharedRingBuffer();
-        
-        buffer_s2c_->header.magic = SharedRingBufferHeader::MAGIC;
-        buffer_c2s_->header.magic = SharedRingBufferHeader::MAGIC;
-    } else {
-        // Client opens existing shared memory
-        fd_s2c_ = shm_open(SERVER_TO_CLIENT_NAME, O_RDWR, S_IRUSR | S_IWUSR);
-        fd_c2s_ = shm_open(CLIENT_TO_SERVER_NAME, O_RDWR, S_IRUSR | S_IWUSR);
-
-        if (fd_s2c_ == -1 || fd_c2s_ == -1) {
-            throw std::runtime_error("Failed to open shared memory");
-        }
-
-        buffer_s2c_ = static_cast<SharedRingBuffer*>(mmap(
-            nullptr, sizeof(SharedRingBuffer), 
-            PROT_READ | PROT_WRITE, MAP_SHARED, fd_s2c_, 0));
-        buffer_c2s_ = static_cast<SharedRingBuffer*>(mmap(
-            nullptr, sizeof(SharedRingBuffer), 
-            PROT_READ | PROT_WRITE, MAP_SHARED, fd_c2s_, 0));
-    }
-
-    // Create/open semaphores for signaling
-    sem_read_ = sem_open((event_name + "_r").c_str(), 
-        O_CREAT, S_IRUSR | S_IWUSR, 0);
-    sem_write_ = sem_open((event_name + "_w").c_str(), 
-        O_CREAT, S_IRUSR | S_IWUSR, 0);
-#endif
-
-    if (buffer_s2c_->header.magic != SharedRingBufferHeader::MAGIC ||
-        buffer_c2s_->header.magic != SharedRingBufferHeader::MAGIC) {
-        throw std::runtime_error("Invalid shared memory format");
-    }
-
-    // Start polling thread
-    poll_thread_ = std::make_unique<std::thread>([this]() {
-        while (running_) {
-#ifdef _WIN32
-            WaitForSingleObject(event_read_, 100); // 100ms timeout
-#else
-            struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_nsec += 100000000; // 100ms
-            sem_timedwait(sem_read_, &ts);
-#endif
-            if (!running_) break;
-
-            SharedRingBuffer* read_buf = 
-                is_server_ ? buffer_c2s_ : buffer_s2c_;
-
-            uint32_t size;
-            std::vector<char> data(SharedRingBufferHeader::BUFFER_SIZE);
-
-            while (read_buf->try_read(data.data(), size)) {
-                // Post received data to io_context
-                boost::asio::post(ioc_, [this, data = std::vector<char>(
-                    data.begin(), data.begin() + size)]() mutable {
-                    on_data_received(std::move(data));
-                });
+            if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+                std::cout << "Opened message queues: " << send_queue_name_ 
+                          << ", " << recv_queue_name_ << std::endl;
             }
         }
-    });
+
+        // Start polling thread for receiving messages
+        poll_thread_ = std::make_unique<std::thread>([this]() { poll_loop(); });
+
+    } catch (const bip::interprocess_exception& e) {
+        std::cerr << "Failed to create/open message queues: " << e.what() << std::endl;
+        cleanup_queues();
+        throw std::runtime_error(std::string("SharedMemoryChannel initialization failed: ") + e.what());
+    }
 }
 
-NPRPC_API SharedMemoryChannel::~SharedMemoryChannel() {
+SharedMemoryChannel::~SharedMemoryChannel() {
     running_ = false;
-    if (poll_thread_) {
+
+    if (poll_thread_ && poll_thread_->joinable()) {
         poll_thread_->join();
     }
 
-#ifdef _WIN32
-    if (buffer_s2c_) UnmapViewOfFile(buffer_s2c_);
-    if (buffer_c2s_) UnmapViewOfFile(buffer_c2s_);
-    if (mapping_s2c_) CloseHandle(mapping_s2c_);
-    if (mapping_c2s_) CloseHandle(mapping_c2s_);
-    if (event_read_) CloseHandle(event_read_);
-    if (event_write_) CloseHandle(event_write_);
-#else
-    if (buffer_s2c_) munmap(buffer_s2c_, sizeof(SharedRingBuffer));
-    if (buffer_c2s_) munmap(buffer_c2s_, sizeof(SharedRingBuffer));
-    if (fd_s2c_ != -1) {
-        close(fd_s2c_);
-        if (is_server_) shm_unlink(SERVER_TO_CLIENT_NAME);
-    }
-    if (fd_c2s_ != -1) {
-        close(fd_c2s_);
-        if (is_server_) shm_unlink(CLIENT_TO_SERVER_NAME);
-    }
-    if (sem_read_) {
-        sem_close(sem_read_);
-        if (is_server_) {
-            std::string name = std::string(EVENT_PREFIX) + "s" + 
-                std::to_string(getpid()) + "_r";
-            sem_unlink(name.c_str());
-        }
-    }
-    if (sem_write_) {
-        sem_close(sem_write_);
-        if (is_server_) {
-            std::string name = std::string(EVENT_PREFIX) + "s" + 
-                std::to_string(getpid()) + "_w";
-            sem_unlink(name.c_str());
-        }
-    }
-#endif
+    cleanup_queues();
 }
 
-NPRPC_API bool SharedMemoryChannel::send(const void* data, uint32_t size) {
-    SharedRingBuffer* write_buf = 
-        is_server_ ? buffer_s2c_ : buffer_c2s_;
-
-    if (!write_buf->try_write(data, size)) {
+bool SharedMemoryChannel::send(const void* data, uint32_t size) {
+    if (!send_queue_ || size > MAX_MESSAGE_SIZE) {
         return false;
     }
 
-#ifdef _WIN32
-    SetEvent(event_write_);
-#else
-    sem_post(sem_write_);
-#endif
-    return true;
+    try {
+        // Use timed_send with very short timeout to avoid blocking
+        // Priority 0 (normal priority)
+        auto timeout = boost::posix_time::microsec_clock::universal_time() + 
+                       boost::posix_time::milliseconds(100);
+        
+        bool sent = send_queue_->timed_send(data, size, 0, timeout);
+        
+        if (!sent && g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+            std::cerr << "SharedMemoryChannel: Queue full, message dropped" << std::endl;
+        }
+        
+        return sent;
+
+    } catch (const bip::interprocess_exception& e) {
+        std::cerr << "SharedMemoryChannel send error: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+void SharedMemoryChannel::poll_loop() {
+    unsigned int priority;
+    bip::message_queue::size_type recv_size;
+
+    while (running_) {
+        try {
+            // Use timed_receive to allow checking running_ flag
+            auto timeout = boost::posix_time::microsec_clock::universal_time() + 
+                           boost::posix_time::milliseconds(100);
+
+            if (recv_queue_->timed_receive(recv_buffer_.data(), recv_buffer_.size(), 
+                                          recv_size, priority, timeout)) {
+                // Validate message size (security check)
+                if (recv_size > max_message_size) {
+                    std::cerr << "SharedMemoryChannel: Rejected oversized message: " 
+                              << recv_size << " bytes (max: " << max_message_size << ")" << std::endl;
+                    continue;
+                }
+
+                // Message received, post to io_context
+                std::vector<char> data(recv_buffer_.begin(), recv_buffer_.begin() + recv_size);
+                
+                boost::asio::post(ioc_, [this, data = std::move(data)]() mutable {
+                    if (on_data_received) {
+                        on_data_received(std::move(data));
+                    }
+                });
+            }
+        } catch (const bip::interprocess_exception& e) {
+            if (running_) {
+                std::cerr << "SharedMemoryChannel receive error: " << e.what() << std::endl;
+            }
+            break;
+        }
+    }
+
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+        std::cout << "SharedMemoryChannel poll thread exiting" << std::endl;
+    }
+}
+
+void SharedMemoryChannel::cleanup_queues() {
+    send_queue_.reset();
+    recv_queue_.reset();
+
+    // Only the creator (server) should remove the queues
+    if (is_server_) {
+        try {
+            bip::message_queue::remove(send_queue_name_.c_str());
+            bip::message_queue::remove(recv_queue_name_.c_str());
+            
+            if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+                std::cout << "Cleaned up message queues: " << send_queue_name_ 
+                          << ", " << recv_queue_name_ << std::endl;
+            }
+        } catch (const bip::interprocess_exception& e) {
+            // Ignore cleanup errors
+        }
+    }
 }
 
 } // namespace nprpc::impl
