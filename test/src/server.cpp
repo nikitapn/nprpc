@@ -60,6 +60,10 @@ int main(int argc, char** argv) {
   TestLargeMessage test_large_message;
   nprpctest::make_stuff_happen<test::TestLargeMessage>(test_large_message, flags, "nprpc_test_large_message");
 
+  #include "common/tests/objects.inl"
+  TestObjectsImpl test_objects(nprpctest::poa);
+  nprpctest::make_stuff_happen<test::TestObjects>(test_objects, flags, "nprpc_test_objects");
+
   // Wait for shutdown signal from JavaScript client
   std::unique_lock<std::mutex> lk(cv_m);
   cv.wait(lk, [] { return shutdown_requested; });

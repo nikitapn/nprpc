@@ -19,6 +19,9 @@ const header_size = 16;
 const invalid_object_id = 0xFFFFFFFFFFFFFFFFn;
 const localhost_ip4 = 0x7F000001;
 
+type ObjectId = detail.ObjectId;
+export type { ObjectId };
+
 export let rpc: Rpc;
 let host_info: HostInfo = {secured: false, objects: {}};
 
@@ -420,7 +423,7 @@ export class Poa {
     return this.object_map_.get(oid);
   }
 
-  public activate_object(obj: ObjectServant): detail.ObjectId {
+  public activate_object(obj: ObjectServant): ObjectId {
     obj.poa_ = this;
     obj.activation_time_ = Date.now();
 
@@ -431,7 +434,7 @@ export class Poa {
     obj.object_id_ = object_id_internal;
     obj.ref_cnt_ = 0;
 
-    let oid: detail.ObjectId = {
+    let oid: ObjectId = {
       object_id: object_id_internal,
       poa_idx: this.index,
       flags: detail.ObjectFlag.Tethered,
@@ -460,7 +463,7 @@ export class Poa {
 }
 
 export class ObjectProxy {
-  public data: detail.ObjectId;
+  public data: ObjectId;
   /** @internal */
   local_ref_cnt_: number;
   /** @internal */
@@ -468,7 +471,7 @@ export class ObjectProxy {
   /** @internal */
   endpoint_: EndPoint;
 
-  constructor(data?: detail.ObjectId) {
+  constructor(data?: ObjectId) {
     if (!data) (this.data as any) = {}
     else this.data = data;
     this.timeout_ms_ = 1000;
@@ -667,7 +670,7 @@ export const narrow = <T extends ObjectProxy>(from: ObjectProxy, to: new () => T
  * @returns ObjectProxy or null if oid is invalid
  */
 export const create_object_from_oid = (
-  oid: detail.ObjectId,
+  oid: ObjectId,
   remote_endpoint: EndPoint): ObjectProxy =>
 {
   if (oid.object_id == invalid_object_id)

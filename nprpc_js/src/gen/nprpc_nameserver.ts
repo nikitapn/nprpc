@@ -9,7 +9,7 @@ export class Nameserver extends NPRPC.ObjectProxy {
   }
 
 
-  public async Bind(obj: /*in*/NPRPC.ObjectProxy, name: /*in*/string): Promise<void> {
+  public async Bind(obj: /*in*/NPRPC.ObjectId, name: /*in*/string): Promise<void> {
     let interface_idx = (arguments.length == 2 ? 0 : arguments[arguments.length - 1]);
     const buf = NPRPC.FlatBuffer.create();
     buf.prepare(216);
@@ -21,7 +21,7 @@ export class Nameserver extends NPRPC.ObjectProxy {
     buf.dv.setUint8(16 + 2, interface_idx);
     buf.dv.setUint8(16 + 3, 0);
     buf.dv.setBigUint64(16 + 8, this.data.object_id, true);
-    marshal_nprpc_nameserver_M1(buf, 32, {_1: obj.data, _2: name});
+    marshal_nprpc_nameserver_M1(buf, 32, {_1: obj, _2: name});
     buf.write_len(buf.size - 4);
     await NPRPC.rpc.call(this.endpoint, buf, this.timeout);
     let std_reply = NPRPC.handle_standart_reply(buf);
@@ -57,7 +57,7 @@ export class Nameserver extends NPRPC.ObjectProxy {
 export interface INameserver_Servant
 {
   Bind(obj: /*in*/NPRPC.ObjectProxy, name: /*in*/string): void;
-  Resolve(name: /*in*/string, obj: /*out*/NPRPC.ref<NPRPC.ObjectProxy>): boolean/*boolean*/;
+  Resolve(name: /*in*/string, obj: /*out*/NPRPC.ref<NPRPC.ObjectId>): boolean/*boolean*/;
 }
 export class _INameserver_Servant extends NPRPC.ObjectServant {
   public static _get_class(): string { return "nprpc_nameserver/nprpc.Nameserver"; }
@@ -71,12 +71,12 @@ export class _INameserver_Servant extends NPRPC.ObjectServant {
     switch(function_idx) {
       case 0: {
         const ia = unmarshal_nprpc_nameserver_M1(buf, 32);
-        (obj as any).Bind(ia._1, ia._2);
+        (obj as any).Bind(NPRPC.create_object_from_oid(ia._1, remote_endpoint), ia._2);
         NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);
         break;
       }
       case 1: {
-        let _out_2: NPRPC.ObjectProxy;
+        let _out_2: NPRPC.ObjectId;
         const ia = unmarshal_nprpc_nameserver_M2(buf, 32);
         const obuf = buf;
         obuf.consume(obuf.size);
@@ -84,7 +84,7 @@ export class _INameserver_Servant extends NPRPC.ObjectServant {
         obuf.commit(72);
         let __ret_val: boolean/*boolean*/;
         __ret_val = (obj as any).Resolve(ia._1,         _out_2);
-        const out_data = {_1: __ret_val, _2: _out_2.data};
+        const out_data = {_1: __ret_val, _2: _out_2};
         marshal_nprpc_nameserver_M3(obuf, 16, out_data);
         obuf.write_len(obuf.size - 4);
         obuf.write_msg_id(NPRPC.impl.MessageId.BlockResponse);
@@ -98,7 +98,7 @@ export class _INameserver_Servant extends NPRPC.ObjectServant {
 }
 
 export interface nprpc_nameserver_M1 {
-  _1: NPRPC.detail.ObjectId;
+  _1: NPRPC.ObjectId;
   _2: string;
 }
 
@@ -130,7 +130,7 @@ return result;
 
 export interface nprpc_nameserver_M3 {
   _1: boolean/*boolean*/;
-  _2: NPRPC.detail.ObjectId;
+  _2: NPRPC.ObjectId;
 }
 
 export function marshal_nprpc_nameserver_M3(buf: NPRPC.FlatBuffer, offset: number, data: nprpc_nameserver_M3): void {

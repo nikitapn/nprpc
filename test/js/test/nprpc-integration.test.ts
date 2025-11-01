@@ -18,6 +18,7 @@ describe('NPRPC Integration Tests', function() {
     
     const serverManager = new ServerManager();
     let rpc: NPRPC.Rpc;
+    let poa: NPRPC.Poa;
     let nameserver: NPRPC.Nameserver;
 
     before(async function() {
@@ -34,6 +35,7 @@ describe('NPRPC Integration Tests', function() {
         // Initialize RPC connection
         try {
             rpc = await NPRPC.init(false);
+            poa = rpc.create_poa(128);
             console.log('RPC initialized successfully');
         } catch (error) {
             serverManager.stopAll();
@@ -279,5 +281,36 @@ describe('NPRPC Integration Tests', function() {
                 throw error;
             }
         });
-    });
+    }); // describe TestNested
+
+    describe('TestObjects Interface', function() {
+        let testObjects: test.TestObjects;
+
+        before(async function() {
+            testObjects = await resolveTestObject('nprpc_test_objects', test.TestObjects);
+        });
+
+        it('should send and object proxy correctly', async function() {
+            class SimpleObjectImpl extends test._ISimpleObject_Servant implements test.ISimpleObject_Servant {
+                value: number = 0;
+
+                constructor() {
+                    super();
+                }
+
+                GetValue(): number {
+                    return this.value;
+                }
+
+                SetValue(a: number): void {
+                    this.value = a;
+                }
+            }
+
+            const simpleObjectProxy = new SimpleObjectImpl();
+            const oid = poa.activate_object(simpleObjectProxy);
+
+            testObjects.SendObject(oid);
+        });
+    }); // describe TestObjects
 });

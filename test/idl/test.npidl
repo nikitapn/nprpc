@@ -71,6 +71,14 @@ interface TestOptional {
 	Opt1 ReturnOpt1();
 }
 
+interface SimpleObject {
+	u32 GetValue();
+	void SetValue(a: in u32);
+}
+
+interface TestObjects {
+	void SendObject(o: in /* SimpleObject */ object);
+}
 
 [force_helpers=1]
 CCC : flat {

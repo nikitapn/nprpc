@@ -282,7 +282,7 @@ void TypescriptBuilder::emit_variable(AstTypeDecl* type, std::string name, std::
 		os << bl() << "let " << name << ": void;\n";
 		break;
 	case FieldType::Object:
-		os << bl() << "let " << name << ": NPRPC.detail.ObjectId = new NPRPC.detail.ObjectId();\n";
+		os << bl() << "let " << name << ": NPRPC.ObjectId = new NPRPC.ObjectId();\n";
 		break;
 	case FieldType::Alias:
 		emit_variable(calias(type)->get_real_type(), name, os);
@@ -334,10 +334,9 @@ void TypescriptBuilder::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, 
 		os << "void";
 		break;
 	case FieldType::Object:
-		// Both input and output use ObjectProxy in the proxy API
-		// Input: we extract .data to get ObjectId for marshalling
-		// Output: we convert ObjectId to ObjectProxy using create_object_from_oid
-		os << "NPRPC.ObjectProxy";
+		// Input: ObjectId (raw oid from poa.activate_object)
+		// Output: ObjectProxy (with endpoint selection)
+		os << (input ? "NPRPC.ObjectId" : "NPRPC.ObjectProxy");
 		break;
 	default:
 		assert(false);
@@ -350,6 +349,22 @@ void TypescriptBuilder::emit_parameter_type_for_proxy_call(AstFunctionArgument* 
 	const bool as_reference = arg->modifier == ArgumentModifier::Out;
 	if (as_reference) os << "NPRPC.ref<";
 	emit_parameter_type_for_proxy_call_r(arg->type, os, input);
+	if (as_reference) os << '>';
+}
+
+void TypescriptBuilder::emit_parameter_type_for_servant(AstFunctionArgument* arg, std::ostream& os) {
+	const bool input = (arg->modifier == ArgumentModifier::In);
+	os << (input ? "/*in*/" : "/*out*/");
+	const bool as_reference = arg->modifier == ArgumentModifier::Out;
+	if (as_reference) os << "NPRPC.ref<";
+	// For servant interface with objects:
+	// Input: ObjectProxy (server needs to call methods on received object)
+	// Output: ObjectId (server provides raw data)
+	if (arg->type->id == FieldType::Object) {
+		os << (input ? "NPRPC.ObjectProxy" : "NPRPC.ObjectId");
+	} else {
+		emit_parameter_type_for_proxy_call_r(arg->type, os, input);
+	}
 	if (as_reference) os << '>';
 }
 
@@ -551,7 +566,7 @@ void TypescriptBuilder::emit_struct2(AstStructDecl* s, bool is_exception) {
 			out << "  " << f->name << (f->is_optional() ? "?: " : ": ");
 			// For function argument structs with object types, use ObjectId instead of ObjectProxy
 			if (f->function_argument && f->type->id == FieldType::Object) {
-				out << "NPRPC.detail.ObjectId";
+				out << "NPRPC.ObjectId";
 			} else {
 				out << emit_type(f->type);
 			}
@@ -809,12 +824,8 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 					continue;
 				if (ix > 0) out << ", ";
 				out << "_" << (ix + 1) << ": ";
-				// For Object types, extract the ObjectId from ObjectProxy
-				if (in->type->id == FieldType::Object) {
-					out << in->name << ".data";
-				} else {
-					out << in->name;
-				}
+				// Input parameters are now ObjectId directly (no .data access needed)
+				out << in->name;
 				++ix;
 			}
 			out << "});\n";
@@ -888,7 +899,7 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 	for (auto fn : ifs->fns) {
 		out << bl() << fn->name;
 		emit_function_arguments(false, fn, out,
-			std::bind(&TypescriptBuilder::emit_parameter_type_for_proxy_call, this, _1, _2)
+			std::bind(&TypescriptBuilder::emit_parameter_type_for_servant, this, _1, _2)
 		);
 		out << ": " << emit_type(fn->ret_value) << ";\n";
 	}
@@ -956,7 +967,14 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 		if (fn->out_s) {
 			for (auto arg : fn->args) {
 				if (arg->modifier == ArgumentModifier::Out) {
-					out << bl() << "let _out_" << ++out_ix << ": " << emit_type(arg->type) << ";\n";
+					// For output parameters, use ObjectId instead of ObjectProxy for object types
+					out << bl() << "let _out_" << ++out_ix << ": ";
+					if (arg->type->id == FieldType::Object) {
+						out << "NPRPC.ObjectId";
+					} else {
+						out << emit_type(arg->type);
+					}
+					out << ";\n";
 				}
 			}
 		}
@@ -995,8 +1013,13 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 				// For output arguments, we'll create refs to pass
 				out << bl() << "_out_" << ++out_ix;
 			} else {
-				// For input arguments, just pass from the unmarshalled object
-				out << "ia._" << ++in_ix;
+				// For input arguments, convert ObjectId to ObjectProxy if needed
+				++in_ix;
+				if (arg->type->id == FieldType::Object) {
+					out << "NPRPC.create_object_from_oid(ia._" << in_ix << ", remote_endpoint)";
+				} else {
+					out << "ia._" << in_ix;
+				}
 			}
 			if (++idx != fn->args.size())
 				out << ", ";
@@ -1079,12 +1102,8 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 				if (ix > 0) out << ", ";
 				++ix;
 				out << "_" << ix << ": ";
-				// For Object types, extract the ObjectId from the ObjectProxy
-				if (out_arg->type->id == FieldType::Object) {
-					out << "_out_" << ix << ".data";
-				} else {
-					out << "_out_" << ix;
-				}
+				// Output variables are now declared as ObjectId directly, no .data needed
+				out << "_out_" << ix;
 			}
 			out << "};\n";
 			

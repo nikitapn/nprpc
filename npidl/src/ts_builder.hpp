@@ -22,6 +22,7 @@ private:
 
 	void emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, std::ostream& os, bool input);
 	void emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, std::ostream& os);
+	void emit_parameter_type_for_servant(AstFunctionArgument* arg, std::ostream& os);
 
 	void assign_from_ts_type(AstTypeDecl* type, std::string op1, std::string op2, bool from_iterator = false);
 	void assign_from_flat_type(AstTypeDecl* type, std::string op1, std::string op2, 
