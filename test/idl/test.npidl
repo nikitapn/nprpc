@@ -51,6 +51,10 @@ interface TestBasic {
 	void OutArrayOfStructs(a: out vector<SimpleStruct>) raises (AssertionFailed);
 
 	void InException() raises (SimpleException);
+	
+	// Test case for flat output struct with simple scalar out parameter and exception handler
+	// This tests the fix for variable scope when output params are declared before try block
+	void OutScalarWithException(dev_addr: in u8, addr: in u16, value: out u8) raises (SimpleException);
 }
 
 interface TestLargeMessage {

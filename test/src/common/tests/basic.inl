@@ -53,4 +53,13 @@ public:
     void InException () override {
       throw test::SimpleException{"This is a test exception", 123};
     }
+
+    void OutScalarWithException(uint8_t dev_addr, uint16_t addr, uint8_t& value) override {
+      // This tests the fix for flat output struct with exception handler
+      // The output parameter 'value' must be declared before the try block
+      // so it's in scope for both the function call and the assignment to output buffer
+      
+      // Simulate a simple read operation that succeeds
+      value = static_cast<uint8_t>(dev_addr + addr); // Simple calculation for testing
+    }
 };

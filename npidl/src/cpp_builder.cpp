@@ -1408,9 +1408,9 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 			oc << bd; emit_type(fn->ret_value, oc); oc << " __ret_val;\n";
 		}
 
-		if (fn->ex) oc << bd++ << "try {\n";
-
-		// Create auto variables for out direct parameters
+		// Create stack variables for output parameters BEFORE the try block
+		// For flat output structs: ALL out parameters need stack variables
+		// For non-flat output structs: only Vector/String/Struct need temporary variables (for _d() access)
 		size_t out_ix = fn->is_void() ? 0 : 1, out_temp_ix = 0;
 
 		auto passed_as_direct = [](AstFunctionArgument* arg) {
@@ -1418,18 +1418,30 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 				(arg->type->id == FieldType::Vector || arg->type->id == FieldType::String || arg->type->id == FieldType::Struct);
 		};
 
-		for (auto arg : fn->args) {
-			if (arg->modifier != ArgumentModifier::Out)
-				continue;
-
-			if (!passed_as_direct(arg)) {
+		if (fn->out_s && fn->out_s->flat) {
+			// For flat output structs, create stack variables for ALL output parameters
+			for (auto arg : fn->args) {
+				if (arg->modifier != ArgumentModifier::Out) continue;
 				++out_ix;
-				continue;
+				oc << bd; emit_type(arg->type, oc); oc << " _out_" << out_ix << ";\n";
 			}
+		} else if (fn->out_s) {
+			// For non-flat output structs, create temporary variables only for complex types
+			for (auto arg : fn->args) {
+				if (arg->modifier != ArgumentModifier::Out)
+					continue;
 
-			oc << bd << "auto oa_" << ++out_temp_ix << " = oa._" << ++out_ix <<
-				((arg->type->id == FieldType::Vector || arg->type->id == FieldType::String) ? "_d();\n" : "();\n");
+				if (!passed_as_direct(arg)) {
+					++out_ix;
+					continue;
+				}
+
+				oc << bd << "auto oa_" << ++out_temp_ix << " = oa._" << ++out_ix <<
+					((arg->type->id == FieldType::Vector || arg->type->id == FieldType::String) ? "_d();\n" : "();\n");
+			}
 		}
+
+		if (fn->ex) oc << bd++ << "try {\n";
 
 		oc << bd <<
 			(fn->is_void() ? "" : "__ret_val = ") << fn->name << "("
@@ -1441,9 +1453,14 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 		for (auto arg : fn->args) {
 			if (arg->modifier == ArgumentModifier::Out) {
 				assert(fn->out_s);
-				if (passed_as_direct(arg)) {
+				if (fn->out_s->flat) {
+					// For flat structs, pass stack variable reference
+					oc << "_out_" << ++out_ix;
+				} else if (passed_as_direct(arg)) {
+					// For non-flat structs with complex types, pass temporary variable
 					oc << "oa_" << ++out_temp_ix;
 				} else {
+					// For non-flat structs with simple types, pass direct reference
 					oc << "oa._" << ++out_ix << "()";
 				}
 			} else {

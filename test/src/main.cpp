@@ -81,6 +81,12 @@ TEST_F(NprpcTest, TestBasic) {
               EXPECT_EQ(ex.code, 123);
             }
 
+            // OutScalarWithException test - tests flat output struct with exception handler
+            // This verifies the fix where output parameters must be declared before try block
+            uint8_t read_value;
+            obj->OutScalarWithException(10, 20, read_value);
+            EXPECT_EQ(read_value, 30); // dev_addr + addr = 10 + 20 = 30
+
         } catch (nprpc::Exception& ex) {
             FAIL() << "Exception in TestBasic: " << ex.what();
         }

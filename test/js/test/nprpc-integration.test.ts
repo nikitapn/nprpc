@@ -168,6 +168,17 @@ describe('NPRPC Integration Tests', function() {
                 expect(simpleEx.code).to.equal(123);
             }
         });
+
+        it('should handle flat output struct with scalar out param and exception', async function() {
+            // This tests the fix for: output parameters in flat structs with exception handlers
+            // The C++ generator must declare output variables before the try block
+            const valueRef = NPRPC.make_ref<number>();
+            
+            await testBasic.OutScalarWithException(10, 20, valueRef);
+            
+            // Verify the output value (dev_addr + addr = 10 + 20 = 30)
+            expect(valueRef.value).to.equal(30);
+        });
     }); // describe TestBasic
 
     describe('TestOptional Interface', function() {
