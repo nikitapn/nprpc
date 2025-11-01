@@ -30,6 +30,11 @@ SimpleStruct : flat {
 	id: u32;
 }
 
+SimpleException : exception {
+	message: string;
+	code: u32;
+}
+
 interface TestBasic {
 	boolean ReturnBoolean();
 	IdArray ReturnIdArray();
@@ -40,6 +45,8 @@ interface TestBasic {
 
 	void OutStruct(a: out AAA);
 	void OutArrayOfStructs(a: out vector<SimpleStruct>);
+
+	void InException() raises (SimpleException);
 }
 
 interface TestLargeMessage {

@@ -9,75 +9,135 @@ export type oflags_t = number/*u16*/;
 export type uuid_t = Uint8Array;
 export type ifs_idx_t = number/*u8*/;
 export type fn_idx_t = number/*u8*/;
+export interface ExceptionCommFailure_Data {
+  __ex_id: number/*u32*/;
+  what: string;
+}
+
 export class ExceptionCommFailure extends NPRPC.Exception {
   constructor(  public what: string) { super("ExceptionCommFailure"); }
 }
 
+export function marshal_ExceptionCommFailure(buf: NPRPC.FlatBuffer, offset: number, data: ExceptionCommFailure_Data): void {
+buf.dv.setUint32(offset + 0, data.__ex_id, true);
+NPRPC.marshal_string(buf, offset + 4, data.what);
+}
 export function unmarshal_ExceptionCommFailure(buf: NPRPC.FlatBuffer, offset: number): ExceptionCommFailure {
 const result = {} as ExceptionCommFailure;
 result.what = NPRPC.unmarshal_string(buf, offset + 0);
 return result;
 }
 
+export interface ExceptionTimeout_Data {
+  __ex_id: number/*u32*/;
+}
+
 export class ExceptionTimeout extends NPRPC.Exception {
   constructor() { super("ExceptionTimeout"); }
 }
 
+export function marshal_ExceptionTimeout(buf: NPRPC.FlatBuffer, offset: number, data: ExceptionTimeout_Data): void {
+buf.dv.setUint32(offset + 0, data.__ex_id, true);
+}
 export function unmarshal_ExceptionTimeout(buf: NPRPC.FlatBuffer, offset: number): ExceptionTimeout {
 const result = {} as ExceptionTimeout;
 return result;
+}
+
+export interface ExceptionObjectNotExist_Data {
+  __ex_id: number/*u32*/;
 }
 
 export class ExceptionObjectNotExist extends NPRPC.Exception {
   constructor() { super("ExceptionObjectNotExist"); }
 }
 
+export function marshal_ExceptionObjectNotExist(buf: NPRPC.FlatBuffer, offset: number, data: ExceptionObjectNotExist_Data): void {
+buf.dv.setUint32(offset + 0, data.__ex_id, true);
+}
 export function unmarshal_ExceptionObjectNotExist(buf: NPRPC.FlatBuffer, offset: number): ExceptionObjectNotExist {
 const result = {} as ExceptionObjectNotExist;
 return result;
+}
+
+export interface ExceptionUnknownFunctionIndex_Data {
+  __ex_id: number/*u32*/;
 }
 
 export class ExceptionUnknownFunctionIndex extends NPRPC.Exception {
   constructor() { super("ExceptionUnknownFunctionIndex"); }
 }
 
+export function marshal_ExceptionUnknownFunctionIndex(buf: NPRPC.FlatBuffer, offset: number, data: ExceptionUnknownFunctionIndex_Data): void {
+buf.dv.setUint32(offset + 0, data.__ex_id, true);
+}
 export function unmarshal_ExceptionUnknownFunctionIndex(buf: NPRPC.FlatBuffer, offset: number): ExceptionUnknownFunctionIndex {
 const result = {} as ExceptionUnknownFunctionIndex;
 return result;
+}
+
+export interface ExceptionUnknownMessageId_Data {
+  __ex_id: number/*u32*/;
 }
 
 export class ExceptionUnknownMessageId extends NPRPC.Exception {
   constructor() { super("ExceptionUnknownMessageId"); }
 }
 
+export function marshal_ExceptionUnknownMessageId(buf: NPRPC.FlatBuffer, offset: number, data: ExceptionUnknownMessageId_Data): void {
+buf.dv.setUint32(offset + 0, data.__ex_id, true);
+}
 export function unmarshal_ExceptionUnknownMessageId(buf: NPRPC.FlatBuffer, offset: number): ExceptionUnknownMessageId {
 const result = {} as ExceptionUnknownMessageId;
 return result;
+}
+
+export interface ExceptionUnsecuredObject_Data {
+  __ex_id: number/*u32*/;
+  class_id: string;
 }
 
 export class ExceptionUnsecuredObject extends NPRPC.Exception {
   constructor(  public class_id: string) { super("ExceptionUnsecuredObject"); }
 }
 
+export function marshal_ExceptionUnsecuredObject(buf: NPRPC.FlatBuffer, offset: number, data: ExceptionUnsecuredObject_Data): void {
+buf.dv.setUint32(offset + 0, data.__ex_id, true);
+NPRPC.marshal_string(buf, offset + 4, data.class_id);
+}
 export function unmarshal_ExceptionUnsecuredObject(buf: NPRPC.FlatBuffer, offset: number): ExceptionUnsecuredObject {
 const result = {} as ExceptionUnsecuredObject;
 result.class_id = NPRPC.unmarshal_string(buf, offset + 0);
 return result;
 }
 
+export interface ExceptionBadAccess_Data {
+  __ex_id: number/*u32*/;
+}
+
 export class ExceptionBadAccess extends NPRPC.Exception {
   constructor() { super("ExceptionBadAccess"); }
 }
 
+export function marshal_ExceptionBadAccess(buf: NPRPC.FlatBuffer, offset: number, data: ExceptionBadAccess_Data): void {
+buf.dv.setUint32(offset + 0, data.__ex_id, true);
+}
 export function unmarshal_ExceptionBadAccess(buf: NPRPC.FlatBuffer, offset: number): ExceptionBadAccess {
 const result = {} as ExceptionBadAccess;
 return result;
+}
+
+export interface ExceptionBadInput_Data {
+  __ex_id: number/*u32*/;
 }
 
 export class ExceptionBadInput extends NPRPC.Exception {
   constructor() { super("ExceptionBadInput"); }
 }
 
+export function marshal_ExceptionBadInput(buf: NPRPC.FlatBuffer, offset: number, data: ExceptionBadInput_Data): void {
+buf.dv.setUint32(offset + 0, data.__ex_id, true);
+}
 export function unmarshal_ExceptionBadInput(buf: NPRPC.FlatBuffer, offset: number): ExceptionBadInput {
 const result = {} as ExceptionBadInput;
 return result;
@@ -229,7 +289,7 @@ function nprpc_base_throw_exception(buf: NPRPC.FlatBuffer): void {
   switch( buf.read_exception_number() ) {
     case 0:
     {
-      let ex_obj = unmarshal_ExceptionCommFailure(buf, 16);
+      let ex_obj = unmarshal_ExceptionCommFailure(buf, 16 + 4);
       throw new ExceptionCommFailure(ex_obj.what);
     }
     case 1:
@@ -250,7 +310,7 @@ function nprpc_base_throw_exception(buf: NPRPC.FlatBuffer): void {
     }
     case 5:
     {
-      let ex_obj = unmarshal_ExceptionUnsecuredObject(buf, 16);
+      let ex_obj = unmarshal_ExceptionUnsecuredObject(buf, 16 + 4);
       throw new ExceptionUnsecuredObject(ex_obj.class_id);
     }
     case 6:

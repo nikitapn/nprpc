@@ -49,4 +49,8 @@ public:
       test::IdArray arr {1,2,3,4,5,6,7,8,9,10};
       return arr;
     }
+
+    virtual void InException () {
+      throw test::SimpleException{"This is a test exception", 123};
+    }
 };

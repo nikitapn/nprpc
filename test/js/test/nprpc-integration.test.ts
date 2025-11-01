@@ -152,6 +152,20 @@ describe('NPRPC Integration Tests', function() {
                 expect(ref.value[i].id).to.equal(i + 1);
             }
         });
+
+        it('should throw SimpleException from InExeption method', async function() {
+            try {
+                console.log('Calling InException to trigger SimpleException...');
+                await testBasic.InException();
+                expect.fail('Expected InException to throw an exception');
+            } catch (error) {
+                console.log(`Caught SimpleException: ${JSON.stringify(error)}`);
+                expect(error).to.be.instanceOf(test.SimpleException);
+                const simpleEx = error as unknown as test.SimpleException;
+                expect(simpleEx.message).to.equal('This is a test exception');
+                expect(simpleEx.code).to.equal(123);
+            }
+        });
     }); // describe TestBasic
 
     describe('TestOptional Interface', function() {

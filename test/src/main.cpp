@@ -72,6 +72,15 @@ TEST_F(NprpcTest, TestBasic) {
               EXPECT_EQ(struct_array[i].id, i + 1);
             }
 
+            // InException test
+            try {
+              obj->InException();
+              FAIL() << "Expected InException to throw SimpleException";
+            } catch (const test::SimpleException& ex) {
+              EXPECT_EQ(std::string_view(ex.message), "This is a test exception"sv);
+              EXPECT_EQ(ex.code, 123);
+            }
+
         } catch (nprpc::Exception& ex) {
             FAIL() << "Exception in TestBasic: " << ex.what();
         }

@@ -558,6 +558,16 @@ void TypescriptBuilder::emit_struct2(AstStructDecl* s, bool is_exception) {
 			out << ";\n";
 		}
 	} else {
+		// For exceptions, generate both the exception class and a marshalling interface
+		// The interface includes __ex_id for marshalling purposes
+		out << "export interface " << s->name << "_Data {\n";
+		for (auto const f : s->fields) {
+			out << "  " << f->name << (f->is_optional() ? "?: " : ": ");
+			out << emit_type(f->type);
+			out << ";\n";
+		}
+		out << "}\n\n";
+		
 		out <<
 			bl() << "export class " << s->name << " extends NPRPC.Exception {\n" << bb(false) <<
 				bl() << "constructor(";
@@ -597,7 +607,10 @@ void TypescriptBuilder::emit_struct(AstStructDecl* s) {
 void TypescriptBuilder::emit_exception(AstStructDecl* s) {
 	assert(s->is_exception());
 	emit_struct2(s, true);
-	// Only generate unmarshal for exceptions - they're never marshalled, only thrown and unmarshalled
+	// Generate both marshal and unmarshal for exceptions
+	// Marshal is needed on server side when throwing exceptions
+	// Unmarshal is needed on client side when catching exceptions
+	emit_marshal_function(s);
 	emit_unmarshal_function(s);
 	out << '\n';
 }
@@ -620,7 +633,8 @@ void TypescriptBuilder::emit_file_footer() {
 				;
 			// Use unmarshal function instead of _Direct class
 			if (ex->fields.size() > 1) {
-				out << bl() << "let ex_obj = unmarshal_" << ex->name << "(buf, " << size_of_header << ");\n";
+				// Skip header (16 bytes) + __ex_id field (4 bytes)
+				out << bl() << "let ex_obj = unmarshal_" << ex->name << "(buf, " << size_of_header << " + 4);\n";
 				out << bl() << "throw new " << ns(ex->nm) << ex->name << "(";
 				for (size_t i = 1; i < ex->fields.size(); ++i) {
 					out << "ex_obj." << ex->fields[i]->name;
@@ -1506,7 +1520,10 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 void TypescriptBuilder::emit_marshal_function(AstStructDecl* s) {
 	calc_struct_size_align(s);
 	
-	out << bl() << "export function marshal_" << s->name << "(buf: NPRPC.FlatBuffer, offset: number, data: " << s->name << "): void {\n";
+	// For exceptions, use the _Data interface that includes __ex_id
+	std::string data_type = s->is_exception() ? (s->name + "_Data") : s->name;
+	
+	out << bl() << "export function marshal_" << s->name << "(buf: NPRPC.FlatBuffer, offset: number, data: " << data_type << "): void {\n";
 	bb();
 	
 	int current_offset = 0;
