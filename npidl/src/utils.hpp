@@ -12,6 +12,7 @@ void calc_struct_size_align(AstStructDecl* s);
 std::tuple<int, int> get_type_size_align(AstTypeDecl* type);
 bool is_flat(AstTypeDecl* type);
 bool is_fundamental(AstTypeDecl* type);
+bool contains_object(AstTypeDecl* type);
 
 constexpr uint32_t size_of_header       = 16;
 constexpr uint32_t size_of_call_header  = 16;

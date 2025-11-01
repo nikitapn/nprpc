@@ -290,23 +290,18 @@ describe('NPRPC Integration Tests', function() {
             testObjects = await resolveTestObject('nprpc_test_objects', test.TestObjects);
         });
 
-        it('should send object proxy correctly', async function() {
-            this.timeout(60000); // Increase timeout for this test
-            class SimpleObjectImpl extends test._ISimpleObject_Servant implements test.ISimpleObject_Servant {
-                value: number = 0;
-
-                constructor() {
-                    super();
-                }
-
-                GetValue(): number {
-                    return this.value;
-                }
-
-                SetValue(a: number): void {
-                    this.value = a;
-                }
+        class SimpleObjectImpl extends test._ISimpleObject_Servant implements test.ISimpleObject_Servant {
+            value: number = 0;
+            constructor() {
+                super();
             }
+            SetValue(a: number): void {
+                this.value = a;
+            }
+        }
+
+        it('should send object proxy correctly', async function() {
+            
 
             const simpleObjectProxy = new SimpleObjectImpl();
             const oid = poa.activate_object(simpleObjectProxy);
@@ -318,5 +313,23 @@ describe('NPRPC Integration Tests', function() {
             await testObjects.ReleaseReceivedObject();
             expect(simpleObjectProxy.value).to.equal(42); // Server confirms it has the object
         });
+
+        it('should send nested object proxies correctly', async function() {
+            const simpleObject1 = new SimpleObjectImpl();
+            const simpleObject2 = new SimpleObjectImpl();
+
+            const oid1 = poa.activate_object(simpleObject1);
+            const oid2 = poa.activate_object(simpleObject2);
+
+            // Create NestedObjects structure
+            const nestedObjects: test.NestedObjects = {
+                object1: new NPRPC.ObjectProxy(oid1),
+                object2: new NPRPC.ObjectProxy(oid2)
+            };
+
+            // Send the nested objects to the server
+            await testObjects.SendNestedObjects(nestedObjects);
+        });
+
     }); // describe TestObjects
 });

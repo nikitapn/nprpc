@@ -861,7 +861,24 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 				;
 
 			// Use new unmarshal function instead of _Direct wrapper
-			out << bl() << "const out = unmarshal_" << fn->out_s->name << "(buf, " << size_of_header << ");\n";
+			// Check if output struct needs remote_endpoint (has nested user structs with objects)
+			bool out_needs_endpoint = false;
+			for (auto f : fn->out_s->fields) {
+				if (f->type->id == FieldType::Struct) {
+					auto nested = cflat(f->type);
+					if (nested->fields.empty() || !nested->fields[0]->function_argument) {
+						if (contains_object(f->type)) {
+							out_needs_endpoint = true;
+							break;
+						}
+					}
+				}
+			}
+			if (out_needs_endpoint) {
+				out << bl() << "const out = unmarshal_" << fn->out_s->name << "(buf, " << size_of_header << ", this.endpoint);\n";
+			} else {
+				out << bl() << "const out = unmarshal_" << fn->out_s->name << "(buf, " << size_of_header << ");\n";
+			}
 
 			int ix = fn->is_void() ? 0 : 1;
 
@@ -980,9 +997,24 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 		}
 
 		if (fn->in_s) {
-			out <<
-				bl() << "const ia = unmarshal_" << fn->in_s->name << "(buf, " << get_arguments_offset() << ");\n"
-				;
+			// Check if input struct needs remote_endpoint (has nested user structs with objects)
+			bool in_needs_endpoint = false;
+			for (auto f : fn->in_s->fields) {
+				if (f->type->id == FieldType::Struct) {
+					auto nested = cflat(f->type);
+					if (nested->fields.empty() || !nested->fields[0]->function_argument) {
+						if (contains_object(f->type)) {
+							in_needs_endpoint = true;
+							break;
+						}
+					}
+				}
+			}
+			if (in_needs_endpoint) {
+				out << bl() << "const ia = unmarshal_" << fn->in_s->name << "(buf, " << get_arguments_offset() << ", remote_endpoint);\n";
+			} else {
+				out << bl() << "const ia = unmarshal_" << fn->in_s->name << "(buf, " << get_arguments_offset() << ");\n";
+			}
 		}
 
 		if (fn->out_s && !fn->out_s->flat) {
@@ -1144,7 +1176,7 @@ void TypescriptBuilder::emit_heap_views() {
 	// HeapViews is now part of FlatBuffer, no need to generate it here
 }
 
-void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::string& data_name) {
+void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::string& data_name, bool is_generated_arg_struct) {
 	const std::string field_access = data_name + "." + f->name;
 	
 	switch (f->type->id) {
@@ -1211,7 +1243,15 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 	}
 	case FieldType::Object: {
 		const int field_offset = align_offset(align_of_object, offset, size_of_object);
-		out << bl() << "NPRPC.detail.marshal_ObjectId(buf, offset + " << field_offset << ", " << field_access << ");\n";
+		// For user-defined structs, the field is ObjectProxy and we need to extract .data
+		// For generated M structs, the field is already ObjectId
+		if (is_generated_arg_struct) {
+			// Generated struct: field is ObjectId
+			out << bl() << "NPRPC.detail.marshal_ObjectId(buf, offset + " << field_offset << ", " << field_access << ");\n";
+		} else {
+			// User-defined struct: field is ObjectProxy, extract .data
+			out << bl() << "NPRPC.detail.marshal_ObjectId(buf, offset + " << field_offset << ", " << field_access << ".data);\n";
+		}
 		break;
 	}
 	case FieldType::Array: {
@@ -1336,7 +1376,7 @@ void TypescriptBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const s
 	}
 }
 
-void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std::string& result_name) {
+void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std::string& result_name, bool has_endpoint) {
 	const std::string field_name = result_name + "." + f->name;
 	
 	switch (f->type->id) {
@@ -1398,12 +1438,26 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 	case FieldType::Struct: {
 		auto s = cflat(f->type);
 		const int field_offset = align_offset(s->align, offset, s->size);
-		out << bl() << field_name << " = unmarshal_" << s->name << "(buf, offset + " << field_offset << ");\n";
+		// Pass remote_endpoint if the nested struct contains objects
+		if (has_endpoint && contains_object(f->type)) {
+			out << bl() << field_name << " = unmarshal_" << s->name 
+			    << "(buf, offset + " << field_offset << ", remote_endpoint);\n";
+		} else {
+			out << bl() << field_name << " = unmarshal_" << s->name 
+			    << "(buf, offset + " << field_offset << ");\n";
+		}
 		break;
 	}
 	case FieldType::Object: {
 		const int field_offset = align_offset(align_of_object, offset, size_of_object);
-		out << bl() << field_name << " = NPRPC.detail.unmarshal_ObjectId(buf, offset + " << field_offset << ");\n";
+		if (has_endpoint) {
+			// Convert ObjectId to ObjectProxy using remote_endpoint
+			out << bl() << field_name << " = NPRPC.create_object_from_oid("
+			    << "NPRPC.detail.unmarshal_ObjectId(buf, offset + " << field_offset << "), remote_endpoint);\n";
+		} else {
+			// Just unmarshal as ObjectId
+			out << bl() << field_name << " = NPRPC.detail.unmarshal_ObjectId(buf, offset + " << field_offset << ");\n";
+		}
 		break;
 	}
 	case FieldType::Array: {
@@ -1424,8 +1478,13 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 			// For fixed-size arrays of structs, unmarshal each element
 			out << bl() << field_name << " = new Array(" << arr->length << ");\n";
 			out << bl() << "for (let i = 0; i < " << arr->length << "; ++i) {\n" << bb(false);
-			out << bl() << field_name << "[i] = unmarshal_" << cflat(wt)->name 
-			    << "(buf, offset + " << field_offset << " + i * " << ut_size << ");\n";
+			if (has_endpoint && contains_object(wt)) {
+				out << bl() << field_name << "[i] = unmarshal_" << cflat(wt)->name 
+				    << "(buf, offset + " << field_offset << " + i * " << ut_size << ", remote_endpoint);\n";
+			} else {
+				out << bl() << field_name << "[i] = unmarshal_" << cflat(wt)->name 
+				    << "(buf, offset + " << field_offset << " + i * " << ut_size << ");\n";
+			}
 			out << eb();
 		} else {
 			assert(false && "Unsupported array element type for unmarshalling");
@@ -1528,7 +1587,7 @@ void TypescriptBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const
 		// For other aliases (including array aliases), just resolve and unmarshal
 		auto temp_field = *f;
 		temp_field.type = real_type;
-		emit_field_unmarshal(&temp_field, offset, result_name);
+		emit_field_unmarshal(&temp_field, offset, result_name, has_endpoint);
 		return;
 	}
 	default:
@@ -1542,19 +1601,71 @@ void TypescriptBuilder::emit_marshal_function(AstStructDecl* s) {
 	// For exceptions, use the _Data interface that includes __ex_id
 	std::string data_type = s->is_exception() ? (s->name + "_Data") : s->name;
 	
+	// Check if this is a generated argument struct (has function_argument fields)
+	bool is_generated_arg_struct = false;
+	if (!s->fields.empty() && s->fields[0]->function_argument) {
+		is_generated_arg_struct = true;
+	}
+	
 	out << bl() << "export function marshal_" << s->name << "(buf: NPRPC.FlatBuffer, offset: number, data: " << data_type << "): void {\n";
 	bb();
 	
 	int current_offset = 0;
 	for (auto field : s->fields) {
-		emit_field_marshal(field, current_offset, "data");
+		emit_field_marshal(field, current_offset, "data", is_generated_arg_struct);
 	}
 	
 	out << eb();
 }
 
 void TypescriptBuilder::emit_unmarshal_function(AstStructDecl* s) {
-	out << bl() << "export function unmarshal_" << s->name << "(buf: NPRPC.FlatBuffer, offset: number): " << s->name << " {\n";
+	// Check if this struct needs remote_endpoint parameter
+	// Cases that need it:
+	// 1. User-defined structs with direct object fields (convert ObjectId to ObjectProxy)
+	// 2. Generated argument structs with nested user-defined structs that have objects
+	//    (need to pass remote_endpoint through to nested unmarshal calls)
+	bool has_objects = false;
+	bool is_generated_arg_struct = false;
+	
+	// Check if this is a generated argument struct (has function_argument fields)
+	if (!s->fields.empty() && s->fields[0]->function_argument) {
+		is_generated_arg_struct = true;
+	}
+	
+	// Check if we need remote_endpoint
+	if (is_generated_arg_struct) {
+		// For generated structs, only need remote_endpoint if we have nested user-defined structs with objects
+		for (auto f : s->fields) {
+			if (f->type->id == FieldType::Struct) {
+				auto nested_struct = cflat(f->type);
+				// Check if nested struct is user-defined (not generated) and contains objects
+				if (nested_struct->fields.empty() || !nested_struct->fields[0]->function_argument) {
+					// It's a user-defined struct, check if it contains objects
+					if (contains_object(f->type)) {
+						has_objects = true;
+						break;
+					}
+				}
+			}
+		}
+	} else {
+		// For user-defined structs, need remote_endpoint if we have direct object fields
+		for (auto f : s->fields) {
+			if (contains_object(f->type)) {
+				has_objects = true;
+				break;
+			}
+		}
+	}
+	
+	// Add remote_endpoint parameter if struct contains objects (and is not a generated arg struct)
+	if (has_objects) {
+		out << bl() << "export function unmarshal_" << s->name 
+		    << "(buf: NPRPC.FlatBuffer, offset: number, remote_endpoint: NPRPC.EndPoint): " << s->name << " {\n";
+	} else {
+		out << bl() << "export function unmarshal_" << s->name 
+		    << "(buf: NPRPC.FlatBuffer, offset: number): " << s->name << " {\n";
+	}
 	bb();
 	
 	out << bl() << "const result = {} as " << s->name << ";\n";
@@ -1563,7 +1674,7 @@ void TypescriptBuilder::emit_unmarshal_function(AstStructDecl* s) {
 	// For exceptions, skip field 0 (__ex_id) as it's implicit and not part of the class
 	size_t start_index = s->is_exception() ? 1 : 0;
 	for (size_t i = start_index; i < s->fields.size(); ++i) {
-		emit_field_unmarshal(s->fields[i], current_offset, "result");
+		emit_field_unmarshal(s->fields[i], current_offset, "result", has_objects);
 	}
 	
 	out << bl() << "return result;\n" << eb();

@@ -215,6 +215,29 @@ bool is_fundamental(AstTypeDecl* type) {
 	}
 }
 
+bool contains_object(AstTypeDecl* type) {
+	switch (type->id) {
+	case FieldType::Object:
+		return true;
+	case FieldType::Struct: {
+		auto s = cflat(type);
+		for (auto f : s->fields) {
+			if (contains_object(f->type)) return true;
+		}
+		return false;
+	}
+	case FieldType::Array:
+	case FieldType::Vector:
+		return contains_object(cwt(type)->type);
+	case FieldType::Optional:
+		return contains_object(cwt(type)->real_type());
+	case FieldType::Alias:
+		return contains_object(calias(type)->type);
+	default:
+		return false;
+	}
+}
+
 void dfs_interface(
 	std::function<void(AstInterfaceDecl*)> fn, 
 	AstInterfaceDecl* start

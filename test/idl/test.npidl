@@ -79,9 +79,16 @@ interface SimpleObject {
 	async SetValue(a: in u32);
 }
 
+NestedObjects : flat {
+	object1: /* SimpleObject */ object;
+	object2: /* SimpleObject */ object;
+}
+
 interface TestObjects {
 	void SendObject(o: in /* SimpleObject */ object) raises (AssertionFailed);
 	void ReleaseReceivedObject() raises (AssertionFailed);
+
+	void SendNestedObjects(o: in NestedObjects) raises (AssertionFailed);
 }
 
 [force_helpers=1]
