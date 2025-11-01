@@ -1379,16 +1379,6 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 	for (auto fn : ifs->fns) {
 		oc << "    case " << fn->idx << ": {\n";
 
-		int out_ix = fn->is_void() ? 0 : 1;
-
-		if (fn->out_s && fn->out_s->flat) {
-			for (auto arg : fn->args) {
-				if (arg->modifier == ArgumentModifier::Out) {
-					oc << "      "; emit_type(arg->type, oc); oc << " _out_" << ++out_ix << ";\n";
-				}
-			}
-		}
-
 		if (fn->in_s) {
 			oc <<
 				"      " << fn->in_s->name << "_Direct ia(bufs(), " << get_arguments_offset() << ");\n"
@@ -1419,24 +1409,42 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 		}
 
 		if (fn->ex) oc << bd++ << "try {\n";
-		
+
+		// Create auto variables for out direct parameters
+		size_t out_ix = fn->is_void() ? 0 : 1, out_temp_ix = 0;
+
+		auto passed_as_direct = [](AstFunctionArgument* arg) {
+			return arg->modifier == ArgumentModifier::Out &&
+				(arg->type->id == FieldType::Vector || arg->type->id == FieldType::String || arg->type->id == FieldType::Struct);
+		};
+
+		for (auto arg : fn->args) {
+			if (arg->modifier != ArgumentModifier::Out)
+				continue;
+
+			if (!passed_as_direct(arg)) {
+				++out_ix;
+				continue;
+			}
+
+			oc << bd << "auto oa_" << ++out_temp_ix << " = oa._" << ++out_ix <<
+				((arg->type->id == FieldType::Vector || arg->type->id == FieldType::String) ? "_d();\n" : "();\n");
+		}
+
 		oc << bd <<
 			(fn->is_void() ? "" : "__ret_val = ") << fn->name << "("
 			;
 
-		size_t in_ix = 0, idx = 0; out_ix = fn->is_void() ? 0 : 1;
+		size_t in_ix = 0, idx = 0;
+		out_ix = fn->is_void() ? 0 : 1;
+		out_temp_ix = 0;
 		for (auto arg : fn->args) {
 			if (arg->modifier == ArgumentModifier::Out) {
 				assert(fn->out_s);
-				if (!fn->out_s->flat) {
-					oc << "oa._" << ++out_ix;
-					if (arg->type->id == FieldType::Vector || arg->type->id == FieldType::String) {
-						oc << "_d()";
-					} else {
-						oc << "()";
-					}
+				if (passed_as_direct(arg)) {
+					oc << "oa_" << ++out_temp_ix;
 				} else {
-					oc << "_out_" << ++out_ix;
+					oc << "oa._" << ++out_ix << "()";
 				}
 			} else {
 				if (arg->type->id == FieldType::Object) {

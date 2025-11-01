@@ -30,6 +30,21 @@ public:
         std::iota(std::begin(span), std::end(span), 0);
     }
 
+    virtual void OutStruct (test::flat::AAA_Direct& a) {
+        a.a() = 12345;
+        a.b("Hello from OutStruct");
+        a.c("Another string");
+    }
+
+    virtual void OutArrayOfStructs (::nprpc::flat::Vector_Direct2<test::flat::SimpleStruct, test::flat::SimpleStruct_Direct> a) {
+      a.length(10);
+      auto span = a();
+      int i = 1;
+      for (auto s : span) {
+        s.id() = i++;
+      }
+    }
+
     virtual test::IdArray ReturnIdArray () {
       test::IdArray arr {1,2,3,4,5,6,7,8,9,10};
       return arr;

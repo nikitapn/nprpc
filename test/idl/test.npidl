@@ -25,6 +25,11 @@ AAA: flat {
 	c: string;
 }
 
+[force_helpers=1]
+SimpleStruct : flat {
+	id: u32;
+}
+
 interface TestBasic {
 	boolean ReturnBoolean();
 	IdArray ReturnIdArray();
@@ -32,6 +37,9 @@ interface TestBasic {
 
 	boolean In(a: in u32, b: in boolean, c: in vector<u8>);
 	void Out(a: out u32, b: out boolean, c: out vector<u8>);
+
+	void OutStruct(a: out AAA);
+	void OutArrayOfStructs(a: out vector<SimpleStruct>);
 }
 
 interface TestLargeMessage {

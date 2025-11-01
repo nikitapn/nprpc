@@ -8,7 +8,6 @@
 #include <filesystem>
 #include "builder.hpp"
 
-
 class TypescriptBuilder : public Builder {
 public:
 struct _ns {
@@ -24,16 +23,11 @@ private:
 	void emit_parameter_type_for_proxy_call_r(AstTypeDecl* type, std::ostream& os, bool input);
 	void emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, std::ostream& os);
 
-	void emit_parameter_type_for_servant_callback_r(AstTypeDecl* type, std::ostream& os, const bool input);
-	void emit_parameter_type_for_servant_callback(AstFunctionArgument* arg, std::ostream& os);
-
 	void assign_from_ts_type(AstTypeDecl* type, std::string op1, std::string op2, bool from_iterator = false);
 	void assign_from_flat_type(AstTypeDecl* type, std::string op1, std::string op2, 
 		bool from_iterator = false, bool top_object = true, bool direct = false);
 
-	void emit_accessors(const std::string& flat_name, AstFieldDecl* f, int& last_field_ended);
 	void emit_type(AstTypeDecl* type, std::ostream& os);
-	void emit_flat_type(AstTypeDecl* type, std::ostream& os);
 	void emit_struct2(AstStructDecl* s, bool is_exception);
 	void emit_struct_helpers();
 	void emit_variable(AstTypeDecl* type, std::string name, std::ostream& os);
@@ -51,17 +45,11 @@ private:
 		return OstreamWrapper{[type, this](std::ostream& os) { this->emit_type(type, os); }};
 	}
 
-	auto emit_flat_type(AstTypeDecl* type) {
-		return OstreamWrapper{[type, this](std::ostream& os) { this->emit_flat_type(type, os); }};
-	}
-
-
 	std::string get_helper_function_name(AstStructDecl* s, bool from_flat) const {
 		std::stringstream ss;
 		ss << "helpers." << (from_flat ? "assign_from_flat_" : "assign_from_ts_") + s->name;
 		return ss.str();
 	}
-
 
 public:
 	virtual void emit_constant(const std::string& name, AstNumber* number);

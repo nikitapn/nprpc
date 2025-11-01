@@ -133,7 +133,26 @@ describe('NPRPC Integration Tests', function() {
             expect(result).to.be.an('array').that.has.lengthOf(10);
             expect(result).to.be.an('array').that.deep.equals([1,2,3,4,5,6,7,8,9,10]);
         });
-    });
+
+        it('should return struct in output parameter', async function() {
+            const aaaRef = NPRPC.make_ref<test.AAA>();
+            await testBasic.OutStruct(aaaRef);
+            expect(aaaRef.value).to.not.be.undefined;
+            expect(aaaRef.value.a).to.equal(12345);
+            expect(aaaRef.value.b).to.equal('Hello from OutStruct');
+            expect(aaaRef.value.c).to.equal('Another string');
+        });
+
+        it('should return array of structs', async function() {
+            const ref = NPRPC.make_ref<test.SimpleStruct[]>();
+            await testBasic.OutArrayOfStructs(ref);
+            expect(ref.value).to.not.be.undefined;
+            expect(ref.value).to.be.an('array').that.has.lengthOf(10);
+            for (let i = 0; i < 10; i++) {
+                expect(ref.value[i].id).to.equal(i + 1);
+            }
+        });
+    }); // describe TestBasic
 
     describe('TestOptional Interface', function() {
         let testOptional: test.TestOptional;

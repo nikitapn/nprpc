@@ -31,8 +31,10 @@ TEST_F(NprpcTest, TestBasic) {
         try {
             auto obj = make_stuff_happen<test::TestBasic>(servant, flags);
 
+            // ReturnBoolean test
             EXPECT_TRUE(obj->ReturnBoolean());
 
+            // In/Out test
             std::vector<uint8_t> ints;
             ints.reserve(256);
             boost::push_back(ints, boost::irange(0, 255));
@@ -54,6 +56,22 @@ TEST_F(NprpcTest, TestBasic) {
 
             // ReturnU32 test
             EXPECT_EQ(obj->ReturnU32(), 42u);
+
+            // OutStruct test
+            test::AAA aaa;
+            obj->OutStruct(aaa);
+            EXPECT_EQ(aaa.a, 12345);
+            EXPECT_EQ(std::string_view(aaa.b), "Hello from OutStruct"sv);
+            EXPECT_EQ(std::string_view(aaa.c), "Another string"sv);
+
+            // OutArrayOfStructs test
+            std::vector<test::SimpleStruct> struct_array;
+            obj->OutArrayOfStructs(struct_array);
+            EXPECT_EQ(struct_array.size(), 10u);
+            for (uint32_t i = 0; i < 10; ++i) {
+              EXPECT_EQ(struct_array[i].id, i + 1);
+            }
+
         } catch (nprpc::Exception& ex) {
             FAIL() << "Exception in TestBasic: " << ex.what();
         }
