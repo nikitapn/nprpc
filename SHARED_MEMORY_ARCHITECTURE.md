@@ -88,15 +88,15 @@ if (object_id.origin == local_origin) {
 ```
 Client                          Server (Listener)
   |                                    |
-  |-- Handshake(channel_uuid) ------->| (via accept queue)
+  |-- Handshake(channel_uuid) -------> | (via accept queue)
   |                                    |
   |                                    |-- Creates dedicated channel
   |                                    |   - <uuid>_s2c queue
   |                                    |   - <uuid>_c2s queue
   |                                    |
-  |<--- Handshake(channel_uuid) ------| (via dedicated channel)
+  |<--- Handshake(channel_uuid) ------ | (via dedicated channel)
   |                                    |
-  |=== RPC on dedicated channel ======|
+  |=== RPC on dedicated channel ====== |
 ```
 
 ### Key Points

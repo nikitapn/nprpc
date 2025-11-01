@@ -12,6 +12,8 @@ using namespace nprpc::impl;
 // Simple echo test: client sends message, server echoes it back
 TEST(SharedMemoryListener, AcceptAndCommunicate) {
     boost::asio::io_context ioc;
+    auto work_guard = boost::asio::make_work_guard(ioc);  // Keep io_context alive
+    
     std::atomic<bool> server_received{false};
     std::atomic<bool> client_received{false};
     
@@ -41,6 +43,13 @@ TEST(SharedMemoryListener, AcceptAndCommunicate) {
     // Give listener time to start
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
+    // Run io_context in separate thread BEFORE connecting
+    // This ensures handlers can be called immediately when data arrives
+    std::thread io_thread([&]() { ioc.run(); });
+    
+    // Give io_context time to start
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
     // Client side: connect to listener
     auto client_channel = connect_to_shared_memory_listener(ioc, listener_name);
     
@@ -53,9 +62,6 @@ TEST(SharedMemoryListener, AcceptAndCommunicate) {
 
     // Send message from client
     ASSERT_TRUE(client_channel->send(test_message.data(), test_message.size()));
-
-    // Run io_context in separate thread
-    std::thread io_thread([&]() { ioc.run(); });
 
     // Wait for communication to complete (with timeout)
     auto start = std::chrono::steady_clock::now();
@@ -83,6 +89,8 @@ TEST(SharedMemoryListener, AcceptAndCommunicate) {
 // Test multiple concurrent connections
 TEST(SharedMemoryListener, MultipleConnections) {
     boost::asio::io_context ioc;
+    auto work_guard = boost::asio::make_work_guard(ioc);  // Keep io_context alive
+    
     std::string listener_name = "test_multi_" + std::to_string(std::time(nullptr));
     
     std::atomic<int> connections_accepted{0};

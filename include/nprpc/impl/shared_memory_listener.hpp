@@ -1,7 +1,7 @@
 #pragma once
 
+#include <nprpc/impl/lock_free_ring_buffer.hpp>
 #include <boost/asio.hpp>
-#include <boost/interprocess/ipc/message_queue.hpp>
 #include <string>
 #include <functional>
 #include <thread>
@@ -61,7 +61,7 @@ private:
     std::string listener_name_;
     boost::asio::io_context& ioc_;
     
-    std::unique_ptr<boost::interprocess::message_queue> accept_queue_;
+    std::unique_ptr<LockFreeRingBuffer> accept_ring_;
     std::unique_ptr<std::thread> accept_thread_;
     std::atomic<bool> running_{false};
     

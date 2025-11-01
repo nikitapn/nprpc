@@ -34,6 +34,7 @@ add_library(nprpc SHARED
   src/framework.h
   src/nprpc.cpp
   src/rpc_impl.cpp
+  src/lock_free_ring_buffer.cpp
   src/shared_memory_channel.cpp
   src/shared_memory_connection.cpp
   src/shared_memory_listener.cpp

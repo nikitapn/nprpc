@@ -4,8 +4,6 @@
 #include <nprpc/common.hpp>
 #include <iostream>
 
-namespace bip = boost::interprocess;
-
 namespace nprpc::impl {
 
 SharedMemoryListener::SharedMemoryListener(
@@ -24,22 +22,23 @@ SharedMemoryListener::SharedMemoryListener(
         throw std::invalid_argument("Accept handler cannot be null");
     }
 
-    // Create well-known accept queue
-    // Remove any existing queue from crashed server
-    bip::message_queue::remove(listener_name_.c_str());
+    // Create well-known accept ring buffer
+    // Remove any existing ring from crashed server
+    std::string accept_ring_name = make_shm_name(listener_name_, "accept");
+    LockFreeRingBuffer::remove(accept_ring_name);
 
     try {
-        accept_queue_ = std::make_unique<bip::message_queue>(
-            bip::create_only,
-            listener_name_.c_str(),
-            10,  // Max 10 pending connections
-            sizeof(SharedMemoryHandshake));
+        // Small ring buffer for handshakes (10 slots, each can hold a handshake)
+        accept_ring_ = LockFreeRingBuffer::create(
+            accept_ring_name,
+            10,  // 10 pending connections
+            1024);  // 1KB per slot (enough for handshake)
 
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "SharedMemoryListener created: " << listener_name_ << std::endl;
         }
-    } catch (const bip::interprocess_exception& e) {
-        std::cerr << "Failed to create listener queue: " << e.what() << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to create listener ring: " << e.what() << std::endl;
         throw std::runtime_error(std::string("SharedMemoryListener creation failed: ") + e.what());
     }
 }
@@ -47,16 +46,17 @@ SharedMemoryListener::SharedMemoryListener(
 SharedMemoryListener::~SharedMemoryListener() {
     stop();
 
-    // Clean up accept queue
-    accept_queue_.reset();
+    // Clean up accept ring
+    accept_ring_.reset();
     
     try {
-        bip::message_queue::remove(listener_name_.c_str());
+        std::string accept_ring_name = make_shm_name(listener_name_, "accept");
+        LockFreeRingBuffer::remove(accept_ring_name);
         
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "SharedMemoryListener cleaned up: " << listener_name_ << std::endl;
         }
-    } catch (const bip::interprocess_exception& e) {
+    } catch (const std::exception& e) {
         // Ignore cleanup errors
     }
 }
@@ -91,24 +91,27 @@ void SharedMemoryListener::stop() {
 }
 
 void SharedMemoryListener::accept_loop() {
-    SharedMemoryHandshake handshake;
-    unsigned int priority;
-    bip::message_queue::size_type recv_size;
-
+    char buffer[1024];  // Buffer for handshake
+    
     while (running_) {
         try {
             // Wait for connection request with timeout
-            auto timeout = boost::posix_time::microsec_clock::universal_time() + 
-                           boost::posix_time::milliseconds(100);
+            size_t bytes_read = accept_ring_->read_with_timeout(
+                buffer, 
+                sizeof(buffer),
+                std::chrono::milliseconds(100));
 
-            if (accept_queue_->timed_receive(&handshake, sizeof(handshake), 
-                                            recv_size, priority, timeout)) {
-                // Validate handshake
-                if (recv_size != sizeof(SharedMemoryHandshake)) {
+            if (bytes_read > 0) {
+                // Validate handshake size
+                if (bytes_read != sizeof(SharedMemoryHandshake)) {
                     std::cerr << "SharedMemoryListener: Invalid handshake size: " 
-                              << recv_size << std::endl;
+                              << bytes_read << std::endl;
                     continue;
                 }
+
+                // Parse handshake
+                SharedMemoryHandshake handshake;
+                std::memcpy(&handshake, buffer, sizeof(SharedMemoryHandshake));
 
                 if (!handshake.is_valid()) {
                     std::cerr << "SharedMemoryListener: Invalid handshake magic/version" << std::endl;
@@ -118,7 +121,7 @@ void SharedMemoryListener::accept_loop() {
                 // Handle the connection request
                 handle_connection_request(handshake);
             }
-        } catch (const bip::interprocess_exception& e) {
+        } catch (const std::exception& e) {
             if (running_) {
                 std::cerr << "SharedMemoryListener accept error: " << e.what() << std::endl;
             }
@@ -140,30 +143,22 @@ void SharedMemoryListener::handle_connection_request(const SharedMemoryHandshake
     }
 
     try {
-        // Create dedicated channel for this client (server creates the queues)
+        // Create dedicated channel for this client (server creates the rings)
         auto channel = std::make_unique<SharedMemoryChannel>(
             ioc_, 
             channel_id, 
             /*is_server=*/true, 
-            /*create_queues=*/true);
+            /*create_rings=*/true);
 
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "SharedMemoryListener: Channel created successfully: " << channel_id << std::endl;
         }
 
-        // Send handshake confirmation back to client via their dedicated channel
-        // This signals the client that queues are ready
-        if (!channel->send(&handshake, sizeof(handshake))) {
-            std::cerr << "SharedMemoryListener: Failed to send handshake confirmation" << std::endl;
-            return;
+        // Call accept handler immediately in this thread
+        // This ensures on_data_received is set before any messages arrive
+        if (accept_handler_) {
+            accept_handler_(std::move(channel));
         }
-
-        // Post the new connection to the io_context
-        boost::asio::post(ioc_, [this, channel = std::move(channel)]() mutable {
-            if (accept_handler_) {
-                accept_handler_(std::move(channel));
-            }
-        });
 
     } catch (const std::exception& e) {
         std::cerr << "SharedMemoryListener: Failed to create channel: " << e.what() << std::endl;
@@ -196,22 +191,20 @@ std::unique_ptr<SharedMemoryChannel> connect_to_shared_memory_listener(
     handshake.channel_id[sizeof(handshake.channel_id) - 1] = '\0';
 
     try {
-        // Open the listener's accept queue
-        bip::message_queue listener_queue(bip::open_only, listener_name.c_str());
+        // Open the listener's accept ring
+        std::string accept_ring_name = make_shm_name(listener_name, "accept");
+        auto accept_ring = LockFreeRingBuffer::open(accept_ring_name);
 
         // Send connection request
-        auto timeout = boost::posix_time::microsec_clock::universal_time() + 
-                       boost::posix_time::seconds(5);  // 5 second timeout for handshake
-        
-        if (!listener_queue.timed_send(&handshake, sizeof(handshake), 0, timeout)) {
-            throw std::runtime_error("Timeout sending connection request to listener");
+        if (!accept_ring->try_write(&handshake, sizeof(handshake))) {
+            throw std::runtime_error("Failed to send connection request to listener (ring buffer full)");
         }
 
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-            std::cout << "Sent connection request, waiting for server to create queues..." << std::endl;
+            std::cout << "Sent connection request, waiting for server to create ring buffers..." << std::endl;
         }
 
-        // Poll for queue existence (wait for server to create them)
+        // Poll for ring buffer existence (wait for server to create them)
         std::unique_ptr<SharedMemoryChannel> channel;
         auto start = std::chrono::steady_clock::now();
         
@@ -221,15 +214,15 @@ std::unique_ptr<SharedMemoryChannel> connect_to_shared_memory_listener(
                     ioc,
                     channel_id,
                     /*is_server=*/false,
-                    /*create_queues=*/false);
+                    /*create_rings=*/false);
                 break;
             } catch (const std::exception& e) {
-                // Queues don't exist yet, wait and retry
+                // Ring buffers don't exist yet, wait and retry
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 
                 auto elapsed = std::chrono::steady_clock::now() - start;
                 if (elapsed > std::chrono::seconds(5)) {
-                    throw std::runtime_error("Timeout waiting for server to create queues");
+                    throw std::runtime_error("Timeout waiting for server to create ring buffers");
                 }
             }
         }
@@ -240,7 +233,7 @@ std::unique_ptr<SharedMemoryChannel> connect_to_shared_memory_listener(
 
         return channel;
 
-    } catch (const bip::interprocess_exception& e) {
+    } catch (const std::exception& e) {
         std::cerr << "Failed to connect to listener: " << e.what() << std::endl;
         throw std::runtime_error(std::string("Connection failed: ") + e.what());
     }
