@@ -156,6 +156,8 @@ export enum EndPointType { //u32
   TcpTethered,
   WebSocket,
   SecuredWebSocket,
+  Http,
+  SecuredHttp,
   SharedMemory
 }
 

@@ -12,15 +12,17 @@
 #include <nprpc_stub/nprpc_base.hpp>
 
 namespace nprpc {
-static constexpr std::string_view tcp_prefix = "tcp://";
-static constexpr std::string_view ws_prefix  = "ws://";
-static constexpr std::string_view wss_prefix = "wss://";
-static constexpr std::string_view mem_prefix = "mem://";
+static constexpr std::string_view tcp_prefix    = "tcp://";
+static constexpr std::string_view ws_prefix     = "ws://";
+static constexpr std::string_view wss_prefix    = "wss://";
+static constexpr std::string_view http_prefix   = "http://";
+static constexpr std::string_view https_prefix  = "https://";
+static constexpr std::string_view mem_prefix    = "mem://";
 
 class EndPoint
 {
   EndPointType  type_;
-  std::string   hostname_; // or ip address
+  std::string   hostname_; // or ip address, or channel ID for shared memory
   std::uint16_t port_;
 
  public:
@@ -34,6 +36,10 @@ class EndPoint
         return ws_prefix;
       case EndPointType::SecuredWebSocket:
         return wss_prefix;
+      case EndPointType::Http:
+        return http_prefix;
+      case EndPointType::SecuredHttp:
+        return https_prefix;
       case EndPointType::SharedMemory:
         return mem_prefix;
       default:
@@ -73,7 +79,7 @@ class EndPoint
   std::string_view memory_channel_id() const noexcept { 
     return (type_ == EndPointType::SharedMemory) ? hostname_ : std::string_view{}; 
   }
-  
+
   std::string      get_full() const noexcept
   {
     if (type_ == EndPointType::SharedMemory) {
@@ -84,13 +90,13 @@ class EndPoint
   }
 
   EndPoint() = default;
-  
+
   EndPoint(
     EndPointType type, std::string_view hostname, std::uint16_t port) noexcept
     : type_ {type}, hostname_ {hostname}, port_ {port}
   {
   }
-  
+
   EndPoint(std::string_view url)
   {
     if (url.empty()) {
@@ -133,6 +139,12 @@ class EndPoint
     } else if (url.find(wss_prefix) == 0) {
       type_ = EndPointType::SecuredWebSocket;
       split(url, wss_prefix, true);
+    } else if (url.find(http_prefix) == 0) {
+      type_ = EndPointType::Http;
+      split(url, http_prefix, true);
+    } else if (url.find(https_prefix) == 0) {
+      type_ = EndPointType::SecuredHttp;
+      split(url, https_prefix, true);
     } else if (url.find(mem_prefix) == 0) {
       type_ = EndPointType::SharedMemory;
       split(url, mem_prefix, false);  // Port is optional for shared memory

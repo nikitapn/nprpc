@@ -38,6 +38,8 @@ enum EndPointType {
   TcpTethered,
   WebSocket,
   SecuredWebSocket,
+  Http,
+  SecuredHttp,
   SharedMemory,
 };
 
@@ -71,9 +73,11 @@ ObjectId : flat {
   /**
     * List of urls available for connection separated by ';'
     * Currently supported protocols:
-    *   [PLAIN | TETHERED] tcp://<hostname>:<port>
-    *   [PLAIN]            ws://<hostname>:<port>
+    *   [PLAIN | TETHERED] tcp://<hostname|ip>:<port>
+    *   [PLAIN]            ws://<hostname|ip>:<port>
     *   [SECURED]          wss://hostname>:<port>
+    *   [PLAIN]            http://<hostname|ip>:<port>/rpc
+    *   [SECURED]          https://<hostname>:<port>/rpc
     *   [PLAIN]            mem://<path>
     */
   urls: string;

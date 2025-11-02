@@ -35,7 +35,7 @@ class Poa;
 class ObjectServant;
 class Object;
 
-constexpr oid_t invalid_object_id = (uint64_t)-1;
+constexpr oid_t invalid_object_id = std::numeric_limits<oid_t>::max();
 
 namespace impl {
 
@@ -100,21 +100,27 @@ enum class Lifespan {
 };
 } // namespace PoaPolicy
 
-
-
 namespace ObjectActivationFlags {
 enum Enum : uint32_t {
-  // I'm not sure if this flag is needed
+  // For default, no flags are set
   NONE                     = 0,
-  // Means that evil hackers will not get access to this object
-  // from any other session, besides from the one it was created in
+  // Make this object session-specific (unaccessible outside of the session it was created in)
   SESSION_SPECIFIC         = 1 << 0,
+  // Allow TCP connections to this object
   ALLOW_TCP                = 1 << 1,
+  // Allow WebSocket connections to this object
   ALLOW_WEBSOCKET          = 1 << 2,
+  // Allow SSL WebSocket connections to this object
   ALLOW_SSL_WEBSOCKET      = 1 << 3,
-  ALLOW_SHARED_MEMORY      = 1 << 4,
+  // Allow HTTP connections to this object
+  ALLOW_HTTP               = 1 << 4,
+  // Allow secured HTTP connections to this object
+  ALLOW_SECURED_HTTP       = 1 << 5,
+  // Allow shared memory connections to this object
+  ALLOW_SHARED_MEMORY      = 1 << 6,
+  // Allow all connection types
   ALLOW_ALL =
-    ALLOW_TCP | ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET | ALLOW_SHARED_MEMORY,
+    ALLOW_TCP | ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET | ALLOW_HTTP | ALLOW_SECURED_HTTP | ALLOW_SHARED_MEMORY
 };
 }
 
@@ -378,12 +384,8 @@ class RpcBuilder {
   NPRPC_API Rpc* build(boost::asio::io_context& ioc);
 };
 
-
-
-template<typename T>
-concept ObjectDerrived = std::is_base_of_v<Object, T>;
-
-template<ObjectDerrived T>
+template<class T>
+  requires (std::is_base_of_v<Object, T>)
 T* narrow(Object*& obj) noexcept
 {
   static_assert(std::is_base_of_v<Object, T>);

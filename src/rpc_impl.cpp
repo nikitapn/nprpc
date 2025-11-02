@@ -14,9 +14,9 @@ Poa* RpcImpl::create_poa_impl(uint32_t objects_max, PoaPolicy::Lifespan lifespan
   std::lock_guard<std::mutex> lk(poas_mut_);
 
   auto it = std::find(std::begin(poas_created_), std::end(poas_created_), false);
-  if (it == std::end(poas_created_)) {
+  if (it == std::end(poas_created_))
     throw std::runtime_error("Maximum number of POAs reached");
-  }
+
   auto index = std::distance(std::begin(poas_created_), it);
   auto poa = std::make_shared<PoaImpl>(objects_max, static_cast<uint16_t>(index), lifespan);
   poas_[index] = poa;
@@ -41,7 +41,7 @@ void RpcImpl::destroy()
 void RpcImpl::destroy_poa(Poa* poa)
 {
   if (!poa) return;
-   
+
   std::lock_guard<std::mutex> lk(poas_mut_);
 
   auto idx = poa->get_index();
@@ -61,9 +61,8 @@ NPRPC_API std::shared_ptr<Session> RpcImpl::get_session(
   {
     std::lock_guard<std::mutex> lk(connections_mut_);
     if (auto it = std::find_if(opened_sessions_.begin(), opened_sessions_.end(),
-                                [&endpoint](auto const& ptr) {
-                                  return ptr->remote_endpoint() == endpoint;
-                                }); it != opened_sessions_.end()) 
+      [&endpoint](auto const& ptr) { return ptr->remote_endpoint() == endpoint; })
+      ; it != opened_sessions_.end())
     {
       con = (*it);
     } else {
@@ -124,11 +123,8 @@ bool RpcImpl::has_session(
   const EndPoint& endpoint) const noexcept
 {
   std::lock_guard<std::mutex> lk(connections_mut_);
-  return std::find_if(opened_sessions_.begin(),
-                      opened_sessions_.end(),
-                      [endpoint](auto const& ptr) {
-                        return ptr->remote_endpoint() == endpoint;
-                      }) != opened_sessions_.end();
+  return std::find_if(opened_sessions_.begin(), opened_sessions_.end(),
+    [endpoint](auto const& ptr) { return ptr->remote_endpoint() == endpoint; }) != opened_sessions_.end();
 }
 
 
@@ -145,20 +141,16 @@ NPRPC_API SessionContext* RpcImpl::get_object_session_context(Object* obj)
   return nullptr;
 }
 
-bool RpcImpl::close_session(
-  Session* session)
+bool RpcImpl::close_session(Session* session)
 {
   std::lock_guard<std::mutex> lk(connections_mut_);
-  if (auto founded = std::find_if(opened_sessions_.begin(),
-                                  opened_sessions_.end(),
-                                  [session](auto const& ptr) {
-                                    return ptr->remote_endpoint() ==
-                                           session->remote_endpoint();
-                                  });
-      founded != opened_sessions_.end()) {
-    opened_sessions_.erase(founded);
+  if (auto it = std::find_if(opened_sessions_.begin(), opened_sessions_.end(),
+    [session](auto const& ptr) { return ptr->remote_endpoint() == session->remote_endpoint(); })
+    ; it != opened_sessions_.end())
+  {
+    opened_sessions_.erase(it);
   } else {
-    std::cerr << "Error: session was not found\n";
+    std::cerr << "Error: session not found\n";
     return false;
   }
   return true;
@@ -177,7 +169,7 @@ ObjectPtr<Nameserver> RpcImpl::get_nameserver(
   oid.origin.fill(0);
   oid.class_id  = INameserver_Servant::_get_class();
   oid.urls.assign(
-    // "tcp://" + ip + ":15000;"
+    "tcp://" + ip + ":15000;"
     "ws://"  + ip + ":15001;"
   );
 
@@ -192,8 +184,7 @@ RpcImpl::RpcImpl(
     : ioc_ {ioc}
 {
   poas_created_.fill(false);
-  
-  
+
   init_socket(ioc_);
   init_http_server(ioc_);
   init_shared_memory_listener(ioc_);
@@ -208,11 +199,9 @@ void ReferenceListImpl::add_ref(ObjectServant* obj)
     return;
   }
 
-  if (auto it =
-        std::find_if(begin(refs_),
-                     end(refs_),
-                     [obj](auto& pair) { return pair.second == obj; });
-      it != end(refs_)) {
+  if (auto it = std::find_if(begin(refs_), end(refs_), [obj](auto& pair) { return pair.second == obj; })
+    ; it != end(refs_)) 
+  {
     std::cerr << "duplicate reference: " << obj->get_class() << '\n';
     return;
   }
@@ -224,13 +213,10 @@ void ReferenceListImpl::add_ref(ObjectServant* obj)
 bool ReferenceListImpl::remove_ref(
   poa_idx_t poa_idx, oid_t oid)
 {
-  if (auto it = std::find_if(begin(refs_),
-                             end(refs_),
-                             [poa_idx, oid](auto& pair) {
-                               return pair.first.poa_idx == poa_idx &&
-                                      pair.first.object_id == oid;
-                             });
-      it != end(refs_)) {
+  if (auto it = std::find_if(begin(refs_), end(refs_),
+    [poa_idx, oid](auto& pair) { return pair.first.poa_idx == poa_idx && pair.first.object_id == oid; })
+    ; it != end(refs_))
+  {
     auto ptr = (*it).second;
     refs_.erase(it);
     ptr->release();
@@ -241,9 +227,8 @@ bool ReferenceListImpl::remove_ref(
 
 ReferenceListImpl::~ReferenceListImpl()
 {
-  for (auto& ref : refs_) {
+  for (auto& ref : refs_)
     ref.second->release();
-  }
 }
 
 NPRPC_API Object* create_object_from_flat(
@@ -329,6 +314,19 @@ ObjectId PoaImpl::activate_object(
                  std::to_string(g_cfg.listen_http_port));
   }
 
+  if (activation_flags & ObjectActivationFlags::ALLOW_HTTP) {
+    oid.urls +=
+      (std::string(http_prefix) + default_url + ":" + std::to_string(g_cfg.listen_http_port)) + ';';
+  }
+
+  if (activation_flags & ObjectActivationFlags::ALLOW_SECURED_HTTP) {
+    if (g_cfg.hostname.empty()) {
+      throw std::runtime_error("Secured HTTP requires a hostname");
+    }
+    oid.urls += (std::string(https_prefix) + g_cfg.hostname + ":" +
+                 std::to_string(g_cfg.listen_http_port)) + ';';
+  }
+
   if (activation_flags & ObjectActivationFlags::ALLOW_SHARED_MEMORY) {
     oid.urls += (std::string(mem_prefix) + g_server_listener_uuid) + ';';
   }
@@ -336,10 +334,8 @@ ObjectId PoaImpl::activate_object(
   if (pl_lifespan_ == PoaPolicy::Lifespan::Transient) {
     // std::lock_guard<std::mutex> lk(g_orb->new_activated_objects_mut_);
     // g_orb->new_activated_objects_.push_back(obj);
-    if (!ctx)
-      throw std::runtime_error(
-        "Object created with transient policy requires session context for "
-        "activation");
+    if (!ctx) throw std::runtime_error(
+      "Object created with transient policy requires session context for activation");
 
     ctx->ref_list.add_ref(obj);
   }

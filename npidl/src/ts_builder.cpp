@@ -902,6 +902,201 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 		out << eb(); // function
 	}
 
+	// HTTP Transport Support ================================================
+	// Generate nested 'http' object with methods that return values directly
+	out << '\n' << bl() << "// HTTP Transport (alternative to WebSocket)\n";
+	out << bl() << "public readonly http = {\n";
+	out << bb(false);
+	
+	bool first_http_method = true;
+	for (auto& fn : ifs->fns) {
+		if (!first_http_method) out << ",\n";
+		first_http_method = false;
+		
+		out << bl() << fn->name << ": async (";
+		
+		// Input parameters only (no 'out' refs)
+		bool first_param = true;
+		for (auto arg : fn->args) {
+			if (arg->modifier == ArgumentModifier::Out) continue;
+			if (!first_param) out << ", ";
+			first_param = false;
+			out << arg->name << (arg->is_optional() ? "?: " : ": ");
+			emit_parameter_type_for_proxy_call(arg, out);
+		}
+		
+		out << "): Promise<";
+		
+		// Return type: combine return value + out parameters into object/tuple
+		bool has_return = !fn->is_void();
+		int out_param_count = 0;
+		for (auto arg : fn->args) {
+			if (arg->modifier == ArgumentModifier::Out) out_param_count++;
+		}
+		
+		if (has_return && out_param_count == 0) {
+			// Simple return value
+			out << emit_type(fn->ret_value);
+		} else if (!has_return && out_param_count == 1) {
+			// Single out parameter - return it directly (no ref wrapper for HTTP)
+			for (auto arg : fn->args) {
+				if (arg->modifier == ArgumentModifier::Out) {
+					out << emit_type(arg->type);
+					break;
+				}
+			}
+		} else if (has_return || out_param_count > 0) {
+			// Multiple returns - wrap in object
+			out << "{ ";
+			if (has_return) {
+				out << "result: " << emit_type(fn->ret_value);
+				if (out_param_count > 0) out << ", ";
+			}
+			int out_ix = 0;
+			for (auto arg : fn->args) {
+				if (arg->modifier == ArgumentModifier::Out) {
+					if (out_ix > 0) out << ", ";
+					out << arg->name << ": ";
+					out << emit_type(arg->type);
+					out_ix++;
+				}
+			}
+			out << " }";
+		} else {
+			// void with no out params
+			out << "void";
+		}
+		
+		out << "> => {\n";
+		out << bb(false);
+		
+		// Build the request (same as WebSocket version)
+		const auto fixed_size = get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
+		const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
+		out << 
+			bl() << "const buf = NPRPC.FlatBuffer.create();\n" <<
+			bl() << "buf.prepare(" << capacity << ");\n" <<
+			bl() << "buf.commit(" << fixed_size << ");\n" <<
+			bl() << "buf.write_msg_id(NPRPC.impl.MessageId.FunctionCall);\n" <<
+			bl() << "buf.write_msg_type(NPRPC.impl.MessageType.Request);\n" <<
+			bl() << "buf.dv.setUint16(" << size_of_header << " + 0, this.data.poa_idx, true);\n" <<
+			bl() << "buf.dv.setUint8(" << size_of_header << " + 2, 0);\n" << // interface_idx = 0
+			bl() << "buf.dv.setUint8(" << size_of_header << " + 3, " << fn->idx << ");\n" <<
+			bl() << "buf.dv.setBigUint64(" << size_of_header << " + 8, this.data.object_id, true);\n"
+			;
+
+		if (fn->in_s) {
+			out << bl() << "marshal_" << fn->in_s->name << "(buf, " << get_arguments_offset() << ", {";
+			int ix = 0;
+			for (auto in : fn->args) {
+				if (in->modifier == ArgumentModifier::Out) continue;
+				if (ix > 0) out << ", ";
+				out << "_" << (ix + 1) << ": " << in->name;
+				++ix;
+			}
+			out << "});\n";
+		}
+
+		out << bl() << "buf.write_len(buf.size - 4);\n\n";
+		
+		// HTTP fetch instead of WebSocket
+		out <<
+			bl() << "const response = await fetch('/rpc', {\n" << bb(false) <<
+				bl() << "method: 'POST',\n" <<
+				bl() << "headers: { 'Content-Type': 'application/octet-stream' },\n" <<
+				bl() << "body: buf.array_buffer\n" <<
+			eb() << ");\n\n" <<
+			bl() << "if (!response.ok) throw new NPRPC.Exception(`HTTP error: ${response.status}`);\n" <<
+			bl() << "const response_data = await response.arrayBuffer();\n" <<
+			bl() << "buf.set_buffer(response_data);\n\n" <<
+			bl() << "let std_reply = NPRPC.handle_standart_reply(buf);\n"
+			;
+
+		if (fn->ex) {
+			out <<
+				bl() << "if (std_reply == 1) " << ctx_.current_file() << "_throw_exception(buf);\n";
+		}
+
+		if (!fn->out_s) {
+			// No output
+			out << bl() << "if (std_reply != 0) throw new NPRPC.Exception(\"Unexpected reply\");\n";
+		} else {
+			out << bl() << "if (std_reply != -1) throw new NPRPC.Exception(\"Unexpected reply\");\n";
+			
+			bool out_needs_endpoint = false;
+			for (auto f : fn->out_s->fields) {
+				if (f->type->id == FieldType::Struct) {
+					auto nested = cflat(f->type);
+					if (nested->fields.empty() || !nested->fields[0]->function_argument) {
+						if (contains_object(f->type)) {
+							out_needs_endpoint = true;
+							break;
+						}
+					}
+				}
+			}
+			
+			if (out_needs_endpoint) {
+				out << bl() << "const out = unmarshal_" << fn->out_s->name << "(buf, " << size_of_header << ", this.endpoint);\n";
+			} else {
+				out << bl() << "const out = unmarshal_" << fn->out_s->name << "(buf, " << size_of_header << ");\n";
+			}
+
+			// Build return value
+			bool has_ret = !fn->is_void();
+			int out_count = 0;
+			for (auto arg : fn->args) {
+				if (arg->modifier == ArgumentModifier::Out) out_count++;
+			}
+			
+			if (has_ret && out_count == 0) {
+				out << bl() << "return out._1;\n";
+			} else if (!has_ret && out_count == 1) {
+				// Single out param - always at _1 in output struct
+				for (auto arg : fn->args) {
+					if (arg->modifier == ArgumentModifier::Out) {
+						if (arg->type->id == FieldType::Object) {
+							out << bl() << "return NPRPC.create_object_from_oid(out._1, this.endpoint);\n";
+						} else {
+							out << bl() << "return out._1;\n";
+						}
+						break;
+					}
+				}
+			} else {
+				// Multiple returns - build object
+				out << bl() << "return {";
+				bool first_field = true;
+				if (has_ret) {
+					out << " result: out._1";
+					first_field = false;
+				}
+				int ix = has_ret ? 2 : 1;
+				for (auto arg : fn->args) {
+					if (arg->modifier == ArgumentModifier::Out) {
+						if (!first_field) out << ", ";
+						first_field = false;
+						out << " " << arg->name << ": ";
+						if (arg->type->id == FieldType::Object) {
+							out << "NPRPC.create_object_from_oid(out._" << ix << ", this.endpoint)";
+						} else {
+							out << "out._" << ix;
+						}
+						ix++;
+					}
+				}
+				out << " };\n";
+			}
+		}
+		
+		out << eb(false); // Decrement depth
+		out << bl() << "}"; // Close arrow function (no newline - comma comes after)
+	}
+	
+	// Close http object literal
+	out << eb(false); // Decrement depth for http object (from bb(false) on line 909)
+	out << "\n" << bl() << "};\n";
+
 	out << eb(); // Proxy class ends
 	
 	// Servant definition

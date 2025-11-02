@@ -53,6 +53,66 @@ export class Nameserver extends NPRPC.ObjectProxy {
     obj.value = NPRPC.create_object_from_oid(out._2, this.endpoint);
     return out._1;
   }
+
+  // HTTP Transport (alternative to WebSocket)
+  public readonly http = {
+    Bind: async (obj: /*in*/NPRPC.ObjectId, name: /*in*/string): Promise<void> => {
+      const buf = NPRPC.FlatBuffer.create();
+      buf.prepare(216);
+      buf.commit(88);
+      buf.write_msg_id(NPRPC.impl.MessageId.FunctionCall);
+      buf.write_msg_type(NPRPC.impl.MessageType.Request);
+      buf.dv.setUint16(16 + 0, this.data.poa_idx, true);
+      buf.dv.setUint8(16 + 2, 0);
+      buf.dv.setUint8(16 + 3, 0);
+      buf.dv.setBigUint64(16 + 8, this.data.object_id, true);
+      marshal_nprpc_nameserver_M1(buf, 32, {_1: obj, _2: name});
+      buf.write_len(buf.size - 4);
+
+      const response = await fetch('/rpc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: buf.array_buffer
+      }
+);
+
+      if (!response.ok) throw new NPRPC.Exception(`HTTP error: ${response.status}`);
+      const response_data = await response.arrayBuffer();
+      buf.set_buffer(response_data);
+
+      let std_reply = NPRPC.handle_standart_reply(buf);
+      if (std_reply != 0) throw new NPRPC.Exception("Unexpected reply");
+    },
+    Resolve: async (name: /*in*/string): Promise<{ result: boolean/*boolean*/, obj: NPRPC.ObjectProxy }> => {
+      const buf = NPRPC.FlatBuffer.create();
+      buf.prepare(168);
+      buf.commit(40);
+      buf.write_msg_id(NPRPC.impl.MessageId.FunctionCall);
+      buf.write_msg_type(NPRPC.impl.MessageType.Request);
+      buf.dv.setUint16(16 + 0, this.data.poa_idx, true);
+      buf.dv.setUint8(16 + 2, 0);
+      buf.dv.setUint8(16 + 3, 1);
+      buf.dv.setBigUint64(16 + 8, this.data.object_id, true);
+      marshal_nprpc_nameserver_M2(buf, 32, {_1: name});
+      buf.write_len(buf.size - 4);
+
+      const response = await fetch('/rpc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: buf.array_buffer
+      }
+);
+
+      if (!response.ok) throw new NPRPC.Exception(`HTTP error: ${response.status}`);
+      const response_data = await response.arrayBuffer();
+      buf.set_buffer(response_data);
+
+      let std_reply = NPRPC.handle_standart_reply(buf);
+      if (std_reply != -1) throw new NPRPC.Exception("Unexpected reply");
+      const out = unmarshal_nprpc_nameserver_M3(buf, 16);
+      return { result: out._1,  obj: NPRPC.create_object_from_oid(out._2, this.endpoint) };
+    }
+  };
 }
 export interface INameserver_Servant
 {

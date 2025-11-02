@@ -8,6 +8,7 @@
 
 namespace nprpc::impl {
 
+// A lock-free ID to pointer mapping structure
 template <typename T>
 class IdToPtr {
   struct Item {
