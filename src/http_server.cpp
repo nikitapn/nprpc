@@ -3,6 +3,7 @@
 // LICENSING file in the topmost directory
 
 #include <nprpc/impl/websocket_session.hpp>
+#include <nprpc/impl/http_rpc_session.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
 
 #include <boost/beast/http.hpp>
@@ -72,6 +73,71 @@ path_cat(
   return result;
 }
 
+// Handle RPC request over HTTP POST
+template <class Body, class Allocator>
+http::message_generator handle_rpc_request(
+    http::request<Body, http::basic_fields<Allocator>>& req) {
+  
+  // Helper to create success response
+  auto const rpc_response = 
+      [&req](std::string&& body_data, bool add_cors = true) {
+        http::response<http::string_body> res{http::status::ok, req.version()};
+        res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(http::field::content_type, "application/octet-stream");
+        
+        // Add CORS headers for cross-origin requests from browsers
+        if (add_cors) {
+          res.set(http::field::access_control_allow_origin, "*");
+          res.set(http::field::access_control_allow_methods, "POST, OPTIONS");
+          res.set(http::field::access_control_allow_headers, "Content-Type");
+        }
+        
+        res.keep_alive(req.keep_alive());
+        res.body() = std::move(body_data);
+        res.prepare_payload();
+        return res;
+      };
+
+  // Helper for error response
+  auto const rpc_error =
+      [&req](beast::string_view what) {
+        http::response<http::string_body> res{http::status::internal_server_error, req.version()};
+        res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(http::field::content_type, "text/plain");
+        res.set(http::field::access_control_allow_origin, "*");
+        res.keep_alive(req.keep_alive());
+        res.body() = std::string("RPC Error: ") + std::string(what);
+        res.prepare_payload();
+        return res;
+      };
+
+  try {
+    // Extract request body as string
+    std::string request_body = req.body();
+    
+    if (request_body.empty()) {
+      return rpc_error("Empty request body");
+    }
+
+    // Process RPC request
+    std::string response_body;
+    if (!process_http_rpc(g_orb->ioc(), request_body, response_body)) {
+      return rpc_error("Failed to process RPC request");
+    }
+
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+      std::cout << "HTTP RPC: Processed request, response size: " 
+                << response_body.size() << " bytes" << std::endl;
+    }
+
+    return rpc_response(std::move(response_body));
+
+  } catch (const std::exception& e) {
+    std::cerr << "HTTP RPC exception: " << e.what() << std::endl;
+    return rpc_error(e.what());
+  }
+}
+
 // This function produces an HTTP response for the given
 // request. The type of the response object depends on the
 // contents of the request, so the interface requires the
@@ -116,9 +182,27 @@ http::message_generator handle_request(
         return res;
       };
 
+  // Handle OPTIONS preflight for CORS
+  if (req.method() == http::verb::options) {
+    http::response<http::empty_body> res{http::status::no_content, req.version()};
+    res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+    res.set(http::field::access_control_allow_origin, "*");
+    res.set(http::field::access_control_allow_methods, "GET, POST, OPTIONS");
+    res.set(http::field::access_control_allow_headers, "Content-Type");
+    res.set(http::field::access_control_max_age, "86400"); // 24 hours
+    res.keep_alive(req.keep_alive());
+    return res;
+  }
+
   // Make sure we can handle the method
   if (req.method() != http::verb::get && req.method() != http::verb::post && req.method() != http::verb::head)
     return bad_request("Unknown HTTP-method");
+
+  // Check if this is an RPC request (POST to /rpc or /rpc/*)
+  if (req.method() == http::verb::post && 
+      (req.target() == "/rpc" || req.target().starts_with("/rpc/"))) {
+    return handle_rpc_request(req);
+  }
 
   if (g_cfg.http_root_dir.empty())
     return bad_request("Illegal request: only Upgrade is allowed");
