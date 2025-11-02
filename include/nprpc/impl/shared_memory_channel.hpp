@@ -97,6 +97,13 @@ public:
         return send_ring_ && recv_ring_;
     }
 
+    /**
+     * @brief Get the channel ID
+     */
+    const std::string& channel_id() const {
+        return channel_id_;
+    }
+
 private:
     void read_loop();
     void cleanup_rings();

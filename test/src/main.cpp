@@ -95,8 +95,7 @@ TEST_F(NprpcTest, TestBasic) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-    // TODO: Enable when SharedMemoryServerSession is implemented
-    // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
 }
 
 // Optional types test
@@ -134,6 +133,7 @@ TEST_F(NprpcTest, TestOptional) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
 }
 
 // Nested structures test
@@ -179,6 +179,7 @@ TEST_F(NprpcTest, TestNested) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
 }
 
 // Large message test to verify async_write fix for messages >2.6MB
@@ -228,6 +229,7 @@ TEST_F(NprpcTest, TestLargeMessage) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
 }
 
 // Bad input validation test
@@ -276,6 +278,7 @@ TEST_F(NprpcTest, TestBadInput) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
 }
 
 
