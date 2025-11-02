@@ -41,6 +41,10 @@ export class EndPoint {
         return "ws://";
       case EndPointType.SecuredWebSocket:
         return "wss://";
+      case EndPointType.Http:
+        return "http://";
+      case EndPointType.SecuredHttp:
+        return "https://";
       default:
         throw new Exception("Unknown EndPointType");
     };
@@ -52,6 +56,10 @@ export class EndPoint {
       type = EndPointType.WebSocket;
     } else if (str.startsWith("wss://")) {
       type = EndPointType.SecuredWebSocket;
+    } else if (str.startsWith("http://")) {
+      type = EndPointType.Http;
+    } else if (str.startsWith("https://")) {
+      type = EndPointType.SecuredHttp;
     } else {
       throw new Exception("Invalid EndPoint string: " + str);
     }

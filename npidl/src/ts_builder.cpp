@@ -1001,7 +1001,8 @@ void TypescriptBuilder::emit_interface(AstInterfaceDecl* ifs) {
 		
 		// HTTP fetch instead of WebSocket
 		out <<
-			bl() << "const response = await fetch('/rpc', {\n" << bb(false) <<
+			bl() << "const url = `http://${this.endpoint.hostname}:${this.endpoint.port}/rpc`;\n" <<
+			bl() << "const response = await fetch(url, {\n" << bb(false) <<
 				bl() << "method: 'POST',\n" <<
 				bl() << "headers: { 'Content-Type': 'application/octet-stream' },\n" <<
 				bl() << "body: buf.array_buffer\n" <<

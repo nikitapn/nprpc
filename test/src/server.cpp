@@ -39,7 +39,9 @@ class ServerControlImpl : public ::test::IServerControl_Servant {
 
 int main(int argc, char** argv) {
   constexpr auto flags = nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET |
-                         nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET;
+                         nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET |
+                         nprpc::ObjectActivationFlags::Enum::ALLOW_HTTP |
+                         nprpc::ObjectActivationFlags::Enum::ALLOW_SECURED_HTTP;
   nprpctest::NprpcTestEnvironment env;
   env.SetUp();
 

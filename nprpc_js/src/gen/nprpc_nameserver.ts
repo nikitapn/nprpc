@@ -69,7 +69,8 @@ export class Nameserver extends NPRPC.ObjectProxy {
       marshal_nprpc_nameserver_M1(buf, 32, {_1: obj, _2: name});
       buf.write_len(buf.size - 4);
 
-      const response = await fetch('/rpc', {
+      const url = `http://${this.endpoint.hostname}:${this.endpoint.port}/rpc`;
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
         body: buf.array_buffer
@@ -96,7 +97,8 @@ export class Nameserver extends NPRPC.ObjectProxy {
       marshal_nprpc_nameserver_M2(buf, 32, {_1: name});
       buf.write_len(buf.size - 4);
 
-      const response = await fetch('/rpc', {
+      const url = `http://${this.endpoint.hostname}:${this.endpoint.port}/rpc`;
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
         body: buf.array_buffer
