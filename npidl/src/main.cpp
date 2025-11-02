@@ -25,6 +25,7 @@
 #include "cpp_builder.hpp"
 #include "ts_builder.hpp"
 #include "utils.hpp"
+#include "lsp_server.hpp"
 
 #include <nplib/utils/colored_cout.h>
 
@@ -1140,6 +1141,7 @@ int main(int argc, char* argv[]) {
 	po::options_description desc("Allowed options");
 	desc.add_options()
 		("help", "produce help message")
+		("lsp", "run as Language Server Protocol server")
 		("out-inc-dir", po::value<std::filesystem::path>(&out_inc_dir), "directory for generated include files")
 		("out-src-dir", po::value<std::filesystem::path>(&out_src_dir), "directory for generated source files")
 		("out-ts-dir", po::value<std::filesystem::path>(&out_ts_dir), "directory for generated typescript files")
@@ -1155,10 +1157,19 @@ int main(int argc, char* argv[]) {
 		po::variables_map vm;
 		po::store(po::command_line_parser(argc, argv).options(desc).positional(p).run(), vm);
 		po::notify(vm);
+		
 		if (vm.count("help")) {
 			std::cout << desc << "\n";
 			return 0;
 		}
+		
+		// LSP mode - run Language Server
+		if (vm.count("lsp")) {
+			LspServer server;
+			server.run();
+			return 0;
+		}
+		
 		if (!vm.count("input-file")) {
 			std::cerr << "no input file...\n";
 			return -1;

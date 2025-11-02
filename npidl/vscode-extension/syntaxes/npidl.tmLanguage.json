@@ -1,0 +1,76 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "NPIDL",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#numbers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.npidl",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.npidl",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.npidl",
+          "match": "\\b(interface|struct|namespace|exception|throws)\\b"
+        },
+        {
+          "name": "storage.modifier.npidl",
+          "match": "\\b(in|out|optional)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.npidl",
+          "match": "\\b(void|bool|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|string|array|vector|flat)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.npidl",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.npidl",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.npidl",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    }
+  },
+  "scopeName": "source.npidl"
+}
