@@ -20,12 +20,15 @@ namespace nprpc::impl {
  * Uses memory-mapped files with lock-free ring buffers for true zero-copy IPC.
  * Two ring buffers: one for server-to-client, one for client-to-server.
  * Automatically handles cleanup when the last reference is destroyed.
+ * 
+ * Variable-sized messages: Each message has a 4-byte header + payload.
+ * This reduces memory footprint significantly compared to fixed-size slots.
  */
 class SharedMemoryChannel {
 public:
     static constexpr size_t MAX_MESSAGE_SIZE = 32 * 1024 * 1024;  // 32MB (same as TCP/WebSocket)
-    static constexpr uint32_t RING_BUFFER_CAPACITY = 128;         // Number of slots per ring buffer
-    static constexpr uint32_t RING_BUFFER_SLOT_SIZE = 64 * 1024;  // 64KB per slot
+    static constexpr size_t RING_BUFFER_SIZE = 16 * 1024 * 1024;  // 16MB per ring buffer (variable-sized messages)
+    // Total per connection: 32MB (16MB × 2 directions) vs 256MB with fixed slots - 8x reduction!
 
 private:
     std::string channel_id_;

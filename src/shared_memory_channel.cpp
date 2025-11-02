@@ -26,20 +26,18 @@ SharedMemoryChannel::SharedMemoryChannel(
             LockFreeRingBuffer::remove(send_ring_name_);
             LockFreeRingBuffer::remove(recv_ring_name_);
 
-            // Create new ring buffers
+            // Create new ring buffers (continuous, variable-sized)
             send_ring_ = LockFreeRingBuffer::create(
                 send_ring_name_,
-                RING_BUFFER_CAPACITY,
-                RING_BUFFER_SLOT_SIZE);
+                RING_BUFFER_SIZE);
 
             recv_ring_ = LockFreeRingBuffer::create(
                 recv_ring_name_,
-                RING_BUFFER_CAPACITY,
-                RING_BUFFER_SLOT_SIZE);
+                RING_BUFFER_SIZE);
 
             if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
                 std::cout << "Created ring buffers: " << send_ring_name_ 
-                         << ", " << recv_ring_name_ << std::endl;
+                         << ", " << recv_ring_name_ << " (" << RING_BUFFER_SIZE << " bytes each)" << std::endl;
             }
         } else {
             // Open existing ring buffers

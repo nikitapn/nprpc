@@ -28,11 +28,11 @@ SharedMemoryListener::SharedMemoryListener(
     LockFreeRingBuffer::remove(accept_ring_name);
 
     try {
-        // Small ring buffer for handshakes (10 slots, each can hold a handshake)
+        // Small ring buffer for handshakes (10KB total - enough for ~10 handshakes)
+        // With variable-sized messages, this is much more efficient
         accept_ring_ = LockFreeRingBuffer::create(
             accept_ring_name,
-            10,  // 10 pending connections
-            1024);  // 1KB per slot (enough for handshake)
+            10 * 1024);  // 10KB total buffer
 
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "SharedMemoryListener created: " << listener_name_ << std::endl;

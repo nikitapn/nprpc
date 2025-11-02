@@ -7,28 +7,26 @@
 
 namespace nprpc::impl {
 
-size_t LockFreeRingBuffer::calculate_shm_size(uint32_t capacity, uint32_t slot_size) {
+size_t LockFreeRingBuffer::calculate_shm_size(size_t buffer_size) {
     // managed_shared_memory needs space for:
     // - Internal bookkeeping (~2KB)
     // - Header object with name
-    // - Data region (capacity * slot_size)
+    // - Data region (continuous buffer)
     // - Alignment padding (64 bytes per allocation)
-    size_t data_size = static_cast<size_t>(capacity) * static_cast<size_t>(slot_size);
     size_t overhead = 8192;  // 8KB for managed_shared_memory overhead + bookkeeping
-    return overhead + data_size;
+    return overhead + buffer_size;
 }
 
 std::unique_ptr<LockFreeRingBuffer> LockFreeRingBuffer::create(
     const std::string& name,
-    uint32_t capacity,
-    uint32_t slot_size) {
+    size_t buffer_size) {
     
     try {
         // Remove any existing shared memory with this name
         boost::interprocess::shared_memory_object::remove(name.c_str());
         
         // Calculate total size needed
-        size_t total_size = calculate_shm_size(capacity, slot_size);
+        size_t total_size = calculate_shm_size(buffer_size);
         
         // Create managed shared memory
         std::cout << "Creating ring buffer '" << name << "'\n";
@@ -39,25 +37,22 @@ std::unique_ptr<LockFreeRingBuffer> LockFreeRingBuffer::create(
         
         // Construct header in shared memory
         auto* header = shm.construct<RingBufferHeader>("header")(
-            capacity, slot_size, MAX_MESSAGE_SIZE);
+            buffer_size, MAX_MESSAGE_SIZE);
         
         if (!header) {
             throw std::runtime_error("Failed to construct RingBufferHeader");
         }
         
-        // Allocate data region (array of slots)
-        // Use construct to create a named array instead of allocate_aligned
-        size_t data_size = static_cast<size_t>(capacity) * static_cast<size_t>(slot_size);
-        
-        auto* data_region = shm.construct<uint8_t>("data")[data_size]();
+        // Allocate data region (continuous circular buffer)
+        auto* data_region = shm.construct<uint8_t>("data")[buffer_size]();
         
         if (!data_region) {
             throw std::runtime_error("Failed to allocate data region");
         }
         
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-            std::cout << "Created ring buffer '" << name << "': " << capacity 
-                     << " slots x " << slot_size << " bytes = " << total_size << " total" << std::endl;
+            std::cout << "Created ring buffer '" << name << "': " 
+                     << buffer_size << " bytes (continuous)" << std::endl;
         }
         
         return std::unique_ptr<LockFreeRingBuffer>(
@@ -94,8 +89,8 @@ std::unique_ptr<LockFreeRingBuffer> LockFreeRingBuffer::open(const std::string& 
         auto* data_region = data_result.first;
         
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-            std::cout << "Opened ring buffer '" << name << "': " << header->capacity 
-                     << " slots x " << header->slot_size << " bytes" << std::endl;
+            std::cout << "Opened ring buffer '" << name << "': " 
+                     << header->buffer_size << " bytes (continuous)" << std::endl;
         }
         
         return std::unique_ptr<LockFreeRingBuffer>(
@@ -134,8 +129,16 @@ LockFreeRingBuffer::~LockFreeRingBuffer() {
     }
 }
 
-uint8_t* LockFreeRingBuffer::get_slot(uint32_t idx) {
-    return data_region_ + (idx * header_->slot_size);
+size_t LockFreeRingBuffer::used_bytes() const {
+    size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
+    size_t read_idx = header_->read_idx.load(std::memory_order_acquire);
+    
+    if (write_idx >= read_idx) {
+        return write_idx - read_idx;
+    } else {
+        // Wrapped around
+        return header_->buffer_size - read_idx + write_idx;
+    }
 }
 
 bool LockFreeRingBuffer::try_write(const void* data, size_t size) {
@@ -146,33 +149,34 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size) {
         return false;
     }
     
-    if (size > header_->slot_size - sizeof(uint32_t)) {
-        std::cerr << "Message size " << size << " exceeds slot capacity " 
-                 << (header_->slot_size - sizeof(uint32_t)) << std::endl;
-        return false;
-    }
+    // Total bytes needed: size header (4 bytes) + data
+    size_t total_bytes = sizeof(uint32_t) + size;
     
-    // Load indices with acquire semantics
-    uint32_t write_idx = header_->write_idx.load(std::memory_order_acquire);
-    uint32_t read_idx = header_->read_idx.load(std::memory_order_acquire);
-    
-    // Check if buffer is full
-    uint32_t next_write = (write_idx + 1) % header_->capacity;
-    if (next_write == read_idx) {
+    // Check if we have enough space
+    // Need to keep at least 1 byte free to distinguish full from empty
+    if (total_bytes + 1 > available_bytes()) {
         return false; // Buffer full
     }
     
-    // Write to slot
-    uint8_t* slot = get_slot(write_idx);
+    // Load current write index
+    size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
     
-    // Write size header
-    *reinterpret_cast<uint32_t*>(slot) = static_cast<uint32_t>(size);
+    // Write size header (may wrap around)
+    for (size_t i = 0; i < sizeof(uint32_t); ++i) {
+        data_region_[(write_idx + i) % header_->buffer_size] = 
+            reinterpret_cast<const uint8_t*>(&size)[i];
+    }
+    write_idx = (write_idx + sizeof(uint32_t)) % header_->buffer_size;
     
-    // Write data
-    std::memcpy(slot + sizeof(uint32_t), data, size);
+    // Write data (may wrap around)
+    const uint8_t* src = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < size; ++i) {
+        data_region_[(write_idx + i) % header_->buffer_size] = src[i];
+    }
     
-    // Update write index with release semantics (ensures writes are visible)
-    header_->write_idx.store(next_write, std::memory_order_release);
+    // Update write index with release semantics
+    size_t new_write_idx = (write_idx + size) % header_->buffer_size;
+    header_->write_idx.store(new_write_idx, std::memory_order_release);
     
     // Notify waiting readers
     {
@@ -186,19 +190,21 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size) {
 
 size_t LockFreeRingBuffer::try_read(void* buffer, size_t buffer_size) {
     // Load indices with acquire semantics
-    uint32_t read_idx = header_->read_idx.load(std::memory_order_acquire);
-    uint32_t write_idx = header_->write_idx.load(std::memory_order_acquire);
+    size_t read_idx = header_->read_idx.load(std::memory_order_acquire);
+    size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
     
     // Check if buffer is empty
     if (read_idx == write_idx) {
         return 0; // Empty
     }
     
-    // Read from slot
-    uint8_t* slot = get_slot(read_idx);
-    
-    // Read size header
-    uint32_t message_size = *reinterpret_cast<uint32_t*>(slot);
+    // Read size header (may wrap around)
+    uint32_t message_size = 0;
+    for (size_t i = 0; i < sizeof(uint32_t); ++i) {
+        reinterpret_cast<uint8_t*>(&message_size)[i] = 
+            data_region_[(read_idx + i) % header_->buffer_size];
+    }
+    read_idx = (read_idx + sizeof(uint32_t)) % header_->buffer_size;
     
     // Validate size
     if (message_size > header_->max_message_size) {
@@ -212,12 +218,15 @@ size_t LockFreeRingBuffer::try_read(void* buffer, size_t buffer_size) {
         return 0;
     }
     
-    // Copy data
-    std::memcpy(buffer, slot + sizeof(uint32_t), message_size);
+    // Copy data (may wrap around)
+    uint8_t* dest = static_cast<uint8_t*>(buffer);
+    for (size_t i = 0; i < message_size; ++i) {
+        dest[i] = data_region_[(read_idx + i) % header_->buffer_size];
+    }
     
     // Update read index with release semantics
-    uint32_t next_read = (read_idx + 1) % header_->capacity;
-    header_->read_idx.store(next_read, std::memory_order_release);
+    size_t new_read_idx = (read_idx + message_size) % header_->buffer_size;
+    header_->read_idx.store(new_read_idx, std::memory_order_release);
     
     return message_size;
 }
@@ -258,28 +267,21 @@ size_t LockFreeRingBuffer::read_with_timeout(
     return try_read(buffer, buffer_size);
 }
 
-uint32_t LockFreeRingBuffer::available_slots() const {
-    uint32_t read_idx = header_->read_idx.load(std::memory_order_acquire);
-    uint32_t write_idx = header_->write_idx.load(std::memory_order_acquire);
-    
-    if (write_idx >= read_idx) {
-        return header_->capacity - (write_idx - read_idx) - 1;
-    } else {
-        return read_idx - write_idx - 1;
-    }
+size_t LockFreeRingBuffer::available_bytes() const {
+    size_t used = used_bytes();
+    // Keep 1 byte reserved to distinguish full from empty
+    return header_->buffer_size - used - 1;
 }
 
 bool LockFreeRingBuffer::is_empty() const {
-    uint32_t read_idx = header_->read_idx.load(std::memory_order_acquire);
-    uint32_t write_idx = header_->write_idx.load(std::memory_order_acquire);
+    size_t read_idx = header_->read_idx.load(std::memory_order_acquire);
+    size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
     return read_idx == write_idx;
 }
 
-bool LockFreeRingBuffer::is_full() const {
-    uint32_t read_idx = header_->read_idx.load(std::memory_order_acquire);
-    uint32_t write_idx = header_->write_idx.load(std::memory_order_acquire);
-    uint32_t next_write = (write_idx + 1) % header_->capacity;
-    return next_write == read_idx;
+bool LockFreeRingBuffer::is_full(size_t message_size) const {
+    size_t total_bytes = sizeof(uint32_t) + message_size;
+    return total_bytes + 1 > available_bytes();
 }
 
 } // namespace nprpc::impl

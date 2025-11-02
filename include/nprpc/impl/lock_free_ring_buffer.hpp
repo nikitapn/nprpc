@@ -18,56 +18,55 @@ namespace nprpc::impl {
 //
 // Memory Layout:
 // +------------------+
-// | RingBufferHeader | (metadata: read_idx, write_idx, capacity, etc.)
+// | RingBufferHeader | (metadata: read_idx, write_idx, buffer_size, etc.)
 // +------------------+
-// | Slot 0 (32 bytes)| (message_size + data)
-// +------------------+
-// | Slot 1 (32 bytes)|
-// +------------------+
+// | Continuous Buffer| (circular byte array for variable-sized messages)
+// | [uint32_t size]  | <- Message 1
+// | [data bytes]     |
+// | [uint32_t size]  | <- Message 2
+// | [data bytes]     |
 // | ...              |
 // +------------------+
 //
-// Each slot structure:
-// [uint32_t size][data bytes][padding to 32-byte alignment]
+// Message format: [uint32_t size][data bytes]
+// - Variable-sized messages (no wasted space)
+// - Wraparound handled automatically
+// - Byte-level indices (not slot-based)
 //
 // Synchronization:
-// - read_idx and write_idx are atomics (lock-free for SPSC)
+// - read_idx and write_idx are atomics with byte offsets (lock-free for SPSC)
 // - For blocking reads: condition variable + mutex
 // - Memory barriers handled by std::atomic
 
 struct alignas(64) RingBufferHeader {
-    // Atomic indices for lock-free operations
-    std::atomic<uint32_t> write_idx{0};  // Next slot to write
-    std::atomic<uint32_t> read_idx{0};   // Next slot to read
+    // Atomic byte-level indices for lock-free operations
+    std::atomic<size_t> write_idx{0};  // Next byte position to write
+    std::atomic<size_t> read_idx{0};   // Next byte position to read
     
     // Fixed at creation
-    uint32_t capacity;          // Number of slots
-    uint32_t slot_size;         // Size of each slot in bytes
+    size_t buffer_size;         // Total buffer size in bytes
     uint32_t max_message_size;  // Maximum message size
     
     // For blocking reads (optional - can still be lock-free with timed_wait)
     boost::interprocess::interprocess_mutex mutex;
     boost::interprocess::interprocess_condition data_available;
     
-    RingBufferHeader(uint32_t cap, uint32_t slot_sz, uint32_t max_msg_sz)
-        : capacity(cap)
-        , slot_size(slot_sz)
+    RingBufferHeader(size_t buf_size, uint32_t max_msg_sz)
+        : buffer_size(buf_size)
         , max_message_size(max_msg_sz) {
     }
 };
 
 class LockFreeRingBuffer {
 public:
-    // Configuration
-    static constexpr uint32_t DEFAULT_CAPACITY = 128;        // Number of slots
-    static constexpr uint32_t DEFAULT_SLOT_SIZE = 32 * 1024; // 32KB per slot
-    static constexpr uint32_t MAX_MESSAGE_SIZE = 32 * 1024 * 1024; // 32MB
+    // Configuration for continuous circular buffer (variable-sized messages)
+    static constexpr size_t DEFAULT_BUFFER_SIZE = 16 * 1024 * 1024; // 16MB total (reduced from 128MB)
+    static constexpr uint32_t MAX_MESSAGE_SIZE = 32 * 1024 * 1024;  // 32MB max message
     
     // Create new ring buffer in shared memory
     static std::unique_ptr<LockFreeRingBuffer> create(
         const std::string& name,
-        uint32_t capacity = DEFAULT_CAPACITY,
-        uint32_t slot_size = DEFAULT_SLOT_SIZE);
+        size_t buffer_size = DEFAULT_BUFFER_SIZE);
     
     // Open existing ring buffer
     static std::unique_ptr<LockFreeRingBuffer> open(const std::string& name);
@@ -91,10 +90,10 @@ public:
                              std::chrono::milliseconds timeout);
     
     // Statistics
-    uint32_t capacity() const { return header_->capacity; }
-    uint32_t available_slots() const;
+    size_t buffer_size() const { return header_->buffer_size; }
+    size_t available_bytes() const;
     bool is_empty() const;
-    bool is_full() const;
+    bool is_full(size_t message_size) const;
     
 private:
     LockFreeRingBuffer(boost::interprocess::managed_shared_memory&& shm,
@@ -103,10 +102,10 @@ private:
                        bool is_creator);
     
     // Calculate total shared memory size needed
-    static size_t calculate_shm_size(uint32_t capacity, uint32_t slot_size);
+    static size_t calculate_shm_size(size_t buffer_size);
     
-    // Get pointer to slot data
-    uint8_t* get_slot(uint32_t idx);
+    // Helper to calculate used bytes
+    size_t used_bytes() const;
     
     boost::interprocess::managed_shared_memory shm_;
     RingBufferHeader* header_;
