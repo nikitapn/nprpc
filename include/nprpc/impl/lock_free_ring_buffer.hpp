@@ -96,7 +96,8 @@ public:
     bool is_full(size_t message_size) const;
     
 private:
-    LockFreeRingBuffer(boost::interprocess::managed_shared_memory&& shm,
+    LockFreeRingBuffer(const std::string& name,
+                       boost::interprocess::managed_shared_memory&& shm,
                        RingBufferHeader* header,
                        uint8_t* data_region,
                        bool is_creator);
@@ -107,10 +108,11 @@ private:
     // Helper to calculate used bytes
     size_t used_bytes() const;
     
+    std::string name_;
     boost::interprocess::managed_shared_memory shm_;
     RingBufferHeader* header_;
     uint8_t* data_region_;  // Points to start of slot array
-    bool is_creator_;       // Should we remove shm on destruction?
+    bool is_creator_;       // Should we remove shm on destruction? - Yes if creator
 };
 
 // Helper: Generate unique names for shared memory regions

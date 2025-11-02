@@ -22,14 +22,10 @@ std::unique_ptr<LockFreeRingBuffer> LockFreeRingBuffer::create(
     size_t buffer_size) {
     
     try {
-        // Remove any existing shared memory with this name
-        boost::interprocess::shared_memory_object::remove(name.c_str());
-        
         // Calculate total size needed
         size_t total_size = calculate_shm_size(buffer_size);
         
         // Create managed shared memory
-        std::cout << "Creating ring buffer '" << name << "'\n";
         boost::interprocess::managed_shared_memory shm(
             boost::interprocess::create_only,
             name.c_str(),
@@ -56,7 +52,7 @@ std::unique_ptr<LockFreeRingBuffer> LockFreeRingBuffer::create(
         }
         
         return std::unique_ptr<LockFreeRingBuffer>(
-            new LockFreeRingBuffer(std::move(shm), header, data_region, true));
+            new LockFreeRingBuffer(name, std::move(shm), header, data_region, true));
         
     } catch (const boost::interprocess::interprocess_exception& e) {
         std::cerr << "Failed to create ring buffer '" << name << "': " << e.what() << std::endl;
@@ -94,7 +90,7 @@ std::unique_ptr<LockFreeRingBuffer> LockFreeRingBuffer::open(const std::string& 
         }
         
         return std::unique_ptr<LockFreeRingBuffer>(
-            new LockFreeRingBuffer(std::move(shm), header, data_region, false));
+            new LockFreeRingBuffer(name, std::move(shm), header, data_region, false));
         
     } catch (const boost::interprocess::interprocess_exception& e) {
         std::cerr << "Failed to open ring buffer '" << name << "': " << e.what() << std::endl;
@@ -110,11 +106,13 @@ void LockFreeRingBuffer::remove(const std::string& name) {
 }
 
 LockFreeRingBuffer::LockFreeRingBuffer(
+    const std::string& name,
     boost::interprocess::managed_shared_memory&& shm,
     RingBufferHeader* header,
     uint8_t* data_region,
     bool is_creator)
-    : shm_(std::move(shm))
+    : name_(name)
+    , shm_(std::move(shm))
     , header_(header)
     , data_region_(data_region)
     , is_creator_(is_creator) {
@@ -124,8 +122,15 @@ LockFreeRingBuffer::~LockFreeRingBuffer() {
     // Cleanup is automatic - managed_shared_memory destructor handles it
     // But we should remove the shared memory object if we created it
     if (is_creator_) {
-        // Can't call remove() here because name is not stored
-        // Caller must explicitly call static remove() if needed
+        std::cout << "Destroying ring buffer '" << name_ << "'\n";
+        auto ok = boost::interprocess::shared_memory_object::remove(name_.c_str());
+        if (!ok) {
+            std::cerr << "Warning: Failed to remove shared memory for ring buffer '"
+                      << name_ << "'" << std::endl;
+        } else if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+            std::cout << "LockFreeRingBuffer destroyed and removed: '" 
+                      << name_ << "'" << std::endl;
+        }
     }
 }
 

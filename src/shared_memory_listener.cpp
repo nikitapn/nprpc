@@ -51,8 +51,7 @@ SharedMemoryListener::~SharedMemoryListener() {
     
     try {
         std::string accept_ring_name = make_shm_name(listener_name_, "accept");
-        LockFreeRingBuffer::remove(accept_ring_name);
-        
+
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "SharedMemoryListener cleaned up: " << listener_name_ << std::endl;
         }

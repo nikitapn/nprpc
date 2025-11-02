@@ -286,9 +286,9 @@ TEST_F(NprpcTest, TestBadInput) {
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
-    
+
     // Register the test environment
     ::testing::AddGlobalTestEnvironment(new nprpctest::NprpcTestEnvironment);
-    
+
     return RUN_ALL_TESTS();
 }

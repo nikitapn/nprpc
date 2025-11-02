@@ -34,6 +34,8 @@ add_executable(npidl
 
 target_link_libraries(npidl PRIVATE npidl_core)
 
-# Test executable for npidl
-add_subdirectory(test)
-add_dependencies(npidl_test npidl)
+if (NOT OPT_NPRPC_SKIP_TESTS)
+  # Test executable for npidl
+  add_subdirectory(test)
+  add_dependencies(npidl_test npidl)
+endif()

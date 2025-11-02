@@ -90,7 +90,7 @@ if(WIN32)
   target_compile_definitions(nprpc PRIVATE -DNPRPC_EXPORTS)
 else()
   target_link_libraries(nprpc PUBLIC
-  ${BOOST_LIB_PREFIX}/libboost_system.a
+  # ${BOOST_LIB_PREFIX}/libboost_system.a
     pthread
     ssl
     crypto

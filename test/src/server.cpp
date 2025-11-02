@@ -38,14 +38,14 @@ class ServerControlImpl : public ::test::IServerControl_Servant {
 };
 
 int main(int argc, char** argv) {
-  constexpr auto flags = nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET |
-                         nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET |
-                         nprpc::ObjectActivationFlags::Enum::ALLOW_HTTP |
-                         nprpc::ObjectActivationFlags::Enum::ALLOW_SECURED_HTTP;
   nprpctest::NprpcTestEnvironment env;
+  // Calling it manually since we are not using gtest main
   env.SetUp();
 
-  // Activating test objects  
+  using namespace nprpc::ObjectActivationFlags;
+  constexpr auto flags = ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET | ALLOW_HTTP | ALLOW_SECURED_HTTP;
+
+  // Activating test objects
   #include "common/tests/basic.inl"
   TestBasicImpl test_basic;
   nprpctest::make_stuff_happen<test::TestBasic>(test_basic, flags, "nprpc_test_basic");
@@ -66,12 +66,27 @@ int main(int argc, char** argv) {
   TestObjectsImpl test_objects(nprpctest::poa);
   nprpctest::make_stuff_happen<test::TestObjects>(test_objects, flags, "nprpc_test_objects");
 
+  // Capture interrupt signal to allow graceful shutdown
+  signal(SIGINT, [](int signum) {
+    std::cout << "Interrupt signal (" << signum << ") received." << std::endl;
+    {
+      std::lock_guard<std::mutex> lk(cv_m);
+      shutdown_requested = true;
+    }
+    cv.notify_one();
+  });
+
   // Wait for shutdown signal from JavaScript client
   std::unique_lock<std::mutex> lk(cv_m);
   cv.wait(lk, [] { return shutdown_requested; });
 
+  std::cout << "Server shutting down..." << std::endl;
+
   // Give some time for the client to receive the response
   std::this_thread::sleep_for(std::chrono::seconds(1));
+
+  // Calling TearDown to clean up manually since we are not using gtest main
+  env.TearDown();
 
   return 0;
 }

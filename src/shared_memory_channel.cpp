@@ -22,10 +22,6 @@ SharedMemoryChannel::SharedMemoryChannel(
 
     try {
         if (create_rings) {
-            // Remove any existing shared memory from crashed processes
-            LockFreeRingBuffer::remove(send_ring_name_);
-            LockFreeRingBuffer::remove(recv_ring_name_);
-
             // Create new ring buffers (continuous, variable-sized)
             send_ring_ = LockFreeRingBuffer::create(
                 send_ring_name_,
@@ -130,15 +126,14 @@ void SharedMemoryChannel::read_loop() {
 }
 
 void SharedMemoryChannel::cleanup_rings() {
+    std::cout << "Cleaning up SharedMemoryChannel rings for channel: " 
+              << channel_id_ << std::endl;
     send_ring_.reset();
     recv_ring_.reset();
 
     // Only the creator (server) should remove the shared memory
     if (is_server_) {
         try {
-            LockFreeRingBuffer::remove(send_ring_name_);
-            LockFreeRingBuffer::remove(recv_ring_name_);
-            
             if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
                 std::cout << "Cleaned up ring buffers: " << send_ring_name_ 
                          << ", " << recv_ring_name_ << std::endl;
