@@ -161,7 +161,6 @@ describe('NPRPC Integration Tests', function() {
                 await testBasic.InException();
                 expect.fail('Expected InException to throw an exception');
             } catch (error) {
-                console.log(`Caught SimpleException: ${JSON.stringify(error)}`);
                 expect(error).to.be.instanceOf(test.SimpleException);
                 const simpleEx = error as unknown as test.SimpleException;
                 expect(simpleEx.message).to.equal('This is a test exception');

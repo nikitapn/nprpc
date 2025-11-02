@@ -34,24 +34,30 @@ struct Token {
 	TokenId id;
 	std::string name;
 	std::string_view static_name;
+	int line;
+	int col;
 
-	Token() = default;
+	Token() : line(0), col(0) {}
 
-    Token(TokenId _id)
-		: id(_id)
+    Token(TokenId _id, int _line = 0, int _col = 0)
+		: id(_id), line(_line), col(_col)
 	{
 	}
 
-	Token(TokenId _id, std::string_view _name)
+	Token(TokenId _id, std::string_view _name, int _line = 0, int _col = 0)
 		: id(_id)
 		, name(_name)
+		, line(_line)
+		, col(_col)
 	{
     }
 
-	Token(TokenId _id, std::string_view _name, std::string_view _static_name)
+	Token(TokenId _id, std::string_view _name, std::string_view _static_name, int _line = 0, int _col = 0)
 		: id(_id)
 		, name(_name)
 		, static_name(_static_name)
+		, line(_line)
+		, col(_col)
 	{
 	}
 	
@@ -222,7 +228,7 @@ class Lexer {
 		return std::string(begin, ptr_ - begin);
 	}
 
-	Token read_string() {
+	Token read_string(int tok_line, int tok_col) {
 		assert(is_letter_or_underscore(cur()));
 
 		const char* begin = ptr_;
@@ -272,13 +278,13 @@ class Lexer {
 		auto const str = std::string_view(begin, ptr_);
 
 		if (auto o = map.find(str); o) {
-			return Token(o.value().second, {}, o.value().first);
+			return Token(o.value().second, {}, o.value().first, tok_line, tok_col);
 		}
 
-		if (str == "true") return Token(TokenId::Number, "1");
-		if (str == "false") return Token(TokenId::Number, "0");
+		if (str == "true") return Token(TokenId::Number, "1", tok_line, tok_col);
+		if (str == "false") return Token(TokenId::Number, "0", tok_line, tok_col);
 
-		return Token(TokenId::Identifier, std::string(str));
+		return Token(TokenId::Identifier, std::string(str), tok_line, tok_col);
 	}
 public:
 	int col() const noexcept { return col_; }
@@ -286,17 +292,20 @@ public:
 
 	Token tok() {
 		skip_wp();
+		int tok_line = line_;
+		int tok_col = col_;
+		
 		switch (cur()) {
-		case '\0': return Token(TokenId::Eof);
+		case '\0': return Token(TokenId::Eof, tok_line, tok_col);
 		case ':':
 			next();
 			if (cur() == ':') {
 				next();
-				return Token(TokenId::DoubleColon);
+				return Token(TokenId::DoubleColon, tok_line, tok_col);
 			}
-			return Token(TokenId::Colon);
+			return Token(TokenId::Colon, tok_line, tok_col);
 
-#define TOKEN_FUNC(x, y) case y: next(); return Token(TokenId::x);
+#define TOKEN_FUNC(x, y) case y: next(); return Token(TokenId::x, tok_line, tok_col);
 			ONE_CHAR_TOKENS()
 #undef TOKEN_FUNC
 
@@ -313,9 +322,9 @@ public:
 			return tok();
 		default:
 			if (is_digit(cur())) {
-				return Token(TokenId::Number, read_number());
+				return Token(TokenId::Number, read_number(), tok_line, tok_col);
 			} else if (is_letter_or_underscore(cur())) {
-				return read_string();
+				return read_string(tok_line, tok_col);
 			} else {
 				using namespace std::string_literals;
 				throw lexical_error(line_, col_, "Unknown token '"s + cur() + "'");
@@ -330,6 +339,13 @@ public:
 		std::ifstream ifs(file_path);
 		std::noskipws(ifs);
 		std::copy(std::istream_iterator<char>(ifs), std::istream_iterator<char>(), std::back_inserter(text_));
+		text_ += '\0';
+		ptr_ = text_.c_str();
+	}
+	
+	// Constructor for in-memory content (LSP mode)
+	Lexer(const std::string& content) {
+		text_ = content;
 		text_ += '\0';
 		ptr_ = text_.c_str();
 	}
@@ -411,6 +427,11 @@ class Parser {
 	size_t tokens_looked_ = 0;
 	Context& ctx_;
 	BuildGroup& builder_;
+	
+	// Error recovery support
+	std::vector<parser_error> errors_;
+	bool panic_mode_ = false;
+	bool enable_recovery_ = false;  // Can be toggled for LSP vs normal compilation
 
   using attributes_t = boost::container::small_vector<std::pair<std::string, std::string>, 2>;
 	
@@ -1109,23 +1130,123 @@ class Parser {
 			);
 	}
 
+	// Error recovery support
+	void record_error(const parser_error& e) {
+		errors_.push_back(e);
+		panic_mode_ = true;
+	}
+	
+	void synchronize() {
+		// Skip tokens until we find a synchronization point
+		// Good sync points: semicolon, closing brace, namespace, interface, struct
+		panic_mode_ = false;
+		flush();
+		
+		while (true) {
+			Token t;
+			if (tokens_.size() == 0) {
+				t = lex_.tok();
+			} else {
+				t = tokens_.pop_front();
+			}
+			
+			// Synchronization points - safe places to resume parsing
+			if (t == TokenId::Semicolon ||
+			    t == TokenId::BracketClose ||
+			    t == TokenId::Eof) {
+				break;
+			}
+			
+			// Look ahead - if next token is a statement starter, stop here
+			Token next = peek();
+			if (next == TokenId::Namespace ||
+			    next == TokenId::Interface ||
+			    next == TokenId::Flat ||
+			    next == TokenId::Exception ||
+			    next == TokenId::Enum ||
+			    next == TokenId::Using ||
+			    next == TokenId::Const ||
+			    next == '[') {  // Attributes
+				break;
+			}
+			flush();
+		}
+	}
+	
+	// Wrapper to handle errors with recovery
+	template<typename Fn>
+	bool try_parse(Fn&& fn, const char* error_msg) {
+		if (!enable_recovery_) {
+			return fn();
+		}
+		
+		try {
+			return fn();
+		} catch (parser_error& e) {
+			record_error(e);
+			synchronize();
+			return false;
+		} catch (lexical_error& e) {
+			record_error(parser_error(e.line, e.col, e.what()));
+			synchronize();
+			return false;
+		}
+	}
+
 public:
-	Parser(std::filesystem::path file_path, Context& ctx, BuildGroup& builder)
+	Parser(std::filesystem::path file_path, Context& ctx, BuildGroup& builder, bool enable_recovery = false)
 		: lex_(file_path)
 		, ctx_(ctx)
 		, builder_(builder)
+		, enable_recovery_(enable_recovery)
+	{
+	}
+	
+	// Constructor for in-memory content (LSP mode)
+	Parser(const std::string& content, Context& ctx, BuildGroup& builder, bool enable_recovery = false)
+		: lex_(content)
+		, ctx_(ctx)
+		, builder_(builder)
+		, enable_recovery_(enable_recovery)
 	{
 	}
 
 	void parse() {
-		while (!done_) {
-			if (!(
-				check(&Parser::stmt_decl) ||
-				check(&Parser::eof)
-				)) {
-				throw_error("Expected tokens: statement, eof");
+		if (!enable_recovery_) {
+			// Original behavior - throw on first error
+			while (!done_) {
+				if (!(
+					check(&Parser::stmt_decl) ||
+					check(&Parser::eof)
+					)) {
+					throw_error("Expected tokens: statement, eof");
+				}
+			}
+		} else {
+			// Error recovery mode - collect all errors
+			while (!done_) {
+				try_parse([this]() {
+					if (check(&Parser::stmt_decl) || check(&Parser::eof)) {
+						return true;
+					}
+					throw_error("Expected tokens: statement, eof");
+					return false;
+				}, "Statement parsing failed");
 			}
 		}
+	}
+	
+	// Get collected errors (for LSP)
+	const std::vector<parser_error>& get_errors() const {
+		return errors_;
+	}
+	
+	bool has_errors() const {
+		return !errors_.empty();
+	}
+	
+	void enable_recovery(bool enable) {
+		enable_recovery_ = enable;
 	}
 };
 
@@ -1209,3 +1330,61 @@ int main(int argc, char* argv[]) {
 
 	return -1;
 }
+
+// LSP Helper Function Implementation
+#include "parse_for_lsp.hpp"
+
+namespace npidl {
+
+// Null builder that doesn't generate any output (for LSP parsing)
+class NullBuilder : public Builder {
+public:
+	NullBuilder(Context& ctx) : Builder(ctx) {}
+	
+	void emit_file_footer() override {}
+	void emit_namespace_begin() override {}
+	void emit_namespace_end() override {}
+	void emit_interface(AstInterfaceDecl*) override {}
+	void emit_struct(AstStructDecl*) override {}
+	void emit_exception(AstStructDecl*) override {}
+	void emit_enum(AstEnumDecl*) override {}
+	void emit_constant(const std::string&, AstNumber*) override {}
+	void emit_using(AstAliasDecl*) override {}
+};
+
+bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors) {
+	errors.clear();
+	
+	try {
+		Context ctx{"lsp_module"};
+		BuildGroup builder(ctx);
+		builder.add<NullBuilder>();
+		
+		// Create parser with error recovery enabled
+		Parser parser(content, ctx, builder, true /* enable_recovery */);
+		parser.parse();
+		
+		// Collect any errors that occurred
+		for (const auto& e : parser.get_errors()) {
+			ParseError err;
+			err.line = e.line;
+			err.col = e.col;
+			err.message = e.what();
+			errors.push_back(err);
+		}
+
+		return !parser.has_errors();
+
+	} catch (const std::exception& e) {
+		// Fallback for unexpected errors
+		ParseError err;
+		err.line = 1;
+		err.col = 1;
+		err.message = std::string("Unexpected error: ") + e.what();
+		errors.push_back(err);
+		return false;
+	}
+}
+
+} // namespace npidl
+

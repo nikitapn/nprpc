@@ -318,7 +318,7 @@ public:
 		std::string content;
 		int version = 0;
 		std::vector<lsp::Diagnostic> diagnostics;
-		std::unique_ptr<Context> context;
+		// Note: Context is created per-parse, not stored per-document
 	};
 
 	void open(const std::string& uri, const std::string& text, int version);

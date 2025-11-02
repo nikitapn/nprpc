@@ -21,7 +21,7 @@ This directory contains the LSP server implementation for the NPIDL language, pr
 
 ```
 ┌─────────────────────────────────────────────┐
-│  Editor (Neovim/Emacs/VSCode)              │
+│  Editor (Neovim/Emacs/VSCode)               │
 └──────────────┬──────────────────────────────┘
                │ JSON-RPC over stdin/stdout
                │

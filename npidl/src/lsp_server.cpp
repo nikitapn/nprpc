@@ -2,7 +2,7 @@
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 
 #include "lsp_server.hpp"
-#include "ast.hpp"
+#include "parse_for_lsp.hpp"
 #include <iostream>
 #include <sstream>
 #include <filesystem>
@@ -37,9 +37,22 @@ DocumentManager::Document* DocumentManager::get(const std::string& uri) {
 std::vector<lsp::Diagnostic> DocumentManager::parse_and_get_diagnostics(Document& doc) {
 	std::vector<lsp::Diagnostic> diagnostics;
 	
-	// TODO: Integrate with actual parser
-	// For now, just return empty diagnostics
-	// In next step, we'll modify Parser to collect diagnostics without throwing
+	std::vector<npidl::ParseError> parse_errors;
+	npidl::parse_for_lsp(doc.content, parse_errors);
+	
+	// Convert parse errors to LSP diagnostics
+	for (const auto& err : parse_errors) {
+		lsp::Diagnostic diag;
+		// Convert from 1-based to 0-based indexing (LSP protocol requirement)
+		diag.range.start.line = err.line - 1;
+		diag.range.start.character = err.col - 1;
+		diag.range.end.line = err.line - 1;
+		diag.range.end.character = err.col;  // Highlight one character
+		diag.severity = 1;  // Error
+		diag.message = err.message;
+		diag.source = "npidl";
+		diagnostics.push_back(diag);
+	}
 	
 	return diagnostics;
 }
