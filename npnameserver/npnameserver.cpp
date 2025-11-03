@@ -4,11 +4,11 @@
 #include <iostream>
 #include <memory>
 #include <unordered_map>
-#include <nprpc_stub/nprpc_nameserver.hpp>
+#include <nprpc_nameserver.hpp>
 #include <boost/asio/signal_set.hpp>
 #include <boost/beast/core/error.hpp>
 
-class Nameserver : public nprpc::INameserver_Servant {
+class NameserverImpl : public nprpc::common::INameserver_Servant {
 	std::unordered_map<std::string, std::unique_ptr<nprpc::Object>> objects_;
 public:
 	void Bind(nprpc::Object* obj, nprpc::flat::Span<char> name) override {
@@ -37,7 +37,7 @@ public:
 };
 
 int main() {
-	Nameserver server;
+	NameserverImpl server;
 	boost::asio::io_context ioc;
 
 	boost::asio::signal_set signals(ioc, SIGINT, SIGTERM);

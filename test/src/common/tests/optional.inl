@@ -1,13 +1,13 @@
 
-class TestOptionalImpl : public test::ITestOptional_Servant {
+class TestOptionalImpl : public nprpc::test::ITestOptional_Servant {
 public:
-    virtual bool InEmpty(::nprpc::flat::Optional_Direct<uint32_t> a) {
+    bool InEmpty(::nprpc::flat::Optional_Direct<uint32_t> a) override {
         EXPECT_FALSE(a.has_value());
         return true;
     }
 
-    virtual bool In(::nprpc::flat::Optional_Direct<uint32_t> a, 
-                   ::nprpc::flat::Optional_Direct<test::flat::AAA, test::flat::AAA_Direct> b) {
+    bool In(::nprpc::flat::Optional_Direct<uint32_t> a, 
+                   ::nprpc::flat::Optional_Direct<nprpc::test::flat::AAA, nprpc::test::flat::AAA_Direct> b) override {
         EXPECT_TRUE(a.has_value());
         EXPECT_EQ(a.value(), 100u);
         EXPECT_TRUE(b.has_value());
@@ -21,17 +21,17 @@ public:
         return true;
     }
 
-    virtual void OutEmpty(::nprpc::flat::Optional_Direct<uint32_t> a) {
+    void OutEmpty(::nprpc::flat::Optional_Direct<uint32_t> a) override {
         a.set_nullopt();
     }
 
-    virtual void Out(::nprpc::flat::Optional_Direct<uint32_t> a) {
+    void Out(::nprpc::flat::Optional_Direct<uint32_t> a) override {
         a.alloc();
         a.value() = 100;
     }
 
-    virtual test::Opt1 ReturnOpt1() {
-        test::Opt1 ret;
+    nprpc::test::Opt1 ReturnOpt1() override {
+        nprpc::test::Opt1 ret;
         ret.str = "test_string";
         ret.stream = std::vector<uint8_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
         return ret;

@@ -11,8 +11,8 @@
 #include <gtest/gtest.h>
 
 #include <nprpc/impl/nprpc_impl.hpp>
-#include <nprpc_test_stub/test.hpp>
-#include <nprpc_stub/nprpc_nameserver.hpp>
+#include <nprpc_test.hpp>
+#include <nprpc_nameserver.hpp>
 
 #include <nplib/utils/thread_pool.hpp>
 
@@ -29,7 +29,7 @@ TEST_F(NprpcTest, TestBasic) {
     TestBasicImpl servant;
     auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
         try {
-            auto obj = make_stuff_happen<test::TestBasic>(servant, flags);
+            auto obj = make_stuff_happen<nprpc::test::TestBasic>(servant, flags);
 
             // ReturnBoolean test
             EXPECT_TRUE(obj->ReturnBoolean());
@@ -58,14 +58,14 @@ TEST_F(NprpcTest, TestBasic) {
             EXPECT_EQ(obj->ReturnU32(), 42u);
 
             // OutStruct test
-            test::AAA aaa;
+            nprpc::test::AAA aaa;
             obj->OutStruct(aaa);
             EXPECT_EQ(aaa.a, 12345);
             EXPECT_EQ(std::string_view(aaa.b), "Hello from OutStruct"sv);
             EXPECT_EQ(std::string_view(aaa.c), "Another string"sv);
 
             // OutArrayOfStructs test
-            std::vector<test::SimpleStruct> struct_array;
+            std::vector<nprpc::test::SimpleStruct> struct_array;
             obj->OutArrayOfStructs(struct_array);
             EXPECT_EQ(struct_array.size(), 10u);
             for (uint32_t i = 0; i < 10; ++i) {
@@ -76,7 +76,7 @@ TEST_F(NprpcTest, TestBasic) {
             try {
               obj->InException();
               FAIL() << "Expected InException to throw SimpleException";
-            } catch (const test::SimpleException& ex) {
+            } catch (const nprpc::test::SimpleException& ex) {
               EXPECT_EQ(std::string_view(ex.message), "This is a test exception"sv);
               EXPECT_EQ(ex.code, 123);
             }
@@ -104,10 +104,10 @@ TEST_F(NprpcTest, TestOptional) {
     TestOptionalImpl servant;
     auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
         try {
-            auto obj = make_stuff_happen<test::TestOptional>(servant, flags);
+            auto obj = make_stuff_happen<nprpc::test::TestOptional>(servant, flags);
 
             EXPECT_TRUE(obj->InEmpty(std::nullopt));
-            EXPECT_TRUE(obj->In(100, test::AAA{ 100u, "test_b"s, "test_c"s }));
+            EXPECT_TRUE(obj->In(100, nprpc::test::AAA{ 100u, "test_b"s, "test_c"s }));
 
             std::optional<uint32_t> a;
 
@@ -144,10 +144,10 @@ TEST_F(NprpcTest, TestNested) {
     TestNestedImpl servant;
     auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
         try {
-            auto obj = make_stuff_happen<test::TestNested>(servant, flags);
+            auto obj = make_stuff_happen<nprpc::test::TestNested>(servant, flags);
             obj->set_timeout(5000); // Set a longer timeout for this test
 
-            std::optional<test::BBB> a;
+            std::optional<nprpc::test::BBB> a;
 
             obj->Out(a);
 
@@ -190,7 +190,7 @@ TEST_F(NprpcTest, TestLargeMessage) {
     TestLargeMessage servant;
     auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
         try {   
-            auto obj = make_stuff_happen<test::TestLargeMessage>(servant, flags);
+            auto obj = make_stuff_happen<nprpc::test::TestLargeMessage>(servant, flags);
             obj->set_timeout(5000); // Set a longer timeout for this test
 
             // Test sending 3MB of data
@@ -234,14 +234,14 @@ TEST_F(NprpcTest, TestLargeMessage) {
 
 // Bad input validation test
 TEST_F(NprpcTest, TestBadInput) {
-    class TestBadInputImpl : public test::ITestBadInput_Servant {
+    class TestBadInputImpl : public nprpc::test::ITestBadInput_Servant {
     public:
         virtual void In(::nprpc::flat::Span<uint8_t> a) {}
     } servant;
 
     auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
         try {
-            auto obj = make_stuff_happen<test::TestBadInput>(servant, flags);
+            auto obj = make_stuff_happen<nprpc::test::TestBadInput>(servant, flags);
 
             boost::beast::flat_buffer buf;
             auto mb = buf.prepare(2048);

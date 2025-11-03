@@ -1,6 +1,6 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/shared_memory_connection.hpp>
-#include <nprpc_stub/nprpc_nameserver.hpp>
+#include <nprpc_nameserver.hpp>
 
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -156,18 +156,18 @@ bool RpcImpl::close_session(Session* session)
   return true;
 }
 
-ObjectPtr<Nameserver> RpcImpl::get_nameserver(
+ObjectPtr<common::Nameserver> RpcImpl::get_nameserver(
   std::string_view nameserver_ip)
 {
   auto ip = std::string(nameserver_ip);
-  ObjectPtr<Nameserver> obj(new Nameserver(0));
+  ObjectPtr<common::Nameserver> obj(new common::Nameserver(0));
   detail::ObjectId& oid = obj->get_data();
 
   oid.object_id = 0ull;
   oid.poa_idx   = 0;
   oid.flags     = static_cast<nprpc::oflags_t>(detail::ObjectFlag::Persistent);
   oid.origin.fill(0);
-  oid.class_id  = INameserver_Servant::_get_class();
+  oid.class_id  = common::INameserver_Servant::_get_class();
   oid.urls.assign(
     "tcp://" + ip + ":15000;"
     "ws://"  + ip + ":15001;"

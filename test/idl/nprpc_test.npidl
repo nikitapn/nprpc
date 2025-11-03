@@ -1,7 +1,8 @@
 // Copyright (c) 2022 nikitapnn1@gmail.com
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 
-namespace test {
+module nprpc.test;
+
 using Id = u32;
 using IdArray = vector<Id>;
 using bytestream = vector<u8>;
@@ -137,6 +138,4 @@ interface TestNested {
 [trusted=false]
 interface TestBadInput {
 	void In(a: in vector<u8>);
-}
-
 }

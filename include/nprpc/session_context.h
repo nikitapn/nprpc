@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <nprpc_stub/nprpc_base.hpp>
+#include <nprpc_base.hpp>
 #include <nprpc/endpoint.hpp>
 #include <nprpc/export.hpp>
 

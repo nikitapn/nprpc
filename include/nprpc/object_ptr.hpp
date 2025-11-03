@@ -19,7 +19,7 @@ class ObjectPtr {
 		if (!obj_) return;
 		try {
 			obj_->release();
-		} catch (nprpc::Exception&) {
+		} catch (Exception&) {
 		}
 	}
 public:

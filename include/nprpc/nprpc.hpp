@@ -18,7 +18,7 @@
 #include <boost/beast/core/flat_buffer.hpp>
 
 #include <nprpc/common.hpp>
-#include <nprpc_stub/nprpc_base.hpp>
+#include <nprpc_base.hpp>
 #include <nprpc/basic.hpp>
 #include <nprpc/buffer.hpp>
 #include <nprpc/object_ptr.hpp>
@@ -30,7 +30,9 @@
 namespace nprpc {
 
 class Rpc;
+namespace common {
 class Nameserver;
+}
 class Poa;
 class ObjectServant;
 class Object;
@@ -64,13 +66,13 @@ class ObjectId
     ar & NVP2("urls", data_.urls);
   }
 
-  void assign_from_direct(const nprpc::detail::flat::ObjectId_Direct& other)
+  void assign_from_direct(const detail::flat::ObjectId_Direct& other)
   {
-    nprpc::detail::helpers::assign_from_flat_ObjectId(const_cast<nprpc::detail::flat::ObjectId_Direct&>(other), data_);
+    nprpc::detail::helpers::assign_from_flat_ObjectId(const_cast<detail::flat::ObjectId_Direct&>(other), data_);
   }
   
   static void assign_to_direct(
-    const nprpc::ObjectId& oid, 
+    const ::nprpc::ObjectId& oid, 
     detail::flat::ObjectId_Direct& direct)
   {
     nprpc::detail::helpers::assign_from_cpp_ObjectId(direct, oid.data_);
@@ -196,8 +198,8 @@ class ObjectServant
 
  public:
   virtual std::string_view get_class() const noexcept = 0;
-  virtual void             dispatch(nprpc::Buffers&        bufs,
-                                    nprpc::SessionContext& ctx,
+  virtual void             dispatch(::nprpc::Buffers&        bufs,
+                                    ::nprpc::SessionContext& ctx,
                                     bool                   from_parent) = 0;
   virtual void             destroy() noexcept { delete this; }
 
@@ -280,7 +282,7 @@ class NPRPC_API Rpc
   PoaBuilder create_poa() { return PoaBuilder(this); }
   virtual void destroy_poa(Poa* poa) = 0;
   virtual void destroy() = 0;
-  virtual ObjectPtr<Nameserver> get_nameserver(std::string_view nameserver_ip) = 0;
+  virtual ObjectPtr<common::Nameserver> get_nameserver(std::string_view nameserver_ip) = 0;
   virtual SessionContext* get_object_session_context(Object* obj) = 0;
   virtual ~Rpc() = default;
 };

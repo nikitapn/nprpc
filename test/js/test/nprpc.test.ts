@@ -5,7 +5,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 // Use the Node.js compatible build
 import * as NPRPC from 'nprpc/index.node.js';
-import * as test from '../src/gen/test';
+import * as test from '../src/gen/nprpc_test';
 
 // Test data constants (matching C++ tests)
 const tstr1 = "test_string_1_very_long_test_string_1_very_long_test_string_1_very_long_test_string_1_very_long";

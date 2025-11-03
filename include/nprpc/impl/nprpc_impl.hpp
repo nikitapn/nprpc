@@ -134,7 +134,7 @@ class SocketConnection
 
 class RpcImpl : public Rpc
 {
-  friend nprpc::PoaBuilder;
+  friend PoaBuilder;
 
   static constexpr size_t                  max_poa_objects = 6;
   static constexpr std::uint16_t           invalid_port    = -1;
@@ -180,7 +180,7 @@ class RpcImpl : public Rpc
   void                          destroy() override;
   void                          destroy_poa(Poa* poa) override;
   bool                          close_session(Session* con);
-  virtual ObjectPtr<Nameserver> get_nameserver(
+  virtual ObjectPtr<common::Nameserver> get_nameserver(
     std::string_view nameserver_ip) override;
   //	void check_unclaimed_objects(boost::system::error_code ec);
 
@@ -360,7 +360,7 @@ inline void Session::close()
 
 class ReferenceListImpl
 {
-  std::vector<std::pair<nprpc::detail::ObjectIdLocal, ObjectServant*>> refs_;
+  std::vector<std::pair<detail::ObjectIdLocal, ObjectServant*>> refs_;
  public:
   ~ReferenceListImpl();
 

@@ -10,9 +10,9 @@ namespace npidl {
 
 // Error information from parser
 struct ParseError {
-	int line;        // 1-based
-	int col;         // 1-based  
-	std::string message;
+  int line;        // 1-based
+  int col;         // 1-based  
+  std::string message;
 };
 
 // Parse content and return errors (for LSP)

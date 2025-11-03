@@ -122,7 +122,7 @@ export interface INameserver_Servant
   Resolve(name: /*in*/string, obj: /*out*/NPRPC.ref<NPRPC.ObjectId>): boolean/*boolean*/;
 }
 export class _INameserver_Servant extends NPRPC.ObjectServant {
-  public static _get_class(): string { return "nprpc_nameserver/nprpc.Nameserver"; }
+  public static _get_class(): string { return "nprpc_nameserver/nprpc.common.Nameserver"; }
   public readonly get_class = () => { return _INameserver_Servant._get_class(); }
   public readonly dispatch = (buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, from_parent: boolean) => {
     _INameserver_Servant._dispatch(this, buf, remote_endpoint, from_parent);

@@ -9,7 +9,7 @@
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/asio/ip/address_v4.hpp>
 
-#include <nprpc_stub/nprpc_base.hpp>
+#include <nprpc_base.hpp>
 
 namespace nprpc {
 static constexpr std::string_view tcp_prefix    = "tcp://";

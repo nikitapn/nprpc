@@ -14,6 +14,9 @@ add_library(npidl_core STATIC
   src/ts_builder.cpp
   src/utils.cpp
   src/utils.hpp
+  src/library.cpp
+  src/namespace.cpp
+  src/context.cpp
 )
 
 target_include_directories(npidl_core PUBLIC

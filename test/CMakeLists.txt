@@ -1,7 +1,7 @@
 include(../cmake/npidl.cmake)
 
 set(IDL_FILES 
-  ${CMAKE_SOURCE_DIR}/nprpc/test/idl/test.npidl
+  ${CMAKE_SOURCE_DIR}/nprpc/test/idl/nprpc_test.npidl
 )
 
 npidl_generate_idl_files("${IDL_FILES}" nprpc_test_stub)

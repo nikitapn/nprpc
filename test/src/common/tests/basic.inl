@@ -1,5 +1,5 @@
 
-class TestBasicImpl : public test::ITestBasic_Servant {
+class TestBasicImpl : public nprpc::test::ITestBasic_Servant {
 public:
     uint32_t ReturnU32() override{
         return 42;
@@ -30,13 +30,13 @@ public:
         std::iota(std::begin(span), std::end(span), 0);
     }
 
-    void OutStruct (test::flat::AAA_Direct& a) override{
+    void OutStruct (nprpc::test::flat::AAA_Direct& a) override{
         a.a() = 12345;
         a.b("Hello from OutStruct");
         a.c("Another string");
     }
 
-    void OutArrayOfStructs (::nprpc::flat::Vector_Direct2<test::flat::SimpleStruct, test::flat::SimpleStruct_Direct> a) override{
+    void OutArrayOfStructs (::nprpc::flat::Vector_Direct2<nprpc::test::flat::SimpleStruct, nprpc::test::flat::SimpleStruct_Direct> a) override{
       a.length(10);
       auto span = a();
       int i = 1;
@@ -45,13 +45,13 @@ public:
       }
     }
 
-    test::IdArray ReturnIdArray () override {
-      test::IdArray arr {1,2,3,4,5,6,7,8,9,10};
+    nprpc::test::IdArray ReturnIdArray () override {
+      nprpc::test::IdArray arr {1,2,3,4,5,6,7,8,9,10};
       return arr;
     }
 
     void InException () override {
-      throw test::SimpleException{"This is a test exception", 123};
+      throw nprpc::test::SimpleException{"This is a test exception", 123};
     }
 
     void OutScalarWithException(uint8_t dev_addr, uint16_t addr, uint8_t& value) override {

@@ -7,7 +7,7 @@
 #include <nprpc/impl/websocket_session.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/session.hpp>
-#include <nprpc_stub/nprpc_base.hpp>
+#include <nprpc_base.hpp>
 
 #include <boost/beast/version.hpp>
 #include <boost/asio/bind_executor.hpp>

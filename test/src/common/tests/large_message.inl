@@ -1,4 +1,4 @@
-class TestLargeMessage : public test::ITestLargeMessage_Servant {
+class TestLargeMessage : public nprpc::test::ITestLargeMessage_Servant {
 public:
     virtual bool ReturnBoolean() {
         return true;

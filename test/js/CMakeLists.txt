@@ -11,8 +11,8 @@ set(JS_TEST_CONFIG_FILES
     "${CMAKE_SOURCE_DIR}/nprpc/test/js/.mocharc.json"
 )
 
-set(NPRPC_TEST_JS_SRC ${CMAKE_BINARY_DIR}/nprpc_test_stub/src/gen/js/test.ts)
-set(NPRPC_TEST_JS_DST ${CMAKE_SOURCE_DIR}/nprpc/test/js/src/gen/test.ts)
+set(NPRPC_TEST_JS_SRC ${CMAKE_BINARY_DIR}/nprpc_test_stub/src/gen/js/nprpc_test.ts)
+set(NPRPC_TEST_JS_DST ${CMAKE_SOURCE_DIR}/nprpc/test/js/src/gen/nprpc_test.ts)
 
 # Copy generated test interfaces
 add_custom_command(

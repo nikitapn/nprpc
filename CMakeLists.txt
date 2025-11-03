@@ -12,25 +12,25 @@ set(IDL_FILES
 
 npidl_generate_idl_files("${IDL_FILES}" nprpc_stub)
 
-# Copy nprpc_stub generated headers to the nprpc/include/nprpc_stub directory
+# Copy nprpc_stub generated headers to the nprpc/include directory
 foreach(file ${nprpc_stub_GENERATED_HEADERS})
   get_filename_component(filename ${file} NAME)
   add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/include/nprpc_stub/${filename}
+    OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/include/${filename}
     DEPENDS ${file}
     COMMAND ${CMAKE_COMMAND} -E make_directory
-      ${CMAKE_CURRENT_SOURCE_DIR}/include/nprpc_stub
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       ${file}
-      ${CMAKE_CURRENT_SOURCE_DIR}/include/nprpc_stub
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
     COMMENT "Copying nprpc_stub generated headers to nprpc/include/nprpc/gen"
   )
 endforeach()
 
 add_library(nprpc SHARED
   ${nprpc_stub_GENERATED_SOURCES}
-  include/nprpc_stub/nprpc_base.hpp
-  include/nprpc_stub/nprpc_nameserver.hpp
+  include/nprpc_base.hpp
+  include/nprpc_nameserver.hpp
   src/framework.h
   src/nprpc.cpp
   src/rpc_impl.cpp
