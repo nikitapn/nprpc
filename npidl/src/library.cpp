@@ -39,7 +39,7 @@ struct Token {
 
   Token() : line(0), col(0) {}
 
-    Token(TokenId _id, int _line = 0, int _col = 0)
+  Token(TokenId _id, int _line = 0, int _col = 0)
     : id(_id), line(_line), col(_col)
   {
   }
@@ -60,7 +60,7 @@ struct Token {
     , col(_col)
   {
   }
-  
+
   bool operator == (TokenId id) const noexcept {
     return this->id == id;
   }
@@ -266,7 +266,7 @@ public:
     skip_wp();
     int tok_line = line_;
     int tok_col = col_;
-    
+
     switch (cur()) {
     case '\0': return Token(TokenId::Eof, tok_line, tok_col);
     case ':':
@@ -389,6 +389,31 @@ public:
   throw parser_error(ctx_.current_file_path(), lex_.line(), lex_.col(), \
     "Unexpected token: '" + std::string(tok.to_string_view()) + '\'');
 
+// Simple Recursive Descent Parser
+// Every rule is called via Parser::check() which saves/restores lookahead state
+//
+// NPIDL Grammar (EBNF):
+//   file           ::= stmt_decl* EOF
+//   stmt_decl      ::= const_decl | namespace_decl | attributes_decl? (interface_decl | struct_decl) 
+//                      | enum_decl | using_decl | module_decl | ';'
+//   module_decl    ::= 'module' (IDENTIFIER '.')* IDENTIFIER ';'
+//   const_decl     ::= 'const' IDENTIFIER '=' NUMBER ';'
+//   namespace_decl ::= 'namespace' IDENTIFIER '{' stmt_decl* '}'
+//   using_decl     ::= 'using' IDENTIFIER '=' type_decl ';'
+//   enum_decl      ::= 'enum' IDENTIFIER (':' fundamental_type)? '{' enum_item (',' enum_item)* '}'
+//   enum_item      ::= IDENTIFIER ('=' NUMBER)?
+//   interface_decl ::= 'interface' IDENTIFIER (':' IDENTIFIER (',' IDENTIFIER)*)? '{' function_decl* '}'
+//   struct_decl    ::= IDENTIFIER ':' ('flat' | 'exception') '{' (field_decl ';' | version_decl)* '}'
+//   function_decl  ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (',' arg_decl)*)? ')' 
+//                      (';' | 'raises' '(' IDENTIFIER ')' ';')
+//   field_decl     ::= IDENTIFIER '?'? ':' type_decl
+//   arg_decl       ::= IDENTIFIER '?'? ':' ('in' | 'out' 'direct'?) type_decl
+//   type_decl      ::= fundamental_type array_decl? | IDENTIFIER array_decl?
+//                      | 'vector' '<' type_decl '>' | 'string' array_decl? | 'void' | 'object'
+//   array_decl     ::= '[' (IDENTIFIER | NUMBER) ']'
+//   version_decl   ::= '#' 'version' NUMBER
+//   attributes_decl::= '[' (IDENTIFIER '=' (IDENTIFIER | NUMBER))? ']' attributes_decl?
+//
 class Parser {
   friend struct PeekGuard;
   Lexer lex_;
@@ -407,7 +432,7 @@ class Parser {
   bool enable_recovery_ = false;  // Can be toggled for LSP vs normal compilation
 
   using attributes_t = boost::container::small_vector<std::pair<std::string, std::string>, 2>;
-  
+
   class PeekGuard {
     Parser& parser_;
     size_t saved_;
@@ -442,7 +467,7 @@ class Parser {
     tokens_looked_++;
     return *tok;
   }
-  
+
   Token match(TokenId id) {
     Token t;
 
@@ -470,8 +495,9 @@ class Parser {
 
   template<class MemFn, typename... Args>
   bool check(MemFn Pm, Args&&... args) {
-    size_t saved = tokens_looked_;
-    if (std::invoke(Pm, this, std::forward<Args>(args)...)) return true;
+    auto const saved = tokens_looked_;
+    if (std::invoke(Pm, this, std::forward<Args>(args)...))
+      return true;
     tokens_looked_ = saved;
     return false;
   }
@@ -518,6 +544,7 @@ class Parser {
     }
   }
 
+  // array_decl ::= '[' (IDENTIFIER | NUMBER) ']'
   bool array_decl(AstTypeDecl*& type) {
     if (peek() == TokenId::SquareBracketOpen) {
       flush();
@@ -548,10 +575,13 @@ class Parser {
     return false;
   }
 
+  // is_double_colon ::= '::'
   bool is_double_colon() {
     return peek() == TokenId::DoubleColon;
   }
 
+  // get_type_namespace ::= '::' namespace_path | parent_namespace_path
+  // namespace_path ::= IDENTIFIER ('::' IDENTIFIER)*
   bool get_type_namespace(Namespace*& nm, Token& type) {
     auto parse_namespace = [&]() {
       do {
@@ -592,6 +622,12 @@ class Parser {
     return false;
   }
 
+  // type_decl ::= fundamental_type array_decl?
+  //             | IDENTIFIER array_decl?
+  //             | 'vector' '<' type_decl '>'
+  //             | 'string' array_decl?
+  //             | 'void'
+  //             | 'object'
   bool type_decl(AstTypeDecl*& type) {
     type = nullptr;
 
@@ -645,6 +681,7 @@ class Parser {
     }
   }
 
+  // field_decl ::= IDENTIFIER '?'? ':' type_decl
   bool field_decl(AstFieldDecl*& field) {
     Token field_name;
     AstTypeDecl* type;
@@ -664,6 +701,7 @@ class Parser {
     return true;
   }
 
+  // arg_decl ::= IDENTIFIER '?'? ':' ('in' | 'out' 'direct'?) type_decl
   bool arg_decl(AstFunctionArgument& arg) {
     Token arg_name;
     bool optional;
@@ -680,7 +718,6 @@ class Parser {
       arg.direct = true;
     }
 
-
     AstTypeDecl* type;
 
     if (!check(&Parser::type_decl, std::ref(type))) return false;
@@ -691,6 +728,7 @@ class Parser {
     return true;
   }
 
+  // version_decl ::= '#' 'version' NUMBER
   bool version_decl(AstStructDecl* s) {
     if (!(peek() == TokenId::Hash && peek() == TokenId::Identifier && tokens_.back().name == "version")) return false;
 
@@ -706,6 +744,7 @@ class Parser {
     return true;
   }
 
+  // Helper for struct parsing
   bool struct_close_tag() {
     if (peek() == TokenId::BracketClose) {
       flush();
@@ -714,6 +753,7 @@ class Parser {
     return false;
   }
 
+  // struct_decl ::= IDENTIFIER ':' ('flat' | 'exception') '{' (field_decl ';' | version_decl)* '}'
   bool struct_decl(attributes_t& attr) {
     Token name_tok;
 
@@ -732,7 +772,7 @@ class Parser {
     auto s = new AstStructDecl();
 
     s->name = name_tok.name;
-    
+
     if (is_exception) {
       s->exception_id = ctx_.next_exception_id();
       ctx_.exceptions.push_back(s);
@@ -781,6 +821,7 @@ class Parser {
     return true;
   }
 
+  // const_decl ::= 'const' IDENTIFIER '=' NUMBER ';'
   bool const_decl() {
     if (peek() != TokenId::Const) return false;
     flush();
@@ -791,6 +832,7 @@ class Parser {
     return true;
   }
 
+  // module_decl ::= 'module' (IDENTIFIER '.')* IDENTIFIER ';'
   // Parse module (ident '.')* ';'
   bool module_decl() {
     if (peek() != TokenId::Module)
@@ -821,6 +863,7 @@ class Parser {
     return true;
   }
 
+  // namespace_decl ::= 'namespace' IDENTIFIER '{' stmt_decl* '}'
   bool namespace_decl() {
     if (peek() != TokenId::Namespace) return false;
     flush();
@@ -843,15 +886,16 @@ class Parser {
     return true;
   }
 
+  // function_decl ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (',' arg_decl)*)? ')' (';' | 'raises' '(' IDENTIFIER ')' ';')
   bool function_decl(AstFunctionDecl*& f) {
     bool is_async;
     AstTypeDecl* ret_type = nullptr;
-    
+
     if (!(is_async = check(&Parser::one, TokenId::Async)) && 
       !check(&Parser::type_decl, std::ref(ret_type))) return false;
-    
+
     if (!ret_type) ret_type = new AstVoidDecl();
-    
+
     f = new AstFunctionDecl();
     f->ret_value = ret_type ;
     f->is_async = is_async;
@@ -873,18 +917,18 @@ class Parser {
     }
 
     auto tok = peek();
-    
+
     if (tok == TokenId::Semicolon) {
       flush();
     } else if (tok == TokenId::Raises) {
       if (f->is_async) throw_error("function declared as async cannot throw exceptions");
-      
+
       flush();
       match('(');
-      
+
       auto type = ctx_.nm_cur()->find_type(match(TokenId::Identifier).name, false);
       if (!type) throw_error("unknown exception type");
-        
+
       if (type->id != FieldType::Struct && cflat(type)->is_exception()) {
         throw_error("class is not an exception");
       }
@@ -899,6 +943,7 @@ class Parser {
     return true;
   }
 
+  // attributes_decl ::= '[' (IDENTIFIER '=' (IDENTIFIER | NUMBER))? ']' attributes_decl?
   bool attributes_decl(boost::container::small_vector<std::pair<std::string, std::string>, 2>& attr) {
     if (peek() != '[') return false;
     flush();
@@ -937,6 +982,7 @@ class Parser {
     return true;
   }
 
+  // interface_decl ::= 'interface' IDENTIFIER (':' IDENTIFIER (',' IDENTIFIER)*)? '{' function_decl* '}'
   bool interface_decl(attributes_t& attr) {
 
     if (peek() != TokenId::Interface) return false;
@@ -989,7 +1035,6 @@ class Parser {
       throw_error("Expected tokens: function declaration, '}' ");
     }
 
-
     for (uint16_t idx = 0; idx < ifs->fns.size(); ++idx) {
       ifs->fns[idx]->idx = idx;
     }
@@ -1001,18 +1046,19 @@ class Parser {
     return true;
   }
 
-
-
+  // one ::= TOKEN_ID (helper to match a single token)
   bool one(TokenId id) {
     if (peek() == id) { flush(); return true; }
     return false;
   }
 
+  // eof ::= EOF
   bool eof() {
     if (peek() == TokenId::Eof) { flush(); return (done_ = true); }
     return false;
   }
 
+  // using_decl ::= 'using' IDENTIFIER '=' type_decl ';'
   bool using_decl() {
     Token left;
 
@@ -1038,6 +1084,8 @@ class Parser {
     return true;
   }
 
+  // enum_decl ::= 'enum' IDENTIFIER (':' fundamental_type)? '{' enum_item (',' enum_item)* '}'
+  // enum_item ::= IDENTIFIER ('=' NUMBER)?
   bool enum_decl() {
     if (peek() != TokenId::Enum) return false;
     flush();
@@ -1073,7 +1121,7 @@ class Parser {
 
     while ((tok = peek()) != TokenId::BracketClose) {
       if (tok.id != TokenId::Identifier) throw_error("Unexpected token '" + tok.name + '\'');
-      
+
       auto name = std::move(tok.name);
 
       tok = peek();
@@ -1089,7 +1137,7 @@ class Parser {
 
         // explicit
         e->items.emplace_back(std::move(name), std::pair<AstNumber, bool>{ n, true });
-        
+
         ix = std::get<std::int64_t>(n.value) + 1;
         tok = peek();
       } else {
@@ -1114,6 +1162,7 @@ class Parser {
     return true;
   }
 
+  // Helper to parse declarations that can have attributes
   bool something_that_could_have_attributes() {
     attributes_t attr;
     check(&Parser::attributes_decl, std::ref(attr));
@@ -1122,6 +1171,7 @@ class Parser {
       check(&Parser::struct_decl, std::ref(attr));
   }
 
+  // stmt_decl ::= const_decl | namespace_decl | attributes_decl? (interface_decl | struct_decl) | enum_decl | using_decl | module_decl | ';'
   bool stmt_decl() {
     return (
       check(&Parser::const_decl) ||
@@ -1139,13 +1189,13 @@ class Parser {
     errors_.push_back(e);
     panic_mode_ = true;
   }
-  
+
   void synchronize() {
     // Skip tokens until we find a synchronization point
     // Good sync points: semicolon, closing brace, namespace, interface, struct
     panic_mode_ = false;
     flush();
-    
+
     while (true) {
       Token t;
       if (tokens_.size() == 0) {
@@ -1153,14 +1203,14 @@ class Parser {
       } else {
         t = tokens_.pop_front();
       }
-      
+
       // Synchronization points - safe places to resume parsing
       if (t == TokenId::Semicolon ||
           t == TokenId::BracketClose ||
           t == TokenId::Eof) {
         break;
       }
-      
+
       // Look ahead - if next token is a statement starter, stop here
       Token next = peek();
       if (next == TokenId::Namespace ||
@@ -1176,14 +1226,14 @@ class Parser {
       flush();
     }
   }
-  
+
   // Wrapper to handle errors with recovery
   template<typename Fn>
   bool try_parse(Fn&& fn, const char* error_msg) {
     if (!enable_recovery_) {
       return fn();
     }
-    
+
     try {
       return fn();
     } catch (parser_error& e) {
@@ -1240,16 +1290,16 @@ public:
       }
     }
   }
-  
+
   // Get collected errors (for LSP)
   const std::vector<parser_error>& get_errors() const {
     return errors_;
   }
-  
+
   bool has_errors() const {
     return !errors_.empty();
   }
-  
+
   void enable_recovery(bool enable) {
     enable_recovery_ = enable;
   }
@@ -1259,7 +1309,7 @@ public:
 class NullBuilder : public Builder {
 public:
   NullBuilder(Context* ctx) : Builder(ctx) {}
-  
+
   void finalize() override {}
   void emit_namespace_begin() override {}
   void emit_namespace_end() override {}
@@ -1283,7 +1333,7 @@ bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors) 
     // Initialize context with a dummy file path for error reporting
     // In real LSP usage, this should be the actual file URI converted to path
     ctx.open(std::filesystem::path("<in-memory>"));
-    
+
     BuildGroup builder(&ctx);
     builder.add<NullBuilder>();
 
@@ -1385,7 +1435,6 @@ CompilationBuilder& CompilationBuilder::with_language_ts() {
   language_flags_ |= LanguageFlags::TypeScript;
   return *this;
 }
-
 
 std::unique_ptr<ICompilation> CompilationBuilder::build() {
   BuildGroup builder;
