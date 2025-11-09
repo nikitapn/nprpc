@@ -75,6 +75,8 @@ enum class TokenId {
   Async,
   Const,
   Module,
+  Import,
+  QuotedString,
 };
 
 struct AstStructDecl;
@@ -216,7 +218,6 @@ inline std::ostream& operator << (std::ostream& os, const AstNumber& n) {
   return os;
 }
 
-
 struct AstTypeDecl {
   FieldType id;
 };
@@ -301,7 +302,6 @@ struct AstInterfaceDecl : AstTypeDecl {
   std::vector<AstInterfaceDecl*> plist;
   bool trusted = true;
 
-
   AstInterfaceDecl() {
     id = FieldType::Interface;
   }
@@ -311,8 +311,8 @@ struct AstEnumDecl : AstFundamentalType {
   std::string name;
   Namespace* nm;
   std::vector<std::pair<std::string, std::pair<AstNumber, bool>>> items;
-  
-  AstEnumDecl() 
+
+  AstEnumDecl()
     : AstFundamentalType(TokenId::UInt32) 
   {
     id = FieldType::Enum;
@@ -326,13 +326,32 @@ struct AstFieldDecl {
   bool input_function_argument;
   std::string_view function_name;
   std::string_view function_argument_name;
-  
+
   bool is_optional() const noexcept {
     return type->id == FieldType::Optional;
   }
 };
 
 using struct_id_t = std::string;
+
+struct AstImportDecl {
+  std::string import_path;           // Path as written in source: "./types.npidl"
+  std::filesystem::path resolved_path; // Absolute resolved path
+  bool resolved = false;              // True if import was successfully resolved
+  std::string error_message;          // Error message if resolution failed
+  
+  // Position information for LSP
+  // Full range: import "./types.npidl";
+  //             ^^^^^^^^^^^^^^^^^^^^^^^
+  int import_line = 0;
+  int import_col = 0;
+  
+  // Path range: "./types.npidl"
+  //             ^^^^^^^^^^^^^^^
+  int path_start_line = 0;
+  int path_start_col = 0;
+  int path_end_col = 0;
+};
 
 struct AstStructDecl : AstTypeDecl {
   int version = -1;
@@ -437,7 +456,6 @@ constexpr auto copt(AstTypeDecl* type) noexcept {
   return static_cast<AstOptionalDecl*>(type);
 }
 
-
 inline AstTypeDecl* AstWrapType::real_type() {
   auto wt = type;
   if (wt->id == FieldType::Alias)
@@ -485,7 +503,6 @@ public:
   auto end() { return items_.end(); }
 };
 
-
 using AFFAList = List<struct_id_t, AstStructDecl*>;
 
 class Context {
@@ -498,11 +515,21 @@ class Context {
   std::string base_name;
   std::filesystem::path file_path;
   std::unordered_set<AstStructDecl*> structs_with_helpers_;
+
+  // Stack-based file tracking for imports
+  struct FileContext {
+    std::filesystem::path file_path;
+    std::string base_name;
+    Namespace* namespace_at_entry;  // Namespace state when file started parsing
+  };
+  std::vector<FileContext> file_stack_;
+
 public:
   AFFAList affa_list;
   int m_struct_n_ = 0;
   std::vector<AstStructDecl*> exceptions;
   std::vector<AstInterfaceDecl*> interfaces;
+  std::vector<AstImportDecl*> imports;  // All imports in this file
 
   const std::string& current_file() const noexcept {
     return base_name;
@@ -549,7 +576,7 @@ public:
   Namespace* nm_cur() {
     return nm_cur_;
   }
-  
+
   Namespace* nm_root() {
     return nm_root_; 
   }
@@ -583,4 +610,86 @@ public:
       return c == '.' ? '_' : ::tolower(c); });
     nm_root_ = nm_cur_ = new Namespace();
   }
+
+  // Push current file onto stack and switch to new file (for imports)
+  void push_file(std::filesystem::path new_file_path) {
+    // Save current file context
+    file_stack_.push_back(FileContext{
+      .file_path = file_path,
+      .base_name = base_name,
+      .namespace_at_entry = nm_cur_
+    });
+
+    // Switch to new file
+    file_path = std::move(new_file_path);
+    base_name = file_path.filename().replace_extension().string();
+    std::transform(base_name.begin(), base_name.end(), base_name.begin(), [](char c) {
+      return c == '.' ? '_' : ::tolower(c); 
+    });
+    // Note: Keep namespace context (imports share namespace hierarchy)
+  }
+
+  // Pop back to previous file after import completes
+  void pop_file() {
+    if (file_stack_.empty()) {
+      throw std::runtime_error("Cannot pop file: file stack is empty");
+    }
+
+    auto& prev = file_stack_.back();
+    file_path = std::move(prev.file_path);
+    base_name = std::move(prev.base_name);
+    nm_cur_ = prev.namespace_at_entry;  // Restore namespace context
+
+    file_stack_.pop_back();
+  }
+
+  // Check if we're currently parsing an imported file
+  bool is_in_import() const noexcept {
+    return !file_stack_.empty();
+  }
+
+  // Get the depth of import nesting (0 = main file, 1 = first import, etc.)
+  size_t import_depth() const noexcept {
+    return file_stack_.size();
+  }
+
+  // Get path of the file that imported current file (if any)
+  std::optional<std::filesystem::path> parent_file_path() const noexcept {
+    if (file_stack_.empty()) return std::nullopt;
+    return file_stack_.back().file_path;
+  }
+};
+
+// RAII guard for file context - ensures pop_file() is called even on exception
+class FileContextGuard {
+  Context& ctx_;
+  bool dismissed_ = false;
+  
+public:
+  explicit FileContextGuard(Context& ctx, std::filesystem::path file_path) 
+    : ctx_(ctx) 
+  {
+    ctx_.push_file(std::move(file_path));
+  }
+  
+  ~FileContextGuard() {
+    if (!dismissed_) {
+      try {
+        ctx_.pop_file();
+      } catch (...) {
+        // Suppress exceptions in destructor
+      }
+    }
+  }
+  
+  // Call this if you want to handle pop manually
+  void dismiss() noexcept {
+    dismissed_ = true;
+  }
+  
+  // Delete copy/move to prevent misuse
+  FileContextGuard(const FileContextGuard&) = delete;
+  FileContextGuard& operator=(const FileContextGuard&) = delete;
+  FileContextGuard(FileContextGuard&&) = delete;
+  FileContextGuard& operator=(FileContextGuard&&) = delete;
 };

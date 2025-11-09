@@ -115,6 +115,7 @@ struct Map {
 };
 
 class Lexer {
+  static constexpr char quote_char = '\'';
   std::string text_;
   Context& ctx_;
   const char* ptr_;
@@ -242,6 +243,7 @@ class Lexer {
       { "async"sv, TokenId::Async },
       { "const"sv, TokenId::Const },
       { "module"sv, TokenId::Module },
+      { "import"sv, TokenId::Import },
     };
 
     static constexpr Map<std::string_view, TokenId,
@@ -292,6 +294,19 @@ public:
         throw lexical_error(ctx_.current_file_path(), line_, col_, "Unknown token '/'.");
       }
       return tok();
+    case quote_char: {
+      next();
+      const char* begin = ptr_;
+      while (cur() != quote_char) {
+        if (cur() == '\0' || cur() == '\n') {
+          throw lexical_error(ctx_.current_file_path(), line_, col_, "Unterminated quoted string.");
+        }
+        next();
+      }
+      std::string str(begin, ptr_ - begin);
+      next(); // skip closing quote
+      return Token(TokenId::QuotedString, str, tok_line, tok_col);
+    }
     default:
       if (is_digit(cur())) {
         return Token(TokenId::Number, read_number(), tok_line, tok_col);
@@ -833,7 +848,6 @@ class Parser {
   }
 
   // module_decl ::= 'module' (IDENTIFIER '.')* IDENTIFIER ';'
-  // Parse module (ident '.')* ';'
   bool module_decl() {
     if (peek() != TokenId::Module)
       return false;
@@ -883,6 +897,52 @@ class Parser {
         throw_error("expected statement declaration inside namespace");
       }
     }
+    return true;
+  }
+
+  // import_decl ::= 'import' STRING ';'
+  bool import_decl() {
+    if (peek() != TokenId::Import)
+      return false;
+
+    flush();
+
+    auto import_path_tok = match(TokenId::QuotedString);
+    match(';');
+
+    // Resolve import path relative to current file
+    auto current_dir = ctx_.get_file_path().parent_path();
+    auto resolved = std::filesystem::canonical(
+        current_dir / import_path_tok.name
+    );
+
+    // Check if already parsed (avoid duplicate parsing)
+    if (already_parsed(resolved)) {
+        return true;
+    }
+
+    // Parse the imported file
+    ctx_.push_file(resolved);
+
+    try {
+        if (auto* doc = doc_manager_.get(path_to_uri(resolved))) {
+            // LSP: Use in-memory content
+            Parser parser(doc->content, ctx_, builder_, enable_recovery_);
+            parser.parse();
+        } else {
+            // File: Read from disk
+            Parser parser(ctx_, builder_);
+            parser.parse();
+        }
+
+        ctx_.pop_file();
+    } catch (...) {
+        ctx_.pop_file();  // Ensure stack is cleaned up
+        throw;
+    }
+
+    mark_as_parsed(resolved);
+
     return true;
   }
 
@@ -1174,6 +1234,7 @@ class Parser {
   // stmt_decl ::= const_decl | namespace_decl | attributes_decl? (interface_decl | struct_decl) | enum_decl | using_decl | module_decl | ';'
   bool stmt_decl() {
     return (
+      check(&Parser::import_decl) ||
       check(&Parser::const_decl) ||
       check(&Parser::namespace_decl) ||
       check(&Parser::something_that_could_have_attributes) ||
