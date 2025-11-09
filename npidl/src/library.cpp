@@ -118,6 +118,7 @@ struct Map {
 
 class Lexer {
   static constexpr char quote_char = '\'';
+  ISourceProvider& source_provider_;
   Context& ctx_;
   std::string text_;
   const char* ptr_;
@@ -265,6 +266,11 @@ class Lexer {
 public:
   int col() const noexcept { return col_; }
   int line() const noexcept { return line_; }
+  
+  // Accessor for Parser to create child lexers for imports
+  ISourceProvider& get_source_provider() {
+    return source_provider_;
+  }
 
   Token tok() {
     skip_wp();
@@ -306,6 +312,7 @@ public:
         next();
       }
       std::string str(begin, ptr_ - begin);
+      assert(cur() == quote_char);
       next(); // skip closing quote
       return Token(TokenId::QuotedString, str, tok_line, tok_col);
     }
@@ -323,7 +330,8 @@ public:
 
   // Single constructor - source provider injected
   Lexer(ISourceProvider& source_provider, Context& ctx) 
-    : ctx_(ctx)
+    : source_provider_(source_provider)
+    , ctx_(ctx)
     , text_(source_provider.read_file(ctx.get_file_path()))
   {
     text_ += '\0';
@@ -844,6 +852,12 @@ class Parser {
     if (peek() != TokenId::Module)
       return false;
 
+    // Option 4: Module is only allowed in main file, not in imports
+    if (ctx_.is_in_import()) {
+      auto tok = peek();
+      throw_error("Module declaration not allowed in imported files");
+    }
+
     flush();
 
     Token tok;
@@ -893,15 +907,13 @@ class Parser {
   }
 
   // import_decl ::= 'import' STRING ';'
-  // TODO: Implement full import support using import_resolver_
   bool import_decl() {
-    if (peek() != TokenId::Import)
+    auto import_tok = peek();
+    if (import_tok != TokenId::Import)
       return false;
 
     flush();
 
-    auto import_tok = peek();
-    match(TokenId::Import);
     auto import_path_tok = match(TokenId::QuotedString);
     match(';');
     
@@ -926,8 +938,38 @@ class Parser {
         
         // Check if we should parse this import (depends on resolver strategy)
         if (import_resolver_.should_parse_import(*resolved)) {
-            // TODO: Implement actual import parsing with FileContextGuard
-            // For now, just record the import
+            // Parse the imported file
+            try {
+                // Push file context - tracks that we're now in an import
+                FileContextGuard guard(ctx_, *resolved);
+                
+                // Create a new lexer for the imported file
+                Lexer import_lexer(lex_.get_source_provider(), ctx_);
+                
+                // Create a new parser for the imported file
+                // Reuse same builder, import_resolver, and error_handler
+                Parser import_parser(
+                    import_lexer,
+                    ctx_,
+                    builder_,
+                    import_resolver_,
+                    error_handler_
+                );
+                
+                // Parse the imported file
+                import_parser.parse();
+                
+                // FileContextGuard destructor automatically pops file context
+            } catch (const parser_error& e) {
+                import->resolved = false;
+                import->error_message = std::string("Error parsing imported file: ") + e.what();
+                
+                // Re-throw or handle based on error recovery mode
+                if (!error_handler_.should_continue_after_error()) {
+                    throw;
+                }
+                error_handler_.handle_error(e);
+            }
         }
     } else {
         import->resolved = false;
