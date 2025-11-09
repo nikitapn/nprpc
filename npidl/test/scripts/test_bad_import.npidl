@@ -1,0 +1,6 @@
+// Test that module in imports causes error
+module bad_module;
+
+namespace test {
+  Foo: flat { x: i32; };
+}

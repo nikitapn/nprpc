@@ -26,7 +26,6 @@ add_library(npidl_core STATIC
 
 target_include_directories(npidl_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/boost  # Boost.DI
   ${CMAKE_SOURCE_DIR}/nprpc/include
   ${CMAKE_SOURCE_DIR}/nplib/include
   ${CMAKE_SOURCE_DIR}/3rd/glaze/include

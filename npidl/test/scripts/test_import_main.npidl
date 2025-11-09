@@ -1,0 +1,11 @@
+// Test file for imports - main.npidl
+module graphics;
+
+import '/tmp/test_import_types.npidl';
+
+namespace shapes {
+  Circle: flat {
+    center: geometry::Point;
+    radius: i32;
+  };
+}

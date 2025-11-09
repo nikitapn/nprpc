@@ -1,0 +1,10 @@
+// Test module rejection in imports
+module test_main;
+
+import '/tmp/test_bad_import.npidl';
+
+namespace shapes {
+  Foo: flat {
+    x: i32;
+  };
+}

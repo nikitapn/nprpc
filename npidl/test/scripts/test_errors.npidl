@@ -1,0 +1,15 @@
+namespace Test {
+  interface Calculator {
+    i32 add(i32 a i32 b);  // Missing comma - ERROR
+    i32 multiply(i32 a, i32 b);  // This should still be parsed
+  };
+  
+  struct Point {
+    i32 x
+    i32 y;  // Missing semicolon above - ERROR
+  };
+  
+  interface Graphics {  // This should still be parsed despite previous errors
+    void draw(in Point p);
+  };
+};

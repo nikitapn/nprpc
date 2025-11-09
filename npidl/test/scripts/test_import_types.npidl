@@ -1,0 +1,12 @@
+// Test file for imports - types.npidl
+namespace geometry {
+  Point: flat {
+    x: i32;
+    y: i32;
+  };
+  
+  Rectangle: flat {
+    top_left: Point;
+    bottom_right: Point;
+  };
+}
