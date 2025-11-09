@@ -561,6 +561,22 @@ class Parser : public IParser {
     }
   }
 
+  // Helper to convert Token to SourcePosition
+  SourcePosition token_position(const Token& tok) const {
+    return SourcePosition(tok.line, tok.col);
+  }
+
+  // Helper to get current lexer position
+  SourcePosition current_position() const {
+    return SourcePosition(lex_.line(), lex_.col());
+  }
+
+  // Helper to set position on AST node (when we have start token and know current end)
+  template<typename T>
+  void set_node_position(T* node, const Token& start_token) {
+    node->set_position(token_position(start_token), current_position());
+  }
+
   // array_decl ::= '[' (IDENTIFIER | NUMBER) ']'
   bool array_decl(AstTypeDecl*& type) {
     if (peek() == TokenId::SquareBracketOpen) {
@@ -714,6 +730,9 @@ class Parser : public IParser {
     field = new AstFieldDecl();
     field->name = std::move(field_name.name);
     field->type = optional ? new AstOptionalDecl(type) : type;
+    
+    // Set position for the field (name token to current position after type)
+    set_node_position(field, field_name);
 
     return true;
   }
@@ -822,6 +841,9 @@ class Parser : public IParser {
     }
 
     calc_struct_size_align(s);
+
+    // Set position range for the struct declaration
+    set_node_position(s, name_tok);
 
     // std::cerr << s->name << ": size " << s->size << ", alignof "<< s->align << '\n';
 
@@ -995,6 +1017,7 @@ class Parser : public IParser {
   bool function_decl(AstFunctionDecl*& f) {
     bool is_async;
     AstTypeDecl* ret_type = nullptr;
+    Token start_tok = peek(); // Capture starting position (async or return type)
 
     if (!(is_async = check(&Parser::one, TokenId::Async)) && 
       !check(&Parser::type_decl, std::ref(ret_type))) return false;
@@ -1004,7 +1027,8 @@ class Parser : public IParser {
     f = new AstFunctionDecl();
     f->ret_value = ret_type ;
     f->is_async = is_async;
-    f->name = match(TokenId::Identifier).name;
+    auto name_tok = match(TokenId::Identifier);
+    f->name = name_tok.name;
 
     match('(');
 
@@ -1044,6 +1068,9 @@ class Parser : public IParser {
     } else {
       throw_unexpected_token(tok);
     }
+
+    // Set position for the function declaration
+    set_node_position(f, start_tok);
 
     return true;
   }
@@ -1090,11 +1117,13 @@ class Parser : public IParser {
   // interface_decl ::= 'interface' IDENTIFIER (':' IDENTIFIER (',' IDENTIFIER)*)? '{' function_decl* '}'
   bool interface_decl(attributes_t& attr) {
 
-    if (peek() != TokenId::Interface) return false;
+    auto start_tok = peek();
+    if (start_tok != TokenId::Interface) return false;
     flush();
 
     auto ifs = new AstInterfaceDecl();
-    ifs->name = match(TokenId::Identifier).name;
+    auto name_tok = match(TokenId::Identifier);
+    ifs->name = name_tok.name;
 
     for (const auto& a : attr) {
       if (a.first == "trusted")
@@ -1144,6 +1173,9 @@ class Parser : public IParser {
       ifs->fns[idx]->idx = idx;
     }
 
+    // Set position range for the interface declaration
+    set_node_position(ifs, start_tok);
+
     ctx_.interfaces.push_back(ifs);
     ctx_.nm_cur()->add(ifs->name, ifs);
     builder_.emit(&builders::Builder::emit_interface, ifs);
@@ -1165,10 +1197,11 @@ class Parser : public IParser {
 
   // using_decl ::= 'using' IDENTIFIER '=' type_decl ';'
   bool using_decl() {
+    Token start_tok;
     Token left;
 
     if (!(
-      peek() == TokenId::Using &&
+      (start_tok = peek()) == TokenId::Using &&
       (left = peek()) == TokenId::Identifier &&
       peek() == TokenId::Assignment
       ))
@@ -1182,6 +1215,10 @@ class Parser : public IParser {
     }
 
     auto a = new AstAliasDecl(std::move(left.name), ctx_.nm_cur(), right);
+    
+    // Set position for the using declaration
+    set_node_position(a, start_tok);
+    
     ctx_.nm_cur()->add(a->name, a);
 
     builder_.emit(&builders::Builder::emit_using, a);
@@ -1192,7 +1229,8 @@ class Parser : public IParser {
   // enum_decl ::= 'enum' IDENTIFIER (':' fundamental_type)? '{' enum_item (',' enum_item)* '}'
   // enum_item ::= IDENTIFIER ('=' NUMBER)?
   bool enum_decl() {
-    if (peek() != TokenId::Enum) return false;
+    auto start_tok = peek();
+    if (start_tok != TokenId::Enum) return false;
     flush();
 
     auto e = new AstEnumDecl;
@@ -1259,6 +1297,9 @@ class Parser : public IParser {
     }
 
     flush();
+
+    // Set position range for the enum declaration
+    set_node_position(e, start_tok);
 
     ctx_.nm_cur()->add(e->name, e);
 

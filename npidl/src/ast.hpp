@@ -14,6 +14,8 @@
 #include <unordered_set>
 #include <iostream>
 
+#include "source_location.hpp"
+
 namespace npidl {
 
 constexpr int fundamental_type_first = 256;
@@ -272,9 +274,8 @@ struct AstVectorDecl : AstWrapType {
   }
 };
 
-struct AstAliasDecl : AstWrapType {
+struct AstAliasDecl : AstWrapType, AstNodeWithPosition {
   Namespace* nm;
-  std::string name;
 
   AstTypeDecl* get_real_type() const noexcept {
     auto t = this;
@@ -286,8 +287,8 @@ struct AstAliasDecl : AstWrapType {
   AstAliasDecl(std::string&& _name,Namespace* _nm, AstTypeDecl* _type)
     : AstWrapType(_type)
     , nm(_nm)
-    , name(_name)
   {
+    name = std::move(_name);
     id = FieldType::Alias;
   }
 };
@@ -298,8 +299,7 @@ struct AstStringDecl : AstTypeDecl {
   }
 };
 
-struct AstInterfaceDecl : AstTypeDecl {
-  std::string name;
+struct AstInterfaceDecl : AstTypeDecl, AstNodeWithPosition {
   std::vector<AstFunctionDecl*> fns;
   std::vector<AstInterfaceDecl*> plist;
   bool trusted = true;
@@ -309,8 +309,7 @@ struct AstInterfaceDecl : AstTypeDecl {
   }
 };
 
-struct AstEnumDecl : AstFundamentalType {
-  std::string name;
+struct AstEnumDecl : AstFundamentalType, AstNodeWithPosition {
   Namespace* nm;
   std::vector<std::pair<std::string, std::pair<AstNumber, bool>>> items;
 
@@ -321,9 +320,8 @@ struct AstEnumDecl : AstFundamentalType {
   }
 };
 
-struct AstFieldDecl {
+struct AstFieldDecl : AstNodeWithPosition {
   AstTypeDecl* type;
-  std::string name;
   bool function_argument = false;
   bool input_function_argument;
   std::string_view function_name;
@@ -355,10 +353,9 @@ struct AstImportDecl {
   int path_end_col = 0;
 };
 
-struct AstStructDecl : AstTypeDecl {
+struct AstStructDecl : AstTypeDecl, AstNodeWithPosition {
   int version = -1;
   Namespace* nm;
-  std::string name;
   struct_id_t unique_id;
   std::vector<AstFieldDecl*> fields;
   int size = -1;
@@ -472,9 +469,8 @@ struct AstFunctionArgument : AstFieldDecl {
   bool direct = false;
 };
 
-struct AstFunctionDecl {
+struct AstFunctionDecl : AstNodeWithPosition {
   uint16_t idx;
-  std::string name;
   AstTypeDecl* ret_value;
   AstStructDecl* in_s = nullptr;
   AstStructDecl* out_s = nullptr;
