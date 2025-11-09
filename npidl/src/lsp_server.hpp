@@ -12,6 +12,8 @@
 #include <sstream>
 #include <glaze/glaze.hpp>
 
+#include "workspace_manager.hpp"
+
 // LSP Protocol Structures (subset for MVP)
 namespace lsp {
 
@@ -318,7 +320,11 @@ public:
     std::string content;
     int version = 0;
     std::vector<lsp::Diagnostic> diagnostics;
-    // Note: Context is created per-parse, not stored per-document
+    
+    // Parsed imports from this file
+    std::vector<std::string> imports;
+    
+    // Note: Context and AST are stored in ProjectContext via WorkspaceManager
   };
 
   void open(const std::string& uri, const std::string& text, int version);
@@ -341,6 +347,7 @@ public:
   void run();
 private:
   DocumentManager documents_;
+  npidl::WorkspaceManager workspace_;
   bool initialized_ = false;
   
   // Message I/O

@@ -19,6 +19,7 @@
 #include "ast.hpp"
 #include "cpp_builder.hpp"
 #include "ts_builder.hpp"
+#include "null_builder.hpp"
 #include "utils.hpp"
 #include "lsp_server.hpp"
 #include "parser_interfaces.hpp"
@@ -1436,27 +1437,6 @@ public:
     }
   }
 };
-namespace builders {
-// Null builder that doesn't generate any output (for LSP parsing)
-class NullBuilder : public Builder {
-public:
-  NullBuilder(Context* ctx) : Builder(ctx) {}
-
-  void finalize() override {}
-  void emit_namespace_begin() override {}
-  void emit_namespace_end() override {}
-  void emit_interface(AstInterfaceDecl*) override {}
-  void emit_struct(AstStructDecl*) override {}
-  void emit_exception(AstStructDecl*) override {}
-  void emit_enum(AstEnumDecl*) override {}
-  void emit_constant(const std::string&, AstNumber*) override {}
-  void emit_using(AstAliasDecl*) override {}
-
-  Builder* clone(Context* ctx) const {
-    return new NullBuilder(ctx);
-  }
-};
-} // namespace builders
 
 bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors) {
   errors.clear();
