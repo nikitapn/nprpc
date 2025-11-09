@@ -3,6 +3,7 @@
 
 #include "lsp_server.hpp"
 #include "parse_for_lsp.hpp"
+#include "position_index_builder.hpp"
 #include <iostream>
 #include <sstream>
 #include <filesystem>
@@ -34,11 +35,49 @@ DocumentManager::Document* DocumentManager::get(const std::string& uri) {
   return it != documents_.end() ? &it->second : nullptr;
 }
 
-std::vector<lsp::Diagnostic> DocumentManager::parse_and_get_diagnostics(Document& doc) {
+std::vector<lsp::Diagnostic> DocumentManager::parse_and_get_diagnostics(
+    npidl::WorkspaceManager& workspace,
+    Document& doc
+) {
   std::vector<lsp::Diagnostic> diagnostics;
 
+  // Get or create project context for this file
+  // We'll update imports after parsing, so pass empty vector for now
+  auto* project = workspace.get_project_for_file(doc.uri, {});
+  
+  if (!project) {
+    // Should never happen - workspace always creates a project
+    lsp::Diagnostic diag;
+    diag.range.start.line = 0;
+    diag.range.start.character = 0;
+    diag.range.end.line = 0;
+    diag.range.end.character = 0;
+    diag.severity = 1;  // Error
+    diag.message = "Internal error: Failed to create project context";
+    diag.source = "npidl";
+    diagnostics.push_back(diag);
+    return diagnostics;
+  }
+
+  // Parse into the project's persistent context
   std::vector<npidl::ParseError> parse_errors;
-  npidl::parse_for_lsp(doc.content, parse_errors);
+  npidl::parse_for_lsp(*project->ctx, doc.content, parse_errors);
+
+  // Extract imports from parsed context
+  doc.imports.clear();
+  for (const auto* import : project->ctx->imports) {
+    if (import->resolved) {
+      doc.imports.push_back(import->resolved_path.string());
+    }
+  }
+
+  // Update the project's import graph with the newly discovered imports
+  project->add_file(doc.uri, doc.imports);
+
+  // Build position index for fast LSP queries
+  project->position_index.clear();
+  npidl::PositionIndexBuilder index_builder(project->position_index, *project->ctx);
+  index_builder.build();
 
   // Convert parse errors to LSP diagnostics
   for (const auto& err : parse_errors) {
@@ -104,18 +143,18 @@ void LspServer::send_message(const std::string& message) {
 void LspServer::send_response(const glz::json_t& id, const std::string& result) {
   jsonrpc::Response response;
   response.id = id;
-  response.result = result;
+  response.result = result;  // Only set result, not error
 
   std::string json = glz::write_json(response).value_or("{}");
   send_message(json);
 }
 
 void LspServer::send_error(const glz::json_t& id, int code, const std::string& message) {
-  std::string error = glz::write_json(glz::obj{"code", code, "message", message}).value_or("{}");
+  std::string error_obj = glz::write_json(glz::obj{"code", code, "message", message}).value_or("{}");
 
   jsonrpc::Response response;
   response.id = id;
-  response.error = error;
+  response.error = error_obj;  // Only set error, not result
 
   std::string json = glz::write_json(response).value_or("{}");
   send_message(json);
@@ -140,12 +179,35 @@ void LspServer::handle_initialize(const glz::json_t& id, const glz::raw_json& pa
   result.capabilities.definitionProvider = true;
   result.capabilities.referencesProvider = true;
   result.capabilities.documentSymbolProvider = true;
+  
+  // Semantic tokens support
+  lsp::ServerCapabilities::SemanticTokensOptions semanticTokens;
+  semanticTokens.legend.tokenTypes = {
+    "namespace",   // 0 - module
+    "interface",   // 1 - interface
+    "class",       // 2 - struct/exception
+    "enum",        // 3 - enum
+    "function",    // 4 - function
+    "parameter",   // 5 - parameter
+    "property",    // 6 - field
+    "type",        // 7 - type reference
+    "keyword"      // 8 - keywords (import, etc.)
+  };
+  semanticTokens.legend.tokenModifiers = {
+    "readonly",    // 0 - const
+    "declaration", // 1 - definition vs usage
+    "deprecated"   // 2 - deprecated
+  };
+  semanticTokens.full = true;
+  semanticTokens.range = false;
+  result.capabilities.semanticTokensProvider = semanticTokens;
 
   std::string result_json = glz::write_json(result).value_or("{}");
   send_response(id, result_json);
 
   initialized_ = true;
 }
+
 
 void LspServer::handle_initialized(const glz::raw_json& params) {
   std::cerr << "Client initialized notification received" << std::endl;
@@ -180,7 +242,7 @@ void LspServer::handle_did_open(const glz::raw_json& params) {
 
   // Parse and send diagnostics
   if (auto* doc = documents_.get(open_params.textDocument.uri)) {
-    auto diagnostics = documents_.parse_and_get_diagnostics(*doc);
+    auto diagnostics = documents_.parse_and_get_diagnostics(workspace_, *doc);
     publish_diagnostics(open_params.textDocument.uri, diagnostics);
   }
 }
@@ -206,7 +268,7 @@ void LspServer::handle_did_change(const glz::raw_json& params) {
 
     // Parse and send diagnostics
     if (auto* doc = documents_.get(change_params.textDocument.uri)) {
-      auto diagnostics = documents_.parse_and_get_diagnostics(*doc);
+      auto diagnostics = documents_.parse_and_get_diagnostics(workspace_, *doc);
       publish_diagnostics(change_params.textDocument.uri, diagnostics);
     }
   }
@@ -222,6 +284,11 @@ void LspServer::handle_did_close(const glz::raw_json& params) {
   }
 
   std::cerr << "Document closed: " << close_params.textDocument.uri << std::endl;
+  
+  // Remove from workspace (cleans up empty projects)
+  workspace_.remove_file(close_params.textDocument.uri);
+  
+  // Remove from document manager
   documents_.close(close_params.textDocument.uri);
 }
 
@@ -239,9 +306,354 @@ void LspServer::handle_hover(const glz::json_t& id, const glz::raw_json& params)
             << " line:" << pos_params.position.line 
             << " char:" << pos_params.position.character << std::endl;
 
-  // TODO: Implement hover using AST
-  // For MVP, return null
-  send_response(id, "null");
+  // Find the project containing this file
+  auto* project = workspace_.find_project(pos_params.textDocument.uri);
+  if (!project) {
+    std::cerr << "No project found for " << pos_params.textDocument.uri << std::endl;
+    send_response(id, "null");
+    return;
+  }
+
+  std::cerr << "Project found. Index has " << project->position_index.size() << " entries" << std::endl;
+  std::cerr << "Index finalized: " << (project->position_index.is_finalized() ? "yes" : "no") << std::endl;
+
+  // Convert from 0-based LSP position to 1-based parser position
+  uint32_t line = pos_params.position.line + 1;
+  uint32_t col = pos_params.position.character + 1;
+
+  std::cerr << "Looking for node at 1-based position " << line << ":" << col << std::endl;
+
+  // Find the AST node at this position
+  const auto* entry = project->position_index.find_at_position(line, col);
+  if (!entry) {
+    std::cerr << "No AST node at position " << line << ":" << col << std::endl;
+    std::cerr << "Dumping first 10 index entries:" << std::endl;
+    const auto& entries = project->position_index.entries();
+    for (size_t i = 0; i < std::min(size_t(10), entries.size()); ++i) {
+      std::cerr << "  Entry " << i << ": lines " << entries[i].start_line << "-" << entries[i].end_line 
+                << ", cols " << entries[i].start_col << "-" << entries[i].end_col << std::endl;
+    }
+    send_response(id, "null");
+    return;
+  }
+
+  std::cerr << "Found node at " << entry->start_line << ":" << entry->start_col 
+            << " - " << entry->end_line << ":" << entry->end_col << std::endl;
+
+  // Create hover content based on node type
+  std::string hover_markdown = create_hover_content(entry);
+  
+  lsp::Hover hover;
+  hover.contents = hover_markdown;
+  
+  // Set range to the node's range
+  lsp::Range range;
+  range.start.line = entry->start_line - 1;  // Convert back to 0-based
+  range.start.character = entry->start_col - 1;
+  range.end.line = entry->end_line - 1;
+  range.end.character = entry->end_col - 1;
+  hover.range = range;
+
+  std::string result = glz::write_json(hover).value_or("null");
+  send_response(id, result);
+}
+
+std::string LspServer::create_hover_content(const npidl::PositionIndex::Entry* entry) {
+  using NodeType = npidl::PositionIndex::NodeType;
+  std::ostringstream md;
+
+  switch (entry->node_type) {
+    case NodeType::Interface: {
+      auto* ifs = static_cast<npidl::AstInterfaceDecl*>(entry->node);
+      md << "**interface** `" << ifs->name << "`\n\n";
+      md << "Functions: " << ifs->fns.size() << "\n";
+      if (!ifs->plist.empty()) {
+        md << "Inherits from: ";
+        for (size_t i = 0; i < ifs->plist.size(); ++i) {
+          if (i > 0) md << ", ";
+          md << "`" << ifs->plist[i]->name << "`";
+        }
+        md << "\n";
+      }
+      break;
+    }
+
+    case NodeType::Struct: {
+      auto* s = static_cast<npidl::AstStructDecl*>(entry->node);
+      md << "**struct** `" << s->name << "`\n\n";
+      md << "Fields: " << s->fields.size() << "\n";
+      if (s->size >= 0) {
+        md << "Size: " << s->size << " bytes\n";
+      }
+      if (s->flat) {
+        md << "Type: flat\n";
+      }
+      break;
+    }
+
+    case NodeType::Exception: {
+      auto* ex = static_cast<npidl::AstStructDecl*>(entry->node);
+      md << "**exception** `" << ex->name << "`\n\n";
+      md << "Fields: " << ex->fields.size() << "\n";
+      md << "Exception ID: " << ex->exception_id << "\n";
+      break;
+    }
+
+    case NodeType::Enum: {
+      auto* e = static_cast<npidl::AstEnumDecl*>(entry->node);
+      md << "**enum** `" << e->name << "`\n\n";
+      md << "Values: " << e->items.size() << "\n";
+      break;
+    }
+
+    case NodeType::Function: {
+      auto* fn = static_cast<npidl::AstFunctionDecl*>(entry->node);
+      md << "**function** `" << fn->name << "`\n\n";
+      md << "```npidl\n";
+      if (fn->is_async) md << "async ";
+      
+      // Return type
+      if (fn->ret_value->id == npidl::FieldType::Void) {
+        md << "void";
+      } else {
+        md << format_type(fn->ret_value);
+      }
+      
+      md << " " << fn->name << "(";
+      
+      // Parameters
+      for (size_t i = 0; i < fn->args.size(); ++i) {
+        if (i > 0) md << ", ";
+        auto* arg = fn->args[i];
+        md << (arg->modifier == npidl::ArgumentModifier::In ? "in " : "out ");
+        md << format_type(arg->type) << " " << arg->name;
+      }
+      
+      md << ")";
+      
+      if (fn->ex) {
+        md << " raises(" << fn->ex->name << ")";
+      }
+      
+      md << "\n```\n";
+      break;
+    }
+
+    case NodeType::Field: {
+      auto* field = static_cast<npidl::AstFieldDecl*>(entry->node);
+      md << "**field** `" << field->name << "`\n\n";
+      md << "Type: `" << format_type(field->type) << "`\n";
+      break;
+    }
+
+    case NodeType::Parameter: {
+      auto* param = static_cast<npidl::AstFunctionArgument*>(entry->node);
+      md << "**parameter** `" << param->name << "`\n\n";
+      md << "Type: `" << format_type(param->type) << "`\n";
+      md << "Direction: " << (param->modifier == npidl::ArgumentModifier::In ? "in" : "out") << "\n";
+      break;
+    }
+
+    case NodeType::Import: {
+      auto* import = static_cast<npidl::AstImportDecl*>(entry->node);
+      md << "📄 **import**\n\n";
+      if (import->resolved) {
+        md << "Path: `" << import->resolved_path.string() << "`\n";
+        md << "Status: ✓ Resolved\n";
+      } else {
+        md << "Path: `" << import->import_path << "`\n";
+        md << "Status: ❌ Not resolved\n";
+        if (!import->error_message.empty()) {
+          md << "Error: " << import->error_message << "\n";
+        }
+      }
+      break;
+    }
+
+    default:
+      md << "Unknown node type\n";
+      break;
+  }
+
+  return md.str();
+}
+
+std::string LspServer::format_type(npidl::AstTypeDecl* type) {
+  using FieldType = npidl::FieldType;
+  
+  switch (type->id) {
+    case FieldType::Fundamental: {
+      auto* ft = npidl::cft(type);
+      switch (ft->token_id) {
+        case npidl::TokenId::Boolean: return "bool";
+        case npidl::TokenId::Int8: return "int8";
+        case npidl::TokenId::UInt8: return "uint8";
+        case npidl::TokenId::Int16: return "int16";
+        case npidl::TokenId::UInt16: return "uint16";
+        case npidl::TokenId::Int32: return "int32";
+        case npidl::TokenId::UInt32: return "uint32";
+        case npidl::TokenId::Int64: return "int64";
+        case npidl::TokenId::UInt64: return "uint64";
+        case npidl::TokenId::Float32: return "float32";
+        case npidl::TokenId::Float64: return "float64";
+        default: return "?";
+      }
+    }
+    case FieldType::String: return "string";
+    case FieldType::Void: return "void";
+    case FieldType::Object: return "object";
+    case FieldType::Array: {
+      auto* arr = npidl::car(type);
+      return format_type(arr->type) + "[" + std::to_string(arr->length) + "]";
+    }
+    case FieldType::Vector: {
+      auto* vec = npidl::cvec(type);
+      return "vector<" + format_type(vec->type) + ">";
+    }
+    case FieldType::Optional: {
+      auto* opt = npidl::copt(type);
+      return format_type(opt->type) + "?";
+    }
+    case FieldType::Struct: {
+      auto* s = npidl::cflat(type);
+      return s->name;
+    }
+    case FieldType::Interface: {
+      auto* ifs = npidl::cifs(type);
+      return ifs->name;
+    }
+    case FieldType::Enum: {
+      auto* e = npidl::cenum(type);
+      return e->name;
+    }
+    case FieldType::Alias: {
+      auto* alias = npidl::calias(type);
+      return alias->name;
+    }
+    default:
+      return "?";
+  }
+}
+
+void LspServer::handle_semantic_tokens_full(const glz::json_t& id, const glz::raw_json& params) {
+  lsp::SemanticTokensParams token_params;
+
+  auto error = glz::read_json(token_params, params.str);
+  if (error) {
+    std::cerr << "Error parsing semantic tokens params: " << glz::format_error(error, params.str) << std::endl;
+    send_response(id, "null");
+    return;
+  }
+
+  std::cerr << "Semantic tokens request for " << token_params.textDocument.uri << std::endl;
+
+  // Find the project containing this file
+  auto* project = workspace_.find_project(token_params.textDocument.uri);
+  if (!project) {
+    std::cerr << "No project found for " << token_params.textDocument.uri << std::endl;
+    send_response(id, "null");
+    return;
+  }
+
+  std::cerr << "Generating semantic tokens. Index has " << project->position_index.size() << " entries" << std::endl;
+
+  // Build semantic tokens array
+  lsp::SemanticTokensResponse response;
+  std::vector<uint32_t>& data = response.data;
+
+  // Token types (must match legend in handle_initialize)
+  enum TokenType {
+    TT_NAMESPACE = 0,   // module
+    TT_INTERFACE = 1,   // interface
+    TT_CLASS = 2,       // struct/exception
+    TT_ENUM = 3,        // enum
+    TT_FUNCTION = 4,    // function
+    TT_PARAMETER = 5,   // parameter
+    TT_PROPERTY = 6,    // field
+    TT_TYPE = 7,        // type reference
+    TT_KEYWORD = 8      // keywords
+  };
+
+  // Token modifiers (bitflags)
+  enum TokenModifier {
+    TM_READONLY = 1 << 0,      // const
+    TM_DECLARATION = 1 << 1,   // definition vs usage
+    TM_DEPRECATED = 1 << 2     // deprecated
+  };
+
+  // Get all index entries and sort by position
+  const auto& entries = project->position_index.entries();
+  
+  // Track previous token position for delta encoding
+  uint32_t prev_line = 0;
+  uint32_t prev_col = 0;
+
+  for (const auto& entry : entries) {
+    uint32_t token_type = TT_KEYWORD;
+    uint32_t token_modifiers = TM_DECLARATION; // All indexed entries are declarations
+
+    // Map node type to token type
+    switch (entry.node_type) {
+      case npidl::PositionIndex::NodeType::Interface:
+        token_type = TT_INTERFACE;
+        break;
+      case npidl::PositionIndex::NodeType::Struct:
+      case npidl::PositionIndex::NodeType::Exception:
+        token_type = TT_CLASS;
+        break;
+      case npidl::PositionIndex::NodeType::Enum:
+        token_type = TT_ENUM;
+        break;
+      case npidl::PositionIndex::NodeType::Function:
+        token_type = TT_FUNCTION;
+        break;
+      case npidl::PositionIndex::NodeType::Field:
+        token_type = TT_PROPERTY;
+        break;
+      case npidl::PositionIndex::NodeType::Parameter:
+        token_type = TT_PARAMETER;
+        break;
+      case npidl::PositionIndex::NodeType::Import:
+        token_type = TT_KEYWORD;
+        break;
+      case npidl::PositionIndex::NodeType::Alias:
+        token_type = TT_TYPE;
+        break;
+      case npidl::PositionIndex::NodeType::EnumValue:
+        token_type = TT_PROPERTY; // Treat enum values as properties
+        break;
+    }
+
+    // Convert from 1-based parser position to 0-based LSP position
+    uint32_t line = entry.start_line - 1;
+    uint32_t col = entry.start_col - 1;
+    
+    // Calculate token length (simplified - single line tokens)
+    uint32_t length = (entry.end_line == entry.start_line) 
+                      ? (entry.end_col - entry.start_col + 1)
+                      : 0; // Skip multi-line tokens for now
+    
+    if (length == 0) continue; // Skip invalid tokens
+
+    // Delta encoding: each token is relative to previous
+    uint32_t delta_line = (data.empty()) ? line : (line - prev_line);
+    uint32_t delta_col = (delta_line == 0) ? (col - prev_col) : col;
+
+    // Each token is 5 uint32_t values
+    data.push_back(delta_line);
+    data.push_back(delta_col);
+    data.push_back(length);
+    data.push_back(token_type);
+    data.push_back(token_modifiers);
+
+    prev_line = line;
+    prev_col = col;
+  }
+
+  std::cerr << "Generated " << (data.size() / 5) << " semantic tokens" << std::endl;
+
+  std::string result = glz::write_json(response).value_or("null");
+  send_response(id, result);
 }
 
 void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& params) {
@@ -284,13 +696,20 @@ void LspServer::run() {
 
     std::cerr << "Received message: " << message->substr(0, 100) << "..." << std::endl;
 
-    // Try to parse as request first
-    jsonrpc::Request request;
-    auto error = glz::read_json(request, *message);
+    // Check if it's a request (has "id" field) or notification (no "id" field)
+    bool has_id = message->find("\"id\"") != std::string::npos;
 
-    if (!error) {
-      // It's a request - dispatch based on method
-      std::cerr << "Method: " << request.method << std::endl;
+    if (has_id) {
+      // It's a request
+      jsonrpc::Request request;
+      auto error = glz::read_json(request, *message);
+      
+      if (error) {
+        std::cerr << "Failed to parse as request: " << glz::format_error(error, *message) << std::endl;
+        continue;
+      }
+
+      std::cerr << "Request method: " << request.method << std::endl;
 
       if (request.method == "initialize") {
         handle_initialize(request.id, request.params);
@@ -300,19 +719,23 @@ void LspServer::run() {
         handle_hover(request.id, request.params);
       } else if (request.method == "textDocument/definition") {
         handle_definition(request.id, request.params);
+      } else if (request.method == "textDocument/semanticTokens/full") {
+        handle_semantic_tokens_full(request.id, request.params);
       } else {
         std::cerr << "Unknown request method: " << request.method << std::endl;
         send_error(request.id, -32601, "Method not found");
       }
-      continue;
-    }
+    } else {
+      // It's a notification
+      jsonrpc::Notification notification;
+      auto error = glz::read_json(notification, *message);
+      
+      if (error) {
+        std::cerr << "Failed to parse as notification: " << glz::format_error(error, *message) << std::endl;
+        continue;
+      }
 
-    // Try to parse as notification
-    jsonrpc::Notification notification;
-    error = glz::read_json(notification, *message);
-
-    if (!error) {
-      std::cerr << "Notification: " << notification.method << std::endl;
+      std::cerr << "Notification method: " << notification.method << std::endl;
 
       if (notification.method == "initialized") {
         handle_initialized(notification.params);
@@ -327,9 +750,6 @@ void LspServer::run() {
       } else {
         std::cerr << "Unknown notification: " << notification.method << std::endl;
       }
-      continue;
     }
-
-    std::cerr << "Failed to parse message as request or notification" << std::endl;
   }
 }

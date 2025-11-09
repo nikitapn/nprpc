@@ -83,10 +83,29 @@ struct Hover {
   std::optional<Range> range;
 };
 
+struct SemanticTokensParams {
+  TextDocumentIdentifier textDocument;
+};
+
+struct SemanticTokensResponse {
+  std::vector<uint32_t> data; // Encoded token array
+};
+
 struct ServerCapabilities {
   struct TextDocumentSync {
     int openClose = 1;
     int change = 1; // 1=Full, 2=Incremental
+  };
+  
+  struct SemanticTokensLegend {
+    std::vector<std::string> tokenTypes;
+    std::vector<std::string> tokenModifiers;
+  };
+  
+  struct SemanticTokensOptions {
+    SemanticTokensLegend legend;
+    bool full = true;
+    bool range = false;
   };
   
   TextDocumentSync textDocumentSync;
@@ -94,6 +113,7 @@ struct ServerCapabilities {
   bool definitionProvider = true;
   bool referencesProvider = true;
   bool documentSymbolProvider = true;
+  std::optional<SemanticTokensOptions> semanticTokensProvider;
 };
 
 struct InitializeResult {
@@ -222,11 +242,46 @@ struct glz::meta<lsp::Hover> {
 };
 
 template <>
+struct glz::meta<lsp::SemanticTokensParams> {
+  using T = lsp::SemanticTokensParams;
+  static constexpr auto value = object(
+    "textDocument", &T::textDocument
+  );
+};
+
+template <>
+struct glz::meta<lsp::SemanticTokensResponse> {
+  using T = lsp::SemanticTokensResponse;
+  static constexpr auto value = object(
+    "data", &T::data
+  );
+};
+
+template <>
 struct glz::meta<lsp::ServerCapabilities::TextDocumentSync> {
   using T = lsp::ServerCapabilities::TextDocumentSync;
   static constexpr auto value = object(
     "openClose", &T::openClose,
     "change", &T::change
+  );
+};
+
+template <>
+struct glz::meta<lsp::ServerCapabilities::SemanticTokensLegend> {
+  using T = lsp::ServerCapabilities::SemanticTokensLegend;
+  static constexpr auto value = object(
+    "tokenTypes", &T::tokenTypes,
+    "tokenModifiers", &T::tokenModifiers
+  );
+};
+
+template <>
+struct glz::meta<lsp::ServerCapabilities::SemanticTokensOptions> {
+  using T = lsp::ServerCapabilities::SemanticTokensOptions;
+  static constexpr auto value = object(
+    "legend", &T::legend,
+    "full", &T::full,
+    "range", &T::range
   );
 };
 
@@ -238,7 +293,8 @@ struct glz::meta<lsp::ServerCapabilities> {
     "hoverProvider", &T::hoverProvider,
     "definitionProvider", &T::definitionProvider,
     "referencesProvider", &T::referencesProvider,
-    "documentSymbolProvider", &T::documentSymbolProvider
+    "documentSymbolProvider", &T::documentSymbolProvider,
+    "semanticTokensProvider", &T::semanticTokensProvider
   );
 };
 
@@ -265,7 +321,7 @@ struct Request : Message {
 
 struct Response : Message {
   glz::json_t id;
-  glz::raw_json result;
+  std::optional<glz::raw_json> result;
   std::optional<glz::raw_json> error;
 };
 
@@ -333,7 +389,10 @@ public:
   
   Document* get(const std::string& uri);
   
-  std::vector<lsp::Diagnostic> parse_and_get_diagnostics(Document& doc);
+  std::vector<lsp::Diagnostic> parse_and_get_diagnostics(
+    npidl::WorkspaceManager& workspace,
+    Document& doc
+  );
 
 private:
   std::map<std::string, Document> documents_;
@@ -369,6 +428,11 @@ private:
   void handle_did_close(const glz::raw_json& params);
   void handle_hover(const glz::json_t& id, const glz::raw_json& params);
   void handle_definition(const glz::json_t& id, const glz::raw_json& params);
+  void handle_semantic_tokens_full(const glz::json_t& id, const glz::raw_json& params);
+  
+  // Helper methods for hover
+  std::string create_hover_content(const npidl::PositionIndex::Entry* entry);
+  std::string format_type(npidl::AstTypeDecl* type);
   
   // Diagnostics
   void publish_diagnostics(const std::string& uri, const std::vector<lsp::Diagnostic>& diagnostics);

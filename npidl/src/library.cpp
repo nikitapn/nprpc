@@ -456,23 +456,23 @@ class Parser : public IParser {
     size_t saved_;
     bool discard_;
   public:
+    PeekGuard(Parser& parser)
+      : parser_(parser)
+      , saved_(parser.tokens_looked_)
+      , discard_(false) {}
+
+    ~PeekGuard() {
+      if (!discard_)
+        parser_.tokens_looked_ = saved_;
+    }
+
     void flush() {
       discard_ = true;
       parser_.flush();
     }
-
-    PeekGuard(Parser& parser)
-      : parser_(parser)
-      , saved_(parser.tokens_looked_)
-      , discard_(false)
-    {
-    }
-
-    ~PeekGuard() {
-      if (!discard_) parser_.tokens_looked_ = saved_;
-    }
   };
 
+  // peek is a one confusing method!
   Token& peek() {
     assert(tokens_looked_ < max_lookahead_tok_n);
     Token* tok;
@@ -1018,8 +1018,11 @@ class Parser : public IParser {
   bool function_decl(AstFunctionDecl*& f) {
     bool is_async;
     AstTypeDecl* ret_type = nullptr;
-    Token start_tok = peek(); // Capture starting position (async or return type)
-
+    Token start_tok;
+    {
+      PeekGuard pg(*this);
+      start_tok = peek(); // Capture starting position (async or return type)
+    }
     if (!(is_async = check(&Parser::one, TokenId::Async)) && 
       !check(&Parser::type_decl, std::ref(ret_type))) return false;
 
@@ -1438,6 +1441,42 @@ public:
   }
 };
 
+// Parse into existing context (for LSP with persistent AST)
+bool parse_for_lsp(Context& ctx, const std::string& content, std::vector<ParseError>& errors) {
+  errors.clear();
+
+  try {
+    builders::BuildGroup builder(&ctx);
+    builder.add<builders::NullBuilder>();
+
+    // Use test parser factory for in-memory content
+    auto [source_provider, import_resolver, error_handler, lexer, parser] = 
+      ParserFactory::create_test_parser(ctx, builder, content);
+
+    parser->parse();
+
+    // Collect any errors that occurred
+    for (const auto& e : error_handler->get_errors()) {
+      ParseError err;
+      err.line = e.line;
+      err.col = e.col;
+      err.message = e.what();
+      errors.push_back(err);
+    }
+
+    return error_handler->get_errors().empty();
+  } catch (const std::exception& e) {
+    // Fallback for unexpected errors
+    ParseError err;
+    err.line = 1;
+    err.col = 1;
+    err.message = std::string("Unexpected error: ") + e.what();
+    errors.push_back(err);
+    return false;
+  }
+}
+
+// Legacy version for testing - creates throwaway context
 bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors) {
   errors.clear();
 

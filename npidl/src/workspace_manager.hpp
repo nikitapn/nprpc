@@ -6,6 +6,7 @@
 #include "ast.hpp"
 #include "null_builder.hpp"
 #include "parse_for_lsp.hpp"
+#include "position_index.hpp"
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -20,6 +21,9 @@ namespace npidl {
 struct ProjectContext {
   std::unique_ptr<Context> ctx;
   std::unique_ptr<builders::BuildGroup> builder;
+  
+  // Position index for fast LSP lookups (hover, go-to-definition, etc.)
+  PositionIndex position_index;
   
   // All files that are part of this project
   std::unordered_set<std::string> file_uris;

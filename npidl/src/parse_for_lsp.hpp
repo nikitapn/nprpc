@@ -8,6 +8,9 @@
 
 namespace npidl {
 
+// Forward declarations
+class Context;
+
 // Error information from parser
 struct ParseError {
   int line;        // 1-based
@@ -15,7 +18,13 @@ struct ParseError {
   std::string message;
 };
 
-// Parse in-memory content for testing (error recovery enabled)
+// Parse in-memory content into an existing context (for LSP multi-file support)
+// Returns true if parsing succeeded (no errors found)
+// Errors vector is populated with all found errors
+// Context is updated with parsed AST and imports
+bool parse_for_lsp(Context& ctx, const std::string& content, std::vector<ParseError>& errors);
+
+// Legacy version for testing - creates throwaway context
 // Returns true if parsing succeeded (no errors found)
 // Errors vector is populated with all found errors
 bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors);
