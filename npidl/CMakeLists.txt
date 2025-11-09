@@ -8,7 +8,9 @@ add_library(npidl_core STATIC
   src/lsp_server.hpp
   src/lsp_server.cpp
   src/parse_for_lsp.hpp
-  src/parser_interface.hpp
+  src/parser_interfaces.hpp
+  src/parser_implementations.hpp
+  src/parser_implementations.cpp
   src/source_location.hpp
   src/ts_builder.hpp
   src/ts_builder.cpp
@@ -21,6 +23,7 @@ add_library(npidl_core STATIC
 
 target_include_directories(npidl_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/boost  # Boost.DI
   ${CMAKE_SOURCE_DIR}/nprpc/include
   ${CMAKE_SOURCE_DIR}/nplib/include
   ${CMAKE_SOURCE_DIR}/3rd/glaze/include

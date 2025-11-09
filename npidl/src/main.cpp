@@ -7,7 +7,7 @@
 #include <boost/program_options.hpp>
 #include <nplib/utils/colored_cout.h>
 
-#include "parser_interface.hpp"
+#include "parser_interfaces.hpp"
 #include "lsp_server.hpp"
 
 using namespace npidl;

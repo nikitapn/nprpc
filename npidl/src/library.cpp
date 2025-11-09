@@ -21,12 +21,14 @@
 #include "ts_builder.hpp"
 #include "utils.hpp"
 #include "lsp_server.hpp"
+#include "parser_interfaces.hpp"
+#include "parser_implementations.hpp"
 
 #include <nplib/utils/colored_cout.h>
 
 // LSP Helper Function Implementation
 #include "parse_for_lsp.hpp"
-#include "parser_interface.hpp"
+#include "parser_interfaces.hpp"
 
 namespace npidl {
 
@@ -116,8 +118,8 @@ struct Map {
 
 class Lexer {
   static constexpr char quote_char = '\'';
-  std::string text_;
   Context& ctx_;
+  std::string text_;
   const char* ptr_;
   int line_ = 1;
   int col_ = 1;
@@ -319,21 +321,11 @@ public:
     };
   }
 
-  // Constructor for file-based parsing (compiler mode)
-  Lexer(Context& ctx) : ctx_(ctx) {
-    auto file_path = ctx_.get_file_path();
-    if (!std::filesystem::exists(file_path))
-      throw std::runtime_error(("cannot read file: " + file_path.string()).c_str());
-
-    std::ifstream ifs(file_path);
-    std::noskipws(ifs);
-    std::copy(std::istream_iterator<char>(ifs), std::istream_iterator<char>(), std::back_inserter(text_));
-    text_ += '\0';
-    ptr_ = text_.c_str();
-  }
-
-  // Constructor for in-memory parsing (LSP mode)
-  Lexer(const std::string& content, Context& ctx) : text_(content), ctx_(ctx) {
+  // Single constructor - source provider injected
+  Lexer(ISourceProvider& source_provider, Context& ctx) 
+    : ctx_(ctx)
+    , text_(source_provider.read_file(ctx.get_file_path()))
+  {
     text_ += '\0';
     ptr_ = text_.c_str();
   }
@@ -431,7 +423,7 @@ public:
 //
 class Parser {
   friend struct PeekGuard;
-  Lexer lex_;
+  Lexer& lex_;
 
   static constexpr int64_t max_lookahead_tok_n = 5;
   Queue<Token, max_lookahead_tok_n> tokens_;
@@ -440,11 +432,11 @@ class Parser {
   size_t tokens_looked_ = 0;
   Context& ctx_;
   BuildGroup& builder_;
+  IImportResolver& import_resolver_;
+  IErrorHandler& error_handler_;
 
-  // Error recovery support
-  std::vector<parser_error> errors_;
+  // Error recovery support (no longer stores errors - delegated to error_handler_)
   bool panic_mode_ = false;
-  bool enable_recovery_ = false;  // Can be toggled for LSP vs normal compilation
 
   using attributes_t = boost::container::small_vector<std::pair<std::string, std::string>, 2>;
 
@@ -901,48 +893,57 @@ class Parser {
   }
 
   // import_decl ::= 'import' STRING ';'
+  // TODO: Implement full import support using import_resolver_
   bool import_decl() {
     if (peek() != TokenId::Import)
       return false;
 
     flush();
 
+    auto import_tok = peek();
+    match(TokenId::Import);
     auto import_path_tok = match(TokenId::QuotedString);
     match(';');
-
-    // Resolve import path relative to current file
-    auto current_dir = ctx_.get_file_path().parent_path();
-    auto resolved = std::filesystem::canonical(
-        current_dir / import_path_tok.name
+    
+    // Create import AST node
+    auto* import = new AstImportDecl();
+    import->import_path = import_path_tok.name;
+    import->import_line = import_tok.line;
+    import->import_col = import_tok.col;
+    import->path_start_line = import_path_tok.line;
+    import->path_start_col = import_path_tok.col;
+    import->path_end_col = import_path_tok.col + (int)import_path_tok.name.length() + 2; // +2 for quotes
+    
+    // Use injected resolver to resolve import path
+    auto resolved = import_resolver_.resolve_import(
+        import->import_path,
+        ctx_.get_file_path()
     );
-
-    // Check if already parsed (avoid duplicate parsing)
-    if (already_parsed(resolved)) {
-        return true;
-    }
-
-    // Parse the imported file
-    ctx_.push_file(resolved);
-
-    try {
-        if (auto* doc = doc_manager_.get(path_to_uri(resolved))) {
-            // LSP: Use in-memory content
-            Parser parser(doc->content, ctx_, builder_, enable_recovery_);
-            parser.parse();
-        } else {
-            // File: Read from disk
-            Parser parser(ctx_, builder_);
-            parser.parse();
+    
+    if (resolved) {
+        import->resolved_path = *resolved;
+        import->resolved = true;
+        
+        // Check if we should parse this import (depends on resolver strategy)
+        if (import_resolver_.should_parse_import(*resolved)) {
+            // TODO: Implement actual import parsing with FileContextGuard
+            // For now, just record the import
         }
-
-        ctx_.pop_file();
-    } catch (...) {
-        ctx_.pop_file();  // Ensure stack is cleaned up
-        throw;
+    } else {
+        import->resolved = false;
+        import->error_message = "Cannot resolve import path";
+        
+        // Report error through error handler
+        error_handler_.handle_error(parser_error(
+            ctx_.current_file_path(),
+            import_tok.line,
+            import_tok.col,
+            "Cannot resolve import: " + import->import_path
+        ));
     }
-
-    mark_as_parsed(resolved);
-
+    
+    ctx_.imports.push_back(import);
+    
     return true;
   }
 
@@ -1247,7 +1248,7 @@ class Parser {
 
   // Error recovery support
   void record_error(const parser_error& e) {
-    errors_.push_back(e);
+    error_handler_.handle_error(e);
     panic_mode_ = true;
   }
 
@@ -1291,7 +1292,7 @@ class Parser {
   // Wrapper to handle errors with recovery
   template<typename Fn>
   bool try_parse(Fn&& fn, const char* error_msg) {
-    if (!enable_recovery_) {
+    if (!error_handler_.should_continue_after_error()) {
       return fn();
     }
 
@@ -1309,26 +1310,24 @@ class Parser {
   }
 
 public:
-  // Constructor for file-based parsing (compiler mode)
-  Parser(Context& ctx, BuildGroup& builder)
-    : lex_(ctx)
+  // Single constructor - dependencies injected
+  Parser(
+    Lexer& lex,
+    Context& ctx,
+    BuildGroup& builder,
+    IImportResolver& import_resolver,
+    IErrorHandler& error_handler
+  )
+    : lex_(lex)
     , ctx_(ctx)
     , builder_(builder)
-    , enable_recovery_(false)
-  {
-  }
-
-  // Constructor for in-memory parsing (LSP mode)
-  Parser(const std::string& content, Context& ctx, BuildGroup& builder, bool enable_recovery = false)
-    : lex_(content, ctx)
-    , ctx_(ctx)
-    , builder_(builder)
-    , enable_recovery_(enable_recovery)
+    , import_resolver_(import_resolver)
+    , error_handler_(error_handler)
   {
   }
 
   void parse() {
-    if (!enable_recovery_) {
+    if (!error_handler_.should_continue_after_error()) {
       // Original behavior - throw on first error
       while (!done_) {
         if (!(
@@ -1350,19 +1349,6 @@ public:
         }, "Statement parsing failed");
       }
     }
-  }
-
-  // Get collected errors (for LSP)
-  const std::vector<parser_error>& get_errors() const {
-    return errors_;
-  }
-
-  bool has_errors() const {
-    return !errors_.empty();
-  }
-
-  void enable_recovery(bool enable) {
-    enable_recovery_ = enable;
   }
 };
 
@@ -1398,12 +1384,18 @@ bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors) 
     BuildGroup builder(&ctx);
     builder.add<NullBuilder>();
 
-    // Create parser with error recovery enabled
-    Parser parser(content, ctx, builder, true /* enable_recovery */);
+    // Create dependencies for LSP mode
+    InMemorySourceProvider source_provider(content);  // Use in-memory provider for testing
+    LspImportResolver import_resolver;
+    LspErrorHandler error_handler;
+    
+    Lexer lexer(source_provider, ctx);
+    Parser parser(lexer, ctx, builder, import_resolver, error_handler);
+    
     parser.parse();
 
     // Collect any errors that occurred
-    for (const auto& e : parser.get_errors()) {
+    for (const auto& e : error_handler.get_errors()) {
       ParseError err;
       err.line = e.line;
       err.col = e.col;
@@ -1411,7 +1403,7 @@ bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors) 
       errors.push_back(err);
     }
 
-    return !parser.has_errors();
+    return error_handler.get_errors().empty();
   } catch (const std::exception& e) {
     // Fallback for unexpected errors
     ParseError err;
@@ -1446,7 +1438,15 @@ struct Compilation {
       Context ctx;
       ctx.open(file);
       BuildGroup build_group(build_group_, &ctx);
-      Parser parser(ctx, build_group);  // File-based parsing
+      
+      // Create dependencies for compiler mode
+      FileSystemSourceProvider source_provider;
+      CompilerImportResolver import_resolver;
+      CompilerErrorHandler error_handler;
+      
+      Lexer lexer(source_provider, ctx);
+      Parser parser(lexer, ctx, build_group, import_resolver, error_handler);
+      
       parser.parse();
       build_group.finalize();
     }
