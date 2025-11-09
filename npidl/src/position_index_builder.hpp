@@ -43,11 +43,80 @@ public:
             index_struct(exception, true);
         }
         
+        // Index all types from namespace (includes aliases, enums, and structs not in exceptions list)
+        index_namespace_types(ctx_.nm_cur()->root());
+        
         // Finalize (sort) the index
         index_.finalize();
     }
     
 private:
+    void index_namespace_types(Namespace* ns) {
+        if (!ns) return;
+        
+        // Index all types in this namespace
+        for (const auto& [name, type] : ns->types()) {
+            index_type(type);
+        }
+        
+        // Recursively index child namespaces
+        for (auto* child : ns->children()) {
+            index_namespace_types(child);
+        }
+    }
+    
+    void index_type(AstTypeDecl* type) {
+        if (!type) return;
+        
+        using FieldType = npidl::FieldType;
+        
+        switch (type->id) {
+            case FieldType::Alias: {
+                auto* alias = static_cast<AstAliasDecl*>(type);
+                if (has_position(alias)) {
+                    index_.add(
+                        alias,
+                        PositionIndex::NodeType::Alias,
+                        alias->range.start.line,
+                        alias->range.start.column,
+                        alias->range.end.line,
+                        alias->range.end.column
+                    );
+                }
+                break;
+            }
+            case FieldType::Enum: {
+                auto* e = static_cast<AstEnumDecl*>(type);
+                if (has_position(e)) {
+                    index_.add(
+                        e,
+                        PositionIndex::NodeType::Enum,
+                        e->range.start.line,
+                        e->range.start.column,
+                        e->range.end.line,
+                        e->range.end.column
+                    );
+                }
+                break;
+            }
+            case FieldType::Struct: {
+                auto* s = static_cast<AstStructDecl*>(type);
+                // Only index if not already indexed (exceptions are indexed separately)
+                if (has_position(s) && !s->is_exception()) {
+                    index_struct(s, false);
+                }
+                break;
+            }
+            case FieldType::Interface: {
+                // Interfaces are indexed separately, skip
+                break;
+            }
+            default:
+                // Other types (fundamental, vector, etc.) don't have position info
+                break;
+        }
+    }
+    
     void index_interface(AstInterfaceDecl* ifs) {
         if (!has_position(ifs)) return;
         

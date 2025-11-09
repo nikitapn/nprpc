@@ -670,8 +670,121 @@ void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& pa
             << " line:" << pos_params.position.line 
             << " char:" << pos_params.position.character << std::endl;
 
-  // TODO: Implement go-to-definition using AST
-  // For MVP, return null
+  // Find the project containing this file
+  auto* project = workspace_.find_project(pos_params.textDocument.uri);
+  if (!project) {
+    std::cerr << "No project found for " << pos_params.textDocument.uri << std::endl;
+    send_response(id, "null");
+    return;
+  }
+
+  // Convert from 0-based LSP position to 1-based parser position
+  uint32_t line = pos_params.position.line + 1;
+  uint32_t col = pos_params.position.character + 1;
+
+  std::cerr << "Looking for definition at 1-based position " << line << ":" << col << std::endl;
+
+  // Find the AST node at this position
+  const auto* entry = project->position_index.find_at_position(line, col);
+  if (!entry) {
+    std::cerr << "No AST node at position " << line << ":" << col << std::endl;
+    send_response(id, "null");
+    return;
+  }
+
+  std::cerr << "Found node type: " << static_cast<int>(entry->node_type) << std::endl;
+
+  // Helper to get position from a type that inherits from AstNodeWithPosition
+  auto get_type_position = [](npidl::AstTypeDecl* type) -> const npidl::SourceRange* {
+    using FieldType = npidl::FieldType;
+    
+    switch (type->id) {
+      case FieldType::Struct: {
+        auto* s = npidl::cflat(type);
+        return &s->range;
+      }
+      case FieldType::Interface: {
+        auto* ifs = npidl::cifs(type);
+        return &ifs->range;
+      }
+      case FieldType::Enum: {
+        auto* e = npidl::cenum(type);
+        return &e->range;
+      }
+      case FieldType::Alias: {
+        auto* alias = npidl::calias(type);
+        return &alias->range;
+      }
+      default:
+        return nullptr;
+    }
+  };
+
+  // For fields and parameters, try to find the type definition
+  npidl::AstTypeDecl* type_to_find = nullptr;
+  
+  if (entry->node_type == npidl::PositionIndex::NodeType::Field ||
+      entry->node_type == npidl::PositionIndex::NodeType::Parameter) {
+    auto* field = static_cast<npidl::AstFieldDecl*>(entry->node);
+    if (field && field->type) {
+      type_to_find = field->type;
+      std::cerr << "Field/parameter with type id: " << static_cast<int>(type_to_find->id) << std::endl;
+    }
+  } else {
+    // For other nodes (Interface, Struct, Enum, etc.), they ARE the definition
+    // So we return their own position
+    std::cerr << "Node is a definition itself" << std::endl;
+    
+    lsp::Location location;
+    location.uri = pos_params.textDocument.uri;
+    location.range.start.line = entry->start_line - 1;
+    location.range.start.character = entry->start_col - 1;
+    location.range.end.line = entry->end_line - 1;
+    location.range.end.character = entry->end_col - 1;
+    
+    std::string result = glz::write_json(location).value_or("null");
+    send_response(id, result);
+    return;
+  }
+
+  // If we have a type to find, get its position
+  if (type_to_find) {
+    // Unwrap optionals, vectors, and arrays to get to the base type
+    npidl::AstTypeDecl* base_type = type_to_find;
+    while (base_type->id == npidl::FieldType::Optional ||
+           base_type->id == npidl::FieldType::Vector ||
+           base_type->id == npidl::FieldType::Array) {
+      auto* wrap = static_cast<npidl::AstWrapType*>(base_type);
+      base_type = wrap->type;
+    }
+    
+    const npidl::SourceRange* type_range = get_type_position(base_type);
+    
+    if (type_range && type_range->is_valid()) {
+      std::cerr << "Type definition position: " << type_range->start.line << ":" << type_range->start.column << std::endl;
+      
+      // Find the index entry for this type definition
+      const auto* def_entry = project->position_index.find_at_position(
+        type_range->start.line, type_range->start.column);
+      
+      if (def_entry) {
+        lsp::Location location;
+        location.uri = pos_params.textDocument.uri; // Same file for now (TODO: handle imports)
+        location.range.start.line = def_entry->start_line - 1;
+        location.range.start.character = def_entry->start_col - 1;
+        location.range.end.line = def_entry->end_line - 1;
+        location.range.end.character = def_entry->end_col - 1;
+        
+        std::string result = glz::write_json(location).value_or("null");
+        send_response(id, result);
+        return;
+      }
+    } else {
+      std::cerr << "Type is a fundamental type (no definition to jump to)" << std::endl;
+    }
+  }
+
+  std::cerr << "Could not resolve definition" << std::endl;
   send_response(id, "null");
 }
 

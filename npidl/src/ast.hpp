@@ -154,6 +154,14 @@ public:
     nm->parent_ = this;
     children_.push_back(nm);
   }
+  
+  // Accessors for iteration (needed for LSP indexing)
+  const std::vector<std::pair<std::string, AstTypeDecl*>>& types() const noexcept {
+    return types_;
+  }
+  const std::vector<Namespace*>& children() const noexcept {
+    return children_;
+  }
 };
 
 enum class FieldType {
