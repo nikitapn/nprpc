@@ -7,6 +7,8 @@
 #include <filesystem>
 #include "builder.hpp"
 
+namespace npidl::builders {
+
 class CppBuilder : public Builder {
 public:
 struct _ns {
@@ -83,3 +85,5 @@ public:
 
   CppBuilder(Context* ctx, std::filesystem::path out_path);
 };
+
+} // namespace npidl::builders

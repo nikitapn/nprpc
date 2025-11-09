@@ -15,9 +15,14 @@ struct ParseError {
   std::string message;
 };
 
-// Parse content and return errors (for LSP)
-// Returns true if parsing succeeded (possibly with errors if recovery is enabled)
+// Parse in-memory content for testing (error recovery enabled)
+// Returns true if parsing succeeded (no errors found)
 // Errors vector is populated with all found errors
 bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors);
+
+// Alias for clarity - same function, better name for testing
+inline bool parse_string_for_testing(const std::string& content, std::vector<ParseError>& errors) {
+  return parse_for_lsp(content, errors);
+}
 
 } // namespace npidl

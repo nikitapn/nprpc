@@ -1,6 +1,8 @@
 #include "ast.hpp"
 #include <iostream>
 
+namespace npidl {
+
 std::vector<Namespace*> Namespace::path() noexcept {
     std::vector<Namespace*> result;
     auto ptr = this;
@@ -133,3 +135,5 @@ AstNumber* Namespace::find_constant(const std::string& name) {
     [&name](const auto& pair) { return pair.first == name; });
   return it != std::end(constants_) ? &it->second : nullptr;
 }
+
+} // namespace npidl

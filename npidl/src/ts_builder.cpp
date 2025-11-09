@@ -9,6 +9,8 @@
 #include "utils.hpp"
 #include <map>
 
+namespace npidl::builders {
+
 static std::string_view fundamental_to_ts(TokenId id);
 
 using std::placeholders::_1;
@@ -1900,3 +1902,5 @@ TSBuilder::TSBuilder(Context* ctx, std::filesystem::path out_dir)
   , out_dir_(out_dir)
 {
 }
+
+} // namespace npidl::builders

@@ -5,6 +5,7 @@
 #include <cassert>
 #include <stack>
 #include <boost/container/small_vector.hpp>
+namespace npidl {
 
 int get_fundamental_size(TokenId token_id) {
   switch (token_id) {
@@ -257,3 +258,5 @@ void dfs_interface(
     }
   } while (!stack.empty());
 };
+
+} // namespace npidl

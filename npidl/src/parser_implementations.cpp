@@ -153,3 +153,4 @@ void LspErrorHandler::clear_errors() {
 }
 
 } // namespace npidl
+

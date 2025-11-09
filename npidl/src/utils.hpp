@@ -6,6 +6,8 @@
 #include "ast.hpp"
 #include <functional>
 
+namespace npidl {
+
 int get_fundamental_size(TokenId token_id);
 int align_offset(int align_of, int& last_field_ended, int size, int elements_size = 1);
 void calc_struct_size_align(AstStructDecl* s);
@@ -28,3 +30,4 @@ inline constexpr uint32_t  get_arguments_offset() {
 
 void dfs_interface(std::function<void(AstInterfaceDecl*)> fn, AstInterfaceDecl* start);
 
+} // namespace npidl

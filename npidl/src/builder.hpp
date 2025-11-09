@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <fstream>
 
+namespace npidl::builders {
+
 template<typename Fn>
 struct OstreamWrapper {
     Fn fn;
@@ -171,3 +173,5 @@ public:
 
   BuildGroup(Context* ctx = nullptr) : ctx_{ctx}, size_{ 0 } {}
 };
+
+} // namespace npidl::builders

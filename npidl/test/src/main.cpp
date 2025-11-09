@@ -6,6 +6,8 @@
 
 namespace npidltest {
 
+using namespace npidl;
+
 TEST(NPIDL, TestNamespaceSubstitution) {
   auto create_namespace = [](std::string_view full_name) {
     Namespace* cur = nullptr;

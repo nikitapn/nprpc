@@ -23,6 +23,8 @@
 #include "lsp_server.hpp"
 #include "parser_interfaces.hpp"
 #include "parser_implementations.hpp"
+#include "lexer_parser_interfaces.hpp"
+#include "parser_factory.hpp"
 
 #include <nplib/utils/colored_cout.h>
 
@@ -116,7 +118,7 @@ struct Map {
   }
 };
 
-class Lexer {
+class Lexer : public ILexer {
   static constexpr char quote_char = '\'';
   ISourceProvider& source_provider_;
   Context& ctx_;
@@ -264,15 +266,15 @@ class Lexer {
     return Token(TokenId::Identifier, std::string(str), tok_line, tok_col);
   }
 public:
-  int col() const noexcept { return col_; }
-  int line() const noexcept { return line_; }
+  int col() const noexcept override { return col_; }
+  int line() const noexcept override { return line_; }
   
   // Accessor for Parser to create child lexers for imports
-  ISourceProvider& get_source_provider() {
+  ISourceProvider& get_source_provider() override {
     return source_provider_;
   }
 
-  Token tok() {
+  Token tok() override {
     skip_wp();
     int tok_line = line_;
     int tok_col = col_;
@@ -429,7 +431,7 @@ public:
 //   version_decl   ::= '#' 'version' NUMBER
 //   attributes_decl::= '[' (IDENTIFIER '=' (IDENTIFIER | NUMBER))? ']' attributes_decl?
 //
-class Parser {
+class Parser : public IParser {
   friend struct PeekGuard;
   Lexer& lex_;
 
@@ -439,7 +441,7 @@ class Parser {
   bool done_ = false;
   size_t tokens_looked_ = 0;
   Context& ctx_;
-  BuildGroup& builder_;
+  builders::BuildGroup& builder_;
   IImportResolver& import_resolver_;
   IErrorHandler& error_handler_;
 
@@ -823,7 +825,7 @@ class Parser {
 
     // std::cerr << s->name << ": size " << s->size << ", alignof "<< s->align << '\n';
 
-    builder_.emit((!s->is_exception() ? &Builder::emit_struct : &Builder::emit_exception), s);
+    builder_.emit((!s->is_exception() ? &builders::Builder::emit_struct : &builders::Builder::emit_exception), s);
     ctx_.nm_cur()->add(s->name, s);
 
     for (const auto& a : attr) {
@@ -842,7 +844,7 @@ class Parser {
     flush();
     auto var_name = match(TokenId::Identifier); match('=');
     auto var_value = parse_number(match(TokenId::Number)); match(';');
-    builder_.emit(&Builder::emit_constant, var_name.name, &var_value);
+    builder_.emit(&builders::Builder::emit_constant, var_name.name, &var_value);
     ctx_.nm_cur()->add_constant(std::move(var_name.name), std::move(var_value));
     return true;
   }
@@ -891,11 +893,11 @@ class Parser {
     auto name = match(TokenId::Identifier); match('{');
     ctx_.push_namespace(std::move(name.name));
 
-    builder_.emit(&Builder::emit_namespace_begin);
+    builder_.emit(&builders::Builder::emit_namespace_begin);
 
     for (;;) {
       if (check(&Parser::one, TokenId::BracketClose)) {
-        builder_.emit(&Builder::emit_namespace_end);
+        builder_.emit(&builders::Builder::emit_namespace_end);
         ctx_.pop_namespace();
         break;
       }
@@ -1144,7 +1146,7 @@ class Parser {
 
     ctx_.interfaces.push_back(ifs);
     ctx_.nm_cur()->add(ifs->name, ifs);
-    builder_.emit(&Builder::emit_interface, ifs);
+    builder_.emit(&builders::Builder::emit_interface, ifs);
 
     return true;
   }
@@ -1182,7 +1184,7 @@ class Parser {
     auto a = new AstAliasDecl(std::move(left.name), ctx_.nm_cur(), right);
     ctx_.nm_cur()->add(a->name, a);
 
-    builder_.emit(&Builder::emit_using, a);
+    builder_.emit(&builders::Builder::emit_using, a);
 
     return true;
   }
@@ -1260,7 +1262,7 @@ class Parser {
 
     ctx_.nm_cur()->add(e->name, e);
 
-    builder_.emit(&Builder::emit_enum, e);
+    builder_.emit(&builders::Builder::emit_enum, e);
 
     return true;
   }
@@ -1356,7 +1358,7 @@ public:
   Parser(
     Lexer& lex,
     Context& ctx,
-    BuildGroup& builder,
+    builders::BuildGroup& builder,
     IImportResolver& import_resolver,
     IErrorHandler& error_handler
   )
@@ -1368,7 +1370,7 @@ public:
   {
   }
 
-  void parse() {
+  void parse() override {
     if (!error_handler_.should_continue_after_error()) {
       // Original behavior - throw on first error
       while (!done_) {
@@ -1393,7 +1395,7 @@ public:
     }
   }
 };
-
+namespace builders {
 // Null builder that doesn't generate any output (for LSP parsing)
 class NullBuilder : public Builder {
 public:
@@ -1413,31 +1415,25 @@ public:
     return new NullBuilder(ctx);
   }
 };
+} // namespace builders
 
 bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors) {
   errors.clear();
 
   try {
     Context ctx;
-    // Initialize context with a dummy file path for error reporting
-    // In real LSP usage, this should be the actual file URI converted to path
-    ctx.open(std::filesystem::path("<in-memory>"));
-
-    BuildGroup builder(&ctx);
-    builder.add<NullBuilder>();
-
-    // Create dependencies for LSP mode
-    InMemorySourceProvider source_provider(content);  // Use in-memory provider for testing
-    LspImportResolver import_resolver;
-    LspErrorHandler error_handler;
     
-    Lexer lexer(source_provider, ctx);
-    Parser parser(lexer, ctx, builder, import_resolver, error_handler);
-    
-    parser.parse();
+    builders::BuildGroup builder(&ctx);
+    builder.add<builders::NullBuilder>();
+
+    // Use test parser factory for in-memory content
+    auto [source_provider, import_resolver, error_handler, lexer, parser] = 
+      ParserFactory::create_test_parser(ctx, builder, content);
+
+    parser->parse();
 
     // Collect any errors that occurred
-    for (const auto& e : error_handler.get_errors()) {
+    for (const auto& e : error_handler->get_errors()) {
       ParseError err;
       err.line = e.line;
       err.col = e.col;
@@ -1445,7 +1441,7 @@ bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors) 
       errors.push_back(err);
     }
 
-    return error_handler.get_errors().empty();
+    return error_handler->get_errors().empty();
   } catch (const std::exception& e) {
     // Fallback for unexpected errors
     ParseError err;
@@ -1457,98 +1453,100 @@ bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors) 
   }
 }
 
-} // namespace npidl
+// ParserFactory implementation
+std::tuple<
+    std::unique_ptr<FileSystemSourceProvider>,
+    std::unique_ptr<CompilerImportResolver>,
+    std::unique_ptr<CompilerErrorHandler>,
+    std::unique_ptr<ILexer>,
+    std::unique_ptr<IParser>
+>
+ParserFactory::create_compiler_parser(Context& ctx, builders::BuildGroup& builder) {
+    auto source_provider = std::make_unique<FileSystemSourceProvider>();
+    auto import_resolver = std::make_unique<CompilerImportResolver>();
+    auto error_handler = std::make_unique<CompilerErrorHandler>();
+    
+    auto lexer = std::make_unique<Lexer>(*source_provider, ctx);
+    auto parser = std::make_unique<Parser>(
+        *lexer,
+        ctx,
+        builder,
+        *import_resolver,
+        *error_handler
+    );
+    
+    return {
+        std::move(source_provider),
+        std::move(import_resolver),
+        std::move(error_handler),
+        std::move(lexer),
+        std::move(parser)
+    };
+}
 
-// Implementation of ICompilation and CompilationBuilder
-namespace npidl {
-
-struct Compilation {
-  const BuildGroup build_group_;
-  const std::vector<std::filesystem::path> input_files_;
-
-  std::vector<parser_error> errors_;
-
-  Compilation(BuildGroup&& build_group,
-              std::vector<std::filesystem::path>&& input_files)
-    : build_group_(std::move(build_group))
-    , input_files_(std::move(input_files))
-  {
-  }
-
-  void compile() {
-    for (const auto& file : input_files_) {
-      Context ctx;
-      ctx.open(file);
-      BuildGroup build_group(build_group_, &ctx);
-      
-      // Create dependencies for compiler mode
-      FileSystemSourceProvider source_provider;
-      CompilerImportResolver import_resolver;
-      CompilerErrorHandler error_handler;
-      
-      Lexer lexer(source_provider, ctx);
-      Parser parser(lexer, ctx, build_group, import_resolver, error_handler);
-      
-      parser.parse();
-      build_group.finalize();
+std::tuple<
+    std::shared_ptr<LspSourceProvider>,
+    std::unique_ptr<LspImportResolver>,
+    std::unique_ptr<LspErrorHandler>,
+    std::unique_ptr<ILexer>,
+    std::unique_ptr<IParser>
+>
+ParserFactory::create_lsp_parser(Context& ctx, builders::BuildGroup& builder, std::shared_ptr<LspSourceProvider> source_provider) {
+    if (!source_provider) {
+        source_provider = std::make_shared<LspSourceProvider>();
     }
-  }
-
-  const std::vector<parser_error>& get_errors() const {
-    return errors_;
-    // return ctx.get_errors();
-  }
-
-  bool has_errors() const {
-    return false;
-    // return ctx.has_errors();
-  }
-};
-
-ICompilation::~ICompilation() = default;
-
-void ICompilation::compile() {
-  impl_->compile();
+    
+    auto import_resolver = std::make_unique<LspImportResolver>();
+    auto error_handler = std::make_unique<LspErrorHandler>();
+    
+    auto lexer = std::make_unique<Lexer>(*source_provider, ctx);
+    auto parser = std::make_unique<Parser>(
+        *lexer,
+        ctx,
+        builder,
+        *import_resolver,
+        *error_handler
+    );
+    
+    return {
+        source_provider,
+        std::move(import_resolver),
+        std::move(error_handler),
+        std::move(lexer),
+        std::move(parser)
+    };
 }
 
-const std::vector<parser_error>& ICompilation::get_errors() const {
-  return impl_->get_errors();
+std::tuple<
+    std::shared_ptr<InMemorySourceProvider>,
+    std::unique_ptr<LspImportResolver>,
+    std::unique_ptr<LspErrorHandler>,
+    std::unique_ptr<ILexer>,
+    std::unique_ptr<IParser>
+>
+ParserFactory::create_test_parser(Context& ctx, builders::BuildGroup& builder, const std::string& content) {
+    auto source_provider = std::make_shared<InMemorySourceProvider>(content);
+    
+    auto import_resolver = std::make_unique<LspImportResolver>();
+    auto error_handler = std::make_unique<LspErrorHandler>();
+    
+    auto lexer = std::make_unique<Lexer>(*source_provider, ctx);
+    auto parser = std::make_unique<Parser>(
+        *lexer,
+        ctx,
+        builder,
+        *import_resolver,
+        *error_handler
+    );
+    
+    return {
+        source_provider,
+        std::move(import_resolver),
+        std::move(error_handler),
+        std::move(lexer),
+        std::move(parser)
+    };
 }
 
-bool ICompilation::has_errors() const {
-  return impl_->has_errors();
-}
-
-CompilationBuilder& CompilationBuilder::set_input_files(const std::vector<std::filesystem::path>& files) {
-  input_files_ = files;
-  return *this;
-}
-
-CompilationBuilder& CompilationBuilder::set_output_dir(const std::filesystem::path& output_dir) {
-  output_dir_ = output_dir;
-  return *this;
-}
-
-CompilationBuilder& CompilationBuilder::with_language_cpp() {
-  language_flags_ |= LanguageFlags::Cpp;
-  return *this;
-}
-
-CompilationBuilder& CompilationBuilder::with_language_ts() {
-  language_flags_ |= LanguageFlags::TypeScript;
-  return *this;
-}
-
-std::unique_ptr<ICompilation> CompilationBuilder::build() {
-  BuildGroup builder;
-  if (language_flags_ & LanguageFlags::Cpp)
-    builder.add<CppBuilder>(output_dir_);
-  if (language_flags_ & LanguageFlags::TypeScript)
-    builder.add<TSBuilder>(output_dir_);
-
-  auto compilation = std::make_unique<ICompilation>();
-  compilation->impl_ = std::make_unique<Compilation>(std::move(builder), std::move(input_files_));
-
-  return compilation;
-}
 } // namespace npidl
+

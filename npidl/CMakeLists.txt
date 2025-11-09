@@ -12,6 +12,7 @@ add_library(npidl_core STATIC
   src/parser_implementations.hpp
   src/parser_implementations.cpp
   src/source_location.hpp
+  src/compilation.cpp
   src/ts_builder.hpp
   src/ts_builder.cpp
   src/utils.cpp

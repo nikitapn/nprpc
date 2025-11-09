@@ -1,5 +1,6 @@
 #include "ast.hpp"
 
+namespace npidl {
 
 void Context::set_module_name(std::vector<std::string>&& name_parts) {
   // When parse sees module declaration, it changes module name
@@ -28,3 +29,5 @@ void Context::set_module_name(std::vector<std::string>&& name_parts) {
 
   std::cerr << "DEBUG_NAMESPACE: "<< nm_root_->to_cpp17_namespace() << '\n';
 }
+
+} // namespace npidl

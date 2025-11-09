@@ -8,6 +8,8 @@
 #include <filesystem>
 #include "builder.hpp"
 
+namespace npidl::builders {
+
 class TSBuilder : public Builder {
 public:
 struct _ns {
@@ -69,3 +71,5 @@ public:
 
   TSBuilder(Context* ctx, std::filesystem::path out_dir);
 };
+
+} // namespace npidl::builders

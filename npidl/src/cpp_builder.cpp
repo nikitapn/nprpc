@@ -12,6 +12,8 @@
 #include <set>
 #include <boost/container/small_vector.hpp>
 
+namespace npidl::builders {
+
 using std::placeholders::_1;
 using std::placeholders::_2;
 
@@ -1677,3 +1679,5 @@ CppBuilder::CppBuilder(
   , out_path_(out_path)
 {
 }
+
+} // namespace npidl::builders

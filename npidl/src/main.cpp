@@ -8,7 +8,12 @@
 #include <nplib/utils/colored_cout.h>
 
 #include "parser_interfaces.hpp"
+#include "parser_factory.hpp"
+#include "parser_implementations.hpp"
 #include "lsp_server.hpp"
+#include "builder.hpp"
+#include "cpp_builder.hpp"
+#include "ts_builder.hpp"
 
 using namespace npidl;
 

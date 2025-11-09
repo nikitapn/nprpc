@@ -14,6 +14,8 @@
 #include <unordered_set>
 #include <iostream>
 
+namespace npidl {
+
 constexpr int fundamental_type_first = 256;
 constexpr int fundamental_type_last = fundamental_type_first + 16;
 
@@ -189,7 +191,7 @@ inline bool operator == (std::int64_t x, const AstNumber& n) {
 }
 
 inline bool operator != (std::int64_t x, const AstNumber& n) {
-  return !::operator==(x, n);
+  return !(x == n);
 }
 
 // helper type for the visitor #4
@@ -512,11 +514,11 @@ class Context {
 
   std::string module_name;
   int module_level = 0;
-  std::string base_name;
-  std::filesystem::path file_path;
   std::unordered_set<AstStructDecl*> structs_with_helpers_;
 
-  // Stack-based file tracking for imports
+  // File stack for tracking imports
+  // Stack always contains at least one element (the main/current file)
+  // When parsing imports, we push the imported file onto stack
   struct FileContext {
     std::filesystem::path file_path;
     std::string base_name;
@@ -532,14 +534,18 @@ public:
   std::vector<AstImportDecl*> imports;  // All imports in this file
 
   const std::string& current_file() const noexcept {
-    return base_name;
+    assert(!file_stack_.empty());
+    return file_stack_.back().base_name;
   }
 
-  auto get_file_path() const noexcept {
-    return file_path;
+  const std::filesystem::path& get_file_path() const noexcept {
+    assert(!file_stack_.empty());
+    return file_stack_.back().file_path;
   }
 
   std::string current_file_path() const noexcept {
+    assert(!file_stack_.empty());
+    const auto& file_path = file_stack_.back().file_path;
     // Use canonical path if file exists, otherwise use absolute path
     // This is safe for LSP mode where file might not exist on disk yet
     std::error_code ec;
@@ -596,67 +602,71 @@ public:
   }
 
   bool is_nprpc_base() const noexcept {
-    return base_name == "nprpc_base";
+    assert(!file_stack_.empty());
+    return file_stack_.back().base_name == "nprpc_base";
   }
 
   bool is_nprpc_nameserver() const noexcept {
-    return base_name == "nprpc_nameserver";
+    assert(!file_stack_.empty());
+    return file_stack_.back().base_name == "nprpc_nameserver";
   }
 
-  void open(std::filesystem::path _file_path) {
-    file_path = std::move(_file_path);
-    base_name = file_path.filename().replace_extension().string();
-    std::transform(base_name.begin(), base_name.end(), base_name.begin(), [](char c) {
-      return c == '.' ? '_' : ::tolower(c); });
-    nm_root_ = nm_cur_ = new Namespace();
-  }
-
-  // Push current file onto stack and switch to new file (for imports)
+  // Push new file onto stack (for imports)
   void push_file(std::filesystem::path new_file_path) {
-    // Save current file context
-    file_stack_.push_back(FileContext{
-      .file_path = file_path,
-      .base_name = base_name,
-      .namespace_at_entry = nm_cur_
-    });
-
-    // Switch to new file
-    file_path = std::move(new_file_path);
-    base_name = file_path.filename().replace_extension().string();
-    std::transform(base_name.begin(), base_name.end(), base_name.begin(), [](char c) {
+    std::string new_base_name = new_file_path.filename().replace_extension().string();
+    std::transform(new_base_name.begin(), new_base_name.end(), new_base_name.begin(), [](char c) {
       return c == '.' ? '_' : ::tolower(c); 
     });
-    // Note: Keep namespace context (imports share namespace hierarchy)
+
+    file_stack_.push_back(FileContext{
+      .file_path = std::move(new_file_path),
+      .base_name = std::move(new_base_name),
+      .namespace_at_entry = nm_cur_  // Save namespace for restoration
+    });
   }
 
   // Pop back to previous file after import completes
   void pop_file() {
-    if (file_stack_.empty()) {
-      throw std::runtime_error("Cannot pop file: file stack is empty");
+    if (file_stack_.size() <= 1) {
+      throw std::runtime_error("Cannot pop file: only main file remains in stack");
     }
 
-    auto& prev = file_stack_.back();
-    file_path = std::move(prev.file_path);
-    base_name = std::move(prev.base_name);
-    nm_cur_ = prev.namespace_at_entry;  // Restore namespace context
-
+    // Restore namespace from the file being popped
+    nm_cur_ = file_stack_.back().namespace_at_entry;
     file_stack_.pop_back();
   }
 
   // Check if we're currently parsing an imported file
   bool is_in_import() const noexcept {
-    return !file_stack_.empty();
+    return file_stack_.size() > 1;  // More than just main file
   }
 
   // Get the depth of import nesting (0 = main file, 1 = first import, etc.)
   size_t import_depth() const noexcept {
-    return file_stack_.size();
+    return file_stack_.size() > 0 ? file_stack_.size() - 1 : 0;
   }
 
   // Get path of the file that imported current file (if any)
   std::optional<std::filesystem::path> parent_file_path() const noexcept {
-    if (file_stack_.empty()) return std::nullopt;
-    return file_stack_.back().file_path;
+    if (file_stack_.size() < 2) return std::nullopt;
+    return file_stack_[file_stack_.size() - 2].file_path;
+  }
+
+  Context(std::filesystem::path initial_file_path = "<in-memory>")
+    : nm_root_(new Namespace())
+    , nm_cur_(nm_root_)
+  {
+    // Initialize file stack with the main file
+    std::string base_name = initial_file_path.filename().replace_extension().string();
+    std::transform(base_name.begin(), base_name.end(), base_name.begin(), [](char c) {
+      return c == '.' ? '_' : ::tolower(c); 
+    });
+    
+    file_stack_.push_back(FileContext{
+      .file_path = std::move(initial_file_path),
+      .base_name = std::move(base_name),
+      .namespace_at_entry = nm_root_  // Main file starts at root namespace
+    });
   }
 };
 
@@ -693,3 +703,5 @@ public:
   FileContextGuard(FileContextGuard&&) = delete;
   FileContextGuard& operator=(FileContextGuard&&) = delete;
 };
+
+} // namespace npidl

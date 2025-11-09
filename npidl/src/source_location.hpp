@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <string>
 
+namespace npidl {
+
 // Source position tracking for LSP support
 struct SourcePosition {
   uint32_t line;
@@ -54,3 +56,5 @@ struct AstNodeWithPosition {
     return range.contains(line, column);
   }
 };
+
+} // namespace npidl
