@@ -35,13 +35,18 @@
         "path": "./syntaxes/npidl.tmLanguage.json"
       }
     ],
+    "commands": [
+      {
+        "command": "npidl.debugPositions",
+        "title": "NPIDL: Debug AST Positions"
+      }
+    ],
     "configuration": {
       "type": "object",
       "title": "NPIDL",
       "properties": {
         "npidl.lsp.path": {
           "type": "string",
-          "default": "npidl",
           "description": "Path to the npidl executable (with --lsp flag support)"
         },
         "npidl.lsp.trace.server": {

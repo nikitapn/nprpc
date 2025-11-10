@@ -32,6 +32,46 @@ struct Location {
   Range range;
 };
 
+// SymbolKind enumeration
+// https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#symbolKind
+enum class SymbolKind {
+  File = 1,
+  Module = 2,
+  Namespace = 3,
+  Package = 4,
+  Class = 5,
+  Method = 6,
+  Property = 7,
+  Field = 8,
+  Constructor = 9,
+  Enum = 10,
+  Interface = 11,
+  Function = 12,
+  Variable = 13,
+  Constant = 14,
+  String = 15,
+  Number = 16,
+  Boolean = 17,
+  Array = 18,
+  Object = 19,
+  Key = 20,
+  Null = 21,
+  EnumMember = 22,
+  Struct = 23,
+  Event = 24,
+  Operator = 25,
+  TypeParameter = 26
+};
+
+struct DocumentSymbol {
+  std::string name;
+  std::optional<std::string> detail;
+  SymbolKind kind;
+  Range range;
+  Range selectionRange;
+  std::vector<DocumentSymbol> children;
+};
+
 struct Diagnostic {
   Range range;
   int severity = 1; // 1=Error, 2=Warning, 3=Info, 4=Hint
@@ -81,6 +121,10 @@ struct TextDocumentPositionParams {
 struct Hover {
   std::string contents; // Markdown string
   std::optional<Range> range;
+};
+
+struct DocumentSymbolParams {
+  TextDocumentIdentifier textDocument;
 };
 
 struct SemanticTokensParams {
@@ -147,6 +191,30 @@ struct glz::meta<lsp::Location> {
   static constexpr auto value = object(
     "uri", &T::uri,
     "range", &T::range
+  );
+};
+
+template <>
+struct glz::meta<lsp::SymbolKind> {
+  using enum lsp::SymbolKind;
+  static constexpr auto value = enumerate(
+    File, Module, Namespace, Package, Class, Method, Property, Field,
+    Constructor, Enum, Interface, Function, Variable, Constant,
+    String, Number, Boolean, Array, Object, Key, Null, EnumMember,
+    Struct, Event, Operator, TypeParameter
+  );
+};
+
+template <>
+struct glz::meta<lsp::DocumentSymbol> {
+  using T = lsp::DocumentSymbol;
+  static constexpr auto value = object(
+    "name", &T::name,
+    "detail", &T::detail,
+    "kind", &T::kind,
+    "range", &T::range,
+    "selectionRange", &T::selectionRange,
+    "children", &T::children
   );
 };
 
@@ -238,6 +306,14 @@ struct glz::meta<lsp::Hover> {
   static constexpr auto value = object(
     "contents", &T::contents,
     "range", &T::range
+  );
+};
+
+template <>
+struct glz::meta<lsp::DocumentSymbolParams> {
+  using T = lsp::DocumentSymbolParams;
+  static constexpr auto value = object(
+    "textDocument", &T::textDocument
   );
 };
 
@@ -428,7 +504,11 @@ private:
   void handle_did_close(const glz::raw_json& params);
   void handle_hover(const glz::json_t& id, const glz::raw_json& params);
   void handle_definition(const glz::json_t& id, const glz::raw_json& params);
+  void handle_document_symbol(const glz::json_t& id, const glz::raw_json& params);
   void handle_semantic_tokens_full(const glz::json_t& id, const glz::raw_json& params);
+  
+  // Debug commands
+  void handle_debug_positions(const glz::json_t& id, const glz::raw_json& params);
   
   // Helper methods for hover
   std::string create_hover_content(const npidl::PositionIndex::Entry* entry);

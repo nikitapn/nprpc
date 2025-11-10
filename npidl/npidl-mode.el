@@ -29,6 +29,9 @@
 ;; Auto-start LSP for npidl files
 (add-hook 'npidl-mode-hook #'lsp)
 
+;; Enable LSP-based diagnostics via flymake (built into lsp-mode)
+(add-hook 'npidl-mode-hook #'flymake-mode)
+
 (define-derived-mode npidl-mode prog-mode "NPIDL"
   "Major mode for editing NPIDL interface definition files."
   (setq-local comment-start "// ")
@@ -72,9 +75,6 @@
   (setq font-lock-defaults '(npidl-font-lock-keywords)))
 
 (add-to-list 'auto-mode-alist '("\\.npidl\\'" . npidl-mode))
-
-;; Optional: Enable flycheck for on-the-fly diagnostics
-;; (add-hook 'npidl-mode-hook #'flycheck-mode)
 
 ; This file provides npidl-mode.
 (provide 'npidl-mode)

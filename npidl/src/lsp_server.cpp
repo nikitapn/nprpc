@@ -82,11 +82,68 @@ std::vector<lsp::Diagnostic> DocumentManager::parse_and_get_diagnostics(
   // Convert parse errors to LSP diagnostics
   for (const auto& err : parse_errors) {
     lsp::Diagnostic diag;
+    
+    // Split content into lines to find the error token
+    std::istringstream stream(doc.content);
+    std::string line;
+    int current_line = 0;
+    int start_char = err.col - 1;  // Convert 1-based to 0-based
+    int end_char = err.col - 1;
+    
+    while (std::getline(stream, line)) {
+      if (current_line == err.line - 1) {
+        // Found the error line
+        // The error position might be AFTER the problematic token
+        // Search backwards to find the start of the token
+        int pos = err.col - 1;  // 0-based position
+        
+        if (pos > 0 && pos <= static_cast<int>(line.size())) {
+          // Skip backwards over whitespace
+          while (pos > 0 && std::isspace(static_cast<unsigned char>(line[pos - 1]))) {
+            pos--;
+          }
+          
+          // Now find the start of the token (alphanumeric or underscore)
+          int token_end = pos;
+          while (pos > 0 && (std::isalnum(static_cast<unsigned char>(line[pos - 1])) || line[pos - 1] == '_')) {
+            pos--;
+          }
+          
+          // If we found a token, use it
+          if (pos < token_end) {
+            start_char = pos;
+            end_char = token_end;
+          } else {
+            // No token found backwards, try forward from error position
+            pos = err.col - 1;
+            if (pos >= 0 && pos < static_cast<int>(line.size())) {
+              int token_start = pos;
+              while (pos < static_cast<int>(line.size()) && 
+                     (std::isalnum(static_cast<unsigned char>(line[pos])) || line[pos] == '_')) {
+                pos++;
+              }
+              if (pos > token_start) {
+                start_char = token_start;
+                end_char = pos;
+              } else {
+                // Fallback: highlight at least one character
+                start_char = err.col - 1;
+                end_char = std::min(err.col, static_cast<int>(line.size()));
+              }
+            }
+          }
+        }
+        break;
+      }
+      current_line++;
+    }
+    
     // Convert from 1-based to 0-based indexing (LSP protocol requirement)
     diag.range.start.line = err.line - 1;
-    diag.range.start.character = err.col - 1;
+    diag.range.start.character = start_char;
     diag.range.end.line = err.line - 1;
-    diag.range.end.character = err.col;  // Highlight one character
+    // Ensure end >= start
+    diag.range.end.character = std::max(end_char, start_char + 1);
     diag.severity = 1;  // Error
     diag.message = err.message;
     diag.source = "npidl";
@@ -99,6 +156,11 @@ std::vector<lsp::Diagnostic> DocumentManager::parse_and_get_diagnostics(
 // LspServer Implementation
 
 LspServer::LspServer() {
+  // Disable buffering on stdin/stdout for LSP protocol
+  std::ios::sync_with_stdio(false);
+  std::cin.tie(nullptr);
+  std::cout.tie(nullptr);
+  
   // Log to stderr (stdout is for LSP messages)
   std::clog << "NPIDL LSP Server starting..." << std::endl;
 }
@@ -118,10 +180,12 @@ std::optional<std::string> LspServer::read_message() {
 
     if (header.starts_with("Content-Length: ")) {
       content_length = std::stoi(header.substr(16));
+      std::clog << "Content-Length: " << content_length << std::endl;
     }
   }
 
   if (content_length == 0) {
+    std::clog << "No content length found, exiting" << std::endl;
     return std::nullopt;
   }
 
@@ -130,9 +194,11 @@ std::optional<std::string> LspServer::read_message() {
   std::cin.read(content.data(), content_length);
 
   if (!std::cin) {
+    std::clog << "Failed to read " << content_length << " bytes from stdin" << std::endl;
     return std::nullopt;
   }
 
+  std::clog << "Successfully read message of " << content_length << " bytes" << std::endl;
   return content;
 }
 
@@ -628,6 +694,7 @@ void LspServer::handle_semantic_tokens_full(const glz::json_t& id, const glz::ra
     uint32_t col = entry.start_col - 1;
 
     // Calculate token length (simplified - single line tokens)
+    // Note: end_col is inclusive (points to last char), so we don't add 1
     uint32_t length = (entry.end_line == entry.start_line) 
                       ? (entry.end_col - entry.start_col + 1)
                       : 0; // Skip multi-line tokens for now
@@ -787,6 +854,215 @@ void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& pa
   send_response(id, "null");
 }
 
+void LspServer::handle_document_symbol(const glz::json_t& id, const glz::raw_json& params) {
+  lsp::DocumentSymbolParams symbol_params;
+
+  auto error = glz::read_json(symbol_params, params.str);
+  if (error) {
+    std::cerr << "Error parsing documentSymbol params: " << glz::format_error(error, params.str) << '\n';
+    send_error(id, -32602, "Invalid params");
+    return;
+  }
+
+  auto* project = workspace_.find_project(symbol_params.textDocument.uri);
+  if (!project || !project->ctx) {
+    send_response(id, "[]");
+    return;
+  }
+
+  std::vector<lsp::DocumentSymbol> symbols;
+
+  // Helper to convert SourceRange to LSP Range
+  auto to_lsp_range = [](const npidl::SourceRange& sr) -> lsp::Range {
+    lsp::Range range;
+    range.start.line = sr.start.line - 1;
+    range.start.character = sr.start.column - 1;
+    range.end.line = sr.end.line - 1;
+    range.end.character = sr.end.column - 1;
+    return range;
+  };
+
+  // Traverse namespace tree and collect all types
+  std::function<void(npidl::Namespace*)> visit_namespace = [&](npidl::Namespace* ns) {
+    for (const auto& [type_name, type_decl] : ns->types()) {
+      // Handle structs
+      if (type_decl->id == npidl::FieldType::Struct) {
+        auto* s = npidl::cflat(type_decl);
+        lsp::DocumentSymbol symbol;
+        symbol.name = s->name;
+        symbol.kind = lsp::SymbolKind::Struct;
+        symbol.range = to_lsp_range(s->range);
+        symbol.selectionRange = symbol.range;
+        
+        // Add fields as children
+        for (const auto& field : s->fields) {
+          lsp::DocumentSymbol field_symbol;
+          field_symbol.name = field->name;
+          field_symbol.kind = lsp::SymbolKind::Field;
+          if (field->range.is_valid()) {
+            field_symbol.range = to_lsp_range(field->range);
+            field_symbol.selectionRange = field_symbol.range;
+          } else {
+            field_symbol.range = symbol.range;
+            field_symbol.selectionRange = symbol.range;
+          }
+          symbol.children.push_back(std::move(field_symbol));
+        }
+        
+        symbols.push_back(std::move(symbol));
+      }
+      // Handle interfaces
+      else if (type_decl->id == npidl::FieldType::Interface) {
+        auto* iface = npidl::cifs(type_decl);
+        lsp::DocumentSymbol symbol;
+        symbol.name = iface->name;
+        symbol.kind = lsp::SymbolKind::Interface;
+        symbol.range = to_lsp_range(iface->range);
+        symbol.selectionRange = symbol.range;
+        
+        // Add functions as children
+        for (const auto& func : iface->fns) {
+          lsp::DocumentSymbol func_symbol;
+          func_symbol.name = func->name;
+          func_symbol.kind = lsp::SymbolKind::Method;
+          if (func->range.is_valid()) {
+            func_symbol.range = to_lsp_range(func->range);
+            func_symbol.selectionRange = func_symbol.range;
+          } else {
+            func_symbol.range = symbol.range;
+            func_symbol.selectionRange = symbol.range;
+          }
+          symbol.children.push_back(std::move(func_symbol));
+        }
+        
+        symbols.push_back(std::move(symbol));
+      }
+      // Handle enums
+      else if (type_decl->id == npidl::FieldType::Enum) {
+        auto* e = npidl::cenum(type_decl);
+        lsp::DocumentSymbol symbol;
+        symbol.name = e->name;
+        symbol.kind = lsp::SymbolKind::Enum;
+        symbol.range = to_lsp_range(e->range);
+        symbol.selectionRange = symbol.range;
+        
+        // Add enum members
+        for (const auto& [member_name, member_value] : e->items) {
+          lsp::DocumentSymbol member_symbol;
+          member_symbol.name = member_name;
+          member_symbol.kind = lsp::SymbolKind::EnumMember;
+          member_symbol.range = symbol.range; // Enums don't track member positions
+          member_symbol.selectionRange = symbol.range;
+          symbol.children.push_back(std::move(member_symbol));
+        }
+        
+        symbols.push_back(std::move(symbol));
+      }
+      // Handle type aliases
+      else if (type_decl->id == npidl::FieldType::Alias) {
+        auto* alias = npidl::calias(type_decl);
+        lsp::DocumentSymbol symbol;
+        symbol.name = alias->name;
+        symbol.kind = lsp::SymbolKind::TypeParameter;
+        symbol.range = to_lsp_range(alias->range);
+        symbol.selectionRange = symbol.range;
+        symbols.push_back(std::move(symbol));
+      }
+    }
+
+    // Recursively visit child namespaces
+    for (auto* child : ns->children()) {
+      visit_namespace(child);
+    }
+  };
+
+  // Start from root namespace
+  visit_namespace(project->ctx->nm_root());
+
+  std::string result = glz::write_json(symbols).value_or("[]");
+  send_response(id, result);
+}
+
+void LspServer::handle_debug_positions(const glz::json_t& id, const glz::raw_json& params) {
+  lsp::TextDocumentIdentifier doc_id;
+  
+  auto error = glz::read_json(doc_id, params.str);
+  if (error) {
+    std::cerr << "Error parsing debug positions params: " << glz::format_error(error, params.str) << '\n';
+    send_response(id, "null");
+    return;
+  }
+
+  auto* project = workspace_.find_project(doc_id.uri);
+  if (!project) {
+    send_response(id, "\"No project found\"");
+    return;
+  }
+
+  std::ostringstream result;
+  result << "=== AST Position Index Debug ===\n";
+  result << "Total entries: " << project->position_index.size() << "\n\n";
+
+  const auto& entries = project->position_index.entries();
+  for (size_t i = 0; i < entries.size(); ++i) {
+    const auto& entry = entries[i];
+    
+    result << "Entry " << i << ":\n";
+    result << "  Type: ";
+    
+    switch (entry.node_type) {
+      case npidl::PositionIndex::NodeType::Interface:  result << "Interface"; break;
+      case npidl::PositionIndex::NodeType::Struct:     result << "Struct"; break;
+      case npidl::PositionIndex::NodeType::Exception:  result << "Exception"; break;
+      case npidl::PositionIndex::NodeType::Enum:       result << "Enum"; break;
+      case npidl::PositionIndex::NodeType::Function:   result << "Function"; break;
+      case npidl::PositionIndex::NodeType::Field:      result << "Field"; break;
+      case npidl::PositionIndex::NodeType::Parameter:  result << "Parameter"; break;
+      case npidl::PositionIndex::NodeType::Import:     result << "Import"; break;
+      case npidl::PositionIndex::NodeType::Alias:      result << "Alias"; break;
+      case npidl::PositionIndex::NodeType::EnumValue:  result << "EnumValue"; break;
+      default: result << "Unknown";
+    }
+    result << "\n";
+
+    // Get the name if possible
+    std::string name = "?";
+    if (entry.node_type == npidl::PositionIndex::NodeType::Interface) {
+      name = static_cast<npidl::AstInterfaceDecl*>(entry.node)->name;
+    } else if (entry.node_type == npidl::PositionIndex::NodeType::Struct ||
+               entry.node_type == npidl::PositionIndex::NodeType::Exception) {
+      name = static_cast<npidl::AstStructDecl*>(entry.node)->name;
+    } else if (entry.node_type == npidl::PositionIndex::NodeType::Enum) {
+      name = static_cast<npidl::AstEnumDecl*>(entry.node)->name;
+    } else if (entry.node_type == npidl::PositionIndex::NodeType::Function) {
+      name = static_cast<npidl::AstFunctionDecl*>(entry.node)->name;
+    } else if (entry.node_type == npidl::PositionIndex::NodeType::Field) {
+      name = static_cast<npidl::AstFieldDecl*>(entry.node)->name;
+    } else if (entry.node_type == npidl::PositionIndex::NodeType::Parameter) {
+      name = static_cast<npidl::AstFunctionArgument*>(entry.node)->name;
+    } else if (entry.node_type == npidl::PositionIndex::NodeType::Alias) {
+      name = static_cast<npidl::AstAliasDecl*>(entry.node)->name;
+    }
+
+    result << "  Name: " << name << "\n";
+    result << "  Position: " 
+           << entry.start_line << ":" << entry.start_col 
+           << " -> " 
+           << entry.end_line << ":" << entry.end_col << "\n";
+    
+    // Calculate length for single-line tokens
+    if (entry.start_line == entry.end_line) {
+      uint32_t length = entry.end_col - entry.start_col;
+      result << "  Length: " << length << " chars\n";
+    }
+    
+    result << "\n";
+  }
+
+  std::string result_str = result.str();
+  send_response(id, glz::write_json(result_str).value_or("null"));
+}
+
 void LspServer::publish_diagnostics(const std::string& uri, const std::vector<lsp::Diagnostic>& diagnostics) {
   std::string params = glz::write_json(glz::obj{
     "uri", uri,
@@ -831,8 +1107,12 @@ void LspServer::run() {
         handle_hover(request.id, request.params);
       } else if (request.method == "textDocument/definition") {
         handle_definition(request.id, request.params);
+      } else if (request.method == "textDocument/documentSymbol") {
+        handle_document_symbol(request.id, request.params);
       } else if (request.method == "textDocument/semanticTokens/full") {
         handle_semantic_tokens_full(request.id, request.params);
+      } else if (request.method == "npidl/debugPositions") {
+        handle_debug_positions(request.id, request.params);
       } else {
         std::cerr << "Unknown request method: " << request.method << '\n';
         send_error(request.id, -32601, "Method not found");
