@@ -3,27 +3,27 @@
 
 module nprpc;
 
-using oid_t     = u64;
-using poa_idx_t = u16;
-using oflags_t  = u16;
-using uuid_t    = u8[16];
-using ifs_idx_t = u8;
-using fn_idx_t  = u8;
+alias oid_t     = u64;
+alias poa_idx_t = u16;
+alias oflags_t  = u16;
+alias uuid_t    = u8[16];
+alias ifs_idx_t = u8;
+alias fn_idx_t  = u8;
 
-ExceptionCommFailure : exception {
+exception ExceptionCommFailure {
   /** Error message */
   what: string;
 }
 
-ExceptionTimeout : exception {}
-ExceptionObjectNotExist : exception {}
-ExceptionUnknownFunctionIndex : exception {}
-ExceptionUnknownMessageId : exception {}
-ExceptionUnsecuredObject : exception {
+exception ExceptionTimeout {}
+exception ExceptionObjectNotExist {}
+exception ExceptionUnknownFunctionIndex {}
+exception ExceptionUnknownMessageId {}
+exception ExceptionUnsecuredObject {
   class_id: string;
 }
-ExceptionBadAccess : exception {}
-ExceptionBadInput : exception {}
+exception ExceptionBadAccess {}
+exception ExceptionBadInput {}
 
 enum DebugLevel {
   DebugLevel_Critical,
@@ -44,7 +44,7 @@ enum EndPointType {
 };
 
 namespace detail {
-ObjectIdLocal : flat {
+message ObjectIdLocal {
   poa_idx: poa_idx_t;
   object_id: oid_t;
 }
@@ -63,7 +63,7 @@ enum ObjectFlag {
 }
 
 [force_helpers=1]
-ObjectId : flat {
+message ObjectId {
   object_id: oid_t;
   poa_idx: poa_idx_t;
   flags: oflags_t;
@@ -107,14 +107,14 @@ enum MessageType: u32 {
   Answer
 }
 
-Header: flat {
+message Header {
   size: u32;
   msg_id: MessageId;
   msg_type: MessageType;
   request_id: u32;
 }
 
-CallHeader: flat {
+message CallHeader {
   poa_idx: poa_idx_t;
   interface_idx: ifs_idx_t;
   function_idx: fn_idx_t;

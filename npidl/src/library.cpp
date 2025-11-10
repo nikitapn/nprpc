@@ -233,7 +233,7 @@ class Lexer : public ILexer {
       { "f64"sv, TokenId::Float64},
       { "vector"sv, TokenId::Vector},
       { "string"sv, TokenId::String},
-      { "flat"sv, TokenId::Flat},
+      { "message"sv, TokenId::Message},
       { "namespace"sv, TokenId::Namespace},
       { "interface"sv, TokenId::Interface},
       { "object"sv, TokenId::Object},
@@ -241,7 +241,7 @@ class Lexer : public ILexer {
       { "in"sv, TokenId::In },
       { "out"sv, TokenId::Out },
       { "enum"sv, TokenId::Enum },
-      { "using"sv, TokenId::Using },
+      { "alias"sv, TokenId::Alias },
       { "exception"sv, TokenId::Exception },
       { "raises"sv, TokenId::Raises },
       { "direct"sv, TokenId::OutDirect },
@@ -413,19 +413,19 @@ public:
 // NPIDL Grammar (EBNF):
 //   file           ::= stmt_decl* EOF
 //   stmt_decl      ::= const_decl | namespace_decl | attributes_decl? (interface_decl | struct_decl) 
-//                      | enum_decl | using_decl | module_decl | ';'
+//                      | enum_decl | alias_decl | module_decl | ';'
 //   module_decl    ::= 'module' (IDENTIFIER '.')* IDENTIFIER ';'
 //   const_decl     ::= 'const' IDENTIFIER '=' NUMBER ';'
 //   namespace_decl ::= 'namespace' IDENTIFIER '{' stmt_decl* '}'
-//   using_decl     ::= 'using' IDENTIFIER '=' type_decl ';'
+//   alias_decl     ::= 'alias' IDENTIFIER '=' type_decl ';'
 //   enum_decl      ::= 'enum' IDENTIFIER (':' fundamental_type)? '{' enum_item (',' enum_item)* '}'
 //   enum_item      ::= IDENTIFIER ('=' NUMBER)?
 //   interface_decl ::= 'interface' IDENTIFIER (':' IDENTIFIER (',' IDENTIFIER)*)? '{' function_decl* '}'
-//   struct_decl    ::= IDENTIFIER ':' ('flat' | 'exception') '{' (field_decl ';' | version_decl)* '}'
+//   struct_decl    ::= '('message' | 'exception') IDENTIFIER '{' (field_decl ';' | version_decl)* '}'
 //   function_decl  ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (',' arg_decl)*)? ')' 
 //                      (';' | 'raises' '(' IDENTIFIER ')' ';')
-//   field_decl     ::= IDENTIFIER '?'? ':' type_decl
-//   arg_decl       ::= IDENTIFIER '?'? ':' ('in' | 'out' 'direct'?) type_decl
+//   field_decl     ::= (IDENTIFIER | 'message') '?'? ':' type_decl
+//   arg_decl       ::= (IDENTIFIER | 'message') '?'? ':' ('in' | 'out' 'direct'?) type_decl
 //   type_decl      ::= fundamental_type array_decl? | IDENTIFIER array_decl?
 //                      | 'vector' '<' type_decl '>' | 'string' array_decl? | 'void' | 'object'
 //   array_decl     ::= '[' (IDENTIFIER | NUMBER) ']'
@@ -732,12 +732,16 @@ class Parser : public IParser {
     Token type_token;
     bool optional;
 
+    field_name = peek();
     if (!(
-      (field_name = peek()) == TokenId::Identifier && maybe(optional, &Parser::one, TokenId::Optional) &&
-      peek() == TokenId::Colon && check(&Parser::type_decl1, std::ref(type), std::ref(type_token))
-      )) {
-      return false;
-    }
+          (field_name == TokenId::Identifier || field_name == TokenId::Message)
+        && maybe(optional, &Parser::one, TokenId::Optional)
+        && peek() == TokenId::Colon 
+        && check(&Parser::type_decl1, std::ref(type), std::ref(type_token))
+      )) return false;
+    
+    if (field_name == TokenId::Message)
+      field_name.name = "message";
 
     field = new AstFieldDecl();
     field->name = std::move(field_name.name);
@@ -760,10 +764,17 @@ class Parser : public IParser {
 
   // arg_decl ::= IDENTIFIER '?'? ':' ('in' | 'out' 'direct'?) type_decl
   bool arg_decl(AstFunctionArgument& arg, Token& start_token, Token& type_token) {
-    Token arg_name;
+    Token arg_name = peek();
     bool optional;
 
-    if (!((arg_name = peek()) == TokenId::Identifier && maybe(optional, &Parser::one, TokenId::Optional) && peek() == TokenId::Colon)) return false;
+    if (!(
+           (arg_name == TokenId::Identifier  || arg_name == TokenId::Message)
+        && maybe(optional, &Parser::one, TokenId::Optional) 
+        && peek() == TokenId::Colon
+      )) return false;
+
+    if (arg_name == TokenId::Message)
+      arg_name.name = "message";
 
     // Save start token for position tracking
     start_token = arg_name;
@@ -814,26 +825,18 @@ class Parser : public IParser {
     return false;
   }
 
-  // struct_decl ::= IDENTIFIER ':' ('flat' | 'exception') '{' (field_decl ';' | version_decl)* '}'
+  // struct_decl ::= ('message' | 'exception') IDENTIFIER '{' (field_decl ';' | version_decl)* '}'
   bool struct_decl(attributes_t& attr) {
-    Token name_tok;
-
-    if (!((name_tok = peek()) == TokenId::Identifier && peek() == TokenId::Colon))
+    auto first_tok = peek();
+    if (first_tok != TokenId::Message && first_tok != TokenId::Exception)
       return false;
-
-    bool is_exception;
-
-    auto tok = peek();
-    if (tok == TokenId::Flat) is_exception = false;
-    else if (tok == TokenId::Exception) is_exception = true;
-    else return false;
 
     flush();
 
+    Token name_tok = match(TokenId::Identifier);
     auto s = new AstStructDecl();
-
+    bool is_exception = first_tok == TokenId::Exception;
     s->name = name_tok.name;
-
     if (is_exception) {
       s->exception_id = ctx_.next_exception_id();
       ctx_.exceptions.push_back(s);
@@ -1236,13 +1239,13 @@ class Parser : public IParser {
     return false;
   }
 
-  // using_decl ::= 'using' IDENTIFIER '=' type_decl ';'
-  bool using_decl() {
+  // alias_decl ::= 'alias' IDENTIFIER '=' type_decl ';'
+  bool alias_decl() {
     Token start_tok;
     Token left;
 
     if (!(
-      (start_tok = peek()) == TokenId::Using &&
+      (start_tok = peek()) == TokenId::Alias &&
       (left = peek()) == TokenId::Identifier &&
       peek() == TokenId::Assignment
       ))
@@ -1331,8 +1334,11 @@ class Parser : public IParser {
         ix++;
       }
 
-      if (tok == TokenId::BracketClose) break;
-      if (tok != TokenId::Comma) throw_error("Unexpected token '" + tok.name + '\'');
+      if (tok == TokenId::BracketClose)
+        break;
+
+      if (tok != TokenId::Comma)
+        throw_error("Unexpected token '" + tok.name + '\'');
 
       flush();
     }
@@ -1358,7 +1364,7 @@ class Parser : public IParser {
       check(&Parser::struct_decl, std::ref(attr));
   }
 
-  // stmt_decl ::= const_decl | namespace_decl | attributes_decl? (interface_decl | struct_decl) | enum_decl | using_decl | module_decl | ';'
+  // stmt_decl ::= const_decl | namespace_decl | attributes_decl? (interface_decl | struct_decl) | enum_decl | alias_decl | module_decl | ';'
   bool stmt_decl() {
     return (
       check(&Parser::import_decl) ||
@@ -1366,7 +1372,7 @@ class Parser : public IParser {
       check(&Parser::namespace_decl) ||
       check(&Parser::something_that_could_have_attributes) ||
       check(&Parser::enum_decl) ||
-      check(&Parser::using_decl) ||
+      check(&Parser::alias_decl) ||
       check(&Parser::module_decl) ||
       check(&Parser::one, TokenId::Semicolon)
       );
@@ -1403,10 +1409,10 @@ class Parser : public IParser {
       Token next = peek();
       if (next == TokenId::Namespace ||
           next == TokenId::Interface ||
-          next == TokenId::Flat ||
+          next == TokenId::Message ||
           next == TokenId::Exception ||
           next == TokenId::Enum ||
-          next == TokenId::Using ||
+          next == TokenId::Alias ||
           next == TokenId::Const ||
           next == '[') {  // Attributes
         break;

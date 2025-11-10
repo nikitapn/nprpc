@@ -3,11 +3,11 @@
 
 module nprpc.test;
 
-using Id = u32;
-using IdArray = vector<Id>;
-using bytestream = vector<u8>;
+alias Id = u32;
+alias IdArray = vector<Id>;
+alias bytestream = vector<u8>;
 
-AssertionFailed : exception {
+exception AssertionFailed {
 	message: string;
 }
 
@@ -17,25 +17,25 @@ interface ServerControl {
 }
 
 [force_helpers=1]
-FlatStruct : flat {
+message FlatStruct {
 	a: i32;
 	b: u32;
 	c: f32;
 }
 
 [force_helpers=1]
-AAA: flat {
+message AAA{
 	a: u32;
 	b: string;
 	c: string;
 }
 
 [force_helpers=1]
-SimpleStruct : flat {
+message SimpleStruct {
 	id: u32;
 }
 
-SimpleException : exception {
+exception SimpleException {
 	message: string;
 	code: u32;
 }
@@ -64,7 +64,7 @@ interface TestLargeMessage {
 }
 
 [force_helpers=1]
-Opt1 : flat {
+message Opt1 {
 	str: string;
 	stream?: bytestream;
 };
@@ -84,7 +84,7 @@ interface SimpleObject {
 	async SetValue(a: in u32);
 }
 
-NestedObjects : flat {
+message NestedObjects {
 	object1: /* SimpleObject */ object;
 	object2: /* SimpleObject */ object;
 }
@@ -97,34 +97,34 @@ interface TestObjects {
 }
 
 [force_helpers=1]
-CCC : flat {
+message CCC {
 	a: string;
 	b: string;
 	c?: boolean;
 }
 
 [force_helpers=1]
-BBB : flat {
+message BBB {
 	a: vector<AAA>;
 	b: vector<CCC>;
 }
 
 [force_helpers=1]
-Level2 : flat {
+message Level2 {
 	x: string;
 	y: vector<u8>;
 	z: u64;
 }
 
 [force_helpers=1]
-Level1 : flat {
+message Level1 {
 	x: string;
 	y: Level2;
 	z: u64;
 }
 
 [force_helpers=1]
-TopLevel : flat {
+message TopLevel {
 	x: string;
 	y: Level1;
 	z: u64;
