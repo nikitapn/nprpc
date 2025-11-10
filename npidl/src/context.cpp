@@ -26,8 +26,6 @@ void Context::set_module_name(std::vector<std::string>&& name_parts) {
     prev->push(nm_root_);
     nm_root_->change_name(std::move(*name_parts.rbegin()));
   }
-
-  std::cerr << "DEBUG_NAMESPACE: "<< nm_root_->to_cpp17_namespace() << '\n';
 }
 
 } // namespace npidl

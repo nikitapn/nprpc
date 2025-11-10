@@ -28,7 +28,7 @@ ProjectContext* WorkspaceManager::get_project_for_file(
       std::find_if(projects_.begin(), projects_.end(), 
         [related](const auto& p) { return p.get() == related; })
     );
-    std::cerr << "Added file " << uri << " to existing project" << std::endl;
+    std::clog << "Added file " << uri << " to existing project" << std::endl;
     return related;
   }
   
@@ -40,7 +40,7 @@ ProjectContext* WorkspaceManager::get_project_for_file(
   file_to_project_[uri] = project_idx;
   projects_.push_back(std::move(new_project));
   
-  std::cerr << "Created new project for file " << uri << std::endl;
+  std::clog << "Created new project for file " << uri << std::endl;
   return projects_[project_idx].get();
 }
 
@@ -58,7 +58,7 @@ void WorkspaceManager::remove_file(const std::string& uri) {
   
   // If project is now empty, remove it
   if (project->file_uris.empty()) {
-    std::cerr << "Removing empty project at index " << project_idx << std::endl;
+    std::clog << "Removing empty project at index " << project_idx << std::endl;
     projects_.erase(projects_.begin() + project_idx);
     
     // Update indices in file_to_project_

@@ -7,6 +7,7 @@
 
 namespace npidl::builders {
 // Null builder that doesn't generate any output (for LSP parsing)
+// May be not used at all in the end, but kept for completeness
 class NullBuilder : public Builder {
 public:
   NullBuilder(Context* ctx) : Builder(ctx) {}

@@ -135,14 +135,14 @@ static std::ostream& operator << (std::ostream& os, const TokenId& token_id) {
     
     switch (token_id) {
     case TokenId::Boolean:  os << "boolean"; break;
-    case TokenId::Int8:      os << "i8"; break;
-    case TokenId::UInt8:    os << "u8"; break;
+    case TokenId::Int8:     os << "i8";  break;
+    case TokenId::UInt8:    os << "u8";  break;
     case TokenId::Int16:    os << "i16"; break;
-    case TokenId::UInt16:    os << "u16"; break;
+    case TokenId::UInt16:   os << "u16"; break;
     case TokenId::Int32:    os << "i32"; break;
-    case TokenId::UInt32:    os << "u32"; break;
+    case TokenId::UInt32:   os << "u32"; break;
     case TokenId::Int64:    os << "i64"; break;
-    case TokenId::UInt64:    os << "u64"; break;
+    case TokenId::UInt64:   os << "u64"; break;
     case TokenId::Float32:  os << "f32"; break;
     case TokenId::Float64:  os << "f64"; break;
     default: assert(false);

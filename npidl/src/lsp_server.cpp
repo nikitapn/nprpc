@@ -44,7 +44,7 @@ std::vector<lsp::Diagnostic> DocumentManager::parse_and_get_diagnostics(
   // Get or create project context for this file
   // We'll update imports after parsing, so pass empty vector for now
   auto* project = workspace.get_project_for_file(doc.uri, {});
-  
+
   if (!project) {
     // Should never happen - workspace always creates a project
     lsp::Diagnostic diag;
@@ -100,7 +100,7 @@ std::vector<lsp::Diagnostic> DocumentManager::parse_and_get_diagnostics(
 
 LspServer::LspServer() {
   // Log to stderr (stdout is for LSP messages)
-  std::cerr << "NPIDL LSP Server starting..." << std::endl;
+  std::clog << "NPIDL LSP Server starting..." << std::endl;
 }
 
 std::optional<std::string> LspServer::read_message() {
@@ -170,7 +170,7 @@ void LspServer::send_notification(const std::string& method, const std::string& 
 }
 
 void LspServer::handle_initialize(const glz::json_t& id, const glz::raw_json& params) {
-  std::cerr << "Handling initialize request" << std::endl;
+  std::clog << "Handling initialize request" << std::endl;
 
   lsp::InitializeResult result;
   result.capabilities.textDocumentSync.openClose = 1;
@@ -179,7 +179,7 @@ void LspServer::handle_initialize(const glz::json_t& id, const glz::raw_json& pa
   result.capabilities.definitionProvider = true;
   result.capabilities.referencesProvider = true;
   result.capabilities.documentSymbolProvider = true;
-  
+
   // Semantic tokens support
   lsp::ServerCapabilities::SemanticTokensOptions semanticTokens;
   semanticTokens.legend.tokenTypes = {
@@ -208,18 +208,17 @@ void LspServer::handle_initialize(const glz::json_t& id, const glz::raw_json& pa
   initialized_ = true;
 }
 
-
 void LspServer::handle_initialized(const glz::raw_json& params) {
-  std::cerr << "Client initialized notification received" << std::endl;
+  std::clog << "Client initialized notification received" << std::endl;
 }
 
 void LspServer::handle_shutdown(const glz::json_t& id) {
-  std::cerr << "Handling shutdown request" << std::endl;
+  std::clog << "Handling shutdown request" << std::endl;
   send_response(id, "null");
 }
 
 void LspServer::handle_exit() {
-  std::cerr << "Exiting LSP server" << std::endl;
+  std::clog << "Exiting LSP server" << std::endl;
   std::exit(0);
 }
 
@@ -232,7 +231,7 @@ void LspServer::handle_did_open(const glz::raw_json& params) {
     return;
   }
 
-  std::cerr << "Document opened: " << open_params.textDocument.uri << std::endl;
+  std::clog << "Document opened: " << open_params.textDocument.uri << std::endl;
 
   documents_.open(
     open_params.textDocument.uri,
@@ -252,11 +251,11 @@ void LspServer::handle_did_change(const glz::raw_json& params) {
 
   auto error = glz::read_json(change_params, params.str);
   if (error) {
-    std::cerr << "Error parsing didChange params: " << glz::format_error(error, params.str) << std::endl;
+    std::cerr << "Error parsing didChange params: " << glz::format_error(error, params.str) << '\n';
     return;
   }
 
-  std::cerr << "Document changed: " << change_params.textDocument.uri << std::endl;
+  std::clog << "Document changed: " << change_params.textDocument.uri << std::endl;
 
   // Full document sync (change=1)
   if (!change_params.contentChanges.empty()) {
@@ -279,15 +278,15 @@ void LspServer::handle_did_close(const glz::raw_json& params) {
 
   auto error = glz::read_json(close_params, params.str);
   if (error) {
-    std::cerr << "Error parsing didClose params: " << glz::format_error(error, params.str) << std::endl;
+    std::cerr << "Error parsing didClose params: " << glz::format_error(error, params.str) << '\n';
     return;
   }
 
-  std::cerr << "Document closed: " << close_params.textDocument.uri << std::endl;
-  
+  std::clog << "Document closed: " << close_params.textDocument.uri << std::endl;
+
   // Remove from workspace (cleans up empty projects)
   workspace_.remove_file(close_params.textDocument.uri);
-  
+
   // Remove from document manager
   documents_.close(close_params.textDocument.uri);
 }
@@ -297,55 +296,55 @@ void LspServer::handle_hover(const glz::json_t& id, const glz::raw_json& params)
 
   auto error = glz::read_json(pos_params, params.str);
   if (error) {
-    std::cerr << "Error parsing hover params: " << glz::format_error(error, params.str) << std::endl;
+    std::cerr << "Error parsing hover params: " << glz::format_error(error, params.str) << '\n';
     send_response(id, "null");
     return;
   }
 
-  std::cerr << "Hover request at " << pos_params.textDocument.uri 
+  std::clog << "Hover request at " << pos_params.textDocument.uri 
             << " line:" << pos_params.position.line 
             << " char:" << pos_params.position.character << std::endl;
 
   // Find the project containing this file
   auto* project = workspace_.find_project(pos_params.textDocument.uri);
   if (!project) {
-    std::cerr << "No project found for " << pos_params.textDocument.uri << std::endl;
+    std::cerr << "No project found for " << pos_params.textDocument.uri << '\n';
     send_response(id, "null");
     return;
   }
 
-  std::cerr << "Project found. Index has " << project->position_index.size() << " entries" << std::endl;
-  std::cerr << "Index finalized: " << (project->position_index.is_finalized() ? "yes" : "no") << std::endl;
+  std::clog << "Project found. Index has " << project->position_index.size() << " entries" << '\n';
+  std::clog << "Index finalized: " << (project->position_index.is_finalized() ? "yes" : "no") << '\n';
 
   // Convert from 0-based LSP position to 1-based parser position
   uint32_t line = pos_params.position.line + 1;
   uint32_t col = pos_params.position.character + 1;
 
-  std::cerr << "Looking for node at 1-based position " << line << ":" << col << std::endl;
+  std::clog << "Looking for node at 1-based position " << line << ":" << col << std::endl;
 
   // Find the AST node at this position
   const auto* entry = project->position_index.find_at_position(line, col);
   if (!entry) {
-    std::cerr << "No AST node at position " << line << ":" << col << std::endl;
-    std::cerr << "Dumping first 10 index entries:" << std::endl;
+    std::clog << "No AST node at position " << line << ":" << col << '\n';
+    std::clog << "Dumping first 10 index entries:" << '\n';
     const auto& entries = project->position_index.entries();
     for (size_t i = 0; i < std::min(size_t(10), entries.size()); ++i) {
-      std::cerr << "  Entry " << i << ": lines " << entries[i].start_line << "-" << entries[i].end_line 
-                << ", cols " << entries[i].start_col << "-" << entries[i].end_col << std::endl;
+      std::clog << "  Entry " << i << ": lines " << entries[i].start_line << "-" << entries[i].end_line 
+                << ", cols " << entries[i].start_col << "-" << entries[i].end_col << '\n';
     }
     send_response(id, "null");
     return;
   }
 
-  std::cerr << "Found node at " << entry->start_line << ":" << entry->start_col 
+  std::clog << "Found node at " << entry->start_line << ":" << entry->start_col 
             << " - " << entry->end_line << ":" << entry->end_col << std::endl;
 
   // Create hover content based on node type
   std::string hover_markdown = create_hover_content(entry);
-  
+
   lsp::Hover hover;
   hover.contents = hover_markdown;
-  
+
   // Set range to the node's range
   lsp::Range range;
   range.start.line = entry->start_line - 1;  // Convert back to 0-based
@@ -411,16 +410,16 @@ std::string LspServer::create_hover_content(const npidl::PositionIndex::Entry* e
       md << "**function** `" << fn->name << "`\n\n";
       md << "```npidl\n";
       if (fn->is_async) md << "async ";
-      
+
       // Return type
       if (fn->ret_value->id == npidl::FieldType::Void) {
         md << "void";
       } else {
         md << format_type(fn->ret_value);
       }
-      
+
       md << " " << fn->name << "(";
-      
+
       // Parameters
       for (size_t i = 0; i < fn->args.size(); ++i) {
         if (i > 0) md << ", ";
@@ -428,13 +427,13 @@ std::string LspServer::create_hover_content(const npidl::PositionIndex::Entry* e
         md << (arg->modifier == npidl::ArgumentModifier::In ? "in " : "out ");
         md << format_type(arg->type) << " " << arg->name;
       }
-      
+
       md << ")";
-      
+
       if (fn->ex) {
         md << " raises(" << fn->ex->name << ")";
       }
-      
+
       md << "\n```\n";
       break;
     }
@@ -480,28 +479,28 @@ std::string LspServer::create_hover_content(const npidl::PositionIndex::Entry* e
 
 std::string LspServer::format_type(npidl::AstTypeDecl* type) {
   using FieldType = npidl::FieldType;
-  
+
   switch (type->id) {
     case FieldType::Fundamental: {
       auto* ft = npidl::cft(type);
       switch (ft->token_id) {
-        case npidl::TokenId::Boolean: return "bool";
-        case npidl::TokenId::Int8: return "int8";
-        case npidl::TokenId::UInt8: return "uint8";
-        case npidl::TokenId::Int16: return "int16";
-        case npidl::TokenId::UInt16: return "uint16";
-        case npidl::TokenId::Int32: return "int32";
-        case npidl::TokenId::UInt32: return "uint32";
-        case npidl::TokenId::Int64: return "int64";
-        case npidl::TokenId::UInt64: return "uint64";
-        case npidl::TokenId::Float32: return "float32";
-        case npidl::TokenId::Float64: return "float64";
+        case npidl::TokenId::Boolean: return "boolean";
+        case npidl::TokenId::Int8:    return "i8";
+        case npidl::TokenId::UInt8:   return "u8";
+        case npidl::TokenId::Int16:   return "i16";
+        case npidl::TokenId::UInt16:  return "u16";
+        case npidl::TokenId::Int32:   return "i32";
+        case npidl::TokenId::UInt32:  return "u32";
+        case npidl::TokenId::Int64:   return "i64";
+        case npidl::TokenId::UInt64:  return "u64";
+        case npidl::TokenId::Float32: return "f32";
+        case npidl::TokenId::Float64: return "f64";
         default: return "?";
       }
     }
-    case FieldType::String: return "string";
-    case FieldType::Void: return "void";
-    case FieldType::Object: return "object";
+    case FieldType::String:  return "string";
+    case FieldType::Void:    return "void";
+    case FieldType::Object:  return "object";
     case FieldType::Array: {
       auto* arr = npidl::car(type);
       return format_type(arr->type) + "[" + std::to_string(arr->length) + "]";
@@ -540,22 +539,22 @@ void LspServer::handle_semantic_tokens_full(const glz::json_t& id, const glz::ra
 
   auto error = glz::read_json(token_params, params.str);
   if (error) {
-    std::cerr << "Error parsing semantic tokens params: " << glz::format_error(error, params.str) << std::endl;
+    std::cerr << "Error parsing semantic tokens params: " << glz::format_error(error, params.str) << '\n';
     send_response(id, "null");
     return;
   }
 
-  std::cerr << "Semantic tokens request for " << token_params.textDocument.uri << std::endl;
+  std::clog << "Semantic tokens request for " << token_params.textDocument.uri << std::endl;
 
   // Find the project containing this file
   auto* project = workspace_.find_project(token_params.textDocument.uri);
   if (!project) {
-    std::cerr << "No project found for " << token_params.textDocument.uri << std::endl;
+    std::cerr << "No project found for " << token_params.textDocument.uri << '\n';
     send_response(id, "null");
     return;
   }
 
-  std::cerr << "Generating semantic tokens. Index has " << project->position_index.size() << " entries" << std::endl;
+  std::clog << "Generating semantic tokens. Index has " << project->position_index.size() << " entries" << std::endl;
 
   // Build semantic tokens array
   lsp::SemanticTokensResponse response;
@@ -583,7 +582,7 @@ void LspServer::handle_semantic_tokens_full(const glz::json_t& id, const glz::ra
 
   // Get all index entries and sort by position
   const auto& entries = project->position_index.entries();
-  
+
   // Track previous token position for delta encoding
   uint32_t prev_line = 0;
   uint32_t prev_col = 0;
@@ -627,12 +626,12 @@ void LspServer::handle_semantic_tokens_full(const glz::json_t& id, const glz::ra
     // Convert from 1-based parser position to 0-based LSP position
     uint32_t line = entry.start_line - 1;
     uint32_t col = entry.start_col - 1;
-    
+
     // Calculate token length (simplified - single line tokens)
     uint32_t length = (entry.end_line == entry.start_line) 
                       ? (entry.end_col - entry.start_col + 1)
                       : 0; // Skip multi-line tokens for now
-    
+
     if (length == 0) continue; // Skip invalid tokens
 
     // Delta encoding: each token is relative to previous
@@ -650,7 +649,7 @@ void LspServer::handle_semantic_tokens_full(const glz::json_t& id, const glz::ra
     prev_col = col;
   }
 
-  std::cerr << "Generated " << (data.size() / 5) << " semantic tokens" << std::endl;
+  std::clog << "Generated " << (data.size() / 5) << " semantic tokens" << std::endl;
 
   std::string result = glz::write_json(response).value_or("null");
   send_response(id, result);
@@ -661,19 +660,19 @@ void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& pa
 
   auto error = glz::read_json(pos_params, params.str);
   if (error) {
-    std::cerr << "Error parsing definition params: " << glz::format_error(error, params.str) << std::endl;
+    std::cerr << "Error parsing definition params: " << glz::format_error(error, params.str) << '\n';
     send_response(id, "null");
     return;
   }
 
-  std::cerr << "Definition request at " << pos_params.textDocument.uri 
+  std::clog << "Definition request at " << pos_params.textDocument.uri
             << " line:" << pos_params.position.line 
             << " char:" << pos_params.position.character << std::endl;
 
   // Find the project containing this file
   auto* project = workspace_.find_project(pos_params.textDocument.uri);
   if (!project) {
-    std::cerr << "No project found for " << pos_params.textDocument.uri << std::endl;
+    std::cerr << "No project found for " << pos_params.textDocument.uri << '\n';
     send_response(id, "null");
     return;
   }
@@ -682,22 +681,22 @@ void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& pa
   uint32_t line = pos_params.position.line + 1;
   uint32_t col = pos_params.position.character + 1;
 
-  std::cerr << "Looking for definition at 1-based position " << line << ":" << col << std::endl;
+  std::clog << "Looking for definition at 1-based position " << line << ":" << col << std::endl;
 
   // Find the AST node at this position
   const auto* entry = project->position_index.find_at_position(line, col);
   if (!entry) {
-    std::cerr << "No AST node at position " << line << ":" << col << std::endl;
+    std::cerr << "No AST node at position " << line << ":" << col << '\n';
     send_response(id, "null");
     return;
   }
 
-  std::cerr << "Found node type: " << static_cast<int>(entry->node_type) << std::endl;
+  std::clog << "Found node type: " << static_cast<int>(entry->node_type) << std::endl;
 
   // Helper to get position from a type that inherits from AstNodeWithPosition
   auto get_type_position = [](npidl::AstTypeDecl* type) -> const npidl::SourceRange* {
     using FieldType = npidl::FieldType;
-    
+
     switch (type->id) {
       case FieldType::Struct: {
         auto* s = npidl::cflat(type);
@@ -722,26 +721,26 @@ void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& pa
 
   // For fields and parameters, try to find the type definition
   npidl::AstTypeDecl* type_to_find = nullptr;
-  
+
   if (entry->node_type == npidl::PositionIndex::NodeType::Field ||
       entry->node_type == npidl::PositionIndex::NodeType::Parameter) {
     auto* field = static_cast<npidl::AstFieldDecl*>(entry->node);
     if (field && field->type) {
       type_to_find = field->type;
-      std::cerr << "Field/parameter with type id: " << static_cast<int>(type_to_find->id) << std::endl;
+      std::clog << "Field/parameter with type id: " << static_cast<int>(type_to_find->id) << std::endl;
     }
   } else {
     // For other nodes (Interface, Struct, Enum, etc.), they ARE the definition
     // So we return their own position
-    std::cerr << "Node is a definition itself" << std::endl;
-    
+    std::clog << "Node is a definition itself" << std::endl;
+
     lsp::Location location;
     location.uri = pos_params.textDocument.uri;
     location.range.start.line = entry->start_line - 1;
     location.range.start.character = entry->start_col - 1;
     location.range.end.line = entry->end_line - 1;
     location.range.end.character = entry->end_col - 1;
-    
+
     std::string result = glz::write_json(location).value_or("null");
     send_response(id, result);
     return;
@@ -757,16 +756,16 @@ void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& pa
       auto* wrap = static_cast<npidl::AstWrapType*>(base_type);
       base_type = wrap->type;
     }
-    
+
     const npidl::SourceRange* type_range = get_type_position(base_type);
-    
+
     if (type_range && type_range->is_valid()) {
-      std::cerr << "Type definition position: " << type_range->start.line << ":" << type_range->start.column << std::endl;
-      
+      std::clog << "Type definition position: " << type_range->start.line << ":" << type_range->start.column << std::endl;
+
       // Find the index entry for this type definition
       const auto* def_entry = project->position_index.find_at_position(
         type_range->start.line, type_range->start.column);
-      
+
       if (def_entry) {
         lsp::Location location;
         location.uri = pos_params.textDocument.uri; // Same file for now (TODO: handle imports)
@@ -774,17 +773,17 @@ void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& pa
         location.range.start.character = def_entry->start_col - 1;
         location.range.end.line = def_entry->end_line - 1;
         location.range.end.character = def_entry->end_col - 1;
-        
+
         std::string result = glz::write_json(location).value_or("null");
         send_response(id, result);
         return;
       }
     } else {
-      std::cerr << "Type is a fundamental type (no definition to jump to)" << std::endl;
+      std::clog << "Type is a fundamental type (no definition to jump to)" << std::endl;
     }
   }
 
-  std::cerr << "Could not resolve definition" << std::endl;
+  std::clog << "Could not resolve definition" << std::endl;
   send_response(id, "null");
 }
 
@@ -798,16 +797,16 @@ void LspServer::publish_diagnostics(const std::string& uri, const std::vector<ls
 }
 
 void LspServer::run() {
-  std::cerr << "LSP Server ready, waiting for messages..." << std::endl;
+  std::clog << "LSP Server ready, waiting for messages..." << std::endl;
 
   while (true) {
     auto message = read_message();
     if (!message) {
-      std::cerr << "Failed to read message, exiting" << std::endl;
+      std::cerr << "Failed to read message, exiting\n";
       break;
     }
 
-    std::cerr << "Received message: " << message->substr(0, 100) << "..." << std::endl;
+    std::clog << "Received message: " << message->substr(0, 100) << "..." << std::endl;
 
     // Check if it's a request (has "id" field) or notification (no "id" field)
     bool has_id = message->find("\"id\"") != std::string::npos;
@@ -816,13 +815,13 @@ void LspServer::run() {
       // It's a request
       jsonrpc::Request request;
       auto error = glz::read_json(request, *message);
-      
+
       if (error) {
-        std::cerr << "Failed to parse as request: " << glz::format_error(error, *message) << std::endl;
+        std::cerr << "Failed to parse as request: " << glz::format_error(error, *message) << '\n';
         continue;
       }
 
-      std::cerr << "Request method: " << request.method << std::endl;
+      std::clog << "Request method: " << request.method << std::endl;
 
       if (request.method == "initialize") {
         handle_initialize(request.id, request.params);
@@ -835,20 +834,20 @@ void LspServer::run() {
       } else if (request.method == "textDocument/semanticTokens/full") {
         handle_semantic_tokens_full(request.id, request.params);
       } else {
-        std::cerr << "Unknown request method: " << request.method << std::endl;
+        std::cerr << "Unknown request method: " << request.method << '\n';
         send_error(request.id, -32601, "Method not found");
       }
     } else {
       // It's a notification
       jsonrpc::Notification notification;
       auto error = glz::read_json(notification, *message);
-      
+
       if (error) {
-        std::cerr << "Failed to parse as notification: " << glz::format_error(error, *message) << std::endl;
+        std::cerr << "Failed to parse as notification: " << glz::format_error(error, *message) << '\n';
         continue;
       }
 
-      std::cerr << "Notification method: " << notification.method << std::endl;
+      std::clog << "Notification method: " << notification.method << std::endl;
 
       if (notification.method == "initialized") {
         handle_initialized(notification.params);

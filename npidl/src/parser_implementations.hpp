@@ -20,7 +20,7 @@ public:
 
 class LspSourceProvider : public ISourceProvider {
     std::unordered_map<std::string, std::string> documents_;
-    
+
 public:
     void update_document(const std::string& uri, const std::string& content);
     void remove_document(const std::string& uri);
@@ -31,10 +31,10 @@ public:
 // In-memory source provider for testing - provides content directly without file I/O
 class InMemorySourceProvider : public ISourceProvider {
     std::string content_;
-    
+
 public:
     explicit InMemorySourceProvider(std::string content) : content_(std::move(content)) {}
-    
+
     std::string read_file(const std::filesystem::path& path) override {
         // Ignore path, just return the in-memory content
         return content_;
@@ -47,13 +47,13 @@ public:
 
 class CompilerImportResolver : public IImportResolver {
     std::unordered_set<std::string> parsed_files_;
-    
+
 public:
     std::optional<std::filesystem::path> resolve_import(
         const std::string& import_path,
         const std::filesystem::path& current_file_path
     ) override;
-    
+
     bool should_parse_import(const std::filesystem::path& resolved_path) override;
 };
 
@@ -63,7 +63,7 @@ public:
         const std::string& import_path,
         const std::filesystem::path& current_file_path
     ) override;
-    
+
     bool should_parse_import(const std::filesystem::path& resolved_path) override;
 };
 
@@ -79,11 +79,11 @@ public:
 
 class LspErrorHandler : public IErrorHandler {
     std::vector<parser_error> errors_;
-    
+
 public:
     void handle_error(const parser_error& error) override;
     bool should_continue_after_error() const override;
-    
+
     const std::vector<parser_error>& get_errors() const;
     void clear_errors();
 };

@@ -24,14 +24,8 @@ struct ParseError {
 // Context is updated with parsed AST and imports
 bool parse_for_lsp(Context& ctx, const std::string& content, std::vector<ParseError>& errors);
 
-// Legacy version for testing - creates throwaway context
+// Parse in-memory content into a throwaway context (for testing)
 // Returns true if parsing succeeded (no errors found)
-// Errors vector is populated with all found errors
-bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors);
-
-// Alias for clarity - same function, better name for testing
-inline bool parse_string_for_testing(const std::string& content, std::vector<ParseError>& errors) {
-  return parse_for_lsp(content, errors);
-}
+bool parse_string_for_testing(const std::string& content, std::vector<ParseError>& errors);
 
 } // namespace npidl

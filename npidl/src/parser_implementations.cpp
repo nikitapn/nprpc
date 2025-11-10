@@ -17,17 +17,17 @@ std::string FileSystemSourceProvider::read_file(const std::filesystem::path& pat
     if (!std::filesystem::exists(path)) {
         throw std::runtime_error("Cannot read file: " + path.string());
     }
-    
+
     std::ifstream ifs(path);
     std::noskipws(ifs);
-    
+
     std::string content;
     std::copy(
         std::istream_iterator<char>(ifs),
         std::istream_iterator<char>(),
         std::back_inserter(content)
     );
-    
+
     return content;
 }
 
@@ -46,12 +46,12 @@ void LspSourceProvider::remove_document(const std::string& uri) {
 std::string LspSourceProvider::read_file(const std::filesystem::path& path) {
     // Convert path to URI for lookup
     std::string uri = "file://" + path.string();
-    
+
     // Check if we have this document in memory
     if (auto it = documents_.find(uri); it != documents_.end()) {
         return it->second;
     }
-    
+
     // Fallback to filesystem for imported files not open in editor
     FileSystemSourceProvider fs_provider;
     return fs_provider.read_file(path);
@@ -70,16 +70,16 @@ std::optional<std::filesystem::path> CompilerImportResolver::resolve_import(
     const std::filesystem::path& current_file_path
 ) {
     namespace fs = std::filesystem;
-    
+
     // Resolve relative to current file's directory
     auto base_dir = current_file_path.parent_path();
     auto resolved = fs::absolute(base_dir / import_path);
-    
+
     // Check if file exists on filesystem
     if (!fs::exists(resolved)) {
         return std::nullopt;  // Error: file not found
     }
-    
+
     return resolved;
 }
 
@@ -88,7 +88,7 @@ bool CompilerImportResolver::should_parse_import(const std::filesystem::path& re
     std::error_code ec;
     auto canonical = std::filesystem::canonical(resolved_path, ec);
     std::string key = ec ? resolved_path.string() : canonical.string();
-    
+
     // Parse once per file (avoid circular imports and duplicates)
     return parsed_files_.insert(key).second;
 }
@@ -102,11 +102,11 @@ std::optional<std::filesystem::path> LspImportResolver::resolve_import(
     const std::filesystem::path& current_file_path
 ) {
     namespace fs = std::filesystem;
-    
+
     // Same resolution logic as compiler
     auto base_dir = current_file_path.parent_path();
     auto resolved = fs::absolute(base_dir / import_path);
-    
+
     // Don't check if file exists - LSP might have it in memory
     // The source provider will handle the lookup
     return resolved;
@@ -153,4 +153,3 @@ void LspErrorHandler::clear_errors() {
 }
 
 } // namespace npidl
-

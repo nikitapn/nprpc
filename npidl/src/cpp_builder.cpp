@@ -88,13 +88,6 @@ std::ostream& operator<<(std::ostream& os, const CppBuilder::_ns& ns) {
   }
   auto [sub, level] = Namespace::substract(ns.builder.ctx_->nm_cur(), ns.nm);
 
-  std::cerr << "DEBUG: sub " << ns.builder.ctx_->nm_cur()->to_cpp17_namespace() <<
-            "(" << ns.builder.ctx_->nm_cur()->length() << ") "
-            << " - " << ns.nm->to_cpp17_namespace() 
-            << "(" << ns.nm->length() << ") is "
-            << (sub ? sub->to_cpp17_namespace(level) : "nullptr")
-            << ", level is " << level << "\n";
-
   if (sub)
     os << sub->to_cpp17_namespace(level) << "::";
   return os;

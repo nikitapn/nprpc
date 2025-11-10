@@ -139,15 +139,14 @@ public:
 
 class BuildGroup {
   Context* ctx_;
-  size_t size_;
   std::vector<std::unique_ptr<Builder>> builders_;
 public:
   template<typename F, typename... Args>
   void emit(F fptr, Args&&... args) {
     auto mf = std::mem_fn(fptr);
-    std::for_each(builders_.begin(), builders_.begin() + size_, 
-      [&](auto& ptr) { mf(ptr.get(), std::forward<Args>(args)...); }
-    );
+    for (auto& ptr : builders_) {
+      mf(ptr.get(), std::forward<Args>(args)...);
+    }
   }
 
   template<typename T, typename... Args>
@@ -159,19 +158,15 @@ public:
     emit(&Builder::finalize);
   }
 
-  // BuildGroup(const BuildGroup& other) = delete;
-  // BuildGroup& operator=(const BuildGroup& other) = delete;
-
   BuildGroup(const BuildGroup& other, Context* ctx)
     : ctx_{ctx}
-    , size_(other.builders_.size())
   {
-    for (size_t i = 0; i < size_; ++i) {
-      builders_.emplace_back(other.builders_[i]->clone(ctx));
+    for (auto& other_builder : other.builders_) {
+      builders_.emplace_back(other_builder->clone(ctx));
     }
   }
 
-  BuildGroup(Context* ctx = nullptr) : ctx_{ctx}, size_{ 0 } {}
+  BuildGroup(Context* ctx = nullptr) : ctx_{ctx} {}
 };
 
 } // namespace npidl::builders

@@ -99,7 +99,7 @@ TEST(ErrorRecovery, MultipleErrors) {
     )";
     
     std::vector<npidl::ParseError> errors;
-    npidl::parse_for_lsp(code, errors);
+    npidl::parse_string_for_testing(code, errors);
 
     std::cerr << "Detected " << errors.size() << " errors during parsing.\n";
     for (const auto& err : errors) {

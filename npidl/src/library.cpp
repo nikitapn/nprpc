@@ -229,8 +229,8 @@ class Lexer : public ILexer {
       { "u32"sv, TokenId::UInt32 },
       { "i64"sv, TokenId::Int64 },
       { "u64"sv, TokenId::UInt64 },
-      { "float32"sv, TokenId::Float32 },
-      { "float64"sv, TokenId::Float64},
+      { "f32"sv, TokenId::Float32 },
+      { "f64"sv, TokenId::Float64},
       { "vector"sv, TokenId::Vector},
       { "string"sv, TokenId::String},
       { "flat"sv, TokenId::Flat},
@@ -269,7 +269,7 @@ class Lexer : public ILexer {
 public:
   int col() const noexcept override { return col_; }
   int line() const noexcept override { return line_; }
-  
+
   // Accessor for Parser to create child lexers for imports
   ISourceProvider& get_source_provider() override {
     return source_provider_;
@@ -731,7 +731,7 @@ class Parser : public IParser {
     field = new AstFieldDecl();
     field->name = std::move(field_name.name);
     field->type = optional ? new AstOptionalDecl(type) : type;
-    
+
     // Set position for the field (name token to current position after type)
     set_node_position(field, field_name);
 
@@ -846,8 +846,6 @@ class Parser : public IParser {
     // Set position range for the struct declaration
     set_node_position(s, name_tok);
 
-    // std::cerr << s->name << ": size " << s->size << ", alignof "<< s->align << '\n';
-
     builder_.emit((!s->is_exception() ? &builders::Builder::emit_struct : &builders::Builder::emit_exception), s);
     ctx_.nm_cur()->add(s->name, s);
 
@@ -941,7 +939,7 @@ class Parser : public IParser {
 
     auto import_path_tok = match(TokenId::QuotedString);
     match(';');
-    
+
     // Create import AST node
     auto* import = new AstImportDecl();
     import->import_path = import_path_tok.name;
@@ -950,27 +948,27 @@ class Parser : public IParser {
     import->path_start_line = import_path_tok.line;
     import->path_start_col = import_path_tok.col;
     import->path_end_col = import_path_tok.col + (int)import_path_tok.name.length() + 2; // +2 for quotes
-    
+
     // Use injected resolver to resolve import path
     auto resolved = import_resolver_.resolve_import(
         import->import_path,
         ctx_.get_file_path()
     );
-    
+
     if (resolved) {
         import->resolved_path = *resolved;
         import->resolved = true;
-        
+
         // Check if we should parse this import (depends on resolver strategy)
         if (import_resolver_.should_parse_import(*resolved)) {
             // Parse the imported file
             try {
                 // Push file context - tracks that we're now in an import
                 FileContextGuard guard(ctx_, *resolved);
-                
+
                 // Create a new lexer for the imported file
                 Lexer import_lexer(lex_.get_source_provider(), ctx_);
-                
+
                 // Create a new parser for the imported file
                 // Reuse same builder, import_resolver, and error_handler
                 Parser import_parser(
@@ -980,15 +978,15 @@ class Parser : public IParser {
                     import_resolver_,
                     error_handler_
                 );
-                
+
                 // Parse the imported file
                 import_parser.parse();
-                
+
                 // FileContextGuard destructor automatically pops file context
             } catch (const parser_error& e) {
                 import->resolved = false;
                 import->error_message = std::string("Error parsing imported file: ") + e.what();
-                
+
                 // Re-throw or handle based on error recovery mode
                 if (!error_handler_.should_continue_after_error()) {
                     throw;
@@ -999,7 +997,7 @@ class Parser : public IParser {
     } else {
         import->resolved = false;
         import->error_message = "Cannot resolve import path";
-        
+
         // Report error through error handler
         error_handler_.handle_error(parser_error(
             ctx_.current_file_path(),
@@ -1008,9 +1006,9 @@ class Parser : public IParser {
             "Cannot resolve import: " + import->import_path
         ));
     }
-    
+
     ctx_.imports.push_back(import);
-    
+
     return true;
   }
 
@@ -1219,10 +1217,10 @@ class Parser : public IParser {
     }
 
     auto a = new AstAliasDecl(std::move(left.name), ctx_.nm_cur(), right);
-    
+
     // Set position for the using declaration
     set_node_position(a, start_tok);
-    
+
     ctx_.nm_cur()->add(a->name, a);
 
     builder_.emit(&builders::Builder::emit_using, a);
@@ -1447,7 +1445,6 @@ bool parse_for_lsp(Context& ctx, const std::string& content, std::vector<ParseEr
 
   try {
     builders::BuildGroup builder(&ctx);
-    builder.add<builders::NullBuilder>();
 
     // Use test parser factory for in-memory content
     auto [source_provider, import_resolver, error_handler, lexer, parser] = 
@@ -1476,15 +1473,14 @@ bool parse_for_lsp(Context& ctx, const std::string& content, std::vector<ParseEr
   }
 }
 
-// Legacy version for testing - creates throwaway context
-bool parse_for_lsp(const std::string& content, std::vector<ParseError>& errors) {
+// Parse string content for testing purposes
+bool parse_string_for_testing(const std::string& content, std::vector<ParseError>& errors) {
   errors.clear();
 
   try {
     Context ctx;
-    
+
     builders::BuildGroup builder(&ctx);
-    builder.add<builders::NullBuilder>();
 
     // Use test parser factory for in-memory content
     auto [source_provider, import_resolver, error_handler, lexer, parser] = 
@@ -1525,7 +1521,7 @@ ParserFactory::create_compiler_parser(Context& ctx, builders::BuildGroup& builde
     auto source_provider = std::make_unique<FileSystemSourceProvider>();
     auto import_resolver = std::make_unique<CompilerImportResolver>();
     auto error_handler = std::make_unique<CompilerErrorHandler>();
-    
+
     auto lexer = std::make_unique<Lexer>(*source_provider, ctx);
     auto parser = std::make_unique<Parser>(
         *lexer,
@@ -1534,7 +1530,7 @@ ParserFactory::create_compiler_parser(Context& ctx, builders::BuildGroup& builde
         *import_resolver,
         *error_handler
     );
-    
+
     return {
         std::move(source_provider),
         std::move(import_resolver),
@@ -1555,10 +1551,10 @@ ParserFactory::create_lsp_parser(Context& ctx, builders::BuildGroup& builder, st
     if (!source_provider) {
         source_provider = std::make_shared<LspSourceProvider>();
     }
-    
+
     auto import_resolver = std::make_unique<LspImportResolver>();
     auto error_handler = std::make_unique<LspErrorHandler>();
-    
+
     auto lexer = std::make_unique<Lexer>(*source_provider, ctx);
     auto parser = std::make_unique<Parser>(
         *lexer,
@@ -1567,7 +1563,7 @@ ParserFactory::create_lsp_parser(Context& ctx, builders::BuildGroup& builder, st
         *import_resolver,
         *error_handler
     );
-    
+
     return {
         source_provider,
         std::move(import_resolver),
@@ -1586,10 +1582,10 @@ std::tuple<
 >
 ParserFactory::create_test_parser(Context& ctx, builders::BuildGroup& builder, const std::string& content) {
     auto source_provider = std::make_shared<InMemorySourceProvider>(content);
-    
+
     auto import_resolver = std::make_unique<LspImportResolver>();
     auto error_handler = std::make_unique<LspErrorHandler>();
-    
+
     auto lexer = std::make_unique<Lexer>(*source_provider, ctx);
     auto parser = std::make_unique<Parser>(
         *lexer,
@@ -1598,7 +1594,7 @@ ParserFactory::create_test_parser(Context& ctx, builders::BuildGroup& builder, c
         *import_resolver,
         *error_handler
     );
-    
+
     return {
         source_provider,
         std::move(import_resolver),
@@ -1609,4 +1605,3 @@ ParserFactory::create_test_parser(Context& ctx, builders::BuildGroup& builder, c
 }
 
 } // namespace npidl
-

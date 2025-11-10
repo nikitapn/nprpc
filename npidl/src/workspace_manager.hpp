@@ -38,8 +38,6 @@ struct ProjectContext {
     : ctx(std::make_unique<Context>("<project>"))
     , builder(std::make_unique<builders::BuildGroup>(ctx.get()))
   {
-    // NullBuilder for LSP (no code generation)
-    builder->add<builders::NullBuilder>();
   }
   
   // Add a file to this project and update import graph

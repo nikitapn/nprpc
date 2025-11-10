@@ -63,7 +63,7 @@ int main(int argc, char* argv[]) {
       return -1;
     }
   } catch (po::unknown_option& e) {
-    std::cerr << e.what();
+    std::cerr << e.what() << '\n';
     return -1;
   }
 
@@ -81,9 +81,13 @@ int main(int argc, char* argv[]) {
 
     return 0;
   } catch (parser_error& e) {
-    std::cerr << clr::red << "Parser error in:\n\t" << clr::cyan << e.file_path << ':' << e.line << ':' << e.col << ": " << clr::reset << e.what() << '\n';
+    std::cerr << clr::red << "Parser error in:\n\t" 
+      << clr::cyan << e.file_path << ':' << e.line << ':' << e.col << ": "
+      << clr::reset << e.what() << '\n';
   } catch (lexical_error& e) {
-    std::cerr << clr::red << "Lexer error in:\n\t" << clr::cyan << e.file_path << ':' << e.line << ':' << e.col << ": " << clr::reset << e.what() << '\n';
+    std::cerr << clr::red << "Lexer error in:\n\t" 
+      << clr::cyan << e.file_path << ':' << e.line << ':' << e.col << ": "
+      << clr::reset << e.what() << '\n';
   } catch (std::exception& ex) {
     std::cerr << ex.what() << '\n';
   }
