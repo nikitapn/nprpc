@@ -48,3 +48,40 @@ add_custom_target(run_npidl_tests_verbose
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Running nprpc tests with verbose output..."
 )
+
+# LSP Integration Tests (Python scripts)
+# These test the actual LSP server executable end-to-end
+find_package(Python3 COMPONENTS Interpreter)
+
+if(Python3_FOUND)
+  # Add the LSP integration test suite
+  add_test(
+    NAME npidl_lsp_integration_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/integration_tests/run_lsp_tests.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/integration_tests
+  )
+  
+  # Set environment variables for the test
+  set_tests_properties(npidl_lsp_integration_tests PROPERTIES
+    ENVIRONMENT "NPIDL_BIN=${CMAKE_BINARY_DIR}/bin/npidl"
+    TIMEOUT 60
+    LABELS "integration;lsp"
+  )
+  
+  # Make sure npidl is built before running LSP tests
+  add_dependencies(npidl_test npidl)
+  
+  message(STATUS "LSP integration tests enabled (Python ${Python3_VERSION})")
+else()
+  message(WARNING "Python3 not found - LSP integration tests will be skipped")
+endif()
+
+# Helper target to run only LSP integration tests
+if(Python3_FOUND)
+  add_custom_target(run_lsp_tests
+    COMMAND ${CMAKE_CTEST_COMMAND} -R npidl_lsp_integration_tests --output-on-failure
+    DEPENDS npidl
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    COMMENT "Running LSP integration tests..."
+  )
+endif()

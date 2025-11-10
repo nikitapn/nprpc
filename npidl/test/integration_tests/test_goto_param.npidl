@@ -1,0 +1,10 @@
+module test;
+
+Footstep : flat {
+  x: int32;
+  y: int32;
+}
+
+interface Calculator {
+  void SendFootstep(footstep: in Footstep);
+}

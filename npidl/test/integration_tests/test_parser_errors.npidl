@@ -1,0 +1,22 @@
+module test;
+
+// Good definition
+Footstep : flat {
+  x: i32;
+  y: i32;
+}
+
+// Error: unknown type
+BadStruct : flat {
+  value: int32;  // Should be i32
+}
+
+// Error: missing semicolon
+interface Calculator {
+  void Add(a: in i32, b: in i32)  // Missing semicolon
+}
+
+// Another error: unknown type in function
+interface Another {
+  void Process(data: in UnknownType);
+}
