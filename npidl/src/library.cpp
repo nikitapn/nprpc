@@ -739,11 +739,14 @@ class Parser : public IParser {
   }
 
   // arg_decl ::= IDENTIFIER '?'? ':' ('in' | 'out' 'direct'?) type_decl
-  bool arg_decl(AstFunctionArgument& arg) {
+  bool arg_decl(AstFunctionArgument& arg, Token& start_token) {
     Token arg_name;
     bool optional;
 
     if (!((arg_name = peek()) == TokenId::Identifier && maybe(optional, &Parser::one, TokenId::Optional) && peek() == TokenId::Colon)) return false;
+
+    // Save start token for position tracking
+    start_token = arg_name;
 
     if (check(&Parser::one, TokenId::In)) arg.modifier = ArgumentModifier::In;
     else if (check(&Parser::one, TokenId::Out)) arg.modifier = ArgumentModifier::Out;
@@ -1035,13 +1038,16 @@ class Parser : public IParser {
     match('(');
 
     AstFunctionArgument arg;
+    Token arg_start;
 
     if (check(&Parser::one, TokenId::RoundBracketClose) == false) {
       for (;;) {
-        if (!check(&Parser::arg_decl, std::ref(arg))) {
+        if (!check(&Parser::arg_decl, std::ref(arg), std::ref(arg_start))) {
           throw_error("Expected tokens: argument declaration");
         }
-        f->args.push_back(new AstFunctionArgument(std::move(arg)));
+        auto* arg_ptr = new AstFunctionArgument(std::move(arg));
+        set_node_position(arg_ptr, arg_start);
+        f->args.push_back(arg_ptr);
         if (check(&Parser::one, TokenId::RoundBracketClose)) break;
         match(',');
       }

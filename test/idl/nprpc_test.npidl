@@ -20,7 +20,7 @@ interface ServerControl {
 FlatStruct : flat {
 	a: i32;
 	b: u32;
-	c: float32;
+	c: f32;
 }
 
 [force_helpers=1]
