@@ -662,8 +662,16 @@ class Parser : public IParser {
   //             | 'string' array_decl?
   //             | 'void'
   //             | 'object'
+  // type_decl without type reference tracking (for recursive/vector types)
   bool type_decl(AstTypeDecl*& type) {
+    Token dummy;
+    return type_decl1(type, dummy);
+  }
+  
+  // type_decl with type reference tracking
+  bool type_decl1(AstTypeDecl*& type, Token& type_ref_token) {
     type = nullptr;
+    type_ref_token = Token{}; // Reset
 
     auto nm = ctx_.nm_cur();
     Token t;
@@ -683,6 +691,7 @@ class Parser : public IParser {
 
     switch (t.id) {
     case TokenId::Identifier:
+      type_ref_token = t; // Capture the type reference token
       flush();
       type = nm->find_type(t.name, false);
       if (!type) {
@@ -694,7 +703,8 @@ class Parser : public IParser {
       flush();
       type = new AstVectorDecl();
       match('<');
-      if (!check(&Parser::type_decl, std::ref(static_cast<AstVectorDecl*>(type)->type))) throw_error("Expected a type declaration");
+      if (!check(&Parser::type_decl, std::ref(static_cast<AstVectorDecl*>(type)->type)))
+        throw_error("Expected a type declaration");
       match('>');
       return true;
     case TokenId::String:
@@ -719,11 +729,12 @@ class Parser : public IParser {
   bool field_decl(AstFieldDecl*& field) {
     Token field_name;
     AstTypeDecl* type;
+    Token type_token;
     bool optional;
 
     if (!(
       (field_name = peek()) == TokenId::Identifier && maybe(optional, &Parser::one, TokenId::Optional) &&
-      peek() == TokenId::Colon && check(&Parser::type_decl, std::ref(type))
+      peek() == TokenId::Colon && check(&Parser::type_decl1, std::ref(type), std::ref(type_token))
       )) {
       return false;
     }
@@ -732,14 +743,23 @@ class Parser : public IParser {
     field->name = std::move(field_name.name);
     field->type = optional ? new AstOptionalDecl(type) : type;
 
-    // Set position for the field (name token to current position after type)
-    set_node_position(field, field_name);
+    // Set position for just the field name token
+    SourcePosition start = token_position(field_name);
+    SourcePosition end(field_name.line, field_name.col + static_cast<int>(field->name.length()) - 1);
+    field->range = SourceRange(start, end);
+    
+    // Set type reference position if we got a valid identifier token
+    if (type_token.id == TokenId::Identifier) {
+      SourcePosition type_start = token_position(type_token);
+      SourcePosition type_end(type_token.line, type_token.col + static_cast<int>(type_token.name.length()) - 1);
+      field->type_ref_range = SourceRange(type_start, type_end);
+    }
 
     return true;
   }
 
   // arg_decl ::= IDENTIFIER '?'? ':' ('in' | 'out' 'direct'?) type_decl
-  bool arg_decl(AstFunctionArgument& arg, Token& start_token) {
+  bool arg_decl(AstFunctionArgument& arg, Token& start_token, Token& type_token) {
     Token arg_name;
     bool optional;
 
@@ -760,7 +780,8 @@ class Parser : public IParser {
 
     AstTypeDecl* type;
 
-    if (!check(&Parser::type_decl, std::ref(type))) return false;
+    if (!check(&Parser::type_decl1, std::ref(type), std::ref(type_token)))
+      return false;
 
     arg.name = arg_name.name;
     arg.type = optional ? new AstOptionalDecl(type) : type;
@@ -1039,14 +1060,26 @@ class Parser : public IParser {
 
     AstFunctionArgument arg;
     Token arg_start;
+    Token arg_type_token;
 
     if (check(&Parser::one, TokenId::RoundBracketClose) == false) {
       for (;;) {
-        if (!check(&Parser::arg_decl, std::ref(arg), std::ref(arg_start))) {
+        if (!check(&Parser::arg_decl, std::ref(arg), std::ref(arg_start), std::ref(arg_type_token))) {
           throw_error("Expected tokens: argument declaration");
         }
         auto* arg_ptr = new AstFunctionArgument(std::move(arg));
-        set_node_position(arg_ptr, arg_start);
+        // Set position for just the argument name
+        SourcePosition start = token_position(arg_start);
+        SourcePosition end(arg_start.line, arg_start.col + static_cast<int>(arg_ptr->name.length()) - 1);
+        arg_ptr->range = SourceRange(start, end);
+        
+        // Set type reference position if we got a valid identifier token
+        if (arg_type_token.id == TokenId::Identifier) {
+          SourcePosition type_start = token_position(arg_type_token);
+          SourcePosition type_end(arg_type_token.line, arg_type_token.col + static_cast<int>(arg_type_token.name.length()) - 1);
+          arg_ptr->type_ref_range = SourceRange(type_start, type_end);
+        }
+        
         f->args.push_back(arg_ptr);
         if (check(&Parser::one, TokenId::RoundBracketClose)) break;
         match(',');

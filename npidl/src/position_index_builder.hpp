@@ -71,6 +71,24 @@ private:
         using FieldType = npidl::FieldType;
         
         switch (type->id) {
+            // case FieldType::Optional: {
+            //     auto* opt_type = static_cast<AstWrapType*>(type)->type;
+            //     // Index the optional type itself
+            //     if (has_position(opt_type)) {
+            //         index_.add(
+            //             opt_type,
+            //             PositionIndex::NodeType::Optional,
+            //             opt_type->range.start.line,
+            //             opt_type->range.start.column,
+            //             opt_type->range.end.line,
+            //             opt_type->range.end.column
+            //         );
+            //     }
+            //     // Also index the wrapped type
+            //     index_type(opt_type->type);
+            //     break;
+            // }
+
             case FieldType::Alias: {
                 auto* alias = static_cast<AstAliasDecl*>(type);
                 if (has_position(alias)) {
@@ -176,6 +194,18 @@ private:
                     arg->range.end.line,
                     arg->range.end.column
                 );
+                
+                // Also index the parameter's type reference if it has a position
+                if (arg->type_ref_range.is_valid() && arg->type) {
+                    index_.add(
+                        arg->type,
+                        get_type_node_type(arg->type),
+                        arg->type_ref_range.start.line,
+                        arg->type_ref_range.start.column,
+                        arg->type_ref_range.end.line,
+                        arg->type_ref_range.end.column
+                    );
+                }
             }
         }
     }
@@ -191,6 +221,40 @@ private:
             field->range.end.line,
             field->range.end.column
         );
+        
+        // Also index the type reference if it has a position
+        if (field->type_ref_range.is_valid() && field->type) {
+            index_.add(
+                field->type,
+                get_type_node_type(field->type),
+                field->type_ref_range.start.line,
+                field->type_ref_range.start.column,
+                field->type_ref_range.end.line,
+                field->type_ref_range.end.column
+            );
+        }
+    }
+    
+    // Helper to get NodeType for a type declaration
+    PositionIndex::NodeType get_type_node_type(AstTypeDecl* type) {
+        using FieldType = npidl::FieldType;
+        switch (type->id) {
+            case FieldType::Struct:
+                return static_cast<AstStructDecl*>(type)->is_exception() 
+                    ? PositionIndex::NodeType::Exception
+                    : PositionIndex::NodeType::Struct;
+            case FieldType::Interface:
+                return PositionIndex::NodeType::Interface;
+            case FieldType::Enum:
+                return PositionIndex::NodeType::Enum;
+            case FieldType::Alias:
+                return PositionIndex::NodeType::Alias;
+            case FieldType::Optional:
+                return PositionIndex::NodeType::Optional;
+            default:
+                // For fundamental types, wrapped types, etc. - shouldn't happen for user types
+                return PositionIndex::NodeType::Alias; // fallback
+        }
     }
     
     // Helper to check if a node has position information

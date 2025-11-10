@@ -535,6 +535,13 @@ std::string LspServer::create_hover_content(const npidl::PositionIndex::Entry* e
       break;
     }
 
+    case NodeType::Optional: {
+      auto* opt = static_cast<npidl::AstTypeDecl*>(entry->node);
+      md << "**optional type**\n\n";
+      md << "Base type: `" << format_type(npidl::copt(opt)->type) << "`\n";
+      break;
+    }
+
     default:
       md << "Unknown node type\n";
       break;
@@ -687,6 +694,9 @@ void LspServer::handle_semantic_tokens_full(const glz::json_t& id, const glz::ra
       case npidl::PositionIndex::NodeType::EnumValue:
         token_type = TT_PROPERTY; // Treat enum values as properties
         break;
+      case npidl::PositionIndex::NodeType::Optional:
+        token_type = TT_TYPE;
+        break;
     }
 
     // Convert from 1-based parser position to 0-based LSP position
@@ -786,6 +796,67 @@ void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& pa
     }
   };
 
+  // Check if we're on a type reference or a type definition
+  // Type references are added to the index pointing to AstTypeDecl nodes
+  // For type references, we want to navigate to the actual definition
+  if (entry->node_type == npidl::PositionIndex::NodeType::Struct ||
+      entry->node_type == npidl::PositionIndex::NodeType::Interface ||
+      entry->node_type == npidl::PositionIndex::NodeType::Enum ||
+      entry->node_type == npidl::PositionIndex::NodeType::Alias ||
+      entry->node_type == npidl::PositionIndex::NodeType::Optional) {
+    // This is a type - could be a reference or the actual definition
+    // Get the type's position from the AST node
+    auto* type = static_cast<npidl::AstTypeDecl*>(entry->node);
+    if (type->id == npidl::FieldType::Optional) {
+      // Unwrap optional to get to the base type
+      auto* opt = static_cast<npidl::AstWrapType*>(type);
+      type = opt->type;
+    }
+
+    const npidl::SourceRange* type_range = get_type_position(type);
+
+    if (type_range && type_range->is_valid()) {
+      // Check if the position we clicked on matches the type's definition position
+      // If not, it's a type reference and we need to jump to the definition
+      if (entry->start_line != type_range->start.line || 
+          entry->start_col != type_range->start.column) {
+        // This is a type reference, find the actual definition
+        std::clog << "Found type reference, looking for definition at " 
+                  << type_range->start.line << ":" << type_range->start.column << std::endl;
+        
+        const auto* def_entry = project->position_index.find_at_position(
+          type_range->start.line, type_range->start.column);
+        
+        if (def_entry) {
+          lsp::Location location;
+          location.uri = pos_params.textDocument.uri;
+          location.range.start.line = def_entry->start_line - 1;
+          location.range.start.character = def_entry->start_col - 1;
+          location.range.end.line = def_entry->end_line - 1;
+          location.range.end.character = def_entry->end_col - 1;
+
+          std::string result = glz::write_json(location).value_or("null");
+          send_response(id, result);
+          return;
+        }
+      } else {
+        // This is the actual definition, return its position
+        std::clog << "Node is the type definition itself" << std::endl;
+
+        lsp::Location location;
+        location.uri = pos_params.textDocument.uri;
+        location.range.start.line = entry->start_line - 1;
+        location.range.start.character = entry->start_col - 1;
+        location.range.end.line = entry->end_line - 1;
+        location.range.end.character = entry->end_col - 1;
+
+        std::string result = glz::write_json(location).value_or("null");
+        send_response(id, result);
+        return;
+      }
+    }
+  }
+
   // For fields and parameters, try to find the type definition
   npidl::AstTypeDecl* type_to_find = nullptr;
 
@@ -797,8 +868,7 @@ void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& pa
       std::clog << "Field/parameter with type id: " << static_cast<int>(type_to_find->id) << std::endl;
     }
   } else {
-    // For other nodes (Interface, Struct, Enum, etc.), they ARE the definition
-    // So we return their own position
+    // For other node types (functions, imports, etc.), they ARE the definition
     std::clog << "Node is a definition itself" << std::endl;
 
     lsp::Location location;

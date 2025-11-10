@@ -330,6 +330,7 @@ struct AstEnumDecl : AstFundamentalType, AstNodeWithPosition {
 
 struct AstFieldDecl : AstNodeWithPosition {
   AstTypeDecl* type;
+  SourceRange type_ref_range;  // Position of the type name in source (for go-to-definition)
   bool function_argument = false;
   bool input_function_argument;
   std::string_view function_name;

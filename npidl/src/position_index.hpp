@@ -26,7 +26,8 @@ public:
         Parameter,
         Alias,
         Import,
-        EnumValue
+        EnumValue,
+        Optional
     };
 
     struct Entry {
