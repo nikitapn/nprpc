@@ -86,6 +86,11 @@ export class EndPoint {
   public to_string(): string {
     return `${EndPoint.to_string(this.type)}${this.hostname}:${this.port}`;
   }
+
+  public is_ssl(): boolean {
+    return this.type === EndPointType.SecuredWebSocket ||
+      this.type === EndPointType.SecuredHttp;
+  }
 };
 
 interface HostInfo {

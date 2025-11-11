@@ -1026,7 +1026,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs) {
     
     // HTTP fetch instead of WebSocket
     out <<
-      bl() << "const url = `http://${this.endpoint.hostname}:${this.endpoint.port}/rpc`;\n" <<
+      bl() << "const url = `http${this.endpoint.is_ssl() ? 's' : ''}://${this.endpoint.hostname}:${this.endpoint.port}/rpc`;\n" <<
       bl() << "const response = await fetch(url, {\n" << bb(false) <<
         bl() << "method: 'POST',\n" <<
         bl() << "headers: { 'Content-Type': 'application/octet-stream' },\n" <<
