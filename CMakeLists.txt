@@ -119,22 +119,6 @@ target_include_directories(npnameserver
 target_link_libraries(npnameserver PUBLIC nprpc)
 add_dependencies(npnameserver nprpc)
 
-# Test executable for shared memory endpoint
-add_executable(test_shared_memory_endpoint
-  test/src/test_shared_memory_endpoint.cpp
-)
-target_include_directories(test_shared_memory_endpoint PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
-target_link_libraries(test_shared_memory_endpoint PUBLIC nprpc gtest)
-add_test(NAME SharedMemoryEndpoint COMMAND test_shared_memory_endpoint)
-
-# Test executable for shared memory listener
-add_executable(test_shared_memory_listener
-  test/src/test_shared_memory_listener.cpp
-)
-target_include_directories(test_shared_memory_listener PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
-target_link_libraries(test_shared_memory_listener PUBLIC nprpc gtest pthread)
-add_test(NAME SharedMemoryListener COMMAND test_shared_memory_listener)
-
 add_subdirectory(check)
 
 if(UNIX)

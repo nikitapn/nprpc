@@ -36,11 +36,11 @@
       "patterns": [
         {
           "name": "keyword.control.npidl",
-          "match": "\\b(interface|struct|namespace|exception|throws)\\b"
+          "match": "\\b(interface|message|namespace|exception|raises|module)\\b"
         },
         {
           "name": "storage.modifier.npidl",
-          "match": "\\b(in|out|optional)\\b"
+          "match": "\\b(in|out|direct)\\b"
         }
       ]
     },
@@ -48,7 +48,7 @@
       "patterns": [
         {
           "name": "storage.type.npidl",
-          "match": "\\b(void|bool|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|string|array|vector|flat|enum)\\b"
+          "match": "\\b(const|void|async|boolean|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|string|vector|alias|enum)\\b"
         }
       ]
     },

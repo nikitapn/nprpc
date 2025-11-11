@@ -1085,7 +1085,7 @@ void CppBuilder::emit_namespace_end() {
 
 void CppBuilder::emit_helpers() {
   always_full_namespace(true);
-  oh << "namespace " << ctx_->current_file() << "::helper {\n";
+  oh << "namespace " /*<< ctx_->current_file()*/ << "helper {\n";
   for (auto& [unused, s] : ctx_->affa_list) {
     for (auto f : s->fields) {
       assert(f->function_argument);
