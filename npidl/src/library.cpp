@@ -42,10 +42,17 @@ struct Token {
   int line;
   int col;
 
-  Token() : line(0), col(0) {}
+  Token()
+    : id(TokenId::Unknown)
+    , line(0)
+    , col(0)
+  {
+  }
 
   Token(TokenId _id, int _line = 0, int _col = 0)
-    : id(_id), line(_line), col(_col)
+    : id(_id)
+    , line(_line)
+    , col(_col)
   {
   }
 
@@ -55,7 +62,7 @@ struct Token {
     , line(_line)
     , col(_col)
   {
-    }
+  }
 
   Token(TokenId _id, std::string_view _name, std::string_view _static_name, int _line = 0, int _col = 0)
     : id(_id)
@@ -602,7 +609,7 @@ class Parser : public IParser {
       flush();
 
       match(TokenId::SquareBracketClose);
-      type = new AstArrayDecl(type, length);
+      type = new AstArrayDecl(type, static_cast<int>(length));
 
       return true;
     }

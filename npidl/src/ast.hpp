@@ -38,6 +38,7 @@ constexpr int fundamental_type_last = fundamental_type_first + 16;
   TOKEN_FUNC(Dot, '.')
 
 enum class TokenId {
+  Unknown = 0,
   Colon = ':',
 
 #define TOKEN_FUNC(x, y) x = y,
