@@ -121,14 +121,16 @@ void WebSocketSession<Derived>::do_write() {
     return;
   }
 
+  // NOTE: commented out code for write queue size check
+  // It was causing issues with legitimate high-throughput scenarios in proxy server setups
   // Check write queue size - if too large, client is too slow
-  if (write_queue_.size() > max_write_queue_size) {
-    std::cerr << "[nprpc] WebSocketSession: Write queue exceeded maximum size (" << max_write_queue_size 
-              << "), closing slow connection\n";
-    writing_.store(false);
-    close();
-    return;
-  }
+  // if (write_queue_.size() > max_write_queue_size) {
+  //   std::cerr << "[nprpc] WebSocketSession: Write queue exceeded maximum size (" << max_write_queue_size 
+  //             << "), closing slow connection\n";
+  //   writing_.store(false);
+  //   close();
+  //   return;
+  // }
 
   auto& msg = write_queue_.front();
   derived().ws().text(false); // binary mode
