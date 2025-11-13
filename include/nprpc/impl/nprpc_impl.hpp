@@ -312,7 +312,7 @@ inline void dump_message(
   auto size = cb.size();
   auto data = (unsigned char*)cb.data();
 
-  std::cout << (rx ? "rx. size: " : "tx. size: ") << size << "\n";
+  std::cout << "[nprpc] Message HEX16: " << (rx ? "rx. size: " : "tx. size: ") << size << "\n";
   std::cout << std::hex;
   for (size_t i = 0; i < size; ++i) {
     std::cout << std::setfill('0') << std::setw(2) << (int)data[i];

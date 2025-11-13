@@ -34,13 +34,13 @@ void Session::handle_request() {
 	auto validate = [this](ObjectServant& obj) {
 		if (obj.validate_session(this->ctx_)) return true;
 
-		std::cerr << remote_endpoint() << " is trying to access secured object: " << obj.get_class() << '\n';
+		std::cerr << "[nprpc] Handle Request: " << remote_endpoint() << " is trying to access secured object: " << obj.get_class() << '\n';
 		make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Error_BadAccess);
 		return false;
 	};
 
 	if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-		std::cout << "received a message:\n";
+		std::cout << "[nprpc] Handle Request: received a message:\n";
 		dump_message(rx_buffer_(), true);
 	}
 
@@ -57,11 +57,16 @@ void Session::handle_request() {
 	switch (header->msg_id) {
 	case MessageId::FunctionCall: {
 		impl::flat::CallHeader_Direct ch(rx_buffer_(), sizeof(impl::Header));
-		
+
 		if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-			std::cout << "FunctionCall. " << "interface_idx: " << (uint32_t)ch.interface_idx() << ", fn_idx: " << (uint32_t)ch.function_idx() 
-				<< ", poa_idx: " << ch.poa_idx() << ", oid: " << ch.object_id() << std::endl;
+			std::cout << "[nprpc] Handle Request: FunctionCall. " <<
+				"request_id: " << header->request_id <<
+				", interface_idx: " << (uint32_t)ch.interface_idx() <<
+				", fn_idx: " << (uint32_t)ch.function_idx() <<
+				", poa_idx: " << ch.poa_idx() <<
+				", oid: " << ch.object_id() << std::endl;
 		}
+
 		bool not_found = true;
 		if (auto obj = get_object(rx_buffer_(), ch.poa_idx(), ch.object_id()); obj) {
 			if (auto real_obj = (*obj).get(); real_obj) {
@@ -72,7 +77,7 @@ void Session::handle_request() {
 				try { 
 					real_obj->dispatch(rx_buffer_, ctx_, false);
 				} catch (const std::exception& e) {
-					std::cerr << "Exception during dispatch: " << e.what() << '\n';
+					std::cerr << "[nprpc] Handle Request: Exception during dispatch: " << e.what() << '\n';
 					// TODO: find out why Web client does not handle Error_BadInput properly
 					make_simple_answer(rx_buffer_(), MessageId::Error_BadInput, request_id);
 				}
@@ -82,7 +87,7 @@ void Session::handle_request() {
 		}
 
 		if (not_found) {
-			std::cerr << "Object not found. " << ch.object_id() << '\n';
+			std::cerr << "[nprpc] Handle Request: Object not found. " << ch.object_id() << '\n';
 		}
 
 		break;
@@ -92,7 +97,7 @@ void Session::handle_request() {
 		detail::ObjectIdLocal oid{ msg.poa_idx(), msg.object_id() };
 		
 		if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-			std::cout << "AddReference. " << "poa_idx: " << oid.poa_idx << ", oid: " << oid.object_id << std::endl;
+			std::cout << "[nprpc] Handle Request: AddReference. " << "poa_idx: " << oid.poa_idx << ", oid: " << oid.object_id << std::endl;
 		}
 		
 		bool success = false;
@@ -106,12 +111,12 @@ void Session::handle_request() {
 		
 		if (success) {
 			if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-				std::cout << "Refference added." << std::endl;
+				std::cout << "[nprpc] Handle Request: Refference added." << std::endl;
 			}
 			make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Success);
 		} else {
 			if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-				std::cout << "Object not found." << std::endl;
+				std::cout << "[nprpc] Handle Request: Object not found." << std::endl;
 			}
 			make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Error_ObjectNotExist);
 		}
@@ -123,7 +128,7 @@ void Session::handle_request() {
 		detail::ObjectIdLocal oid{ msg.poa_idx(), msg.object_id() };
 
 		if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-			std::cout << "ReleaseObject. " << "poa_idx: " << oid.poa_idx << ", oid: " << oid.object_id << std::endl;
+			std::cout << "[nprpc] Handle Request: ReleaseObject. " << "poa_idx: " << oid.poa_idx << ", oid: " << oid.object_id << std::endl;
 		}
 
 		if (ctx_.ref_list.remove_ref(msg.poa_idx(), msg.object_id())) {
@@ -140,7 +145,7 @@ void Session::handle_request() {
 	}
 
 	if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-		std::cout << "sending reply:\n";
+		std::cout << "[nprpc] Handle Request: sending reply:\n";
 		dump_message(rx_buffer_(), true);
 	}
 }

@@ -30,7 +30,11 @@ class WebSocketSession
   struct pending_request {
     std::function<void(const boost::system::error_code&, flat_buffer&)> completion_handler;
     std::chrono::steady_clock::time_point timeout_point;
-    
+
+    static constexpr std::function<void(const boost::system::error_code&, flat_buffer&)> empty_handler() {
+      return [](const boost::system::error_code&, flat_buffer&) {};
+    }
+
     pending_request(std::function<void(const boost::system::error_code&, flat_buffer&)>&& handler, 
                    std::chrono::milliseconds timeout)
       : completion_handler(std::move(handler))
