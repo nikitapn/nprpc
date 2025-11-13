@@ -266,7 +266,7 @@ void build_symbol_table(Context& ctx, SymbolTable& table) {
 #### Hover
 
 ```cpp
-void LspServer::handle_hover(const glz::json_t& id, const glz::raw_json& params) {
+void LspServer::handle_hover(const glz::generic& id, const glz::raw_json& params) {
     lsp::TextDocumentPositionParams pos_params;
     glz::read_json(pos_params, params.str);
     
@@ -290,7 +290,7 @@ void LspServer::handle_hover(const glz::json_t& id, const glz::raw_json& params)
 #### Go-to-Definition
 
 ```cpp
-void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& params) {
+void LspServer::handle_definition(const glz::generic& id, const glz::raw_json& params) {
     lsp::TextDocumentPositionParams pos_params;
     glz::read_json(pos_params, params.str);
     

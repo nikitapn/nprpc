@@ -206,7 +206,7 @@ void LspServer::send_message(const std::string& message) {
   std::cout << "Content-Length: " << message.size() << "\r\n\r\n" << message << std::flush;
 }
 
-void LspServer::send_response(const glz::json_t& id, const std::string& result) {
+void LspServer::send_response(const glz::generic& id, const std::string& result) {
   jsonrpc::Response response;
   response.id = id;
   response.result = result;  // Only set result, not error
@@ -215,7 +215,7 @@ void LspServer::send_response(const glz::json_t& id, const std::string& result) 
   send_message(json);
 }
 
-void LspServer::send_error(const glz::json_t& id, int code, const std::string& message) {
+void LspServer::send_error(const glz::generic& id, int code, const std::string& message) {
   std::string error_obj = glz::write_json(glz::obj{"code", code, "message", message}).value_or("{}");
 
   jsonrpc::Response response;
@@ -235,7 +235,7 @@ void LspServer::send_notification(const std::string& method, const std::string& 
   send_message(json);
 }
 
-void LspServer::handle_initialize(const glz::json_t& id, const glz::raw_json& params) {
+void LspServer::handle_initialize(const glz::generic& id, const glz::raw_json& params) {
   std::clog << "Handling initialize request" << std::endl;
 
   lsp::InitializeResult result;
@@ -278,7 +278,7 @@ void LspServer::handle_initialized(const glz::raw_json& params) {
   std::clog << "Client initialized notification received" << std::endl;
 }
 
-void LspServer::handle_shutdown(const glz::json_t& id) {
+void LspServer::handle_shutdown(const glz::generic& id) {
   std::clog << "Handling shutdown request" << std::endl;
   send_response(id, "null");
 }
@@ -357,7 +357,7 @@ void LspServer::handle_did_close(const glz::raw_json& params) {
   documents_.close(close_params.textDocument.uri);
 }
 
-void LspServer::handle_hover(const glz::json_t& id, const glz::raw_json& params) {
+void LspServer::handle_hover(const glz::generic& id, const glz::raw_json& params) {
   lsp::TextDocumentPositionParams pos_params;
 
   auto error = glz::read_json(pos_params, params.str);
@@ -607,7 +607,7 @@ std::string LspServer::format_type(npidl::AstTypeDecl* type) {
   }
 }
 
-void LspServer::handle_semantic_tokens_full(const glz::json_t& id, const glz::raw_json& params) {
+void LspServer::handle_semantic_tokens_full(const glz::generic& id, const glz::raw_json& params) {
   lsp::SemanticTokensParams token_params;
 
   auto error = glz::read_json(token_params, params.str);
@@ -732,7 +732,7 @@ void LspServer::handle_semantic_tokens_full(const glz::json_t& id, const glz::ra
   send_response(id, result);
 }
 
-void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& params) {
+void LspServer::handle_definition(const glz::generic& id, const glz::raw_json& params) {
   lsp::TextDocumentPositionParams pos_params;
 
   auto error = glz::read_json(pos_params, params.str);
@@ -924,7 +924,7 @@ void LspServer::handle_definition(const glz::json_t& id, const glz::raw_json& pa
   send_response(id, "null");
 }
 
-void LspServer::handle_document_symbol(const glz::json_t& id, const glz::raw_json& params) {
+void LspServer::handle_document_symbol(const glz::generic& id, const glz::raw_json& params) {
   lsp::DocumentSymbolParams symbol_params;
 
   auto error = glz::read_json(symbol_params, params.str);
@@ -1053,7 +1053,7 @@ void LspServer::handle_document_symbol(const glz::json_t& id, const glz::raw_jso
   send_response(id, result);
 }
 
-void LspServer::handle_debug_positions(const glz::json_t& id, const glz::raw_json& params) {
+void LspServer::handle_debug_positions(const glz::generic& id, const glz::raw_json& params) {
   lsp::TextDocumentIdentifier doc_id;
   
   auto error = glz::read_json(doc_id, params.str);

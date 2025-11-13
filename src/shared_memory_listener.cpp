@@ -215,7 +215,7 @@ std::unique_ptr<SharedMemoryChannel> connect_to_shared_memory_listener(
                     /*is_server=*/false,
                     /*create_rings=*/false);
                 break;
-            } catch (const std::exception& e) {
+            } catch ([[maybe_unused]] const std::exception& ex) {
                 // Ring buffers don't exist yet, wait and retry
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 

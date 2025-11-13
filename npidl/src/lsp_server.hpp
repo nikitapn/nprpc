@@ -390,13 +390,13 @@ struct Message {
 };
 
 struct Request : Message {
-  glz::json_t id; // Can be number or string
+  glz::generic id; // Can be number or string
   std::string method;
   glz::raw_json params; // Raw JSON for flexible parsing
 };
 
 struct Response : Message {
-  glz::json_t id;
+  glz::generic id;
   std::optional<glz::raw_json> result;
   std::optional<glz::raw_json> error;
 };
@@ -488,27 +488,27 @@ private:
   // Message I/O
   std::optional<std::string> read_message();
   void send_message(const std::string& message);
-  void send_response(const glz::json_t& id, const std::string& result);
-  void send_error(const glz::json_t& id, int code, const std::string& message);
+  void send_response(const glz::generic& id, const std::string& result);
+  void send_error(const glz::generic& id, int code, const std::string& message);
   void send_notification(const std::string& method, const std::string& params);
   
   // Request handlers
-  void handle_initialize(const glz::json_t& id, const glz::raw_json& params);
+  void handle_initialize(const glz::generic& id, const glz::raw_json& params);
   void handle_initialized(const glz::raw_json& params);
-  void handle_shutdown(const glz::json_t& id);
+  void handle_shutdown(const glz::generic& id);
   void handle_exit();
   
   // Text document handlers
   void handle_did_open(const glz::raw_json& params);
   void handle_did_change(const glz::raw_json& params);
   void handle_did_close(const glz::raw_json& params);
-  void handle_hover(const glz::json_t& id, const glz::raw_json& params);
-  void handle_definition(const glz::json_t& id, const glz::raw_json& params);
-  void handle_document_symbol(const glz::json_t& id, const glz::raw_json& params);
-  void handle_semantic_tokens_full(const glz::json_t& id, const glz::raw_json& params);
+  void handle_hover(const glz::generic& id, const glz::raw_json& params);
+  void handle_definition(const glz::generic& id, const glz::raw_json& params);
+  void handle_document_symbol(const glz::generic& id, const glz::raw_json& params);
+  void handle_semantic_tokens_full(const glz::generic& id, const glz::raw_json& params);
   
   // Debug commands
-  void handle_debug_positions(const glz::json_t& id, const glz::raw_json& params);
+  void handle_debug_positions(const glz::generic& id, const glz::raw_json& params);
   
   // Helper methods for hover
   std::string create_hover_content(const npidl::PositionIndex::Entry* entry);
