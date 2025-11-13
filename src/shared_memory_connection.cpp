@@ -106,21 +106,7 @@ void SharedMemoryConnection::send_receive_async(
 {
     assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
-    // Check pending requests limit (security check)
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (pending_requests_ >= max_pending_requests) {
-            std::cerr << "SharedMemoryConnection: Too many pending requests: " 
-                      << pending_requests_ << std::endl;
-            if (completion_handler) {
-                (*completion_handler)(boost::system::error_code(
-                    boost::asio::error::no_buffer_space,
-                    boost::system::system_category()), buffer);
-            }
-            return;
-        }
-        pending_requests_++;
-    }
+    pending_requests_++;
 
     struct work_impl : IOWork {
         flat_buffer buf;
