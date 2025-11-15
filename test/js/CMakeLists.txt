@@ -1,29 +1,28 @@
+# JavaScript tests for NPRPC
+
 # Collect TypeScript source files for dependency tracking
 file(GLOB_RECURSE JS_TEST_TS_SOURCES 
-    "${CMAKE_SOURCE_DIR}/nprpc/test/js/src/*.ts"
-    "${CMAKE_SOURCE_DIR}/nprpc/test/js/test/*.ts"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.ts"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/*.ts"
 )
 
 # Configuration files that affect the build
 set(JS_TEST_CONFIG_FILES
-    "${CMAKE_SOURCE_DIR}/nprpc/test/js/package.json"
-    "${CMAKE_SOURCE_DIR}/nprpc/test/js/tsconfig.json"
-    "${CMAKE_SOURCE_DIR}/nprpc/test/js/.mocharc.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/package.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tsconfig.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/.mocharc.json"
 )
 
 set(NPRPC_TEST_JS_SRC ${CMAKE_BINARY_DIR}/nprpc_test_stub/src/gen/js/nprpc_test.ts)
-set(NPRPC_TEST_JS_DST ${CMAKE_SOURCE_DIR}/nprpc/test/js/src/gen/nprpc_test.ts)
+set(NPRPC_TEST_JS_DST ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/nprpc_test.ts)
 
 # Copy generated test interfaces
 add_custom_command(
   OUTPUT ${NPRPC_TEST_JS_DST}
-  COMMAND ${CMAKE_COMMAND} -E make_directory
-    ${CMAKE_SOURCE_DIR}/nprpc/test/js/src/gen
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${NPRPC_TEST_JS_SRC}
-    ${NPRPC_TEST_JS_DST}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/src/gen
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${NPRPC_TEST_JS_SRC} ${NPRPC_TEST_JS_DST}
   DEPENDS ${NPRPC_TEST_JS_SRC}
-  COMMENT "Copying nprpc_test_stub generated TypeScript headers to nprpc/test/js/src/gen"
+  COMMENT "Copying nprpc_test_stub generated TypeScript to test/js/src/gen"
   VERBATIM
 )
 
@@ -32,8 +31,7 @@ add_custom_command(
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/nprpc_js_test.stamp
   COMMAND npm ci && npm run build
   COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/nprpc_js_test.stamp
-  WORKING_DIRECTORY
-    ${CMAKE_SOURCE_DIR}/nprpc/test/js
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   DEPENDS 
     ${JS_TEST_TS_SOURCES}
     ${JS_TEST_CONFIG_FILES}
@@ -57,8 +55,7 @@ add_custom_command(
   TARGET nprpc_js_test
   POST_BUILD
   COMMAND npm test
-  WORKING_DIRECTORY
-    ${CMAKE_SOURCE_DIR}/nprpc/test/js
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   COMMENT "Running JavaScript tests with Mocha"
   VERBATIM
 )

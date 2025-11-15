@@ -27,7 +27,7 @@
 #include "lexer_parser_interfaces.hpp"
 #include "parser_factory.hpp"
 
-#include <nplib/utils/colored_cout.h>
+#include <nprpc/impl/misc/colored_cout.h>
 
 // LSP Helper Function Implementation
 #include "parse_for_lsp.hpp"

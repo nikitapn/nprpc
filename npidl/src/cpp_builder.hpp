@@ -25,6 +25,7 @@ private:
   std::stringstream oc;
 
   std::unordered_map<AstFunctionDecl*, std::string> proxy_arguments_;
+  std::string export_macro_name_;
 
   BlockDepth bd;
 

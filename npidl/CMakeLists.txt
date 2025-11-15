@@ -1,3 +1,4 @@
+# npidl - NPRPC Interface Definition Language compiler
 
 # Library with the core parser logic (reusable for tests)
 add_library(npidl_core STATIC
@@ -24,15 +25,28 @@ add_library(npidl_core STATIC
   src/context.cpp
 )
 
-target_include_directories(npidl_core PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}/src
-  ${CMAKE_SOURCE_DIR}/nprpc/include
-  ${CMAKE_SOURCE_DIR}/nplib/include
-  ${CMAKE_SOURCE_DIR}/3rd/glaze/include
+target_include_directories(npidl_core
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_SOURCE_DIR}/include/nprpc/impl/misc
+    ${CMAKE_SOURCE_DIR}/third_party/glaze/include
 )
 
-if(UNIX)
-  target_link_libraries(npidl_core PUBLIC boost_program_options)
+# Find Boost (optional, for program_options)
+if(NOT TARGET Boost::program_options)
+  # Handle new CMake Boost policy
+  if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+  endif()
+  
+  find_package(Boost QUIET COMPONENTS program_options)
+  if(Boost_FOUND)
+    target_link_libraries(npidl_core PUBLIC Boost::program_options)
+  else()
+    message(WARNING "Boost program_options not found - npidl may have limited functionality")
+  endif()
 endif()
 
 # Main executable
@@ -40,10 +54,16 @@ add_executable(npidl
   src/main.cpp
 )
 
+target_include_directories(npidl
+  PRIVATE
+    ${CMAKE_SOURCE_DIR}/include/nprpc/impl/misc
+    ${CMAKE_SOURCE_DIR}/third_party/glaze/include
+)
+
 target_link_libraries(npidl PRIVATE npidl_core)
 
-if (NOT OPT_NPRPC_SKIP_TESTS)
-  # Test executable for npidl
+# Optional: Build tests
+if(NPRPC_BUILD_TESTS AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test)
   add_subdirectory(test)
   add_dependencies(npidl_test npidl)
 endif()

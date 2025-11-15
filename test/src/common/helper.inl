@@ -37,7 +37,7 @@ inline void log(
 #endif
 
 namespace nprpctest {
-using thread_pool = nplib::thread_pool_1;
+using thread_pool = nprpc::thread_pool_1;
 // Helper class to manage nameserver process
 class NameserverManager {
     pid_t nameserver_pid = -1;

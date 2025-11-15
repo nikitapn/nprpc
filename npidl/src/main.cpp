@@ -5,7 +5,6 @@
 #include <filesystem>
 
 #include <boost/program_options.hpp>
-#include <nplib/utils/colored_cout.h>
 
 #include "parser_interfaces.hpp"
 #include "parser_factory.hpp"
@@ -15,10 +14,14 @@
 #include "cpp_builder.hpp"
 #include "ts_builder.hpp"
 
+#include "colored_cout.h"
+
 using namespace npidl;
 
 int main(int argc, char* argv[]) {
   namespace po = boost::program_options;
+  namespace fs = std::filesystem;
+  namespace clr = nprpc::clr;
 
   std::filesystem::path output_dir;
   std::vector<std::filesystem::path> input_files;

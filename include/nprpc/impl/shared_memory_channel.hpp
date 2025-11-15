@@ -1,10 +1,13 @@
 #pragma once
 
+#include <nprpc/export.hpp>
 #include <nprpc/impl/lock_free_ring_buffer.hpp>
+
 #include <boost/asio.hpp>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
+
 #include <memory>
 #include <string>
 #include <thread>
@@ -24,7 +27,7 @@ namespace nprpc::impl {
  * Variable-sized messages: Each message has a 4-byte header + payload.
  * This reduces memory footprint significantly compared to fixed-size slots.
  */
-class SharedMemoryChannel {
+class NPRPC_API SharedMemoryChannel {
 public:
     static constexpr size_t MAX_MESSAGE_SIZE = 32 * 1024 * 1024;  // 32MB (same as TCP/WebSocket)
     static constexpr size_t RING_BUFFER_SIZE = 16 * 1024 * 1024;  // 16MB per ring buffer (variable-sized messages)

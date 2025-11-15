@@ -1,6 +1,8 @@
 #pragma once
 
+#include <nprpc/export.hpp>
 #include <nprpc/impl/lock_free_ring_buffer.hpp>
+
 #include <boost/asio.hpp>
 #include <string>
 #include <functional>
@@ -53,7 +55,7 @@ struct SharedMemoryHandshake {
  * 5. Server sends handshake back to confirm
  * 6. Both sides now use the dedicated channel for RPC communication
  */
-class SharedMemoryListener {
+class NPRPC_API SharedMemoryListener {
 public:
     using AcceptHandler = std::function<void(std::unique_ptr<SharedMemoryChannel>)>;
 
@@ -122,7 +124,7 @@ private:
  * @param listener_name Well-known listener name to connect to
  * @return std::unique_ptr<SharedMemoryChannel> Dedicated channel for this connection
  */
-std::unique_ptr<SharedMemoryChannel> connect_to_shared_memory_listener(
+NPRPC_API std::unique_ptr<SharedMemoryChannel> connect_to_shared_memory_listener(
     boost::asio::io_context& ioc,
     const std::string& listener_name);
 

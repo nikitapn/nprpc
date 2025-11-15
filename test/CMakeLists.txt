@@ -1,7 +1,13 @@
+# NPRPC Tests
+
+# Find GTest
+find_package(GTest REQUIRED)
+
+# Generate test IDL files
 include(../cmake/npidl.cmake)
 
 set(IDL_FILES 
-  ${CMAKE_SOURCE_DIR}/nprpc/test/idl/nprpc_test.npidl
+  ${CMAKE_CURRENT_SOURCE_DIR}/idl/nprpc_test.npidl
 )
 
 npidl_generate_idl_files("${IDL_FILES}" nprpc_test_stub)
@@ -21,17 +27,24 @@ add_executable(nprpc_test
   src/main.cpp
   ${nprpc_test_stub_GENERATED_SOURCES}
 )
-add_dependencies(nprpc_test nprpc_test_gen npnameserver)
+
+add_dependencies(nprpc_test nprpc_test_gen)
+if(TARGET npnameserver)
+  add_dependencies(nprpc_test npnameserver)
+endif()
+
 target_include_directories(nprpc_test
   PRIVATE
-    ${CMAKE_SOURCE_DIR}/nprpc/include
-    ${CMAKE_SOURCE_DIR}/nplib/include
-    ${nprpc_test_stub_INCLUDE_DIR}  # For generated headers
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${nprpc_test_stub_INCLUDE_DIR}
 )
+
 target_link_libraries(nprpc_test
-  GTest::gtest_main
-  nprpc
+  PRIVATE
+    GTest::gtest_main
+    nprpc::nprpc
 )
+
 target_compile_definitions(nprpc_test
   PRIVATE
     NPRPC_USE_GTEST
@@ -42,90 +55,107 @@ add_executable(nprpc_server_test
   src/server.cpp
   ${nprpc_test_stub_GENERATED_SOURCES}
 )
-add_dependencies(nprpc_server_test nprpc_test)
+
+add_dependencies(nprpc_server_test nprpc_test_gen)
+
 target_include_directories(nprpc_server_test
   PRIVATE
-    ${CMAKE_SOURCE_DIR}/nprpc/include
-    ${CMAKE_SOURCE_DIR}/nplib/include
-    ${nprpc_test_stub_INCLUDE_DIR}  # For generated headers
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${nprpc_test_stub_INCLUDE_DIR}
 )
+
 target_link_libraries(nprpc_server_test
-  nprpc
+  PRIVATE
+    nprpc::nprpc
 )
 
-add_subdirectory(js)
+# Add JavaScript tests if enabled
+if(NPRPC_BUILD_JS AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/js)
+  add_subdirectory(js)
+endif()
 
-# Enable testing and include GoogleTest
-enable_testing()
+# Enable testing
 include(GoogleTest)
 
 # Add a simple test that runs the executable
 add_test(
   NAME nprpc_all_tests
   COMMAND nprpc_test
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 
 # Set test properties
 set_tests_properties(nprpc_all_tests PROPERTIES
-  TIMEOUT 120  # 120 seconds timeout for large message tests
+  TIMEOUT 120
 )
 
-# Optionally, also discover individual tests (requires the executable to be built first)
-# This will create individual test entries for each TEST_F in your code
+# Discover individual tests
 gtest_discover_tests(nprpc_test
   PROPERTIES
     TIMEOUT 120
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
   DISCOVERY_TIMEOUT 30
   DISCOVERY_MODE PRE_TEST
 )
 
-# Custom target to run tests automatically after build
+# Custom target to run tests manually
 add_custom_target(run_nprpc_tests
-  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --test-dir ${CMAKE_CURRENT_BINARY_DIR}
+  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
   DEPENDS nprpc_test
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   COMMENT "Running nprpc tests..."
 )
 
 # Custom target to run tests with verbose output
 add_custom_target(run_nprpc_tests_verbose
-  COMMAND ${CMAKE_CTEST_COMMAND} --verbose --test-dir ${CMAKE_CURRENT_BINARY_DIR}
+  COMMAND ${CMAKE_CTEST_COMMAND} --verbose
   DEPENDS nprpc_test
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   COMMENT "Running nprpc tests with verbose output..."
-)
-
-# Custom target to run only the large message test
-add_custom_target(run_large_message_test
-  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --test-dir ${CMAKE_CURRENT_BINARY_DIR} -R "TestLargeMessage"
-  DEPENDS nprpc_test
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Running large message test..."
 )
 
 # Run tests automatically after building the main test executable
 add_custom_command(
   TARGET nprpc_test
   POST_BUILD
-  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --test-dir ${CMAKE_CURRENT_BINARY_DIR}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Automatically running nprpc tests after build..."
+  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  COMMENT "Automatically running nprpc C++ tests after build..."
 )
 
 # Test executable for shared memory endpoint
 add_executable(test_shared_memory_endpoint
   src/test_shared_memory_endpoint.cpp
 )
-target_include_directories(test_shared_memory_endpoint PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
-target_link_libraries(test_shared_memory_endpoint PUBLIC nprpc gtest)
+
+target_include_directories(test_shared_memory_endpoint 
+  PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+target_link_libraries(test_shared_memory_endpoint 
+  PRIVATE 
+    nprpc::nprpc 
+    GTest::gtest
+)
+
 add_test(NAME SharedMemoryEndpoint COMMAND test_shared_memory_endpoint)
 
 # Test executable for shared memory listener
 add_executable(test_shared_memory_listener
   src/test_shared_memory_listener.cpp
 )
-target_include_directories(test_shared_memory_listener PRIVATE ${CMAKE_SOURCE_DIR}/nprpc/include/)
-target_link_libraries(test_shared_memory_listener PUBLIC nprpc gtest pthread)
+
+target_include_directories(test_shared_memory_listener 
+  PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+target_link_libraries(test_shared_memory_listener 
+  PRIVATE 
+    nprpc::nprpc 
+    GTest::gtest
+    Threads::Threads
+)
+
 add_test(NAME SharedMemoryListener COMMAND test_shared_memory_listener)

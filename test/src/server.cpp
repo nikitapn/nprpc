@@ -14,7 +14,7 @@
 #include <nprpc_test.hpp>
 #include <nprpc_nameserver.hpp>
 
-#include <nplib/utils/thread_pool.hpp>
+#include <nprpc/impl/misc/thread_pool.hpp>
 
 #include <boost/range/algorithm_ext/push_back.hpp> 
 #include <boost/range/irange.hpp>

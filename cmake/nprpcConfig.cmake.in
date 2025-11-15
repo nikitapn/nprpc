@@ -1,0 +1,27 @@
+@PACKAGE_INIT@
+
+# nprpc CMake package configuration file
+
+include(CMakeFindDependencyMacro)
+
+# Find required dependencies
+find_dependency(Threads)
+find_dependency(OpenSSL)
+
+# Include the targets file
+include("${CMAKE_CURRENT_LIST_DIR}/nprpcTargets.cmake")
+
+# Include npidl.cmake for users who want to generate IDL files
+include("${CMAKE_CURRENT_LIST_DIR}/npidl.cmake")
+
+check_required_components(nprpc)
+
+# Provide information about the package
+set(NPRPC_VERSION @PROJECT_VERSION@)
+set(NPRPC_INCLUDE_DIRS "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@")
+
+# Set convenience variables
+if(TARGET nprpc::nprpc)
+  set(NPRPC_LIBRARIES nprpc::nprpc)
+  set(NPRPC_FOUND TRUE)
+endif()

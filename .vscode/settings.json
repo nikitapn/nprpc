@@ -1,0 +1,6 @@
+{
+  "files.associations": {
+    ".args": "gn",
+    "sstream": "cpp"
+  }
+}

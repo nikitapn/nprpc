@@ -667,7 +667,7 @@ public:
     std::transform(base_name.begin(), base_name.end(), base_name.begin(), [](char c) {
       return c == '.' ? '_' : ::tolower(c); 
     });
-    
+
     file_stack_.push_back(FileContext{
       .file_path = std::move(initial_file_path),
       .base_name = std::move(base_name),

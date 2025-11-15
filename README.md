@@ -32,19 +32,40 @@ NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framewo
 
 ### Prerequisites
 
-- C++20 compiler (GCC 10+, Clang 12+, MSVC 2019+)
+- C++23 compiler
 - CMake 3.15+
-- Boost 1.75+
-- Node.js 16+ (for TypeScript client)
+- OpenSSL
+- Boost (optional, for npidl tool)
+- Node.js 16+ (optional, for TypeScript/JavaScript bindings)
 
-### Building
+### Quick Install
 
 ```bash
-git clone https://github.com/nikitapn/npsystem.git
-cd npsystem
+# Ubuntu/Debian
+sudo apt install build-essential cmake libssl-dev
+
+# macOS
+brew install cmake openssl
+
+# Clone and build
+git clone https://github.com/yourusername/nprpc.git
+cd nprpc
 mkdir build && cd build
 cmake ..
 cmake --build .
+sudo cmake --install .
+```
+
+See [BUILD.md](BUILD.md) for detailed build instructions and options.
+
+### Using in Your Project
+
+**With CMake:**
+
+```cmake
+find_package(nprpc REQUIRED)
+add_executable(myapp main.cpp)
+target_link_libraries(myapp PRIVATE nprpc::nprpc)
 ```
 
 ## 📝 Quick Start

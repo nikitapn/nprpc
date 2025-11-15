@@ -878,6 +878,18 @@ void CppBuilder::finalize() {
     ofs_hpp << "#include <string_view>\n\n";
   }
 
+  // Generate module-specific export macro
+  auto module_upper = make_guard(ctx_->current_file());
+  export_macro_name_ = module_upper + "_API";
+  
+  ofs_hpp <<
+    "// Module export macro\n"
+    "#ifdef NPRPC_EXPORTS\n"
+    "#  define " << export_macro_name_ << " NPRPC_EXPORT_ATTR\n"
+    "#else\n"
+    "#  define " << export_macro_name_ << " NPRPC_IMPORT_ATTR\n"
+    "#endif\n\n";
+
   const bool is_module = !ctx_->module().empty();
 
   ofs_cpp <<
@@ -1273,7 +1285,7 @@ std::string_view CppBuilder::proxy_arguments(AstFunctionDecl* fn) {
 void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
   // Servant definition
   oh <<
-    "class I" << ifs->name << "_Servant\n";
+    "class " << export_macro_name_ << " I" << ifs->name << "_Servant\n";
   if (ifs->plist.size()) {
     oh << "  : public I" << ifs->plist[0]->name << "_Servant\n";
     for (size_t i = 1; i < ifs->plist.size(); ++i) {
@@ -1304,7 +1316,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 
   // Proxy definition
   oh <<
-    "class " << ifs->name << "\n";
+    "class " << export_macro_name_ << " " << ifs->name << "\n";
 
   if (ifs->plist.size()) {
     oh << "  : public " << ifs->plist[0]->name << "\n";
@@ -1671,6 +1683,17 @@ CppBuilder::CppBuilder(
 ) : Builder(ctx)
   , out_path_(out_path)
 {
+  if (!ctx) return;
+  // Initialize export macro name early so it's available during emit_interface
+  auto make_guard = [](const std::string& file) {
+    std::string r(file);
+    std::transform(r.begin(), r.end(), r.begin(), [](char c) {
+      return c == '.' ? '_' : ::toupper(c);
+    });
+    return r;
+  };
+  auto module_upper = make_guard(ctx_->current_file());
+  export_macro_name_ = module_upper + "_API";
 }
 
 } // namespace npidl::builders
