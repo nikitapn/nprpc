@@ -376,14 +376,40 @@ await objectManager.ProcessData(oid, data);
 
 ## 📊 Performance
 
-- **Shared Memory**: ~10-20ns per call (zero-copy)
-- **TCP**: ~50-100μs per call (localhost)
-- **WebSocket**: ~100-200μs per call (after connection)
-- **HTTP**: ~500μs-2ms per call (includes connection overhead)
+NPRPC includes comprehensive benchmarks to measure and compare transport performance.
+
+### Quick Performance Numbers
+
+- **Shared Memory**: ~1-2μs latency, 850k+ ops/sec (zero-copy)
+- **TCP**: ~50-100μs latency, 19k ops/sec (localhost)
+- **WebSocket**: ~55-110μs latency, 18k ops/sec
+- **HTTP**: ~145-200μs latency, 6k ops/sec
 
 Memory efficiency:
-- **Shared Memory**: 32MB for 1000 connections (ring buffers)
+- **Shared Memory**: 32MB for 1000 connections (ring buffers, 8x more efficient)
 - **TCP/WebSocket**: 256MB for 1000 connections (traditional buffers)
+
+### Running Benchmarks
+
+```bash
+# Install Google Benchmark (optional)
+sudo apt install libbenchmark-dev  # Ubuntu/Debian
+brew install google-benchmark      # macOS
+
+# Build with benchmarks
+cmake -DNPRPC_BUILD_TESTS=ON ..
+cmake --build .
+
+# Run all benchmarks
+cmake --build . --target run_benchmarks
+
+# Run specific benchmark suite
+./benchmark/nprpc_benchmarks --benchmark_filter=Latency
+./benchmark/nprpc_benchmarks --benchmark_filter=Throughput
+./benchmark/nprpc_benchmarks --benchmark_filter=Bandwidth
+```
+
+See [`benchmark/README.md`](benchmark/README.md) for detailed benchmark documentation.
 
 ## 🔍 IDL Language Reference
 

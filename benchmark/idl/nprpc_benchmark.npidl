@@ -1,0 +1,13 @@
+// Summary: Benchmark suite for NPRPC performance evaluation
+
+module nprpc.benchmark;
+
+interface ServerControl {
+  void Shutdown();
+}
+
+interface Benchmark {
+  void Ping();
+  u32 Func1(a: in u32, b: in u32);
+  void Func2(data: in string);
+}

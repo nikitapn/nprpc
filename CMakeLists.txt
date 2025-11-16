@@ -211,6 +211,11 @@ if(NPRPC_BUILD_TESTS AND UNIX)
   add_subdirectory(test)
 endif()
 
+# Benchmarks (optional, requires Google Benchmark)
+if(NPRPC_BUILD_TESTS AND UNIX)
+  add_subdirectory(benchmark)
+endif()
+
 # Installation
 if(NPRPC_INSTALL)
   include(GNUInstallDirs)

@@ -1,0 +1,188 @@
+#include <iostream>
+#include <chrono>
+#include <thread>
+#include <future>
+#include <cstdlib>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <condition_variable>
+
+#include <nprpc/impl/misc/thread_pool.hpp>
+#include <nprpc_nameserver.hpp>
+#include <nprpc_benchmark.hpp>
+
+using namespace std::string_literals;
+using namespace std::string_view_literals;
+
+using thread_pool = nprpc::thread_pool_1;
+
+// Helper class to manage nameserver process
+class NameserverManager {
+    pid_t nameserver_pid = -1;
+public:
+    bool start_nameserver() {
+        // Fork a child process to run the nameserver
+        nameserver_pid = fork();
+
+        if (nameserver_pid == -1) {
+            std::cerr << "Failed to fork nameserver process" << std::endl;
+            return false;
+        } else if (nameserver_pid == 0) {
+            // Child process - run the nameserver
+            // Try to find npnameserver in the build directory
+            execl("/home/nikita/projects/nprpc/build/npnameserver", "npnameserver", nullptr);
+
+            // If all fail, exit with error
+            std::cerr << "Failed to execute npnameserver" << std::endl;
+            _exit(1);
+        } else {
+            // Parent process - wait a bit for nameserver to start
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+            // Check if the child process is still alive
+            int status;
+            pid_t result = waitpid(nameserver_pid, &status, WNOHANG);
+            if (result != 0) {
+                std::cerr << "Nameserver process failed to start" << std::endl;
+                nameserver_pid = -1;
+                return false;
+            }
+
+            std::cout << "Nameserver started with PID: " << nameserver_pid << std::endl;
+            return true;
+        }
+    }
+
+    void stop_nameserver() {
+        if (nameserver_pid > 0) {
+            std::cout << "Stopping nameserver with PID: " << nameserver_pid << std::endl;
+            kill(nameserver_pid, SIGTERM);
+
+            // Wait for the process to terminate
+            int status;
+            waitpid(nameserver_pid, &status, 0);
+            nameserver_pid = -1;
+        }
+    }
+
+    ~NameserverManager() {
+        stop_nameserver();
+    }
+};
+
+nprpc::Rpc* rpc;
+nprpc::Poa* poa;
+NameserverManager nameserver_manager;
+
+class Environment {
+public:
+    void SetUp() {
+        // Start the nameserver first
+        if (!nameserver_manager.start_nameserver()) {
+            std::cerr << "Failed to start nameserver process\n";
+            std::exit(1);
+        }
+
+        try {
+            // Use the new RpcBuilder API
+            rpc = nprpc::RpcBuilder()
+                .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
+                .set_listen_tcp_port(22222)
+                .set_listen_http_port(22223)
+                .set_hostname("localhost")
+                .enable_ssl_server(
+                    "/home/nikita/projects/npsystem/certs/server.crt",
+                    "/home/nikita/projects/npsystem/certs/server.key",
+                    "/home/nikita/projects/npsystem/certs/dhparam.pem")
+                .enable_ssl_client_self_signed_cert("/home/nikita/projects/npsystem/certs/server.crt")
+                .build(thread_pool::get_instance().ctx());
+
+            // Use the new PoaBuilder API  
+            poa = rpc->create_poa()
+                .with_max_objects(128)
+                .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                .build();
+
+        } catch (nprpc::Exception& ex) {
+            nameserver_manager.stop_nameserver();
+        }
+    }
+
+    void TearDown() {
+        thread_pool::get_instance().stop();
+        if (rpc) {
+            // thread_pool::get_instance().stop();
+            rpc->destroy();
+        } 
+        // Stop the nameserver
+        nameserver_manager.stop_nameserver();
+    }
+};
+
+std::condition_variable cv;
+std::mutex cv_m;
+bool shutdown_requested = false;
+
+class ServerControlImpl : public ::nprpc::benchmark::IServerControl_Servant {
+  void Shutdown() override {
+    std::cout << "Shutdown requested" << std::endl;
+    {
+      std::lock_guard<std::mutex> lk(cv_m);
+      shutdown_requested = true;
+    }
+    cv.notify_one();
+  }
+};
+
+class BenchmarkServerImpl : public ::nprpc::benchmark::IBenchmark_Servant {
+  void Ping() override {}
+  uint32_t Func1(uint32_t a, uint32_t b) override { return a + b; }
+  void Func2(::nprpc::flat::Span<char> data) override {}
+};
+
+int main(int argc, char** argv) {
+  Environment env;
+  env.SetUp();
+
+  constexpr auto flags = nprpc::ObjectActivationFlags::ALLOW_ALL;
+
+  auto nameserver = rpc->get_nameserver("127.0.0.1");
+
+  ServerControlImpl server_control;
+  auto oid = poa->activate_object(&server_control, flags);
+  nameserver->Bind(oid, "nprpc_server_control");
+
+  BenchmarkServerImpl benchmark_server;
+  oid = poa->activate_object(&benchmark_server, flags);
+  nameserver->Bind(oid, "nprpc_benchmark");
+  
+  BenchmarkServerImpl benchmark_server1;
+  oid = poa->activate_object(&benchmark_server1, flags);
+  nameserver->Bind(oid, "nprpc_benchmark1");
+
+  // Capture interrupt signal to allow graceful shutdown
+  signal(SIGINT, [](int signum) {
+    std::cout << "Interrupt signal (" << signum << ") received." << std::endl;
+    {
+      std::lock_guard<std::mutex> lk(cv_m);
+      shutdown_requested = true;
+    }
+    cv.notify_one();
+  });
+
+  // Wait for shutdown signal from JavaScript client
+  std::unique_lock<std::mutex> lk(cv_m);
+  cv.wait(lk, [] { return shutdown_requested; });
+
+  std::cout << "Server shutting down..." << std::endl;
+
+  // Give some time for the client to receive the response
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+
+  env.TearDown();
+
+  return 0;
+}
+
+

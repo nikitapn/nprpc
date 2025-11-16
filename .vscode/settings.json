@@ -1,6 +1,7 @@
 {
   "files.associations": {
     ".args": "gn",
-    "sstream": "cpp"
+    "coroutine": "cpp",
+    "future": "cpp"
   }
 }

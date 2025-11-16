@@ -8,12 +8,18 @@
 #include <boost/asio/signal_set.hpp>
 #include <boost/beast/core/error.hpp>
 
+#ifndef NPRPC_NAMESERVER_LOG
+# define NPRPC_NAMESERVER_LOG 0
+#endif
+
 class NameserverImpl : public nprpc::common::INameserver_Servant {
 	std::unordered_map<std::string, std::unique_ptr<nprpc::Object>> objects_;
 public:
 	void Bind(nprpc::Object* obj, nprpc::flat::Span<char> name) override {
-		std::cout << *obj;
-		std::cout << "  Object is binded as: " << (std::string_view)name << std::endl;
+		if constexpr (NPRPC_NAMESERVER_LOG) {
+			std::cout << *obj;
+			std::cout << "  Object is binded as: " << (std::string_view)name << std::endl;
+		}
 		auto const str = std::string((std::string_view)name);
 		objects_[str] = std::move(std::unique_ptr<nprpc::Object>(obj));
 	}
@@ -30,7 +36,9 @@ public:
 		const auto& oid = found->second->get_data();
 		nprpc::detail::helpers::assign_from_cpp_ObjectId(obj, oid);
 
-		std::cout << "Resolving: " << str << " with urls: " << oid.urls << std::endl;
+		if constexpr (NPRPC_NAMESERVER_LOG) {
+			std::cout << "Resolving: " << str << " with urls: " << oid.urls << std::endl;
+		}
 
 		return true;
 	}

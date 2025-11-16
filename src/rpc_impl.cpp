@@ -296,14 +296,13 @@ ObjectId PoaImpl::activate_object(
     g_cfg.hostname.empty() ? "127.0.0.1"s : g_cfg.hostname;
 
   if (activation_flags & ObjectActivationFlags::ALLOW_TCP) {
-    oid.urls +=
-      (std::string(tcp_prefix) + default_url + ":" + std::to_string(g_cfg.listen_tcp_port)) + ';';
+    oid.urls += (std::string(tcp_prefix) + default_url + ":" +
+                 std::to_string(g_cfg.listen_tcp_port)) + ';';
   }
 
   if (activation_flags & ObjectActivationFlags::ALLOW_WEBSOCKET) {
-    oid.urls +=
-      (std::string(ws_prefix) + default_url + ":" + std::to_string(g_cfg.listen_http_port)) +
-      ';';
+    oid.urls += (std::string(ws_prefix) + default_url + ":" +
+                 std::to_string(g_cfg.listen_http_port)) + ';';
   }
 
   if (activation_flags & ObjectActivationFlags::ALLOW_SSL_WEBSOCKET) {
@@ -311,12 +310,12 @@ ObjectId PoaImpl::activate_object(
       throw std::runtime_error("SSL websocket requires a hostname");
     }
     oid.urls += (std::string(wss_prefix) + g_cfg.hostname + ":" +
-                 std::to_string(g_cfg.listen_http_port));
+                 std::to_string(g_cfg.listen_http_port)) + ';';
   }
 
   if (activation_flags & ObjectActivationFlags::ALLOW_HTTP) {
-    oid.urls +=
-      (std::string(http_prefix) + default_url + ":" + std::to_string(g_cfg.listen_http_port)) + ';';
+    oid.urls += (std::string(http_prefix) + default_url + ":" +
+                 std::to_string(g_cfg.listen_http_port)) + ';';
   }
 
   if (activation_flags & ObjectActivationFlags::ALLOW_SECURED_HTTP) {
