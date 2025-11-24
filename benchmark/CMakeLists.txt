@@ -32,9 +32,31 @@ if(PKG_CONFIG_FOUND)
     message(STATUS "gRPC not found - only NPRPC benchmarks will be built")
     message(STATUS "Install with: sudo pacman -S grpc (Arch) or sudo apt install libgrpc++-dev (Ubuntu/Debian)")
   endif()
+  
+  # Find Cap'n Proto
+  pkg_check_modules(CAPNP QUIET capnp capnp-rpc)
+  
+  if(CAPNP_FOUND)
+    set(CAPNP_AVAILABLE TRUE)
+    message(STATUS "Cap'n Proto found via pkg-config - Cap'n Proto comparison benchmarks enabled")
+    
+    # Locate capnp compiler
+    find_program(CAPNP_EXECUTABLE capnp)
+    find_program(CAPNPC_CXX_EXECUTABLE capnpc-c++)
+    
+    if(NOT CAPNP_EXECUTABLE OR NOT CAPNPC_CXX_EXECUTABLE)
+      message(WARNING "capnp or capnpc-c++ not found, Cap'n Proto benchmarks disabled")
+      set(CAPNP_AVAILABLE FALSE)
+    endif()
+  else()
+    set(CAPNP_AVAILABLE FALSE)
+    message(STATUS "Cap'n Proto not found - Cap'n Proto benchmarks will not be built")
+    message(STATUS "Install with: sudo pacman -S capnproto (Arch) or sudo apt install capnproto (Ubuntu/Debian)")
+  endif()
 else()
   set(GRPC_AVAILABLE FALSE)
-  message(STATUS "pkg-config not found - gRPC benchmarks disabled")
+  set(CAPNP_AVAILABLE FALSE)
+  message(STATUS "pkg-config not found - gRPC and Cap'n Proto benchmarks disabled")
 endif()
 
 # Generate benchmark IDL files (reuse test interfaces)
@@ -72,6 +94,32 @@ if(GRPC_AVAILABLE)
 
   add_custom_target(grpc_benchmark_gen 
     DEPENDS ${PROTO_SRCS} ${GRPC_SRCS}
+  )
+endif()
+
+# Generate Cap'n Proto files if available
+if(CAPNP_AVAILABLE)
+  set(CAPNP_FILES ${CMAKE_CURRENT_SOURCE_DIR}/idl/benchmark.capnp)
+  set(CAPNP_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/capnp_generated)
+  file(MAKE_DIRECTORY ${CAPNP_OUTPUT_DIR})
+
+  # Generate C++ files from .capnp
+  set(CAPNP_SRCS ${CAPNP_OUTPUT_DIR}/benchmark.capnp.c++)
+  set(CAPNP_HDRS ${CAPNP_OUTPUT_DIR}/benchmark.capnp.h)
+
+  add_custom_command(
+    OUTPUT ${CAPNP_SRCS} ${CAPNP_HDRS}
+    COMMAND ${CAPNP_EXECUTABLE}
+    ARGS compile
+         -o${CAPNPC_CXX_EXECUTABLE}:${CAPNP_OUTPUT_DIR}
+         --src-prefix=${CMAKE_CURRENT_SOURCE_DIR}/idl
+         ${CAPNP_FILES}
+    DEPENDS ${CAPNP_FILES}
+    COMMENT "Generating Cap'n Proto files"
+  )
+
+  add_custom_target(capnp_benchmark_gen 
+    DEPENDS ${CAPNP_SRCS}
   )
 endif()
 
@@ -121,6 +169,27 @@ if(GRPC_AVAILABLE)
   )
 endif()
 
+# Cap'n Proto benchmark server (if Cap'n Proto is available)
+if(CAPNP_AVAILABLE)
+  add_executable(capnp_benchmark_server
+    src/capnp_server.cpp
+    ${CAPNP_SRCS}
+  )
+
+  add_dependencies(capnp_benchmark_server capnp_benchmark_gen)
+
+  target_include_directories(capnp_benchmark_server
+    PRIVATE
+      ${CAPNP_OUTPUT_DIR}
+      ${CAPNP_INCLUDE_DIRS}
+  )
+
+  target_link_libraries(capnp_benchmark_server
+    PRIVATE
+      ${CAPNP_LIBRARIES}
+  )
+endif()
+
 # Main benchmark executable
 set(BENCHMARK_SOURCES
   src/benchmark_main.cpp
@@ -139,6 +208,14 @@ if(GRPC_AVAILABLE)
   )
 endif()
 
+# Add Cap'n Proto benchmarks if available
+if(CAPNP_AVAILABLE)
+  list(APPEND BENCHMARK_SOURCES 
+    src/benchmark_capnp_latency.cpp
+    ${CAPNP_SRCS}
+  )
+endif()
+
 add_executable(nprpc_benchmarks ${BENCHMARK_SOURCES})
 
 add_dependencies(nprpc_benchmarks nprpc_benchmark_stub_gen benchmark_server)
@@ -147,6 +224,9 @@ if(TARGET npnameserver)
 endif()
 if(GRPC_AVAILABLE)
   add_dependencies(nprpc_benchmarks grpc_benchmark_gen grpc_benchmark_server)
+endif()
+if(CAPNP_AVAILABLE)
+  add_dependencies(nprpc_benchmarks capnp_benchmark_gen capnp_benchmark_server)
 endif()
 
 target_include_directories(nprpc_benchmarks
@@ -164,6 +244,14 @@ if(GRPC_AVAILABLE)
   )
 endif()
 
+if(CAPNP_AVAILABLE)
+  target_include_directories(nprpc_benchmarks
+    PRIVATE
+      ${CAPNP_OUTPUT_DIR}
+      ${CAPNP_INCLUDE_DIRS}
+  )
+endif()
+
 set(BENCHMARK_LIBRARIES
   nprpc::nprpc
   benchmark::benchmark
@@ -173,6 +261,12 @@ if(GRPC_AVAILABLE)
   list(APPEND BENCHMARK_LIBRARIES
     ${GRPC_LIBRARIES}
     ${PROTOBUF_LIBRARIES}
+  )
+endif()
+
+if(CAPNP_AVAILABLE)
+  list(APPEND BENCHMARK_LIBRARIES
+    ${CAPNP_LIBRARIES}
   )
 endif()
 

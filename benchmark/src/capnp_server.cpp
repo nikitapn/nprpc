@@ -1,0 +1,57 @@
+// Cap'n Proto benchmark server
+#include "benchmark.capnp.h"
+#include <capnp/ez-rpc.h>
+#include <kj/debug.h>
+#include <iostream>
+#include <csignal>
+
+class BenchmarkServiceImpl final : public BenchmarkService::Server {
+protected:
+  kj::Promise<void> emptyCall(EmptyCallContext context) override {
+    return kj::READY_NOW;
+  }
+
+  kj::Promise<void> callWithReturn(CallWithReturnContext context) override {
+    context.getResults().setResult(42);
+    return kj::READY_NOW;
+  }
+
+  kj::Promise<void> smallStringCall(SmallStringCallContext context) override {
+    auto params = context.getParams();
+    auto input = params.getData();
+    context.getResults().setResult(input);
+    return kj::READY_NOW;
+  }
+};
+
+static bool g_shutdown_requested = false;
+
+void signalHandler(int signum) {
+  std::cout << "[capnp_server] Shutdown signal received (" << signum << ")" << std::endl;
+  g_shutdown_requested = true;
+}
+
+int main(int argc, const char* argv[]) {
+  // Set up signal handling
+  std::signal(SIGTERM, signalHandler);
+  std::signal(SIGINT, signalHandler);
+
+  if (argc != 2) {
+    std::cerr << "Usage: " << argv[0] << " HOST:PORT" << std::endl;
+    return 1;
+  }
+
+  capnp::EzRpcServer server(kj::heap<BenchmarkServiceImpl>(), argv[1]);
+  
+  std::cout << "[capnp_server] Cap'n Proto Benchmark Server is running on " << argv[1] << std::endl;
+  
+  // Run until shutdown
+  auto& waitScope = server.getWaitScope();
+  while (!g_shutdown_requested) {
+    waitScope.poll();
+    usleep(10000); // 10ms
+  }
+  
+  std::cout << "[capnp_server] Server shutting down..." << std::endl;
+  return 0;
+}

@@ -27,6 +27,7 @@ namespace nprpc::benchmark {
 class BenchmarkServerManager {
   pid_t nprpc_server_pid_ = -1;
   pid_t grpc_server_pid_ = -1;
+  pid_t capnp_server_pid_ = -1;
 
 public:
   bool start_nprpc_server(fs::path server_path) {
@@ -157,9 +158,60 @@ public:
     std::cout << "gRPC server stopped\n";
   }
 
+  bool start_capnp_server(fs::path server_path) {
+    std::cout << "Starting Cap'n Proto benchmark server...\n";
+
+    if (!fs::exists(server_path)) {
+      std::cout << "WARNING: capnp_benchmark_server not found, Cap'n Proto benchmarks will be skipped\n";
+      return false;
+    }
+
+    // Fork a child process to run the server
+    capnp_server_pid_ = fork();
+
+    if (capnp_server_pid_ == -1) {
+      std::cerr << "ERROR: Failed to fork Cap'n Proto server process\n";
+      return false;
+    } else if (capnp_server_pid_ == 0) {
+      // Child process - run the server
+      freopen("/dev/null", "w", stdout);
+      freopen("/dev/null", "w", stderr);
+      execl(server_path.c_str(), "capnp_benchmark_server", "localhost:50052", nullptr);
+      _exit(1);
+    } else {
+      std::cout << "Cap'n Proto benchmark server started with PID: " << capnp_server_pid_ << "\n";
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+
+      // Check if still alive
+      int status;
+      pid_t result = waitpid(capnp_server_pid_, &status, WNOHANG);
+      if (result != 0) {
+        std::cerr << "ERROR: Cap'n Proto server process failed to start\n";
+        capnp_server_pid_ = -1;
+        return false;
+      }
+
+      std::cout << "Cap'n Proto server ready\n";
+      return true;
+    }
+  }
+
+  void stop_capnp_server() {
+    if (capnp_server_pid_ <= 0) return;
+
+    std::cout << "Shutting down Cap'n Proto benchmark server...\n";
+    kill(capnp_server_pid_, SIGTERM);
+
+    int status;
+    waitpid(capnp_server_pid_, &status, 0);
+    capnp_server_pid_ = -1;
+    std::cout << "Cap'n Proto server stopped\n";
+  }
+
   ~BenchmarkServerManager() {
     stop_nprpc_server();
     stop_grpc_server();
+    stop_capnp_server();
   }
 };
 
@@ -194,6 +246,9 @@ int main(int argc, char** argv) {
   // Start gRPC server (optional - will skip gRPC benchmarks if not available)
   server.start_grpc_server(exe_directory / "grpc_benchmark_server");
 
+  // Start Cap'n Proto server (optional - will skip Cap'n Proto benchmarks if not available)
+  server.start_capnp_server(exe_directory / "capnp_benchmark_server");
+
   std::cout << "=== Setup Complete ===\n\n";
 
   // Run all benchmarks
@@ -204,6 +259,7 @@ int main(int argc, char** argv) {
   std::cout << "\n=== NPRPC Benchmark Environment Teardown ===\n";
   server.stop_nprpc_server();
   server.stop_grpc_server();
+  server.stop_capnp_server();
 
   if (g_rpc) {
     thread_pool::get_instance().stop();
