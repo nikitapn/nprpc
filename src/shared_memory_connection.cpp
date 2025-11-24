@@ -31,7 +31,11 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
         flat_buffer& buf;
         SharedMemoryConnection& this_;
         uint32_t timeout_ms;
-        std::promise<boost::system::error_code> promise;
+        
+        std::mutex mtx;
+        std::condition_variable cv;
+        bool done = false;
+        boost::system::error_code result;
 
         void operator()() noexcept override {
             this_.set_timeout(timeout_ms);
@@ -57,15 +61,27 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
         }
 
         void on_failed(const boost::system::error_code& ec) noexcept override {
-            promise.set_value(ec);
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                result = ec;
+                done = true;
+            }
+            cv.notify_one();
         }
 
         void on_executed() noexcept override {
-            promise.set_value({});
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                result = boost::system::error_code{};
+                done = true;
+            }
+            cv.notify_one();
         }
 
-        std::future<boost::system::error_code> get_future() {
-            return promise.get_future();
+        boost::system::error_code wait() {
+            std::unique_lock<std::mutex> lock(mtx);
+            cv.wait(lock, [this]{ return done; });
+            return result;
         }
 
         flat_buffer& buffer() noexcept override { return buf; }
@@ -80,9 +96,9 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
 
     auto post_work_and_wait = [&]() -> boost::system::error_code {
         auto w = std::make_unique<work_impl>(buffer, *this, timeout_ms);
-        auto fut = w->get_future();
+        auto* w_ptr = w.get();
         add_work(std::move(w));
-        return fut.get();
+        return w_ptr->wait();
     };
 
     auto ec = post_work_and_wait();
