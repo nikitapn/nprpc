@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <deque>
+#include <condition_variable>
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
@@ -37,14 +38,12 @@ NPRPC_API extern Config   g_cfg;
 NPRPC_API extern RpcImpl* g_orb;
 NPRPC_API extern std::string g_server_listener_uuid;
 
-struct IOWork {
-  virtual void operator()()                       = 0;
-  virtual void on_failed(
-    const boost::system::error_code& ec) noexcept = 0;
-  virtual void on_executed() noexcept             = 0;
-  virtual flat_buffer& buffer() noexcept          = 0;
-  virtual ~IOWork() = default;
-};
+// Forward declarations of work types
+struct SocketConnectionWork;
+struct SharedMemoryConnectionWork;
+
+// Traits to get work type (defined after connection classes)
+template<typename T> struct connection_work_traits;
 
 template<typename T>
 class CommonConnection {
@@ -53,38 +52,176 @@ class CommonConnection {
     return static_cast<T*>(this);
   }
 protected:
-  std::deque<std::unique_ptr<IOWork>> wq_;
+  using work_type = typename connection_work_traits<T>::type;
+  std::deque<work_type> wq_;
 
-  void add_work(std::unique_ptr<IOWork>&& w) {
+  void add_work(work_type&& w) {
     boost::asio::post(derived()->get_executor(), [
       w{std::move(w)}, this
     ] () mutable {
-      // work may or may not hold shared_ptr to this:
-      // blocking case - it will reference to this,
-      // async case - it will hold shared_ptr to this
       wq_.push_back(std::move(w));
-      if (wq_.size() == 1) (*wq_.front())();
+      if (wq_.size() == 1) wq_.front()();
     });
   }
 
   flat_buffer& current_rx_buffer() noexcept
   {
     assert(wq_.size() > 0);
-    return wq_.front()->buffer();
+    return wq_.front().buffer();
   }
 
+public:
   void pop_and_execute_next_task()
   {
     wq_.pop_front();
-    if (wq_.empty() == false) (*wq_.front())();
+    if (wq_.empty() == false) wq_.front()();
   }
 };
 
-class SocketConnection 
+class SocketConnection;  // Forward declaration
+
+// SocketConnection's work type - unified for sync and async
+struct SocketConnectionWork {
+  flat_buffer buf_storage;  // Owns buffer for async, unused for sync
+  flat_buffer* buf_ptr;      // Points to buffer (external for sync, buf_storage for async)
+  SocketConnection* conn_ptr;  // Raw pointer for sync
+  std::shared_ptr<SocketConnection> conn_shared;  // Shared ptr for async
+  uint32_t timeout_ms;
+  
+  // Sync-only members
+  std::mutex* mtx_ptr = nullptr;
+  std::condition_variable* cv_ptr = nullptr;
+  bool* done_ptr = nullptr;
+  boost::system::error_code* result_ptr = nullptr;
+  
+  // Async-only member
+  std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>> async_handler;
+
+  // Sync constructor
+  SocketConnectionWork(flat_buffer& buf, SocketConnection& conn, uint32_t timeout,
+                      std::mutex& mtx, std::condition_variable& cv, bool& done, 
+                      boost::system::error_code& result)
+    : buf_ptr(&buf)
+    , conn_ptr(&conn)
+    , timeout_ms(timeout)
+    , mtx_ptr(&mtx)
+    , cv_ptr(&cv)
+    , done_ptr(&done)
+    , result_ptr(&result)
+  {
+  }
+
+  // Async constructor
+  SocketConnectionWork(flat_buffer&& buf, std::shared_ptr<SocketConnection> conn, uint32_t timeout,
+                      std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& handler)
+    : buf_storage(std::move(buf))
+    , buf_ptr(&buf_storage)
+    , conn_shared(std::move(conn))
+    , conn_ptr(conn_shared.get())
+    , timeout_ms(timeout)
+    , async_handler(std::move(handler))
+  {
+  }
+
+  // Make it movable
+  SocketConnectionWork(SocketConnectionWork&&) = default;
+  SocketConnectionWork& operator=(SocketConnectionWork&&) = default;
+  SocketConnectionWork(const SocketConnectionWork&) = delete;
+  SocketConnectionWork& operator=(const SocketConnectionWork&) = delete;
+
+  void operator()() noexcept;
+
+  inline void on_failed(const boost::system::error_code& ec) noexcept {
+    if (mtx_ptr) {
+      // Sync path
+      {
+        std::lock_guard<std::mutex> lock(*mtx_ptr);
+        *result_ptr = ec;
+        *done_ptr = true;
+      }
+      cv_ptr->notify_one();
+    } else {
+      // Async path
+      if (async_handler) async_handler.value()(ec, *buf_ptr);
+    }
+  }
+
+  inline void on_executed() noexcept {
+    if (mtx_ptr) {
+      // Sync path
+      {
+        std::lock_guard<std::mutex> lock(*mtx_ptr);
+        *result_ptr = boost::system::error_code{};
+        *done_ptr = true;
+      }
+      cv_ptr->notify_one();
+    } else {
+      // Async path
+      if (async_handler) async_handler.value()(boost::system::error_code{}, *buf_ptr);
+    }
+  }
+
+  inline flat_buffer& buffer() noexcept { return *buf_ptr; }
+};
+
+class SharedMemoryConnection;  // Forward declaration
+class SharedMemoryChannel;     // Forward declaration
+
+// SharedMemoryConnection's work type - unified for sync and async
+struct SharedMemoryConnectionWork {
+  flat_buffer buf_storage;  // Owns buffer for async, unused for sync
+  flat_buffer* buf_ptr;      // Points to buffer (external for sync, buf_storage for async)
+  SharedMemoryConnection* conn_ptr;  // Raw pointer for sync
+  std::shared_ptr<SharedMemoryConnection> conn_shared;  // Shared ptr for async
+  uint32_t timeout_ms;
+  
+  // Sync-only members
+  std::mutex* mtx_ptr = nullptr;
+  std::condition_variable* cv_ptr = nullptr;
+  bool* done_ptr = nullptr;
+  boost::system::error_code* result_ptr = nullptr;
+  
+  // Async-only member
+  std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>> async_handler;
+
+  // Sync constructor
+  SharedMemoryConnectionWork(flat_buffer& buf, SharedMemoryConnection& conn, uint32_t timeout,
+                            std::mutex& mtx, std::condition_variable& cv, bool& done, 
+                            boost::system::error_code& result);
+
+  // Async constructor
+  SharedMemoryConnectionWork(flat_buffer&& buf, std::shared_ptr<SharedMemoryConnection> conn, uint32_t timeout,
+                            std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& handler);
+
+  // Make it movable
+  SharedMemoryConnectionWork(SharedMemoryConnectionWork&&) = default;
+  SharedMemoryConnectionWork& operator=(SharedMemoryConnectionWork&&) = default;
+  SharedMemoryConnectionWork(const SharedMemoryConnectionWork&) = delete;
+  SharedMemoryConnectionWork& operator=(const SharedMemoryConnectionWork&) = delete;
+
+  void operator()() noexcept;
+  void on_failed(const boost::system::error_code& ec) noexcept;
+  void on_executed() noexcept;
+  flat_buffer& buffer() noexcept { return *buf_ptr; }
+};
+
+// Traits specializations
+template<>
+struct connection_work_traits<SocketConnection> {
+  using type = SocketConnectionWork;
+};
+
+template<>
+struct connection_work_traits<SharedMemoryConnection> {
+  using type = SharedMemoryConnectionWork;
+};
+
+class SocketConnection
   : public Session
   , public CommonConnection<SocketConnection>
   , public std::enable_shared_from_this<SocketConnection>
 {
+private:
   // this endpoint is used to reconnect
   // if the connection is lost
   boost::asio::ip::tcp::endpoint    endpoint_;
@@ -131,6 +268,19 @@ class SocketConnection
   SocketConnection(const EndPoint&                endpoint,
                    boost::asio::ip::tcp::socket&& socket);
 };
+
+inline void SocketConnectionWork::operator()() noexcept {
+  conn_ptr->set_timeout(timeout_ms);
+  conn_ptr->write_async(*buf_ptr, [this](const boost::system::error_code& ec, size_t bytes_transferred) {
+    boost::ignore_unused(bytes_transferred);
+    if (ec) {
+      on_failed(ec);
+      conn_ptr->pop_and_execute_next_task();
+      return;
+    }
+    conn_ptr->do_read_size();
+  });
+}
 
 class RpcImpl : public Rpc
 {

@@ -5,12 +5,17 @@
 #include <nprpc/common.hpp>
 
 #include <iostream>
-#include <future>
+#include <variant>
 #include <boost/asio/write.hpp>
 
 #include "helper.hpp"
 
 namespace nprpc::impl {
+
+
+
+// Explicit instantiation for the CommonConnection class template
+// template class CommonConnection<AcceptingPlainWebSocketSession>;
 
 void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
   assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
@@ -19,68 +24,18 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
     dump_message(buffer, false);
   }
 
-  struct WorkImpl : IOWork {
-    flat_buffer& buf;
-    SocketConnection& this_;
-    uint32_t timeout_ms;
-
-    std::mutex mtx;
-    std::condition_variable cv;
-    bool done = false;
-    boost::system::error_code result;
-
-    void operator()() noexcept override {
-      this_.set_timeout(timeout_ms);
-      this_.write_async(buf, [&](const boost::system::error_code& ec, size_t bytes_transferred) {
-        boost::ignore_unused(bytes_transferred);
-        if (ec) {
-          on_failed(ec);
-          this_.pop_and_execute_next_task();
-          return;
-        }
-        this_.do_read_size();
-        });
-    }
-
-    void on_failed(const boost::system::error_code& ec) noexcept override {
-      {
-        std::lock_guard<std::mutex> lock(mtx);
-        result = ec;
-        done = true;
-      }
-      cv.notify_one();
-    }
-
-    void on_executed() noexcept override {
-      {
-        std::lock_guard<std::mutex> lock(mtx);
-        result = boost::system::error_code{};
-        done = true;
-      }
-      cv.notify_one();
-    }
-
-    flat_buffer& buffer() noexcept override { return buf; };
-    
-    boost::system::error_code wait() {
-      std::unique_lock<std::mutex> lock(mtx);
-      cv.wait(lock, [this]{ return done; });
-      return result;
-    }
-
-    WorkImpl(flat_buffer& _buf, SocketConnection& _this_, uint32_t _timeout_ms)
-      : buf(_buf)
-      , this_(_this_)
-      , timeout_ms(_timeout_ms)
-    {
-    }
-  };
+  std::mutex mtx;
+  std::condition_variable cv;
+  bool done = false;
+  boost::system::error_code result;
 
   auto post_work_and_wait = [&]() -> boost::system::error_code {
-    auto w = std::make_unique<WorkImpl>(buffer, *this, timeout_ms);
-    auto* w_ptr = w.get();
+    SocketConnectionWork w{buffer, *this, timeout_ms, mtx, cv, done, result};
     add_work(std::move(w));
-    return w_ptr->wait();
+    
+    std::unique_lock<std::mutex> lock(mtx);
+    cv.wait(lock, [&done]{ return done; });
+    return result;
   };
 
   auto ec = post_work_and_wait();
@@ -110,54 +65,12 @@ void SocketConnection::send_receive_async(
 ) {
   assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
-  struct WorkImpl : IOWork {
-    flat_buffer buf;
-    std::shared_ptr<SocketConnection> this_;
-    uint32_t timeout_ms;
-    std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>> handler;
-    
-    void operator()() noexcept override {
-      this_->set_timeout(timeout_ms);
-      this_->write_async(buf, [&](const boost::system::error_code& ec, size_t bytes_transferred) {
-        boost::ignore_unused(bytes_transferred);
-        if (ec) {
-          on_failed(ec);
-          this_->pop_and_execute_next_task();
-          return;
-        }
-        this_->do_read_size();
-      });
-    }
-
-    void on_failed(const boost::system::error_code& ec) noexcept override {
-      if (handler) handler.value()(ec, buf);
-    }
-
-    void on_executed() noexcept override {
-      if (handler) handler.value()(boost::system::error_code{}, buf);
-    }
-
-    flat_buffer& buffer() noexcept override { return buf; };
-
-    WorkImpl(flat_buffer&& _buf, 
-      std::shared_ptr<SocketConnection> _this_, 
-      std::optional<
-        std::function<
-          void(const boost::system::error_code&, flat_buffer&)>
-      >&& _handler,
-      uint32_t _timeout_ms)
-      : buf(std::move(_buf))
-      , this_(_this_)
-      , timeout_ms(_timeout_ms)
-      , handler(std::move(_handler))
-    {
-    }
-  };
-
-  add_work(
-    std::make_unique<WorkImpl>(std::move(buffer),
+  add_work(SocketConnectionWork{
+    std::move(buffer),
     shared_from_this(),
-    std::move(completion_handler), timeout_ms));
+    timeout_ms,
+    std::move(completion_handler)
+  });
 }
 
 void SocketConnection::reconnect() {
@@ -200,7 +113,7 @@ void SocketConnection::on_read_size(const boost::system::error_code& ec, size_t 
   
   if (ec) {
     fail(ec, "client_socket_session: on_read_size");
-    (*wq_.front()).on_failed(ec);
+    wq_.front().on_failed(ec);
     pop_and_execute_next_task();
     return;
   }
@@ -209,7 +122,7 @@ void SocketConnection::on_read_size(const boost::system::error_code& ec, size_t 
 
   if (rx_size_ > max_message_size) {
     fail(boost::asio::error::no_buffer_space, "rx_size_ > max_message_size");
-    (*wq_.front()).on_failed(ec);
+    wq_.front().on_failed(ec);
     pop_and_execute_next_task();
     return;
   }
@@ -226,7 +139,7 @@ void SocketConnection::on_read_body(const boost::system::error_code& ec, size_t 
 
   if (ec) {
     fail(ec, "client_socket_session: on_read_body");
-    (*wq_.front()).on_failed(ec);
+    wq_.front().on_failed(ec);
     pop_and_execute_next_task();
     return;
   }
@@ -239,7 +152,7 @@ void SocketConnection::on_read_body(const boost::system::error_code& ec, size_t 
   if (rx_size_ != 0) {
     do_read_body();
   } else {
-    (*wq_.front()).on_executed();
+    wq_.front().on_executed();
     pop_and_execute_next_task();
   }
 }

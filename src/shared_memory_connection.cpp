@@ -2,22 +2,104 @@
 #include <nprpc/impl/shared_memory_listener.hpp>
 #include <nprpc/common.hpp>
 #include <iostream>
-#include <future>
+#include <condition_variable>
 
 namespace nprpc::impl {
+
+// SharedMemoryConnectionWork implementation
+
+// Sync constructor
+SharedMemoryConnectionWork::SharedMemoryConnectionWork(
+    flat_buffer& buf, SharedMemoryConnection& conn, uint32_t timeout,
+    std::mutex& mtx, std::condition_variable& cv, bool& done, boost::system::error_code& result)
+    : buf_ptr(&buf)
+    , conn_ptr(&conn)
+    , timeout_ms(timeout)
+    , mtx_ptr(&mtx)
+    , cv_ptr(&cv)
+    , done_ptr(&done)
+    , result_ptr(&result)
+{
+}
+
+// Async constructor
+SharedMemoryConnectionWork::SharedMemoryConnectionWork(
+    flat_buffer&& buf, std::shared_ptr<SharedMemoryConnection> conn, uint32_t timeout,
+    std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& handler)
+    : buf_storage(std::move(buf))
+    , buf_ptr(&buf_storage)
+    , conn_shared(std::move(conn))
+    , conn_ptr(conn_shared.get())
+    , timeout_ms(timeout)
+    , async_handler(std::move(handler))
+{
+}
+
+void SharedMemoryConnectionWork::operator()() noexcept {
+    conn_ptr->set_timeout(timeout_ms);
+    
+    // Validate message size (security check)
+    if (buf_ptr->size() > max_message_size) {
+        std::cerr << "SharedMemoryConnection: Message too large: " << buf_ptr->size() << std::endl;
+        on_failed(boost::system::error_code(
+            boost::asio::error::message_size,
+            boost::system::system_category()));
+        conn_ptr->pop_and_execute_next_task();
+        return;
+    }
+    
+    // Send data through shared memory channel
+    if (!conn_ptr->channel_->send(buf_ptr->data().data(), buf_ptr->size())) {
+        on_failed(boost::system::error_code(
+            boost::asio::error::no_buffer_space,
+            boost::system::system_category()));
+        conn_ptr->pop_and_execute_next_task();
+        return;
+    }
+}
+
+void SharedMemoryConnectionWork::on_failed(const boost::system::error_code& ec) noexcept {
+    if (async_handler) {
+        // Async path
+        {
+            std::lock_guard lock(conn_ptr->mutex_);
+            conn_ptr->pending_requests_--;
+        }
+        async_handler.value()(ec, *buf_ptr);
+    } else {
+        // Sync path
+        {
+            std::lock_guard<std::mutex> lock(*mtx_ptr);
+            *result_ptr = ec;
+            *done_ptr = true;
+        }
+        cv_ptr->notify_one();
+    }
+}
+
+void SharedMemoryConnectionWork::on_executed() noexcept {
+    if (async_handler) {
+        // Async path
+        {
+            std::lock_guard lock(conn_ptr->mutex_);
+            conn_ptr->pending_requests_--;
+        }
+        async_handler.value()(boost::system::error_code{}, *buf_ptr);
+    } else {
+        // Sync path
+        {
+            std::lock_guard<std::mutex> lock(*mtx_ptr);
+            *result_ptr = boost::system::error_code{};
+            *done_ptr = true;
+        }
+        cv_ptr->notify_one();
+    }
+}
 
 void SharedMemoryConnection::timeout_action() {
     // For shared memory, timeout means the other side is unresponsive
     // std::cerr << "SharedMemoryConnection timeout" << std::endl;
     // close();
-}
-
-void SharedMemoryConnection::add_work(std::unique_ptr<IOWork>&& w) {
-    boost::asio::post(ioc_, [w{std::move(w)}, this]() mutable {
-        std::lock_guard lock(mutex_);
-        wq_.push_back(std::move(w));
-        if (wq_.size() == 1) (*wq_.front())();
-    });
 }
 
 void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
@@ -27,90 +109,25 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
         dump_message(buffer, false);
     }
 
-    struct work_impl : IOWork {
-        flat_buffer& buf;
-        SharedMemoryConnection& this_;
-        uint32_t timeout_ms;
-        
-        std::mutex mtx;
-        std::condition_variable cv;
-        bool done = false;
-        boost::system::error_code result;
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool done = false;
+    boost::system::error_code result;
 
-        void operator()() noexcept override {
-            this_.set_timeout(timeout_ms);
-            
-            // Validate message size (security check)
-            if (buf.size() > max_message_size) {
-                std::cerr << "SharedMemoryConnection: Message too large: " << buf.size() << std::endl;
-                on_failed(boost::system::error_code(
-                    boost::asio::error::message_size,
-                    boost::system::system_category()));
-                this_.pop_and_execute_next_task();
-                return;
-            }
-            
-            // Send data through shared memory channel
-            if (!this_.channel_->send(buf.data().data(), buf.size())) {
-                on_failed(boost::system::error_code(
-                    boost::asio::error::no_buffer_space,
-                    boost::system::system_category()));
-                this_.pop_and_execute_next_task();
-                return;
-            }
-        }
+    add_work(SharedMemoryConnectionWork(buffer, *this, timeout_ms, mtx, cv, done, result));
 
-        void on_failed(const boost::system::error_code& ec) noexcept override {
-            {
-                std::lock_guard<std::mutex> lock(mtx);
-                result = ec;
-                done = true;
-            }
-            cv.notify_one();
-        }
+    // Wait for completion
+    std::unique_lock<std::mutex> lock(mtx);
+    cv.wait(lock, [&done]{ return done; });
 
-        void on_executed() noexcept override {
-            {
-                std::lock_guard<std::mutex> lock(mtx);
-                result = boost::system::error_code{};
-                done = true;
-            }
-            cv.notify_one();
-        }
-
-        boost::system::error_code wait() {
-            std::unique_lock<std::mutex> lock(mtx);
-            cv.wait(lock, [this]{ return done; });
-            return result;
-        }
-
-        flat_buffer& buffer() noexcept override { return buf; }
-
-        work_impl(flat_buffer& _buf, SharedMemoryConnection& _this_, uint32_t _timeout_ms)
-            : buf(_buf)
-            , this_(_this_)
-            , timeout_ms(_timeout_ms)
-        {
-        }
-    };
-
-    auto post_work_and_wait = [&]() -> boost::system::error_code {
-        auto w = std::make_unique<work_impl>(buffer, *this, timeout_ms);
-        auto* w_ptr = w.get();
-        add_work(std::move(w));
-        return w_ptr->wait();
-    };
-
-    auto ec = post_work_and_wait();
-    
-    if (!ec) {
+    if (!result) {
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
             dump_message(buffer, true);
         }
         return;
     }
 
-    fail(ec, "send_receive");
+    fail(result, "send_receive");
     close();
     throw nprpc::ExceptionCommFailure();
 }
@@ -124,66 +141,8 @@ void SharedMemoryConnection::send_receive_async(
 
     pending_requests_++;
 
-    struct work_impl : IOWork {
-        flat_buffer buf;
-        SharedMemoryConnection& this_;
-        uint32_t timeout_ms;
-        std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>> handler;
-        
-        void operator()() noexcept override {
-            this_.set_timeout(timeout_ms);
-            
-            // Validate message size (security check)
-            if (buf.size() > max_message_size) {
-                std::cerr << "SharedMemoryConnection: Message too large: " << buf.size() << std::endl;
-                on_failed(boost::system::error_code(
-                    boost::asio::error::message_size,
-                    boost::system::system_category()));
-                this_.pop_and_execute_next_task();
-                return;
-            }
-            
-            if (!this_.channel_->send(buf.data().data(), buf.size())) {
-                on_failed(boost::system::error_code(
-                    boost::asio::error::no_buffer_space,
-                    boost::system::system_category()));
-                this_.pop_and_execute_next_task();
-                return;
-            }
-        }
-
-        void on_failed(const boost::system::error_code& ec) noexcept override {
-            {
-                std::lock_guard lock(this_.mutex_);
-                this_.pending_requests_--;
-            }
-            if (handler) handler.value()(ec, buf);
-        }
-
-        void on_executed() noexcept override {
-            {
-                std::lock_guard lock(this_.mutex_);
-                this_.pending_requests_--;
-            }
-            if (handler) handler.value()(boost::system::error_code{}, buf);
-        }
-
-        flat_buffer& buffer() noexcept override { return buf; }
-
-        work_impl(flat_buffer&& _buf, 
-            SharedMemoryConnection& _this_, 
-            std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& _handler,
-            uint32_t _timeout_ms)
-            : buf(std::move(_buf))
-            , this_(_this_)
-            , timeout_ms(_timeout_ms)
-            , handler(std::move(_handler))
-        {
-        }
-    };
-
-    add_work(std::make_unique<work_impl>(
-        std::move(buffer), *this, std::move(completion_handler), timeout_ms));
+    add_work(SharedMemoryConnectionWork(
+        std::move(buffer), shared_from_this(), timeout_ms, std::move(completion_handler)));
 }
 
 SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint, boost::asio::io_context& ioc)
@@ -230,7 +189,7 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint, boost::
         current_buffer.commit(data.size());
 
         // Mark current operation as complete
-        (*wq_.front()).on_executed();
+        wq_.front().on_executed();
         pop_and_execute_next_task();
     };
 
