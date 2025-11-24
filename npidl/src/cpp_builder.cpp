@@ -540,6 +540,19 @@ void CppBuilder::assign_from_cpp_type(
     if (is_flat(wt)) {
       auto [size, align] = get_type_size_align(wt);
       os << bd << "memcpy(" << op1 << "().data(), " << op2 << ".data(), " << op2 << ".size() * " << size << ");\n";
+    } else if (wt->id == FieldType::String) {
+      os << bd << "{\n" <<
+        (bd += 1) << "auto vdir = " << op1 << "_d();\n" <<
+        bd << "auto it = " << op2 << ".begin();\n" <<
+        bd << "auto span = vdir();\n" <<
+        bd << "for (auto e : span) {\n";
+        os << (bd += 1) << "e.length(it->size());\n";
+        os << "e = *it;\n";
+
+      os << 
+        bd << "++it;\n" << 
+        (bd -= 1) << "}\n" <<
+        (bd -= 1) << "}\n";
     } else {
       os <<
         bd << "{\n" <<
@@ -642,8 +655,11 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type, std::string op1, std::
   case FieldType::Vector: {
     auto wt = static_cast<AstWrapType*>(type)->type;
     auto const size = std::get<0>(get_type_size_align(wt));
+
+    bool is_string = (wt->id == FieldType::String);
+
     os << bd << "{\n"
-      << bd + 1 <<"auto span = " << op2 << "();\n";
+      << bd + 1 <<"auto span = " << op2 << (is_string ? "_d()();\n" : "();\n");
     
     if (type->id == FieldType::Vector) {
       os << bd + 1 << op1 << ".resize(span.size());\n";
