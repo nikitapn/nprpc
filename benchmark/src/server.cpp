@@ -17,6 +17,8 @@ using namespace std::string_view_literals;
 
 using thread_pool = nprpc::thread_pool_1;
 
+#define LOG_PREFIX "[benchmark_server] "
+
 // Helper class to manage nameserver process
 class NameserverManager {
     pid_t nameserver_pid = -1;
@@ -26,7 +28,7 @@ public:
         nameserver_pid = fork();
 
         if (nameserver_pid == -1) {
-            std::cerr << "Failed to fork nameserver process" << std::endl;
+            std::cerr << LOG_PREFIX "Failed to fork nameserver process" << std::endl;
             return false;
         } else if (nameserver_pid == 0) {
             // Child process - run the nameserver
@@ -34,7 +36,7 @@ public:
             execl("/home/nikita/projects/nprpc/build/npnameserver", "npnameserver", nullptr);
 
             // If all fail, exit with error
-            std::cerr << "Failed to execute npnameserver" << std::endl;
+            std::cerr << LOG_PREFIX "Failed to execute npnameserver" << std::endl;
             _exit(1);
         } else {
             // Parent process - wait a bit for nameserver to start
@@ -44,19 +46,19 @@ public:
             int status;
             pid_t result = waitpid(nameserver_pid, &status, WNOHANG);
             if (result != 0) {
-                std::cerr << "Nameserver process failed to start" << std::endl;
+                std::cerr << LOG_PREFIX "Nameserver process failed to start" << std::endl;
                 nameserver_pid = -1;
                 return false;
             }
 
-            std::cout << "Nameserver started with PID: " << nameserver_pid << std::endl;
+            std::cout << LOG_PREFIX "Nameserver started with PID: " << nameserver_pid << std::endl;
             return true;
         }
     }
 
     void stop_nameserver() {
         if (nameserver_pid > 0) {
-            std::cout << "Stopping nameserver with PID: " << nameserver_pid << std::endl;
+            std::cout << LOG_PREFIX "Stopping nameserver with PID: " << nameserver_pid << std::endl;
             kill(nameserver_pid, SIGTERM);
 
             // Wait for the process to terminate
@@ -80,7 +82,7 @@ public:
     void SetUp() {
         // Start the nameserver first
         if (!nameserver_manager.start_nameserver()) {
-            std::cerr << "Failed to start nameserver process\n";
+            std::cerr << LOG_PREFIX "Failed to start nameserver process\n";
             std::exit(1);
         }
 
@@ -112,7 +114,7 @@ public:
     void TearDown() {
         thread_pool::get_instance().stop();
         if (rpc) {
-            // thread_pool::get_instance().stop();
+            thread_pool::get_instance().stop();
             rpc->destroy();
         } 
         // Stop the nameserver
@@ -126,7 +128,7 @@ bool shutdown_requested = false;
 
 class ServerControlImpl : public ::nprpc::benchmark::IServerControl_Servant {
   void Shutdown() override {
-    std::cout << "Shutdown requested" << std::endl;
+    std::cout << LOG_PREFIX "Shutdown requested" << std::endl;
     {
       std::lock_guard<std::mutex> lk(cv_m);
       shutdown_requested = true;
@@ -156,14 +158,10 @@ int main(int argc, char** argv) {
   BenchmarkServerImpl benchmark_server;
   oid = poa->activate_object(&benchmark_server, flags);
   nameserver->Bind(oid, "nprpc_benchmark");
-  
-  BenchmarkServerImpl benchmark_server1;
-  oid = poa->activate_object(&benchmark_server1, flags);
-  nameserver->Bind(oid, "nprpc_benchmark1");
 
   // Capture interrupt signal to allow graceful shutdown
   signal(SIGINT, [](int signum) {
-    std::cout << "Interrupt signal (" << signum << ") received." << std::endl;
+    std::cout << LOG_PREFIX "Interrupt signal (" << signum << ") received." << std::endl;
     {
       std::lock_guard<std::mutex> lk(cv_m);
       shutdown_requested = true;
@@ -171,11 +169,13 @@ int main(int argc, char** argv) {
     cv.notify_one();
   });
 
+  std::cout << LOG_PREFIX "NPRPC Benchmark Server is running" << std::endl;
+
   // Wait for shutdown signal from JavaScript client
   std::unique_lock<std::mutex> lk(cv_m);
   cv.wait(lk, [] { return shutdown_requested; });
 
-  std::cout << "Server shutting down..." << std::endl;
+  std::cout << LOG_PREFIX "Server shutting down..." << std::endl;
 
   // Give some time for the client to receive the response
   std::this_thread::sleep_for(std::chrono::seconds(1));

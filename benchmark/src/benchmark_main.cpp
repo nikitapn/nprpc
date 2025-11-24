@@ -13,138 +13,186 @@
 #include <signal.h>
 #include <filesystem>
 
+#include "common.hpp"
+
 nprpc::Rpc* g_rpc;
 
 using thread_pool = nprpc::thread_pool_1;
+namespace fs = std::filesystem;
 
 // Global test infrastructure
 namespace nprpc::benchmark {
 
 // Server process manager
 class BenchmarkServerManager {
-  pid_t server_pid_ = -1;
-  
+  pid_t nprpc_server_pid_ = -1;
+  pid_t grpc_server_pid_ = -1;
+
 public:
-  bool start_server() {
-    std::cout << "Starting benchmark server...\n";
-    
-    // Find the server executable
-    std::filesystem::path server_path = std::filesystem::current_path() / "benchmark_server";
-    
-    if (!std::filesystem::exists(server_path)) {
-      // Try one level up (if running from build/benchmark)
-      server_path = std::filesystem::current_path().parent_path() / "benchmark" / "benchmark_server";
-    }
-    
-    if (!std::filesystem::exists(server_path)) {
+  bool start_nprpc_server(fs::path server_path) {
+    std::cout << "Starting NPRPC benchmark server...\n";
+
+    if (!fs::exists(server_path)) {
       std::cerr << "ERROR: benchmark_server executable not found at: " << server_path << "\n";
-      std::cerr << "Current path: " << std::filesystem::current_path() << "\n";
+      std::cerr << "Current path: " << fs::current_path() << "\n";
       return false;
     }
-    
+
     // Fork a child process to run the server
-    server_pid_ = fork();
-    
-    if (server_pid_ == -1) {
-      std::cerr << "ERROR: Failed to fork server process\n";
+    nprpc_server_pid_ = fork();
+
+    if (nprpc_server_pid_ == -1) {
+      std::cerr << "ERROR: Failed to fork NPRPC server process\n";
       return false;
-    } else if (server_pid_ == 0) {
+    } else if (nprpc_server_pid_ == 0) {
       // Child process - run the server
       execl(server_path.c_str(), "benchmark_server", nullptr);
-      
+
       // If exec fails
       std::cerr << "ERROR: Failed to execute benchmark_server\n";
       _exit(1);
     } else {
       // Parent process - wait for server to be ready
-      std::cout << "Benchmark server started with PID: " << server_pid_ << "\n";
+      std::cout << "NPRPC benchmark server started with PID: " << nprpc_server_pid_ << "\n";
       std::cout << "Waiting for server to initialize...\n";
       std::this_thread::sleep_for(std::chrono::seconds(2));
-      
+
       // Check if the child process is still alive
       int status;
-      pid_t result = waitpid(server_pid_, &status, WNOHANG);
+      pid_t result = waitpid(nprpc_server_pid_, &status, WNOHANG);
       if (result != 0) {
-        std::cerr << "ERROR: Server process failed to start\n";
-        server_pid_ = -1;
+        std::cerr << "ERROR: NPRPC server process failed to start\n";
+        nprpc_server_pid_ = -1;
         return false;
       }
-      
-      std::cout << "Server ready for benchmarks\n";
+
+      std::cout << "NPRPC server ready\n";
       return true;
     }
   }
-  
-  void stop_server() {
-    if (server_pid_ <= 0) return;
-    
-    std::cout << "\nShutting down benchmark server...\n";
-    
+
+  bool start_grpc_server(fs::path server_path) {
+    std::cout << "Starting gRPC benchmark server...\n";
+
+    if (!fs::exists(server_path)) {
+      std::cout << "WARNING: grpc_benchmark_server not found, gRPC benchmarks will be skipped\n";
+      return false;
+    }
+
+    // Fork a child process to run the server
+    grpc_server_pid_ = fork();
+
+    if (grpc_server_pid_ == -1) {
+      std::cerr << "ERROR: Failed to fork gRPC server process\n";
+      return false;
+    } else if (grpc_server_pid_ == 0) {
+      // Child process - run the server
+      // Redirect output to avoid cluttering benchmark output
+      freopen("/dev/null", "w", stdout);
+      freopen("/dev/null", "w", stderr);
+      execl(server_path.c_str(), "grpc_benchmark_server", nullptr);
+      _exit(1);
+    } else {
+      std::cout << "gRPC benchmark server started with PID: " << grpc_server_pid_ << "\n";
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+
+      // Check if still alive
+      int status;
+      pid_t result = waitpid(grpc_server_pid_, &status, WNOHANG);
+      if (result != 0) {
+        std::cerr << "ERROR: gRPC server process failed to start\n";
+        grpc_server_pid_ = -1;
+        return false;
+      }
+
+      std::cout << "gRPC server ready\n";
+      return true;
+    }
+  }
+
+  void stop_nprpc_server() {
+    if (nprpc_server_pid_ <= 0) return;
+
+    std::cout << "\nShutting down NPRPC benchmark server...\n";
+
     try {
-      // Try graceful shutdown via RPC first
-      auto nameserver = g_rpc->get_nameserver("127.0.0.1");
-      
-      nprpc::Object* obj = nullptr;
-      if (!nameserver->Resolve("nprpc_server_control", obj)) {
-        auto control = nprpc::narrow<nprpc::benchmark::ServerControl>(obj);
-        if (control) {
-          control->Shutdown();
-          std::cout << "Graceful shutdown signal sent\n";
-          
-          // Wait up to 3 seconds for graceful shutdown
-          for (int i = 0; i < 30; ++i) {
-            int status;
-            pid_t result = waitpid(server_pid_, &status, WNOHANG);
-            if (result != 0) {
-              std::cout << "Server shut down gracefully\n";
-              server_pid_ = -1;
-              return;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-          }
+      auto control = get_object<nprpc::benchmark::ServerControl>("nprpc_server_control");
+      control->Shutdown();
+      std::cout << "Graceful shutdown signal sent\n";
+
+      // Wait up to 3 seconds for graceful shutdown
+      for (int i = 0; i < 30; ++i) {
+        int status;
+        pid_t result = waitpid(nprpc_server_pid_, &status, WNOHANG);
+        if (result != 0) {
+          std::cout << "NPRPC server shut down gracefully\n";
+          nprpc_server_pid_ = -1;
+          return;
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
       }
     } catch (...) {
       // Graceful shutdown failed, continue to forceful shutdown
     }
-    
+
     // Force shutdown if graceful failed
-    std::cout << "Forcing server shutdown with SIGTERM...\n";
-    kill(server_pid_, SIGTERM);
-    
-    // Wait for the process to terminate
+    std::cout << "Forcing NPRPC server shutdown with SIGTERM...\n";
+    kill(nprpc_server_pid_, SIGTERM);
+
     int status;
-    waitpid(server_pid_, &status, 0);
-    server_pid_ = -1;
-    std::cout << "Server stopped\n";
+    waitpid(nprpc_server_pid_, &status, 0);
+    nprpc_server_pid_ = -1;
+    std::cout << "NPRPC server stopped\n";
   }
-  
+
+  void stop_grpc_server() {
+    if (grpc_server_pid_ <= 0) return;
+
+    std::cout << "Shutting down gRPC benchmark server...\n";
+    kill(grpc_server_pid_, SIGTERM);
+
+    int status;
+    waitpid(grpc_server_pid_, &status, 0);
+    grpc_server_pid_ = -1;
+    std::cout << "gRPC server stopped\n";
+  }
+
   ~BenchmarkServerManager() {
-    stop_server();
+    stop_nprpc_server();
+    stop_grpc_server();
   }
 };
 
 } // namespace nprpc::benchmark
 
 int main(int argc, char** argv) {
+  if (argc == 0 || argv[0] == nullptr)
+    return 1;
+
+  fs::path exe_directory = fs::absolute(fs::path(argv[0])).parent_path();
+  std::cout << "Executable directory: " << exe_directory << std::endl;
+
   ::benchmark::Initialize(&argc, argv);
-  
+
   if (::benchmark::ReportUnrecognizedArguments(argc, argv)) {
     return 1;
   }
-  
-  // Setup: Start the benchmark server before running benchmarks
+
+  // Setup: Start the benchmark servers before running benchmarks
   std::cout << "\n=== NPRPC Benchmark Environment Setup ===\n";
-  
+
   // Initialize global RPC instance
   g_rpc = nprpc::RpcBuilder().build(thread_pool::get_instance().ctx());
-  
+
   nprpc::benchmark::BenchmarkServerManager server;
-  
-  if (!server.start_server()) {
-    std::cerr << "FATAL: Failed to start benchmark server\n";
+
+  if (!server.start_nprpc_server(exe_directory / "benchmark_server")) {
+    std::cerr << "FATAL: Failed to start NPRPC benchmark server\n";
     return 1;
   }
+
+  // Start gRPC server (optional - will skip gRPC benchmarks if not available)
+  server.start_grpc_server(exe_directory / "grpc_benchmark_server");
 
   std::cout << "=== Setup Complete ===\n\n";
 
@@ -152,17 +200,18 @@ int main(int argc, char** argv) {
   ::benchmark::RunSpecifiedBenchmarks();
   ::benchmark::Shutdown();
 
-  // Teardown: Server will be stopped by destructor
+  // Teardown: Servers will be stopped
   std::cout << "\n=== NPRPC Benchmark Environment Teardown ===\n";
-  // server.stop_server() will be called by destructor
+  server.stop_nprpc_server();
+  server.stop_grpc_server();
 
   if (g_rpc) {
     thread_pool::get_instance().stop();
     g_rpc->destroy();
     g_rpc = nullptr;
   }
-  
+
   std::cout << "=== Teardown Complete ===\n";
-  
+
   return 0;
 }

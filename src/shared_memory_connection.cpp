@@ -8,13 +8,13 @@ namespace nprpc::impl {
 
 void SharedMemoryConnection::timeout_action() {
     // For shared memory, timeout means the other side is unresponsive
-    std::cerr << "SharedMemoryConnection timeout" << std::endl;
-    close();
+    // std::cerr << "SharedMemoryConnection timeout" << std::endl;
+    // close();
 }
 
 void SharedMemoryConnection::add_work(std::unique_ptr<IOWork>&& w) {
     boost::asio::post(ioc_, [w{std::move(w)}, this]() mutable {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard lock(mutex_);
         wq_.push_back(std::move(w));
         if (wq_.size() == 1) (*wq_.front())();
     });
@@ -138,7 +138,7 @@ void SharedMemoryConnection::send_receive_async(
 
         void on_failed(const boost::system::error_code& ec) noexcept override {
             {
-                std::lock_guard<std::mutex> lock(this_.mutex_);
+                std::lock_guard lock(this_.mutex_);
                 this_.pending_requests_--;
             }
             if (handler) handler.value()(ec, buf);
@@ -146,7 +146,7 @@ void SharedMemoryConnection::send_receive_async(
 
         void on_executed() noexcept override {
             {
-                std::lock_guard<std::mutex> lock(this_.mutex_);
+                std::lock_guard lock(this_.mutex_);
                 this_.pending_requests_--;
             }
             if (handler) handler.value()(boost::system::error_code{}, buf);
@@ -195,7 +195,7 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint, boost::
 
     // Set up data receive handler
     channel_->on_data_received = [this](std::vector<char>&& data) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard lock(mutex_);
         if (wq_.empty()) {
             std::cerr << "SharedMemoryConnection: Received unsolicited response" << std::endl;
             return;

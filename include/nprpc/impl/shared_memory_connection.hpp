@@ -4,6 +4,7 @@
 #include <nprpc/impl/shared_memory_channel.hpp>
 #include <memory>
 #include <mutex>
+#include <nprpc/impl/misc/mutex.hpp>
 
 namespace nprpc::impl {
 
@@ -20,6 +21,8 @@ class SharedMemoryConnection
 {
     boost::asio::io_context& ioc_;
     std::unique_ptr<SharedMemoryChannel> channel_;
+    // SpinMutex mutex_;
+    // AdaptiveSpinMutex mutex_;
     std::mutex mutex_;
     uint32_t pending_requests_ = 0;
 

@@ -1,0 +1,38 @@
+// Equivalent gRPC interface to nprpc_benchmark.npidl
+
+syntax = "proto3";
+
+package grpc.benchmark;
+
+// Server control interface
+service ServerControl {
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+message ShutdownRequest {}
+message ShutdownResponse {}
+
+// Benchmark interface
+service Benchmark {
+  rpc Ping(PingRequest) returns (PingResponse);
+  rpc Func1(Func1Request) returns (Func1Response);
+  rpc Func2(Func2Request) returns (Func2Response);
+}
+
+message PingRequest {}
+message PingResponse {}
+
+message Func1Request {
+  uint32 a = 1;
+  uint32 b = 2;
+}
+
+message Func1Response {
+  uint32 result = 1;
+}
+
+message Func2Request {
+  string data = 1;
+}
+
+message Func2Response {}

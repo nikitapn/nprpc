@@ -46,11 +46,8 @@ public:
   void SetUp(const ::benchmark::State& state) override {
     // Get transport type from state range
     transport_ = static_cast<TransportType>(state.range(0));
-    if (transport_ == TransportType::SharedMemory) {
-      proxy_ = get_object<nprpc::benchmark::Benchmark>("nprpc_benchmark");
-    } else {
-      proxy_ = get_object<nprpc::benchmark::Benchmark>("nprpc_benchmark1");
-    }
+    proxy_ = get_object<nprpc::benchmark::Benchmark>("nprpc_benchmark");
+
     auto endpoint = GetEndpoint(transport_);
 
     auto& urls = proxy_->get_data().urls;
