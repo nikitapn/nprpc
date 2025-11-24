@@ -12,11 +12,35 @@ service ServerControl {
 message ShutdownRequest {}
 message ShutdownResponse {}
 
+// Complex nested structures
+message Person {
+  string name = 1;
+  uint32 age = 2;
+  string email = 3;
+}
+
+message Address {
+  string street = 1;
+  string city = 2;
+  string country = 3;
+  uint32 zip_code = 4;
+}
+
+message Employee {
+  Person person = 1;
+  Address address = 2;
+  uint64 employee_id = 3;
+  double salary = 4;
+  repeated string skills = 5;
+}
+
 // Benchmark interface
 service Benchmark {
   rpc Ping(PingRequest) returns (PingResponse);
   rpc Func1(Func1Request) returns (Func1Response);
   rpc Func2(Func2Request) returns (Func2Response);
+  rpc ProcessEmployee(ProcessEmployeeRequest) returns (ProcessEmployeeResponse);
+  rpc ProcessLargeData(ProcessLargeDataRequest) returns (ProcessLargeDataResponse);
 }
 
 message PingRequest {}
@@ -36,3 +60,19 @@ message Func2Request {
 }
 
 message Func2Response {}
+
+message ProcessEmployeeRequest {
+  Employee employee = 1;
+}
+
+message ProcessEmployeeResponse {
+  Employee result = 1;
+}
+
+message ProcessLargeDataRequest {
+  bytes data = 1;
+}
+
+message ProcessLargeDataResponse {
+  bytes result = 1;
+}

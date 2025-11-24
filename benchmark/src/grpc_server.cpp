@@ -45,6 +45,22 @@ class BenchmarkServiceImpl final : public grpc::benchmark::Benchmark::Service {
     // Just receive the string, no processing needed
     return Status::OK;
   }
+  
+  Status ProcessEmployee(ServerContext* context,
+                        const grpc::benchmark::ProcessEmployeeRequest* request,
+                        grpc::benchmark::ProcessEmployeeResponse* response) override {
+    // Echo back the employee data
+    *response->mutable_result() = request->employee();
+    return Status::OK;
+  }
+  
+  Status ProcessLargeData(ServerContext* context,
+                         const grpc::benchmark::ProcessLargeDataRequest* request,
+                         grpc::benchmark::ProcessLargeDataResponse* response) override {
+    // Echo back the data
+    response->set_result(request->data());
+    return Status::OK;
+  }
 };
 
 void RunServer() {

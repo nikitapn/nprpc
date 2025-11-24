@@ -22,6 +22,27 @@ protected:
     context.getResults().setResult(input);
     return kj::READY_NOW;
   }
+  
+  kj::Promise<void> processEmployee(ProcessEmployeeContext context) override {
+    auto params = context.getParams();
+    auto employee = params.getEmployee();
+    
+    // Echo back the employee data
+    auto results = context.getResults();
+    results.setResult(employee);
+    
+    return kj::READY_NOW;
+  }
+  
+  kj::Promise<void> processLargeData(ProcessLargeDataContext context) override {
+    auto params = context.getParams();
+    auto data = params.getData();
+    
+    // Echo back the data
+    context.getResults().setResult(data);
+    
+    return kj::READY_NOW;
+  }
 };
 
 static bool g_shutdown_requested = false;

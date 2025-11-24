@@ -6,8 +6,35 @@ interface ServerControl {
   void Shutdown();
 }
 
+message Person {
+  name: string;
+  age: u32;
+  email: string;
+}
+
+message Address {
+  street: string;
+  city: string;
+  country: string;
+  zipCode: u32;
+}
+
+message Employee {
+  person: Person;
+  address: Address;
+  employeeId: u64;
+  salary: f64;
+  skills: vector<string>;
+}
+
 interface Benchmark {
   void Ping();
   u32 Func1(a: in u32, b: in u32);
   void Func2(data: in string);
+  
+  // Complex nested data benchmark
+  Employee ProcessEmployee(employee: in Employee);
+  
+  // Large data benchmark
+  vector<u8> ProcessLargeData(data: in vector<u8>);
 }

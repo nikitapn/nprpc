@@ -79,6 +79,83 @@ BENCHMARK_DEFINE_F(CapnpLatencyFixture, SmallStringCall)(benchmark::State& state
   state.SetLabel("Cap'n Proto");
 }
 
+BENCHMARK_DEFINE_F(CapnpLatencyFixture, NestedDataCall)(benchmark::State& state) {
+  auto& waitScope = client->getWaitScope();
+  
+  for (auto _ : state) {
+    auto request = capability.processEmployeeRequest();
+    auto employee = request.initEmployee();
+    
+    auto person = employee.initPerson();
+    person.setName("John Doe");
+    person.setAge(35);
+    person.setEmail("john.doe@example.com");
+    
+    auto address = employee.initAddress();
+    address.setStreet("123 Main St");
+    address.setCity("New York");
+    address.setCountry("USA");
+    address.setZipCode(10001);
+    
+    employee.setEmployeeId(987654321);
+    employee.setSalary(125000.50);
+    
+    auto skills = employee.initSkills(5);
+    skills.set(0, "C++");
+    skills.set(1, "Python");
+    skills.set(2, "JavaScript");
+    skills.set(3, "TypeScript");
+    skills.set(4, "Rust");
+    
+    auto promise = request.send();
+    auto response = promise.wait(waitScope);
+    benchmark::DoNotOptimize(response.getResult());
+  }
+  
+  state.counters["calls/sec"] = benchmark::Counter(
+    state.iterations(), benchmark::Counter::kIsRate);
+  state.SetLabel("Cap'n Proto");
+}
+
+BENCHMARK_DEFINE_F(CapnpLatencyFixture, LargeData1MB)(benchmark::State& state) {
+  auto& waitScope = client->getWaitScope();
+  std::vector<uint8_t> data(1024 * 1024, 0x42); // 1 MB
+  
+  for (auto _ : state) {
+    auto request = capability.processLargeDataRequest();
+    request.setData(kj::arrayPtr(data.data(), data.size()));
+    auto promise = request.send();
+    auto response = promise.wait(waitScope);
+    benchmark::DoNotOptimize(response.getResult());
+  }
+  
+  state.SetBytesProcessed(state.iterations() * data.size());
+  state.counters["calls/sec"] = benchmark::Counter(
+    state.iterations(), benchmark::Counter::kIsRate);
+  state.SetLabel("Cap'n Proto");
+}
+
+BENCHMARK_DEFINE_F(CapnpLatencyFixture, LargeData10MB)(benchmark::State& state) {
+  auto& waitScope = client->getWaitScope();
+  std::vector<uint8_t> data(10 * 1024 * 1024, 0x42); // 10 MB
+  
+  for (auto _ : state) {
+    auto request = capability.processLargeDataRequest();
+    request.setData(kj::arrayPtr(data.data(), data.size()));
+    auto promise = request.send();
+    auto response = promise.wait(waitScope);
+    benchmark::DoNotOptimize(response.getResult());
+  }
+  
+  state.SetBytesProcessed(state.iterations() * data.size());
+  state.counters["calls/sec"] = benchmark::Counter(
+    state.iterations(), benchmark::Counter::kIsRate);
+  state.SetLabel("Cap'n Proto");
+}
+
 BENCHMARK_REGISTER_F(CapnpLatencyFixture, EmptyCall)->Unit(benchmark::kMicrosecond);
 BENCHMARK_REGISTER_F(CapnpLatencyFixture, CallWithReturn)->Unit(benchmark::kMicrosecond);
 BENCHMARK_REGISTER_F(CapnpLatencyFixture, SmallStringCall)->Unit(benchmark::kMicrosecond);
+BENCHMARK_REGISTER_F(CapnpLatencyFixture, NestedDataCall)->Unit(benchmark::kMicrosecond);
+BENCHMARK_REGISTER_F(CapnpLatencyFixture, LargeData1MB)->Unit(benchmark::kMillisecond);
+BENCHMARK_REGISTER_F(CapnpLatencyFixture, LargeData10MB)->Unit(benchmark::kMillisecond);

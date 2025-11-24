@@ -107,6 +107,69 @@ BENCHMARK_DEFINE_F(LatencyFixture, SmallStringCall)(benchmark::State& state) {
   );
 }
 
+// Benchmark: Complex nested data structure
+BENCHMARK_DEFINE_F(LatencyFixture, NestedDataCall)(benchmark::State& state) {
+  // Create a complex nested employee object
+  nprpc::benchmark::Employee employee;
+  employee.person.name = "John Doe";
+  employee.person.age = 30;
+  employee.address.street = "123 Main St";
+  employee.address.city = "Springfield";
+  employee.address.zipCode = 12345;
+
+  employee.employeeId = 1001;
+  employee.salary = 75000.50;
+  
+  auto& skills = employee.skills;
+  skills.resize(5);
+  skills[0] = "C++";
+  skills[1] = "Python";
+  skills[2] = "JavaScript";
+  skills[3] = "Rust";
+  skills[4] = "Go";
+  
+  for (auto _ : state) {
+    auto result = proxy_->ProcessEmployee(employee);
+    benchmark::DoNotOptimize(result);
+  }
+}
+
+// Benchmark: Large data payload (1 MB)
+BENCHMARK_DEFINE_F(LatencyFixture, LargeData1MB)(benchmark::State& state) {
+  std::vector<uint8_t> data(1024 * 1024); // 1 MB
+  std::fill(data.begin(), data.end(), 0x42);
+
+  for (auto _ : state) {
+    auto result = proxy_->ProcessLargeData({data.data(), data.data() + data.size()});
+    benchmark::DoNotOptimize(result);
+  }
+
+  state.SetLabel(GetTransportName(transport_));
+  state.SetBytesProcessed(state.iterations() * data.size());
+  state.counters["calls/sec"] = benchmark::Counter(
+    state.iterations(), 
+    benchmark::Counter::kIsRate
+  );
+}
+
+// Benchmark: Very large data payload (10 MB)
+BENCHMARK_DEFINE_F(LatencyFixture, LargeData10MB)(benchmark::State& state) {
+  std::vector<uint8_t> data(10 * 1024 * 1024); // 10 MB
+  std::fill(data.begin(), data.end(), 0x42);
+
+  for (auto _ : state) {
+    auto result = proxy_->ProcessLargeData({data.data(), data.data() + data.size()});
+    benchmark::DoNotOptimize(result);
+  }
+
+  state.SetLabel(GetTransportName(transport_));
+  state.SetBytesProcessed(state.iterations() * data.size());
+  state.counters["calls/sec"] = benchmark::Counter(
+    state.iterations(), 
+    benchmark::Counter::kIsRate
+  );
+}
+
 // Register benchmarks for each transport
 // Arg(0) = SharedMemory, Arg(1) = TCP, Arg(2) = WebSocket
 
@@ -127,6 +190,24 @@ BENCHMARK_REGISTER_F(LatencyFixture, SmallStringCall)
   ->Arg(1)
   ->Arg(2)
   ->Unit(benchmark::kMicrosecond);
+
+BENCHMARK_REGISTER_F(LatencyFixture, NestedDataCall)
+  ->Arg(0)
+  ->Arg(1)
+  ->Arg(2)
+  ->Unit(benchmark::kMicrosecond);
+
+BENCHMARK_REGISTER_F(LatencyFixture, LargeData1MB)
+  ->Arg(0)
+  ->Arg(1)
+  ->Arg(2)
+  ->Unit(benchmark::kMillisecond);
+
+BENCHMARK_REGISTER_F(LatencyFixture, LargeData10MB)
+  ->Arg(0)
+  ->Arg(1)
+  ->Arg(2)
+  ->Unit(benchmark::kMillisecond);
 
 
 /* RESULTS:

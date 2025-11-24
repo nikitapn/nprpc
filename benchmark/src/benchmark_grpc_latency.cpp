@@ -97,6 +97,96 @@ BENCHMARK_DEFINE_F(GrpcLatencyFixture, SmallStringCall)(benchmark::State& state)
   );
 }
 
+// Benchmark: Complex nested data structure
+BENCHMARK_DEFINE_F(GrpcLatencyFixture, NestedDataCall)(benchmark::State& state) {
+  grpc::benchmark::ProcessEmployeeRequest request;
+  auto* employee = request.mutable_employee();
+  employee->mutable_person()->set_name("John Doe");
+  employee->mutable_person()->set_age(35);
+  employee->mutable_person()->set_email("john.doe@example.com");
+  employee->mutable_address()->set_street("123 Main St");
+  employee->mutable_address()->set_city("New York");
+  employee->mutable_address()->set_country("USA");
+  employee->mutable_address()->set_zip_code(10001);
+  employee->set_employee_id(987654321);
+  employee->set_salary(125000.50);
+  employee->add_skills("C++");
+  employee->add_skills("Python");
+  employee->add_skills("JavaScript");
+  employee->add_skills("TypeScript");
+  employee->add_skills("Rust");
+  
+  grpc::benchmark::ProcessEmployeeResponse response;
+  
+  for (auto _ : state) {
+    ClientContext context;
+    Status status = stub_->ProcessEmployee(&context, request, &response);
+    if (!status.ok()) {
+      state.SkipWithError("RPC failed");
+      break;
+    }
+    benchmark::DoNotOptimize(response.result());
+  }
+
+  state.SetLabel("gRPC");
+  state.counters["calls/sec"] = benchmark::Counter(
+    state.iterations(), 
+    benchmark::Counter::kIsRate
+  );
+}
+
+// Benchmark: Large data payload (1 MB)
+BENCHMARK_DEFINE_F(GrpcLatencyFixture, LargeData1MB)(benchmark::State& state) {
+  grpc::benchmark::ProcessLargeDataRequest request;
+  std::string data(1024 * 1024, 0x42); // 1 MB
+  request.set_data(data);
+  
+  grpc::benchmark::ProcessLargeDataResponse response;
+  
+  for (auto _ : state) {
+    ClientContext context;
+    Status status = stub_->ProcessLargeData(&context, request, &response);
+    if (!status.ok()) {
+      state.SkipWithError("RPC failed");
+      break;
+    }
+    benchmark::DoNotOptimize(response.result());
+  }
+
+  state.SetLabel("gRPC");
+  state.SetBytesProcessed(state.iterations() * data.size());
+  state.counters["calls/sec"] = benchmark::Counter(
+    state.iterations(), 
+    benchmark::Counter::kIsRate
+  );
+}
+
+// Benchmark: Very large data payload (10 MB)
+BENCHMARK_DEFINE_F(GrpcLatencyFixture, LargeData10MB)(benchmark::State& state) {
+  grpc::benchmark::ProcessLargeDataRequest request;
+  std::string data(10 * 1024 * 1024, 0x42); // 10 MB
+  request.set_data(data);
+  
+  grpc::benchmark::ProcessLargeDataResponse response;
+  
+  for (auto _ : state) {
+    ClientContext context;
+    Status status = stub_->ProcessLargeData(&context, request, &response);
+    if (!status.ok()) {
+      state.SkipWithError("RPC failed");
+      break;
+    }
+    benchmark::DoNotOptimize(response.result());
+  }
+
+  state.SetLabel("gRPC");
+  state.SetBytesProcessed(state.iterations() * data.size());
+  state.counters["calls/sec"] = benchmark::Counter(
+    state.iterations(), 
+    benchmark::Counter::kIsRate
+  );
+}
+
 // Register benchmarks
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, EmptyCall)
   ->Unit(benchmark::kMicrosecond);
@@ -106,3 +196,12 @@ BENCHMARK_REGISTER_F(GrpcLatencyFixture, CallWithReturn)
 
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, SmallStringCall)
   ->Unit(benchmark::kMicrosecond);
+
+BENCHMARK_REGISTER_F(GrpcLatencyFixture, NestedDataCall)
+  ->Unit(benchmark::kMicrosecond);
+
+BENCHMARK_REGISTER_F(GrpcLatencyFixture, LargeData1MB)
+  ->Unit(benchmark::kMillisecond);
+
+BENCHMARK_REGISTER_F(GrpcLatencyFixture, LargeData10MB)
+  ->Unit(benchmark::kMillisecond);

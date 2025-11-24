@@ -141,6 +141,19 @@ class BenchmarkServerImpl : public ::nprpc::benchmark::IBenchmark_Servant {
   void Ping() override {}
   uint32_t Func1(uint32_t a, uint32_t b) override { return a + b; }
   void Func2(::nprpc::flat::Span<char> data) override {}
+  
+  ::nprpc::benchmark::Employee ProcessEmployee (::nprpc::benchmark::flat::Employee_Direct employee) override {
+    nprpc::benchmark::Employee result;
+    nprpc::benchmark::helper::assign_from_flat_ProcessEmployee_employee(employee, result);
+    return result;
+  }
+
+  std::vector<uint8_t> ProcessLargeData (::nprpc::flat::Span<uint8_t> data) override {
+    // Echo back the data
+    std::vector<uint8_t> result(data.size());
+    std::memcpy(result.data(), data.data(), data.size());
+    return result;
+  }
 };
 
 int main(int argc, char** argv) {
