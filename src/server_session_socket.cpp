@@ -11,7 +11,6 @@
 #include <string_view>
 #include <deque>
 #include <boost/beast/core/bind_handler.hpp>
-#include <boost/beast/core/flat_buffer.hpp>
 #include <boost/asio/write.hpp>
 
 #include <nprpc/nprpc.hpp>

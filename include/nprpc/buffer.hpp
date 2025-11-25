@@ -4,11 +4,11 @@
 #pragma once
 
 #include <array>
-#include <boost/beast/core/flat_buffer.hpp>
+
+#include <nprpc/flat_buffer.hpp>
 
 namespace nprpc {
 
-using flat_buffer = boost::beast::flat_buffer;
 
 class Buffers {
 	std::array<flat_buffer, 2> bufs_;

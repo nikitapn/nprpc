@@ -84,6 +84,7 @@ endif()
 
 # Main library target
 add_library(nprpc
+  src/http_server.cpp
   ${nprpc_stub_GENERATED_SOURCES}
   src/framework.h
   src/nprpc.cpp
@@ -96,7 +97,6 @@ add_library(nprpc
   src/shared_memory_init.cpp
   src/async_connect.cpp
   src/server_session_socket.cpp
-  src/http_server.cpp
   src/server_session_websocket.cpp
   src/client_websocket_connection.cpp
   src/websocket_session.cpp

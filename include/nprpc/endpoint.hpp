@@ -6,7 +6,6 @@
 
 #include <charconv>
 #include <boost/system/errc.hpp>
-#include <boost/beast/core/flat_buffer.hpp>
 #include <boost/asio/ip/address_v4.hpp>
 
 #include <nprpc_base.hpp>

@@ -15,12 +15,11 @@
 #include <optional>
 
 #include <boost/asio/io_context.hpp>
-#include <boost/beast/core/flat_buffer.hpp>
 
+#include <nprpc/buffer.hpp>
 #include <nprpc/common.hpp>
 #include <nprpc_base.hpp>
 #include <nprpc/basic.hpp>
-#include <nprpc/buffer.hpp>
 #include <nprpc/object_ptr.hpp>
 #include <nprpc/utils.hpp>
 #include <nprpc/endpoint.hpp>

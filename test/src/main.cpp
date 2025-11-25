@@ -242,7 +242,7 @@ TEST_F(NprpcTest, TestBadInput) {
         try {
             auto obj = make_stuff_happen<nprpc::test::TestBadInput>(servant, flags);
 
-            boost::beast::flat_buffer buf;
+            nprpc::flat_buffer buf;
             auto mb = buf.prepare(2048);
             buf.commit(40);
             static_cast<::nprpc::impl::Header*>(mb.data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;

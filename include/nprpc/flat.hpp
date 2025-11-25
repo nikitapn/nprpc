@@ -7,6 +7,7 @@
 #ifndef NPRPC_FLAT_HPP_
 #define NPRPC_FLAT_HPP_
 
+#include <cassert>
 #include <cstddef> // std::byte
 #include <memory>
 #include <cstdint>

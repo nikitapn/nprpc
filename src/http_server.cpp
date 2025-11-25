@@ -286,12 +286,12 @@ class http_session {
   boost::optional<http::request_parser<http::string_body>> parser_;
 
 protected:
-  beast::flat_buffer buffer_;
+  flat_buffer buffer_;
 
 public:
   // Construct the session
   http_session(
-      beast::flat_buffer buffer,
+      flat_buffer buffer,
       std::shared_ptr<std::string const> const &doc_root)
     : doc_root_(doc_root)
     , buffer_(std::move(buffer)) 
@@ -548,7 +548,7 @@ class detect_session : public std::enable_shared_from_this<detect_session> {
   beast_tcp_stream_strand stream_;
   ssl::context &ctx_;
   std::shared_ptr<std::string const> doc_root_;
-  beast::flat_buffer buffer_;
+  flat_buffer buffer_;
 
 public:
   explicit detect_session(

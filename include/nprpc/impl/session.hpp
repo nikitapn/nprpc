@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <nprpc/buffer.hpp>
 #include <nprpc/common.hpp>
 #include <boost/date_time/posix_time/ptime.hpp>
 #include <nprpc/basic.hpp>
-#include <nprpc/buffer.hpp>
 #include <nprpc/session_context.h>
 #include <boost/asio/deadline_timer.hpp>
 

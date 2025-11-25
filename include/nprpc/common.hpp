@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <nprpc/flat_buffer.hpp>
+
 #include <iostream>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/basic_stream_socket.hpp>
@@ -13,6 +15,7 @@
 #include <boost/beast/core.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/asio/ssl/context.hpp>
+
 
 namespace nprpc::impl {
 
