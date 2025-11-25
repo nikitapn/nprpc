@@ -100,6 +100,8 @@ private:
                        boost::interprocess::managed_shared_memory&& shm,
                        RingBufferHeader* header,
                        uint8_t* data_region,
+                       void* mirror_base,
+                       size_t ring_window,
                        bool is_creator);
     
     // Calculate total shared memory size needed
@@ -111,8 +113,10 @@ private:
     std::string name_;
     boost::interprocess::managed_shared_memory shm_;
     RingBufferHeader* header_;
-    uint8_t* data_region_;  // Points to start of slot array
-    bool is_creator_;       // Should we remove shm on destruction? - Yes if creator
+    uint8_t* data_region_;  // Points to start of mirrored data region
+    void* mirror_base_;     // Base address for munmap
+    size_t ring_window_;    // Size of each mapped window (page-aligned)
+    bool is_creator_;       // Should we remove shm on destruction?
 };
 
 // Helper: Generate unique names for shared memory regions

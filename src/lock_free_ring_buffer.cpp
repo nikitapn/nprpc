@@ -2,58 +2,130 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/common.hpp>
 #include <boost/interprocess/shared_memory_object.hpp>
+#include <boost/interprocess/mapped_region.hpp>
 #include <boost/date_time/posix_time/posix_time_types.hpp>
 #include <iostream>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace nprpc::impl {
 
+// Helper to get page size
+static size_t get_page_size() {
+    static size_t page_size = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
+    return page_size;
+}
+
 size_t LockFreeRingBuffer::calculate_shm_size(size_t buffer_size) {
-    // managed_shared_memory needs space for:
-    // - Internal bookkeeping (~2KB)
-    // - Header object with name
-    // - Data region (continuous buffer)
-    // - Alignment padding (64 bytes per allocation)
-    size_t overhead = 8192;  // 8KB for managed_shared_memory overhead + bookkeeping
+    // Memory layout must ensure data region starts at page-aligned offset
+    // to avoid double-mapping the header (which contains pthread mutex).
+    //
+    // Layout:
+    // [0 ... ~2KB)        - Boost managed_shared_memory bookkeeping
+    // [~2KB ... ~2.5KB)   - Header object with name string
+    // [~2.5KB ... 4KB)    - Padding to reach page boundary
+    // [4KB ... 4KB+size)  - Data region (page-aligned start)
+    //
+    // We reserve one full page for overhead to guarantee data starts on page boundary
+    size_t page_size = get_page_size();
+    size_t overhead = page_size;  // One page for header + bookkeeping
     return overhead + buffer_size;
 }
 
 std::unique_ptr<LockFreeRingBuffer> LockFreeRingBuffer::create(
     const std::string& name,
     size_t buffer_size) {
-    
     try {
-        // Calculate total size needed
-        size_t total_size = calculate_shm_size(buffer_size);
-        
-        // Create managed shared memory
+        size_t page_size = get_page_size();
+
+        // Calculate total size: one page for header/bookkeeping + buffer
+        // Data will start exactly at page_size offset
+        size_t total_size = page_size + buffer_size;
+
+        // 1) Create managed shared memory (Boost)
         boost::interprocess::managed_shared_memory shm(
             boost::interprocess::create_only,
             name.c_str(),
             total_size);
-        
-        // Construct header in shared memory
+
+        // 2) Construct header (Boost will place it within the first page)
         auto* header = shm.construct<RingBufferHeader>("header")(
             buffer_size, MAX_MESSAGE_SIZE);
-        
-        if (!header) {
-            throw std::runtime_error("Failed to construct RingBufferHeader");
+        if (!header) throw std::runtime_error("Failed to construct RingBufferHeader");
+
+        // 3) Verify header fits within first page
+        uint8_t* shm_base = static_cast<uint8_t*>(shm.get_address());
+        size_t header_offset = reinterpret_cast<uint8_t*>(header) - shm_base;
+        size_t header_end = header_offset + sizeof(RingBufferHeader);
+
+        if (header_end > page_size) {
+            throw std::runtime_error("Header doesn't fit in first page - increase page reservation");
         }
-        
-        // Allocate data region (continuous circular buffer)
-        auto* data_region = shm.construct<uint8_t>("data")[buffer_size]();
-        
-        if (!data_region) {
-            throw std::runtime_error("Failed to allocate data region");
+
+        // 4) Data region starts exactly at page_size offset (page-aligned)
+        // We don't use Boost's construct because we need precise control over placement
+        uint8_t* data_region = shm_base + page_size;
+
+        // Store data offset in header for open() to find it
+        // (We're repurposing unused space or adding a field if needed)
+        // Actually, we can calculate it: data always starts at page_size offset
+
+        // 5) Ring window is exactly buffer_size (rounded up to page)
+        size_t ring_window = (buffer_size + page_size - 1) & ~(page_size - 1);
+
+        // Reserve 2x ring window for mirrored mapping
+        void* reserved = mmap(nullptr, 2 * ring_window, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (reserved == MAP_FAILED) {
+            throw std::runtime_error("Failed to reserve virtual address space for mirrored mapping");
         }
-        
+
+        // 6) Open the POSIX shm object to get an fd
+        std::string posix_name = name;
+        if (posix_name.empty() || posix_name[0] != '/') posix_name.insert(posix_name.begin(), '/');
+
+        int fd = shm_open(posix_name.c_str(), O_RDWR | O_CLOEXEC, 0600);
+        if (fd == -1) {
+            munmap(reserved, 2 * ring_window);
+            throw std::runtime_error(std::string("Failed to open shared memory: ") + strerror(errno));
+        }
+
+        // 7) Map only the DATA region (starting from page_size offset), not the header!
+        void* first_map = mmap(reserved, ring_window, PROT_READ | PROT_WRITE, 
+                               MAP_SHARED | MAP_FIXED, fd, page_size);
+        if (first_map == MAP_FAILED || first_map != reserved) {
+            close(fd);
+            munmap(reserved, 2 * ring_window);
+            throw std::runtime_error(std::string("Failed to create first memory mapping: ") + strerror(errno));
+        }
+
+        void* second_map_addr = static_cast<uint8_t*>(reserved) + ring_window;
+        void* second_map = mmap(second_map_addr, ring_window, PROT_READ | PROT_WRITE, 
+                                MAP_SHARED | MAP_FIXED, fd, page_size);
+        if (second_map == MAP_FAILED || second_map != second_map_addr) {
+            munmap(first_map, ring_window);
+            close(fd);
+            munmap(reserved, 2 * ring_window);
+            throw std::runtime_error(std::string("Failed to create mirrored memory mapping: ") + strerror(errno));
+        }
+
+        close(fd);
+
+        // 8) Mirrored data region pointer - points to start of reserved area
+        uint8_t* mirrored_data_region = static_cast<uint8_t*>(reserved);
+
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-            std::cout << "Created ring buffer '" << name << "': " 
-                     << buffer_size << " bytes (continuous)" << std::endl;
+            std::cout << "Created ring buffer '" << name << "': "
+                      << buffer_size << " bytes with mirrored mapping at " 
+                      << static_cast<void*>(mirrored_data_region)
+                      << " (ring_window=" << ring_window << ")\n";
         }
-        
+
         return std::unique_ptr<LockFreeRingBuffer>(
-            new LockFreeRingBuffer(name, std::move(shm), header, data_region, true));
-        
+            new LockFreeRingBuffer(name, std::move(shm), header, mirrored_data_region, reserved, ring_window, true)
+        );
+
     } catch (const boost::interprocess::interprocess_exception& e) {
         std::cerr << "Failed to create ring buffer '" << name << "': " << e.what() << std::endl;
         throw;
@@ -62,36 +134,73 @@ std::unique_ptr<LockFreeRingBuffer> LockFreeRingBuffer::create(
 
 std::unique_ptr<LockFreeRingBuffer> LockFreeRingBuffer::open(const std::string& name) {
     try {
-        // Open existing shared memory
-        std::cout << "Opening ring buffer '" << name << "'\n";
+
         boost::interprocess::managed_shared_memory shm(
             boost::interprocess::open_only,
             name.c_str());
-        
+
         // Find header
         auto result = shm.find<RingBufferHeader>("header");
-        if (result.first == nullptr) {
-            throw std::runtime_error("Header not found in shared memory");
+        if (result.first == nullptr) throw std::runtime_error("Header not found in shared memory");
+        RingBufferHeader* header = result.first;
+
+        size_t buffer_size = header->buffer_size;
+        size_t page_size = get_page_size();
+
+        // Data region starts at page_size offset (page-aligned, same as in create())
+        // We don't use Boost's find for data - we know exactly where it is
+
+        // Ring window is buffer_size rounded up to page boundary
+        size_t ring_window = (buffer_size + page_size - 1) & ~(page_size - 1);
+
+        // Reserve virtual address space for mirrored data region
+        void* reserved = mmap(nullptr, 2 * ring_window, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (reserved == MAP_FAILED) throw std::runtime_error("Failed to reserve virtual address space for mirrored mapping");
+
+        // Normalize POSIX name
+        std::string posix_name = name;
+        if (posix_name.empty() || posix_name[0] != '/') posix_name.insert(posix_name.begin(), '/');
+
+        int fd = shm_open(posix_name.c_str(), O_RDWR | O_CLOEXEC, 0600);
+        if (fd == -1) {
+            munmap(reserved, 2 * ring_window);
+            throw std::runtime_error(std::string("Failed to open shared memory: ") + strerror(errno));
         }
-        
-        auto* header = result.first;
-        
-        // Find data region by name
-        auto data_result = shm.find<uint8_t>("data");
-        if (data_result.first == nullptr) {
-            throw std::runtime_error("Data region not found in shared memory");
+
+        // Map only the DATA region (starting from page_size offset), not the header!
+        void* first_map = mmap(reserved, ring_window, PROT_READ | PROT_WRITE, 
+                               MAP_SHARED | MAP_FIXED, fd, page_size);
+        if (first_map == MAP_FAILED || first_map != reserved) {
+            close(fd);
+            munmap(reserved, 2 * ring_window);
+            throw std::runtime_error(std::string("Failed to create first memory mapping: ") + strerror(errno));
         }
-        
-        auto* data_region = data_result.first;
-        
+
+        void* second_map_addr = static_cast<uint8_t*>(reserved) + ring_window;
+        void* second_map = mmap(second_map_addr, ring_window, PROT_READ | PROT_WRITE, 
+                                MAP_SHARED | MAP_FIXED, fd, page_size);
+        if (second_map == MAP_FAILED || second_map != second_map_addr) {
+            munmap(first_map, ring_window);
+            close(fd);
+            munmap(reserved, 2 * ring_window);
+            throw std::runtime_error(std::string("Failed to create mirrored memory mapping: ") + strerror(errno));
+        }
+
+        close(fd);
+
+        // Mirrored data region pointer - points to start of reserved area
+        uint8_t* mirrored_data_region = static_cast<uint8_t*>(reserved);
+
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-            std::cout << "Opened ring buffer '" << name << "': " 
-                     << header->buffer_size << " bytes (continuous)" << std::endl;
+            std::cout << "Opened ring buffer '" << name << "': "
+                      << buffer_size << " bytes with mirrored mapping at "
+                      << static_cast<void*>(mirrored_data_region) << " (ring_window=" << ring_window << ")\n";
         }
-        
+
         return std::unique_ptr<LockFreeRingBuffer>(
-            new LockFreeRingBuffer(name, std::move(shm), header, data_region, false));
-        
+            new LockFreeRingBuffer(name, std::move(shm), header, mirrored_data_region, reserved, ring_window, false)
+        );
+
     } catch (const boost::interprocess::interprocess_exception& e) {
         std::cerr << "Failed to open ring buffer '" << name << "': " << e.what() << std::endl;
         throw;
@@ -110,19 +219,27 @@ LockFreeRingBuffer::LockFreeRingBuffer(
     boost::interprocess::managed_shared_memory&& shm,
     RingBufferHeader* header,
     uint8_t* data_region,
+    void* mirror_base,
+    size_t ring_window,
     bool is_creator)
     : name_(name)
     , shm_(std::move(shm))
     , header_(header)
     , data_region_(data_region)
+    , mirror_base_(mirror_base)
+    , ring_window_(ring_window)
     , is_creator_(is_creator) {
 }
 
 LockFreeRingBuffer::~LockFreeRingBuffer() {
+    // Unmap the mirrored virtual memory (2x ring_window_)
+    if (mirror_base_) {
+        munmap(mirror_base_, 2 * ring_window_);
+    }
+
     // Cleanup is automatic - managed_shared_memory destructor handles it
     // But we should remove the shared memory object if we created it
     if (is_creator_) {
-        std::cout << "Destroying ring buffer '" << name_ << "'\n";
         auto ok = boost::interprocess::shared_memory_object::remove(name_.c_str());
         if (!ok) {
             std::cerr << "Warning: Failed to remove shared memory for ring buffer '"
@@ -137,7 +254,7 @@ LockFreeRingBuffer::~LockFreeRingBuffer() {
 size_t LockFreeRingBuffer::used_bytes() const {
     size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
     size_t read_idx = header_->read_idx.load(std::memory_order_acquire);
-    
+
     if (write_idx >= read_idx) {
         return write_idx - read_idx;
     } else {
@@ -153,43 +270,40 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size) {
                  << header_->max_message_size << std::endl;
         return false;
     }
-    
+
     // Total bytes needed: size header (4 bytes) + data
     size_t total_bytes = sizeof(uint32_t) + size;
-    
+
     // Check if we have enough space
     // Need to keep at least 1 byte free to distinguish full from empty
     if (total_bytes + 1 > available_bytes()) {
         return false; // Buffer full
     }
-    
+
     // Load current write index
     size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
-    
-    // Write size header (may wrap around)
-    for (size_t i = 0; i < sizeof(uint32_t); ++i) {
-        data_region_[(write_idx + i) % header_->buffer_size] = 
-            reinterpret_cast<const uint8_t*>(&size)[i];
-    }
+
+    // Write size header - with mirrored mapping, no wrap-around needed!
+    // Just write directly, the mirror handles the wrap
+    std::memcpy(data_region_ + write_idx, &size, sizeof(uint32_t));
     write_idx = (write_idx + sizeof(uint32_t)) % header_->buffer_size;
-    
-    // Write data (may wrap around)
+
+    // Write data - with mirrored mapping, single memcpy always works!
+    // Even if it crosses the buffer boundary, the mirror makes it contiguous
     const uint8_t* src = static_cast<const uint8_t*>(data);
-    for (size_t i = 0; i < size; ++i) {
-        data_region_[(write_idx + i) % header_->buffer_size] = src[i];
-    }
-    
+    std::memcpy(data_region_ + write_idx, src, size);
+
     // Update write index with release semantics
     size_t new_write_idx = (write_idx + size) % header_->buffer_size;
     header_->write_idx.store(new_write_idx, std::memory_order_release);
-    
+
     // Notify waiting readers
     {
         boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex> 
             lock(header_->mutex);
         header_->data_available.notify_one();
     }
-    
+
     return true;
 }
 
@@ -197,42 +311,37 @@ size_t LockFreeRingBuffer::try_read(void* buffer, size_t buffer_size) {
     // Load indices with acquire semantics
     size_t read_idx = header_->read_idx.load(std::memory_order_acquire);
     size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
-    
+
     // Check if buffer is empty
     if (read_idx == write_idx) {
         return 0; // Empty
     }
-    
-    // Read size header (may wrap around)
+
+    // Read size header - with mirrored mapping, no wrap-around needed!
     uint32_t message_size = 0;
-    for (size_t i = 0; i < sizeof(uint32_t); ++i) {
-        reinterpret_cast<uint8_t*>(&message_size)[i] = 
-            data_region_[(read_idx + i) % header_->buffer_size];
-    }
+    std::memcpy(&message_size, data_region_ + read_idx, sizeof(uint32_t));
     read_idx = (read_idx + sizeof(uint32_t)) % header_->buffer_size;
-    
+
     // Validate size
     if (message_size > header_->max_message_size) {
         std::cerr << "Corrupt message size: " << message_size << std::endl;
         return 0;
     }
-    
+
     if (message_size > buffer_size) {
         std::cerr << "Buffer too small: message=" << message_size 
                  << ", buffer=" << buffer_size << std::endl;
         return 0;
     }
-    
-    // Copy data (may wrap around)
+
+    // Copy data - with mirrored mapping, single memcpy always works!
     uint8_t* dest = static_cast<uint8_t*>(buffer);
-    for (size_t i = 0; i < message_size; ++i) {
-        dest[i] = data_region_[(read_idx + i) % header_->buffer_size];
-    }
-    
+    std::memcpy(dest, data_region_ + read_idx, message_size);
+
     // Update read index with release semantics
     size_t new_read_idx = (read_idx + message_size) % header_->buffer_size;
     header_->read_idx.store(new_read_idx, std::memory_order_release);
-    
+
     return message_size;
 }
 
@@ -240,33 +349,33 @@ size_t LockFreeRingBuffer::read_with_timeout(
     void* buffer, 
     size_t buffer_size,
     std::chrono::milliseconds timeout) {
-    
+
     // First try non-blocking read
     size_t bytes = try_read(buffer, buffer_size);
     if (bytes > 0) {
         return bytes;
     }
-    
+
     // Wait for data with timeout
     boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex> 
         lock(header_->mutex);
-    
+
     // Calculate absolute deadline in boost posix_time
     auto deadline = boost::posix_time::microsec_clock::universal_time() + 
                     boost::posix_time::milliseconds(timeout.count());
-    
+
     while (is_empty()) {
         auto now = boost::posix_time::microsec_clock::universal_time();
         if (now >= deadline) {
             return 0; // Timeout
         }
-        
+
         // Wait with absolute time
         if (!header_->data_available.timed_wait(lock, deadline)) {
             return 0; // Timeout
         }
     }
-    
+
     // Release lock and try read again
     lock.unlock();
     return try_read(buffer, buffer_size);
