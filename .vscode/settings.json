@@ -41,6 +41,13 @@
     "__verbose_trap": "cpp",
     "locale": "cpp",
     "__log_hardening_failure": "cpp",
-    "execution": "cpp"
+    "execution": "cpp",
+    "condition_variable": "cpp",
+    "forward_list": "cpp",
+    "fstream": "cpp",
+    "mutex": "cpp",
+    "shared_mutex": "cpp",
+    "stop_token": "cpp",
+    "ostream": "cpp"
   }
 }

@@ -71,6 +71,7 @@ void RunServer() {
 
   ServerBuilder builder;
   builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
+  builder.SetOption(grpc::MakeChannelArgumentOption(GRPC_ARG_MAX_RECEIVE_MESSAGE_LENGTH , 30 * 1024 * 1024));
   builder.RegisterService(&control_service);
   builder.RegisterService(&benchmark_service);
 

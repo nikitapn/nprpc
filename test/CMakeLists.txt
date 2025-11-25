@@ -123,6 +123,24 @@ add_custom_command(
   COMMENT "Automatically running nprpc C++ tests after build..."
 )
 
+# Test executable for lock-free ring buffer
+add_executable(test_lock_free_ring_buffer
+  src/test_lock_free_ring_buffer.cpp
+)
+
+target_include_directories(test_lock_free_ring_buffer
+  PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+target_link_libraries(test_lock_free_ring_buffer
+  PRIVATE 
+    nprpc::nprpc
+    GTest::gtest
+)
+
+add_test(NAME LockFreeRingBuffer COMMAND test_lock_free_ring_buffer)
+
 # Test executable for shared memory endpoint
 add_executable(test_shared_memory_endpoint
   src/test_shared_memory_endpoint.cpp
@@ -163,6 +181,7 @@ add_test(NAME SharedMemoryListener COMMAND test_shared_memory_listener)
 # Ensure the auxiliary shared-memory test executables are built before
 # running the post-build CTest invocation on the main `nprpc_test` target.
 add_dependencies(nprpc_test
+  test_lock_free_ring_buffer
   test_shared_memory_endpoint
   test_shared_memory_listener
 )
