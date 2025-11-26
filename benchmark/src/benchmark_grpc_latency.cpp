@@ -19,8 +19,14 @@ protected:
 
 public:
   void SetUp(const ::benchmark::State& state) override {
-    // Connect to gRPC server
-    channel_ = grpc::CreateChannel("localhost:50051", grpc::InsecureChannelCredentials());
+    // Connect to gRPC server with increased message size limits
+    grpc::ChannelArguments args;
+    args.SetMaxReceiveMessageSize(32 * 1024 * 1024);  // 32 MB
+    args.SetMaxSendMessageSize(32 * 1024 * 1024);     // 32 MB
+    channel_ = grpc::CreateCustomChannel(
+      "localhost:50051", 
+      grpc::InsecureChannelCredentials(),
+      args);
     stub_ = grpc::benchmark::Benchmark::NewStub(channel_);
   }
 
