@@ -1235,6 +1235,13 @@ void CppBuilder::proxy_call(AstFunctionDecl* fn) {
   }
 }
 
+void CppBuilder::proxy_udp_call(AstFunctionDecl* fn) {
+  // Fire-and-forget UDP call - send and don't wait for reply
+  oc <<
+    "  ::nprpc::impl::g_orb->send_udp(this->get_endpoint(), std::move(buf));\n"
+    ;
+}
+
 void CppBuilder::proxy_async_call(AstFunctionDecl* fn) {
   oc <<
     "  ::nprpc::impl::g_orb->call_async(this->get_endpoint(), std::move(buf), !handler ? std::nullopt : std::make_optional([handler = move(handler)] (\n"
@@ -1424,8 +1431,15 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 
     oc << "  static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size() - 4);\n";
 
-    if (!fn->is_async) proxy_call(fn);
-    else proxy_async_call(fn);
+    // Choose the call method based on interface/function attributes
+    if (ifs->is_udp && !fn->is_reliable) {
+      // UDP fire-and-forget - no reply expected
+      proxy_udp_call(fn);
+    } else if (!fn->is_async) {
+      proxy_call(fn);
+    } else {
+      proxy_async_call(fn);
+    }
 
     oc << "}\n\n";
   }

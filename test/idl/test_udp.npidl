@@ -1,0 +1,36 @@
+// Test UDP interface support
+module test_udp;
+
+message Vec3 {
+  x: f32;
+  y: f32;
+  z: f32;
+}
+
+message Quaternion {
+  x: f32;
+  y: f32;
+  z: f32;
+  w: f32;
+}
+
+exception SyncError {
+  message: string;
+  code: i32;
+}
+
+// UDP interface - all methods are fire-and-forget by default
+[udp]
+interface GameSync {
+  // Unreliable, no reply (default for UDP)
+  void UpdatePosition(player_id: in u32, pos: in Vec3, rot: in Quaternion);
+  void FireWeapon(player_id: in u32, weapon_id: in u8, direction: in Vec3);
+  void PlaySound(sound_id: in u16, position: in Vec3, volume: in f32);
+  
+  // Reliable UDP - needs ACK, can have return value and throw
+  [reliable]
+  boolean ApplyDamage(target_id: in u32, amount: in i32) raises(SyncError);
+  
+  [reliable]
+  u64 SpawnEntity(entity_type: in u16, position: in Vec3);
+}

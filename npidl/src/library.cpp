@@ -1126,7 +1126,7 @@ class Parser : public IParser {
     return true;
   }
 
-  // attributes_decl ::= '[' (IDENTIFIER '=' (IDENTIFIER | NUMBER))? ']' attributes_decl?
+  // attributes_decl ::= '[' (IDENTIFIER ('=' (IDENTIFIER | NUMBER))?)? ']' attributes_decl?
   bool attributes_decl(boost::container::small_vector<std::pair<std::string, std::string>, 2>& attr) {
     if (peek() != '[') return false;
     flush();
@@ -1144,15 +1144,24 @@ class Parser : public IParser {
 
       if (auto attribute = peek(); attribute == TokenId::Identifier) {
         pg.flush();
-        match('=');
-        Token value = peek();
-        if (!(value == TokenId::Identifier || value == TokenId::Number)) {
-          throw_error("Expected identifier or number");
+        
+        // Check if there's an '=' for value, or just a flag attribute
+        PeekGuard pg2(*this);
+        if (peek() == '=') {
+          pg2.flush();
+          Token value = peek();
+          if (!(value == TokenId::Identifier || value == TokenId::Number)) {
+            throw_error("Expected identifier or number");
+          }
+          flush();
+          match(']');
+          attr.emplace_back(attribute.name, value.name);
+        } else {
+          // Boolean flag attribute (no value means "1")
+          match(']');
+          attr.emplace_back(attribute.name, "1");
         }
-        flush();
-        match(']');
-
-        attr.emplace_back(attribute.name, value.name);
+        
         goto attributes_decl_next;
       }
     }
@@ -1179,6 +1188,8 @@ class Parser : public IParser {
     for (const auto& a : attr) {
       if (a.first == "trusted")
         ifs->trusted = (a.second == "1");
+      else if (a.first == "udp")
+        ifs->is_udp = (a.second.empty() || a.second == "1");
       else
         throw_error("Unknown attribute: " + a.first + " for interface " + ifs->name);
       // other attributes...
@@ -1213,7 +1224,30 @@ class Parser : public IParser {
     AstFunctionDecl* f;
     for (;;) {
       if (check(&Parser::one, TokenId::BracketClose)) break;
+      
+      // Check for function-level attributes like [reliable]
+      attributes_t fn_attr;
+      check(&Parser::attributes_decl, std::ref(fn_attr));
+      
       if (check(&Parser::function_decl, std::ref(f))) {
+        // Apply function-level attributes
+        for (const auto& a : fn_attr) {
+          if (a.first == "reliable")
+            f->is_reliable = (a.second.empty() || a.second == "1");
+          else
+            throw_error("Unknown attribute: " + a.first + " for function " + f->name);
+        }
+        
+        // UDP interface validation
+        if (ifs->is_udp) {
+          if (!f->is_void() && !f->is_reliable) {
+            throw_error("UDP function '" + f->name + "' must return void (fire-and-forget) unless marked [reliable]");
+          }
+          if (f->ex && !f->is_reliable) {
+            throw_error("UDP function '" + f->name + "' cannot throw exceptions unless marked [reliable]");
+          }
+        }
+        
         ifs->fns.emplace_back(f);
         continue;
       }

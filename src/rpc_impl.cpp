@@ -100,6 +100,25 @@ NPRPC_API void RpcImpl::call(
   get_session(endpoint)->send_receive(buffer, timeout_ms);
 }
 
+NPRPC_API void RpcImpl::send_udp(
+  const EndPoint& endpoint, flat_buffer&& buffer)
+{
+  // TODO: Implement proper UDP transport
+  // For now, we'll use the existing session mechanism but without waiting for reply
+  // This is a placeholder until UdpConnection is implemented
+  
+  if (endpoint.type() == EndPointType::Udp) {
+    // Future: use dedicated UDP socket
+    // get_udp_connection(endpoint)->send(std::move(buffer));
+    throw ExceptionCommFailure("UDP transport not yet implemented");
+  }
+  
+  // Fallback: use existing transport but fire-and-forget style
+  // This allows testing with TCP/SharedMemory until UDP is ready
+  get_session(endpoint)->send_receive_async(
+    std::move(buffer), std::nullopt, 0);
+}
+
 NPRPC_API void RpcImpl::call_async(
   const EndPoint&                                    endpoint,
   flat_buffer&&                                      buffer,

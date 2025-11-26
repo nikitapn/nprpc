@@ -172,6 +172,17 @@ class RpcImpl : public Rpc
     uint32_t                                           timeout_ms = 2500);
 
   /**
+   * @brief Send UDP datagram (fire-and-forget, no reply expected)
+   * 
+   * Used for unreliable UDP transport where no acknowledgment is needed.
+   * The buffer is sent and immediately discarded.
+   * 
+   * @param endpoint Target UDP endpoint
+   * @param buffer Message buffer to send (moved)
+   */
+  NPRPC_API void send_udp(const EndPoint& endpoint, flat_buffer&& buffer);
+
+  /**
    * @brief Check if endpoint uses shared memory transport
    */
   static bool is_shared_memory(const EndPoint& endpoint) noexcept {

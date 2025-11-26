@@ -312,6 +312,7 @@ struct AstInterfaceDecl : AstTypeDecl, AstNodeWithPosition {
   std::vector<AstFunctionDecl*> fns;
   std::vector<AstInterfaceDecl*> plist;
   bool trusted = true;
+  bool is_udp = false;  // [udp] attribute - all methods are fire-and-forget by default
 
   AstInterfaceDecl() {
     id = FieldType::Interface;
@@ -488,6 +489,7 @@ struct AstFunctionDecl : AstNodeWithPosition {
   AstStructDecl* ex = nullptr;
   std::vector<AstFunctionArgument*> args, in_args, out_args;
   bool is_async;
+  bool is_reliable = false;  // [reliable] attribute for UDP methods that need ACK
 
   bool is_void() const noexcept { return ret_value->id == FieldType::Void; }
 };
