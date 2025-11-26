@@ -103,6 +103,8 @@ add_library(nprpc
   src/client_socket_connection.cpp
   src/session_context.cpp
   src/session.cpp
+  src/udp_connection.cpp
+  src/udp_listener.cpp
   src/uuid.cpp
   src/helper.hpp
   src/helper.cpp
@@ -124,6 +126,8 @@ add_library(nprpc
   include/nprpc/impl/async_connect.hpp
   include/nprpc/impl/nprpc_impl.hpp
   include/nprpc/impl/session.hpp
+  include/nprpc/impl/udp_connection.hpp
+  include/nprpc/impl/udp_listener.hpp
   include/nprpc/impl/uuid.hpp
   include/nprpc/impl/websocket_session.hpp
   include/nprpc/serialization/iarchive.h

@@ -1,5 +1,6 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/shared_memory_connection.hpp>
+#include <nprpc/impl/udp_connection.hpp>
 #include <nprpc_nameserver.hpp>
 
 #include <boost/uuid/uuid.hpp>
@@ -103,18 +104,15 @@ NPRPC_API void RpcImpl::call(
 NPRPC_API void RpcImpl::send_udp(
   const EndPoint& endpoint, flat_buffer&& buffer)
 {
-  // TODO: Implement proper UDP transport
-  // For now, we'll use the existing session mechanism but without waiting for reply
-  // This is a placeholder until UdpConnection is implemented
-  
   if (endpoint.type() == EndPointType::Udp) {
-    // Future: use dedicated UDP socket
-    // get_udp_connection(endpoint)->send(std::move(buffer));
-    throw ExceptionCommFailure("UDP transport not yet implemented");
+    // Use dedicated UDP socket for fire-and-forget
+    auto udp_conn = get_udp_connection(ioc_, std::string(endpoint.hostname()), endpoint.port());
+    udp_conn->send(std::move(buffer));
+    return;
   }
   
   // Fallback: use existing transport but fire-and-forget style
-  // This allows testing with TCP/SharedMemory until UDP is ready
+  // This allows UDP-style interfaces to work over TCP/SharedMemory for testing
   get_session(endpoint)->send_receive_async(
     std::move(buffer), std::nullopt, 0);
 }
