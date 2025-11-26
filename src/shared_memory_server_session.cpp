@@ -51,6 +51,7 @@ public:
     void on_message_received(std::vector<char>&& data) {
         try {
             // Move data into rx_buffer (zero-copy)
+            // TODO: Optimize to avoid copy with flat_buffer view mode
             rx_buffer_().consume(rx_buffer_().size());
             auto mb = rx_buffer_().prepare(data.size());
             std::memcpy(mb.data(), data.data(), data.size());
