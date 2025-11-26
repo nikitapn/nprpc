@@ -401,17 +401,16 @@ NPRPC includes comprehensive benchmarks comparing against gRPC and Cap'n Proto.
 #### Large Data Transfer (10 MB payload)
 | Framework | Time | Throughput |
 |-----------|------|------------|
-| **NPRPC SharedMemory** | **17.0 ms** | **2.72 GiB/s** |
-| **NPRPC TCP** | 24.6 ms | 1.87 GiB/s |
-| **NPRPC WebSocket** | 44.6 ms | 2.32 GiB/s |
-| gRPC | ERROR | - |
-| Cap'n Proto | 29.2 ms | 1.14 GiB/s |
+| gRPC | 14.2 ms | 2.22 GiB/s |
+| **NPRPC SharedMemory** | 17.5 ms | 2.67 GiB/s |
+| Cap'n Proto | 22.8 ms | 1.06 GiB/s |
+| **NPRPC TCP** | 27.4 ms | 1.80 GiB/s |
+| **NPRPC WebSocket** | 46.6 ms | 2.00 GiB/s |
 
 **Key Takeaways:**
 - NPRPC SharedMemory with zero-copy is **8x faster** than TCP for large payloads
 - NPRPC is **2-4x faster** than gRPC for empty calls
 - NPRPC SharedMemory achieves **4.78 GiB/s** throughput for 1MB payloads
-- gRPC fails on 10MB payloads, NPRPC handles them with ease
 
 ### Running Benchmarks
 
