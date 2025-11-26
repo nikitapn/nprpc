@@ -171,6 +171,29 @@ class RpcImpl : public Rpc
                                      flat_buffer&)>>&& completion_handler,
     uint32_t                                           timeout_ms = 2500);
 
+  /**
+   * @brief Check if endpoint uses shared memory transport
+   */
+  static bool is_shared_memory(const EndPoint& endpoint) noexcept {
+    return endpoint.type() == EndPointType::SharedMemory;
+  }
+  
+  /**
+   * @brief Prepare a zero-copy buffer for shared memory call
+   * 
+   * If endpoint is shared memory, returns a buffer in view mode pointing
+   * directly into the send ring buffer. Otherwise returns false and
+   * buffer remains unchanged (caller should use normal heap buffer).
+   * 
+   * @param endpoint Target endpoint
+   * @param buffer Buffer to set up (will be set to view mode if shared memory)
+   * @param max_size Maximum message size to reserve
+   * @return true if buffer was set up for zero-copy, false otherwise
+   */
+  NPRPC_API bool prepare_zero_copy_buffer(const EndPoint& endpoint,
+                                          flat_buffer& buffer,
+                                          size_t max_size);
+
   NPRPC_API std::optional<ObjectGuard> get_object(poa_idx_t poa_idx, oid_t oid);
 
   NPRPC_API SessionContext* get_object_session_context(Object* obj) override;

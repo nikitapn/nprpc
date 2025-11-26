@@ -31,6 +31,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
         flat_buffer& buf;
         SharedMemoryConnection& this_;
         uint32_t timeout_ms;
+        LockFreeRingBuffer::WriteReservation reservation;  // For zero-copy write
         
         std::mutex mtx;
         std::condition_variable cv;
@@ -50,13 +51,19 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
                 return;
             }
             
-            // Send data through shared memory channel
-            if (!this_.channel_->send(buf.data().data(), buf.size())) {
-                on_failed(boost::system::error_code(
-                    boost::asio::error::no_buffer_space,
-                    boost::system::system_category()));
-                this_.pop_and_execute_next_task();
-                return;
+            // Check if this is a zero-copy write (buffer in view mode with active reservation)
+            if (buf.is_view_mode() && reservation.valid) {
+                // Zero-copy path: data is already in ring buffer, just commit
+                this_.channel_->commit_write(reservation, buf.size());
+            } else {
+                // Normal path: copy data to ring buffer
+                if (!this_.channel_->send(buf.data().data(), buf.size())) {
+                    on_failed(boost::system::error_code(
+                        boost::asio::error::no_buffer_space,
+                        boost::system::system_category()));
+                    this_.pop_and_execute_next_task();
+                    return;
+                }
             }
         }
 
@@ -86,16 +93,20 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
 
         flat_buffer& buffer() noexcept override { return buf; }
 
-        work_impl(flat_buffer& _buf, SharedMemoryConnection& _this_, uint32_t _timeout_ms)
+        work_impl(flat_buffer& _buf, SharedMemoryConnection& _this_, uint32_t _timeout_ms,
+                  LockFreeRingBuffer::WriteReservation _reservation)
             : buf(_buf)
             , this_(_this_)
             , timeout_ms(_timeout_ms)
+            , reservation(_reservation)
         {
         }
     };
 
     auto post_work_and_wait = [&]() -> boost::system::error_code {
-        auto w = std::make_unique<work_impl>(buffer, *this, timeout_ms);
+        // Transfer reservation from connection to work item
+        auto reservation = std::exchange(active_reservation_, {});
+        auto w = std::make_unique<work_impl>(buffer, *this, timeout_ms, reservation);
         auto* w_ptr = w.get();
         add_work(std::move(w));
         return w_ptr->wait();
@@ -239,6 +250,23 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint, boost::
 
 SharedMemoryConnection::~SharedMemoryConnection() {
     close();
+}
+
+bool SharedMemoryConnection::prepare_write_buffer(flat_buffer& buffer, size_t max_size) {
+    if (!channel_) return false;
+    
+    auto reservation = channel_->reserve_write(max_size);
+    if (!reservation) {
+        return false;  // Buffer full
+    }
+    
+    // Store reservation for later commit
+    active_reservation_ = reservation;
+    
+    // Set buffer to view mode pointing into the ring buffer
+    buffer.set_view(reinterpret_cast<char*>(reservation.data), 0, reservation.max_size);
+    
+    return true;
 }
 
 } // namespace nprpc::impl

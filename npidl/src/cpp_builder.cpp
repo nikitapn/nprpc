@@ -1392,12 +1392,15 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
     const auto fixed_size = get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
     const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
 
+    // Try zero-copy buffer for shared memory transport
     oc <<
+      "  if (!::nprpc::impl::g_orb->prepare_zero_copy_buffer(this->get_endpoint(), buf, " << capacity << ")) {\n"
+      "    buf.prepare(" << capacity << ");\n"
+      "  }\n"
       "  {\n"
-      "    auto mb = buf.prepare(" << capacity << ");\n"
       "    buf.commit(" << fixed_size << ");\n"
-      "    static_cast<::nprpc::impl::Header*>(mb.data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;\n"
-      "    static_cast<::nprpc::impl::Header*>(mb.data())->msg_type = ::nprpc::impl::MessageType::Request;\n"
+      "    static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;\n"
+      "    static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type = ::nprpc::impl::MessageType::Request;\n"
       "  }\n"
       "  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));\n"
       "  __ch.object_id() = this->object_id();\n"

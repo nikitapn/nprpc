@@ -89,11 +89,54 @@ public:
     size_t read_with_timeout(void* buffer, size_t buffer_size, 
                              std::chrono::milliseconds timeout);
     
+    //--------------------------------------------------------------------------
+    // Zero-copy API for direct buffer access
+    //--------------------------------------------------------------------------
+    
+    struct WriteReservation {
+        uint8_t* data;      // Pointer to write data (after size header)
+        size_t max_size;    // Maximum bytes that can be written
+        size_t write_idx;   // Internal: position where size header was written
+        bool valid;         // true if reservation succeeded
+        
+        explicit operator bool() const { return valid; }
+    };
+    
+    struct ReadView {
+        const uint8_t* data;  // Pointer to message data (after size header)
+        size_t size;          // Message size in bytes
+        size_t read_idx;      // Internal: next read position after this message
+        bool valid;           // true if read succeeded
+        
+        explicit operator bool() const { return valid; }
+    };
+    
+    // Reserve space for writing a message (zero-copy write)
+    // Call commit_write() after writing to complete the operation
+    // @param min_size Minimum size you need (will fail if not available)
+    // @return WriteReservation with pointer and max_size (full available space), or invalid if no space
+    WriteReservation try_reserve_write(size_t min_size);
+    
+    // Commit a reserved write with the actual size written
+    // Must be called after try_reserve_write() with the actual bytes written
+    void commit_write(const WriteReservation& reservation, size_t actual_size);
+    
+    // Get a read view into the ring buffer (zero-copy read)
+    // Call commit_read() after processing to advance read pointer
+    // @return ReadView with data pointer, or invalid if empty
+    ReadView try_read_view();
+    
+    // Commit a read, advancing the read pointer
+    void commit_read(const ReadView& view);
+    
     // Statistics
     size_t buffer_size() const { return header_->buffer_size; }
     size_t available_bytes() const;
     bool is_empty() const;
     bool is_full(size_t message_size) const;
+    
+    // Access to header for synchronization (used by SharedMemoryChannel)
+    RingBufferHeader* header() { return header_; }
     
 private:
     LockFreeRingBuffer(const std::string& name,

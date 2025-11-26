@@ -111,6 +111,28 @@ NPRPC_API void RpcImpl::call_async(
     std::move(buffer), std::move(completion_handler), timeout_ms);
 }
 
+NPRPC_API bool RpcImpl::prepare_zero_copy_buffer(
+  const EndPoint& endpoint, flat_buffer& buffer, size_t max_size)
+{
+  if (!is_shared_memory(endpoint)) {
+    return false;
+  }
+  
+  try {
+    auto session = get_session(endpoint);
+    auto* shm_conn = dynamic_cast<SharedMemoryConnection*>(session.get());
+    if (!shm_conn) {
+      return false;
+    }
+    
+    return shm_conn->prepare_write_buffer(buffer, max_size);
+  } catch (const std::exception& e) {
+    // Connection failed - fall back to normal buffer
+    // The actual error will be thrown when call() is made
+    return false;
+  }
+}
+
 NPRPC_API std::optional<ObjectGuard> RpcImpl::get_object(
   poa_idx_t poa_idx, oid_t object_id)
 {

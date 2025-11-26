@@ -86,9 +86,62 @@ bool SharedMemoryChannel::send(const void* data, uint32_t size) {
     }
 }
 
+LockFreeRingBuffer::WriteReservation SharedMemoryChannel::reserve_write(size_t max_size) {
+    if (!send_ring_) {
+        return LockFreeRingBuffer::WriteReservation{nullptr, 0, 0, false};
+    }
+    return send_ring_->try_reserve_write(max_size);
+}
+
+void SharedMemoryChannel::commit_write(
+    const LockFreeRingBuffer::WriteReservation& reservation, 
+    size_t actual_size) {
+    if (send_ring_) {
+        send_ring_->commit_write(reservation, actual_size);
+    }
+}
+
+void SharedMemoryChannel::commit_read(const LockFreeRingBuffer::ReadView& view) {
+    if (recv_ring_) {
+        recv_ring_->commit_read(view);
+    }
+}
+
 void SharedMemoryChannel::read_loop() {
     while (running_) {
         try {
+            // Try zero-copy read first if callback is set
+            if (on_data_received_view) {
+                // Wait for data with timeout
+                {
+                    boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex> 
+                        lock(recv_ring_->header()->mutex);
+                    
+                    auto deadline = boost::posix_time::microsec_clock::universal_time() + 
+                                    boost::posix_time::milliseconds(100);
+                    
+                    while (recv_ring_->is_empty() && running_) {
+                        auto now = boost::posix_time::microsec_clock::universal_time();
+                        if (now >= deadline) {
+                            break; // Timeout, check running_ and try again
+                        }
+                        recv_ring_->header()->data_available.timed_wait(lock, deadline);
+                    }
+                }
+                
+                // Try to get a view into the ring buffer
+                auto view = recv_ring_->try_read_view();
+                if (view) {
+                    // Zero-copy path: provide view directly to callback
+                    // Callback will call commit_read() when done
+                    boost::asio::post(ioc_, [this, view]() {
+                        on_data_received_view(view);
+                    });
+                }
+                continue;
+            }
+            
+            // Fallback to copy-based read
             // Blocking read with timeout (allows checking running_ flag)
             size_t bytes_read = recv_ring_->read_with_timeout(
                 recv_buffer_.data(), 

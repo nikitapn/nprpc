@@ -398,4 +398,124 @@ bool LockFreeRingBuffer::is_full(size_t message_size) const {
     return total_bytes + 1 > available_bytes();
 }
 
+//------------------------------------------------------------------------------
+// Zero-copy API implementations
+//------------------------------------------------------------------------------
+
+LockFreeRingBuffer::WriteReservation LockFreeRingBuffer::try_reserve_write(size_t min_size) {
+    WriteReservation result{nullptr, 0, 0, false};
+    
+    // Calculate available space for data (excluding size header overhead)
+    size_t avail = available_bytes();
+    if (avail <= sizeof(uint32_t) + 1) {
+        return result; // Not enough space for even a minimal message
+    }
+    
+    // Maximum data we can write (reserve space for size header + 1 byte to distinguish full/empty)
+    size_t max_data_size = avail - sizeof(uint32_t) - 1;
+    
+    // Clamp to MAX_MESSAGE_SIZE
+    max_data_size = std::min(max_data_size, static_cast<size_t>(header_->max_message_size));
+    
+    // Check if we have at least the minimum requested
+    if (max_data_size < min_size) {
+        return result; // Buffer too full for the minimum requested size
+    }
+
+    // Load current write index
+    size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
+
+    // Write placeholder size header (will be updated in commit_write)
+    uint32_t placeholder = 0;
+    std::memcpy(data_region_ + write_idx, &placeholder, sizeof(uint32_t));
+    
+    // Store the position where we wrote the size header
+    result.write_idx = write_idx;
+    
+    // Advance past size header
+    write_idx = (write_idx + sizeof(uint32_t)) % header_->buffer_size;
+
+    // Return pointer to data area (with mirrored mapping, this is safe for any write)
+    result.data = data_region_ + write_idx;
+    // Return the FULL available space, not just what was requested!
+    result.max_size = max_data_size;
+    result.valid = true;
+
+    return result;
+}
+
+void LockFreeRingBuffer::commit_write(const WriteReservation& reservation, size_t actual_size) {
+    if (!reservation.valid) {
+        std::cerr << "LockFreeRingBuffer::commit_write: invalid reservation" << std::endl;
+        return;
+    }
+    
+    if (actual_size > reservation.max_size) {
+        std::cerr << "LockFreeRingBuffer::commit_write: actual_size " << actual_size 
+                  << " exceeds reserved " << reservation.max_size << std::endl;
+        return;
+    }
+
+    // Write actual size to the header position
+    uint32_t size32 = static_cast<uint32_t>(actual_size);
+    std::memcpy(data_region_ + reservation.write_idx, &size32, sizeof(uint32_t));
+
+    // Calculate new write index
+    size_t data_start = (reservation.write_idx + sizeof(uint32_t)) % header_->buffer_size;
+    size_t new_write_idx = (data_start + actual_size) % header_->buffer_size;
+
+    // Update write index with release semantics
+    header_->write_idx.store(new_write_idx, std::memory_order_release);
+
+    // Notify waiting readers
+    {
+        boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex> 
+            lock(header_->mutex);
+        header_->data_available.notify_one();
+    }
+}
+
+LockFreeRingBuffer::ReadView LockFreeRingBuffer::try_read_view() {
+    ReadView result{nullptr, 0, 0, false};
+
+    // Load indices with acquire semantics
+    size_t read_idx = header_->read_idx.load(std::memory_order_acquire);
+    size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
+
+    // Check if buffer is empty
+    if (read_idx == write_idx) {
+        return result; // Empty
+    }
+
+    // Read size header - with mirrored mapping, no wrap-around needed!
+    uint32_t message_size = 0;
+    std::memcpy(&message_size, data_region_ + read_idx, sizeof(uint32_t));
+    size_t data_start = (read_idx + sizeof(uint32_t)) % header_->buffer_size;
+
+    // Validate size
+    if (message_size > header_->max_message_size) {
+        std::cerr << "Corrupt message size in read_view: " << message_size << std::endl;
+        return result;
+    }
+
+    // Return pointer directly into the ring buffer
+    // With mirrored mapping, this is always a valid contiguous view
+    result.data = data_region_ + data_start;
+    result.size = message_size;
+    result.read_idx = (data_start + message_size) % header_->buffer_size;
+    result.valid = true;
+
+    return result;
+}
+
+void LockFreeRingBuffer::commit_read(const ReadView& view) {
+    if (!view.valid) {
+        std::cerr << "LockFreeRingBuffer::commit_read: invalid view" << std::endl;
+        return;
+    }
+
+    // Update read index with release semantics
+    header_->read_idx.store(view.read_idx, std::memory_order_release);
+}
+
 } // namespace nprpc::impl

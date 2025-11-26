@@ -82,12 +82,50 @@ public:
      */
     bool send(const void* data, uint32_t size);
 
+    //--------------------------------------------------------------------------
+    // Zero-copy API for direct ring buffer access
+    //--------------------------------------------------------------------------
+    
+    /**
+     * @brief Reserve space in send ring buffer for zero-copy write
+     * 
+     * @param max_size Maximum bytes to write
+     * @return Reservation with data pointer, or invalid if buffer full
+     */
+    LockFreeRingBuffer::WriteReservation reserve_write(size_t max_size);
+    
+    /**
+     * @brief Commit a zero-copy write with actual bytes written
+     */
+    void commit_write(const LockFreeRingBuffer::WriteReservation& reservation, size_t actual_size);
+    
+    /**
+     * @brief Get max message size for reservation
+     */
+    static constexpr size_t max_message_size() { return MAX_MESSAGE_SIZE; }
+
     /**
      * @brief Callback invoked when data is received
      * 
      * Called on io_context thread. The vector is moved to avoid copying.
      */
     std::function<void(std::vector<char>&&)> on_data_received;
+    
+    /**
+     * @brief Zero-copy callback for received data
+     * 
+     * Called with a view directly into the ring buffer.
+     * The view is valid until on_data_received_done() is called.
+     * If set, this takes precedence over on_data_received.
+     */
+    std::function<void(const LockFreeRingBuffer::ReadView&)> on_data_received_view;
+    
+    /**
+     * @brief Signal that zero-copy read is complete
+     * 
+     * Must be called after processing data from on_data_received_view callback.
+     */
+    void commit_read(const LockFreeRingBuffer::ReadView& view);
 
     /**
      * @brief Generate a unique channel ID

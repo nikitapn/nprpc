@@ -25,6 +25,9 @@ class SharedMemoryConnection
     // AdaptiveSpinMutex mutex_;
     std::mutex mutex_;
     uint32_t pending_requests_ = 0;
+    
+    // For zero-copy writes: stores the active reservation
+    LockFreeRingBuffer::WriteReservation active_reservation_;
 
 protected:
     virtual void timeout_action() final;
@@ -42,6 +45,23 @@ public:
         flat_buffer&& buffer,
         std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& completion_handler,
         uint32_t timeout_ms) override;
+
+    //--------------------------------------------------------------------------
+    // Zero-copy API
+    //--------------------------------------------------------------------------
+    
+    /**
+     * @brief Reserve space in send ring buffer for zero-copy write
+     * 
+     * @param max_size Maximum message size
+     * @return true if reservation succeeded, false if buffer full
+     */
+    bool prepare_write_buffer(flat_buffer& buffer, size_t max_size);
+    
+    /**
+     * @brief Get the underlying channel for advanced operations
+     */
+    SharedMemoryChannel* channel() { return channel_.get(); }
 
     SharedMemoryConnection(const EndPoint& endpoint, boost::asio::io_context& ioc);
     ~SharedMemoryConnection();
