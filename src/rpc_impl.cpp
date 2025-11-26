@@ -29,6 +29,7 @@ Poa* RpcImpl::create_poa_impl(uint32_t objects_max, PoaPolicy::Lifespan lifespan
 extern void init_socket(boost::asio::io_context& ioc);
 extern void init_http_server(boost::asio::io_context& ioc);
 extern void init_shared_memory_listener(boost::asio::io_context& ioc);
+extern void init_udp_listener(boost::asio::io_context& ioc);
 
 NPRPC_API Config   g_cfg;
 NPRPC_API RpcImpl* g_orb;
@@ -227,6 +228,7 @@ RpcImpl::RpcImpl(
   init_socket(ioc_);
   init_http_server(ioc_);
   init_shared_memory_listener(ioc_);
+  init_udp_listener(ioc_);
 }
 
 void ReferenceListImpl::add_ref(ObjectServant* obj)
@@ -291,9 +293,9 @@ NPRPC_API Object* create_object_from_flat(
   } else {
     if (!obj->select_endpoint(remote_endpoint)) {
       // Something is malformed, we cannot select an endpoint
-      // maybe I need to wrap `dispatch` in a try-catch block?
+      // maybe I need to wrap `dispatch` in a try-catch block? I think I've already done it in `handle_request`
       throw nprpc::Exception(
-        "Cannot select endpoint for object: " + std::string(oid.class_id));
+        "Cannot select endpoint for object: " + std::string(oid.class_id) + ", available endpoints: " + obj->urls());
     }
   }
 
@@ -367,6 +369,14 @@ ObjectId PoaImpl::activate_object(
 
   if (activation_flags & ObjectActivationFlags::ALLOW_SHARED_MEMORY) {
     oid.urls += (std::string(mem_prefix) + g_server_listener_uuid) + ';';
+  }
+
+  if (activation_flags & ObjectActivationFlags::ALLOW_UDP) {
+    if (g_cfg.listen_udp_port == 0) {
+      throw std::runtime_error("UDP port not configured. Use set_listen_udp_port()");
+    }
+    oid.urls += (std::string(udp_prefix) + default_url + ":" +
+                 std::to_string(g_cfg.listen_udp_port)) + ';';
   }
 
   if (pl_lifespan_ == PoaPolicy::Lifespan::Transient) {

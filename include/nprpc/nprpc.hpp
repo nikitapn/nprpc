@@ -119,6 +119,8 @@ enum Enum : uint32_t {
   ALLOW_SECURED_HTTP       = 1 << 5,
   // Allow shared memory connections to this object
   ALLOW_SHARED_MEMORY      = 1 << 6,
+  // Allow udp connections to this object
+  ALLOW_UDP                = 1 << 7,
   // Allow all connection types
   ALLOW_ALL =
     ALLOW_TCP | ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET | ALLOW_HTTP | ALLOW_SECURED_HTTP | ALLOW_SHARED_MEMORY
@@ -294,6 +296,7 @@ struct Config {
   std::string                listen_address    = "0.0.0.0";
   uint16_t                   listen_tcp_port   = 0;
   uint16_t                   listen_http_port  = 0;
+  uint16_t                   listen_udp_port   = 0;
   std::string                http_root_dir;
   std::vector<std::string>   spa_links;
   ssl::context               ssl_context_server{ssl::context::tlsv13_server};
@@ -339,6 +342,12 @@ class RpcBuilder {
   RpcBuilder& set_listen_http_port(uint16_t port) noexcept
   {
     cfg_.listen_http_port = port;
+    return *this;
+  }
+
+  RpcBuilder& set_listen_udp_port(uint16_t port) noexcept
+  {
+    cfg_.listen_udp_port = port;
     return *this;
   }
 

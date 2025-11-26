@@ -284,9 +284,15 @@ NPRPC_API bool Object::select_endpoint(std::optional<EndPoint> remote_endpoint) 
         return pos;
       }
 
+      // Check for UDP endpoint
+      if ((pos = urls.find(udp_prefix)) != std::string::npos) {
+        try_replace_ip(pos, udp_prefix);
+        return pos;
+      }
+
       if ((pos = urls.find(tcp_prefix)) != std::string::npos)
         try_replace_ip(pos, tcp_prefix);
-    
+
       if ((pos2 = urls.find(ws_prefix)) != std::string::npos)
         try_replace_ip(pos2, ws_prefix);
 
@@ -296,11 +302,11 @@ NPRPC_API bool Object::select_endpoint(std::optional<EndPoint> remote_endpoint) 
       if (pos2 != std::string::npos)
         return pos2;
 
-      if ((pos = urls.find(wss_prefix)) == std::string::npos)
-        throw std::runtime_error("No valid endpoint found for object " + class_id() +
-                                " with urls: " + urls);
+      if ((pos = urls.find(wss_prefix)) != std::string::npos)
+        return pos;
 
-      return pos;
+      throw std::runtime_error("No valid endpoint found for object " + class_id() +
+                                " with urls: " + urls);
     } ();
 
     auto end = urls.find(';', start);

@@ -132,13 +132,18 @@ void UdpListener::handle_datagram(
     auto* call_header = reinterpret_cast<const flat::CallHeader*>(
         recv_buffer_.data() + sizeof(Header));
     
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+        std::cout << "[UDP Listener] Looking for object: poa=" << call_header->poa_idx
+                  << " oid=" << call_header->object_id 
+                  << " iface=" << (int)call_header->interface_idx
+                  << " fn=" << (int)call_header->function_idx << std::endl;
+    }
+    
     // Look up the object
     auto obj_guard = g_orb->get_object(call_header->poa_idx, call_header->object_id);
     if (!obj_guard.has_value()) {
-        if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-            std::cerr << "[UDP Listener] Object not found: poa=" << call_header->poa_idx
-                      << " oid=" << call_header->object_id << std::endl;
-        }
+        std::cerr << "[UDP Listener] Object not found: poa=" << call_header->poa_idx
+                  << " oid=" << call_header->object_id << std::endl;
         return;
     }
     
@@ -223,6 +228,13 @@ NPRPC_API std::shared_ptr<UdpListener> start_udp_listener(
     }
     
     return g_udp_listener;
+}
+
+void init_udp_listener(boost::asio::io_context& ioc) {
+    if (g_cfg.listen_udp_port == 0) {
+        return; // UDP not configured
+    }
+    start_udp_listener(ioc, g_cfg.listen_udp_port);
 }
 
 } // namespace nprpc::impl

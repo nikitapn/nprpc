@@ -52,10 +52,8 @@ public:
         } else if (nameserver_pid == 0) {
             // Child process - run the nameserver
             // Try to find npnameserver in the build directory
-            execl("./build/linux/bin/npnameserver", "npnameserver", nullptr);
-            execl("../build/linux/bin/npnameserver", "npnameserver", nullptr);
-            execl("../../build/linux/bin/npnameserver", "npnameserver", nullptr);
-            execl("/home/nikita/projects/npsystem/build/linux/bin/npnameserver", "npnameserver", nullptr);
+            execl("./build/npnameserver", "npnameserver", nullptr);
+            execl("/home/nikita/nprpc/build/npnameserver", "npnameserver", nullptr);
 
             // If all fail, exit with error
             std::cerr << "Failed to execute npnameserver" << std::endl;
@@ -120,6 +118,7 @@ public:
                 .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
                 .set_listen_tcp_port(22222)
                 .set_listen_http_port(22223)
+                .set_listen_udp_port(22224)
                 .set_hostname("localhost")
                 .enable_ssl_server(
                     "/home/nikita/projects/npsystem/certs/server.crt",
@@ -167,6 +166,7 @@ inline
         const std::string& object_name = "nprpc_test_object"
     ) {
         auto nameserver = rpc->get_nameserver("127.0.0.1");
+
         auto oid = poa->activate_object(&servant, flags);
         nameserver->Bind(oid, object_name);
 

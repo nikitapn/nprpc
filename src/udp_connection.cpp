@@ -63,6 +63,11 @@ UdpConnection::~UdpConnection() {
 
 void UdpConnection::send(flat_buffer&& buffer) {
     // Fire-and-forget - no callback needed
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
+        auto data = buffer.cdata();
+        std::cout << "[UDP] send() called with " << data.size() << " bytes to "
+                  << remote_endpoint_.address().to_string() << ":" << remote_endpoint_.port() << std::endl;
+    }
     send_async(std::move(buffer), nullptr);
 }
 

@@ -12,6 +12,7 @@
 
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc_test.hpp>
+#include <test_udp.hpp>
 #include <nprpc_nameserver.hpp>
 
 #include <nprpc/impl/misc/thread_pool.hpp>
@@ -280,8 +281,167 @@ TEST_F(NprpcTest, TestBadInput) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
 }
 
+TEST_F(NprpcTest, TestUdpFireAndForget) {
+    // Test multiple fire-and-forget UDP calls
+    
+    class GameSyncImpl : public test_udp::IGameSync_Servant {
+    public:
+        std::atomic<int> update_count{0};
+        std::atomic<int> fire_count{0};
+        std::atomic<int> sound_count{0};
+        std::mutex mtx_;
+        std::condition_variable cv_;
+
+        void UpdatePosition(uint32_t player_id, test_udp::flat::Vec3_Direct pos, test_udp::flat::Quaternion_Direct rot) override {
+            update_count++;
+            cv_.notify_all();
+        }
+
+        void FireWeapon(uint32_t player_id, uint8_t weapon_id, test_udp::flat::Vec3_Direct direction) override {
+            fire_count++;
+            cv_.notify_all();
+        }
+
+        void PlaySound(uint16_t sound_id, test_udp::flat::Vec3_Direct position, float volume) override {
+            sound_count++;
+            cv_.notify_all();
+        }
+
+        bool ApplyDamage(uint32_t target_id, int32_t amount) override {
+            return true;
+        }
+
+        uint64_t SpawnEntity(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+            return 0;
+        }
+
+        bool wait_for_count(int expected_total, int timeout_ms = 2000) {
+            std::unique_lock<std::mutex> lock(mtx_);
+            return cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] {
+                return (update_count + fire_count + sound_count) >= expected_total;
+            });
+        }
+    } game_sync_servant;
+
+    try {
+        auto proxy_game = make_stuff_happen<test_udp::GameSync>(
+            game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP, "udp_game_sync_ff");
+
+        // Send multiple fire-and-forget calls rapidly
+        for (int i = 0; i < 10; i++) {
+            proxy_game->UpdatePosition(i, {1.0f * i, 2.0f * i, 3.0f * i}, {0.0f, 0.0f, 0.0f, 1.0f});
+        }
+        for (int i = 0; i < 5; i++) {
+            proxy_game->FireWeapon(i, i % 3, {1.0f, 0.0f, 0.0f});
+        }
+        for (int i = 0; i < 5; i++) {
+            proxy_game->PlaySound(i * 100, {0.0f, 0.0f, 0.0f}, 0.8f);
+        }
+
+        // Wait for all messages to be processed
+        EXPECT_TRUE(game_sync_servant.wait_for_count(20));
+        
+        EXPECT_EQ(game_sync_servant.update_count.load(), 10);
+        EXPECT_EQ(game_sync_servant.fire_count.load(), 5);
+        EXPECT_EQ(game_sync_servant.sound_count.load(), 5);
+
+    } catch (nprpc::Exception& ex) {
+        FAIL() << "Exception in TestUdpFireAndForget: " << ex.what();
+    }
+}
+
+TEST_F(NprpcTest, TestUdpAck) {
+    class ServerControlImpl : public nprpc::test::IServerControl_Servant {
+    public:
+        nprpc::ObjectPtr<nprpc::test::Ack> ack;
+
+        void Shutdown() override {
+            // noop for this test
+        }
+
+        void RegisterAckHandler(::nprpc::Object* handler) override {
+            auto obj = nprpc::narrow<nprpc::test::Ack>(handler);
+            if (!obj) {
+                FAIL() << "RegisterAckHandler: Invalid object type";
+            }
+            ack.reset(obj);
+        }
+    } server_control_servant; // Remote
+
+    class GameSyncImpl : public test_udp::IGameSync_Servant {
+        ServerControlImpl& ctl;
+    public:
+        GameSyncImpl(ServerControlImpl& server_control_servant)
+            : ctl(server_control_servant) {}
+
+        void UpdatePosition (uint32_t player_id, test_udp::flat::Vec3_Direct pos, test_udp::flat::Quaternion_Direct rot) override {
+            // Implementation of UpdatePosition
+            ctl.ack->Confirm({}, "UpdatePosition ACK");
+        }
+
+        void FireWeapon (uint32_t player_id, uint8_t weapon_id, test_udp::flat::Vec3_Direct direction) override {
+            // Implementation of FireWeapon
+        }
+
+        void PlaySound (uint16_t sound_id, test_udp::flat::Vec3_Direct position, float volume) override {
+            // Implementation of PlaySound
+        }
+
+        bool ApplyDamage (uint32_t target_id, int32_t amount) override {
+            // Implementation of ApplyDamage
+            return true; // Example return value
+        }
+
+        uint64_t SpawnEntity (uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+            // Implementation of SpawnEntity
+            return 0; // Example return value
+        }
+    } game_sync_servant(server_control_servant); // Remote
+
+    class TestUdpAckImpl : public nprpc::test::IAck_Servant {
+        std::mutex mtx_;
+        std::condition_variable cv_;
+        std::string last_msg_;
+    public:
+        void Confirm(::nprpc::flat::Span<char> what) override {
+            {
+                std::lock_guard<std::mutex> lock(mtx_);
+                last_msg_ = (std::string)what;
+            }
+            cv_.notify_all();
+        }
+
+        std::string wait_for_ack() {
+            constexpr auto max_timeout_ms = 5000;
+            std::unique_lock<std::mutex> lock(mtx_);
+            if (cv_.wait_for(lock, std::chrono::milliseconds(max_timeout_ms)) == std::cv_status::timeout) {
+                throw nprpc::Exception("Timeout waiting for ACK");
+            }
+            return last_msg_;
+        }
+    } ack_servant; // Local
+
+    try {
+        auto proxy_game = make_stuff_happen<test_udp::GameSync>(
+            game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP, "udp_game_sync");
+
+        auto proxy_server_control = make_stuff_happen<nprpc::test::ServerControl>(
+            server_control_servant, nprpc::ObjectActivationFlags::ALLOW_SHARED_MEMORY, "udp_server_control");
+
+        auto oid = poa->activate_object(&ack_servant, nprpc::ObjectActivationFlags::ALLOW_SHARED_MEMORY);
+        proxy_server_control->RegisterAckHandler(oid);
+
+        // Now invoke UpdatePosition which should trigger an ACK
+        proxy_game->UpdatePosition(1, {0.0f, 1.0f, 2.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+        auto ack_msg = ack_servant.wait_for_ack();
+        EXPECT_EQ(ack_msg, "UpdatePosition ACK");
+    } catch (nprpc::Exception& ex) {
+        FAIL() << "Exception in TestUdpAck: " << ex.what();
+    }
+}
 
 } // namespace nprpctest
+
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

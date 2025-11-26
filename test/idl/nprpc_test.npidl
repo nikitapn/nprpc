@@ -11,9 +11,18 @@ exception AssertionFailed {
 	message: string;
 }
 
+// Simple ACK, for testing UDP unreliable delivery
+interface Ack {
+	// Simple ACK method
+	// Made it async since it will be called io_context thread and we don't want to deadlock
+	async Confirm(what: in string);
+}
+
 interface ServerControl {
 	// All tests performed, safe to shutdown the server
 	void Shutdown();
+	// Register ACK handler object to receive ACKs from server
+	void RegisterAckHandler(handler: in /* Ack */ object);
 }
 
 [force_helpers=1]
