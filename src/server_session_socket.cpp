@@ -152,19 +152,32 @@ public:
 class Acceptor : public std::enable_shared_from_this<Acceptor> {
   net::io_context& ioc_;
   tcp::acceptor acceptor_;
+  bool running_ = true;
 public:
   void on_accept(const boost::system::error_code& ec, tcp::socket socket) {
     if (ec) {
-      fail(ec, "accept");
+      if (ec != boost::asio::error::operation_aborted) {
+        fail(ec, "accept");
+      }
+      return;
     }
+    if (!running_) return;
     std::make_shared<Session_Socket>(std::move(socket))->run();
     do_accept();
   }
 
   void do_accept() {
+    if (!running_) return;
     acceptor_.async_accept(net::make_strand(ioc_),
       boost::beast::bind_front_handler(&Acceptor::on_accept, shared_from_this())
     );
+  }
+
+  void stop() {
+    running_ = false;
+    boost::system::error_code ec;
+    acceptor_.cancel(ec);
+    acceptor_.close(ec);
   }
 
   Acceptor(net::io_context& ioc, unsigned short port)
@@ -174,12 +187,22 @@ public:
   }
 };
 
+static std::shared_ptr<Acceptor> g_tcp_acceptor;
+
 void init_socket(net::io_context& ioc) {
   if (g_cfg.listen_tcp_port == 0) {
     std::cout << "TCP listen port is not set, skipping socket server initialization." << std::endl;
     return;
   }
-  std::make_shared<Acceptor>(ioc, g_cfg.listen_tcp_port)->do_accept();
+  g_tcp_acceptor = std::make_shared<Acceptor>(ioc, g_cfg.listen_tcp_port);
+  g_tcp_acceptor->do_accept();
+}
+
+void stop_socket_listener() {
+  if (g_tcp_acceptor) {
+    g_tcp_acceptor->stop();
+    g_tcp_acceptor.reset();
+  }
 }
 
 } // namespace nprpc::impl

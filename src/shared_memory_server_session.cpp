@@ -28,6 +28,15 @@ public:
         // Server sessions don't have timeouts
     }
 
+    virtual void shutdown() override {
+        // Clear the callback to break the circular reference
+        // (callback captures shared_from_this())
+        if (channel_) {
+            channel_->on_data_received = nullptr;
+        }
+        Session::shutdown();
+    }
+
     virtual void send_receive(flat_buffer&, uint32_t) override {
         // Server sessions don't make outbound calls
         assert(false && "send_receive should not be called on server session");

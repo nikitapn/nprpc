@@ -59,6 +59,27 @@ SharedMemoryChannel::SharedMemoryChannel(
 SharedMemoryChannel::~SharedMemoryChannel() {
     running_ = false;
 
+    // Signal the condition variable multiple times to wake up the read thread
+    // This is needed because the thread might be blocked in timed_wait
+    // We notify multiple times to catch different timing windows
+    for (int i = 0; i < 3; ++i) {
+        if (recv_ring_) {
+            try {
+                recv_ring_->header()->data_available.notify_all();
+            } catch (...) {
+                // Ignore errors - shared memory might already be destroyed
+                break;
+            }
+        }
+        // Small delay to let the thread check running_ flag
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        
+        // Check if thread has already exited
+        if (!read_thread_ || !read_thread_->joinable()) {
+            break;
+        }
+    }
+
     if (read_thread_ && read_thread_->joinable()) {
         read_thread_->join();
     }

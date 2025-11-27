@@ -14,7 +14,8 @@ namespace nprpc::impl {
 UdpConnection::UdpConnection(
     boost::asio::io_context& ioc,
     const endpoint_type& remote_endpoint)
-    : socket_(ioc, boost::asio::ip::udp::v4())
+    : ioc_(ioc)
+    , socket_(ioc, boost::asio::ip::udp::v4())
     , remote_endpoint_(remote_endpoint)
 {
     // Set socket options for better performance
@@ -31,7 +32,8 @@ UdpConnection::UdpConnection(
     boost::asio::io_context& ioc,
     const std::string& host,
     uint16_t port)
-    : socket_(ioc, boost::asio::ip::udp::v4())
+    : ioc_(ioc)
+    , socket_(ioc, boost::asio::ip::udp::v4())
 {
     // Resolve hostname
     boost::asio::ip::udp::resolver resolver(ioc);
@@ -142,6 +144,15 @@ UdpConnection::endpoint_type UdpConnection::local_endpoint() const {
 }
 
 void UdpConnection::close() {
+    // Cancel all pending calls
+    for (auto& [id, pending] : pending_calls_) {
+        pending.timer->cancel();
+        if (pending.handler) {
+            flat_buffer empty_buf;
+            pending.handler(boost::asio::error::operation_aborted, empty_buf);
+        }
+    }
+    pending_calls_.clear();
     if (socket_.is_open()) {
         boost::system::error_code ec;
         socket_.close(ec);
@@ -156,6 +167,11 @@ namespace {
     std::string make_key(const std::string& host, uint16_t port) {
         return host + ":" + std::to_string(port);
     }
+}
+
+void clear_udp_connections() {
+    std::lock_guard<std::mutex> lock(udp_connections_mutex_);
+    udp_connections_.clear();
 }
 
 NPRPC_API std::shared_ptr<UdpConnection> get_udp_connection(

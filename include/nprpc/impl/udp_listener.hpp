@@ -104,4 +104,9 @@ NPRPC_API std::shared_ptr<UdpListener> start_udp_listener(
     boost::asio::io_context& ioc,
     uint16_t port);
 
+/**
+ * @brief Stop and release the global UDP listener
+ */
+void stop_udp_listener();
+
 } // namespace nprpc::impl

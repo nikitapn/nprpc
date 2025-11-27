@@ -53,7 +53,7 @@ public:
             // Child process - run the nameserver
             // Try to find npnameserver in the build directory
             execl("./build/npnameserver", "npnameserver", nullptr);
-            execl("/home/nikita/nprpc/build/npnameserver", "npnameserver", nullptr);
+            execl("/home/nikita/projects/nprpc/build/npnameserver", "npnameserver", nullptr);
 
             // If all fail, exit with error
             std::cerr << "Failed to execute npnameserver" << std::endl;
@@ -140,13 +140,25 @@ public:
     }
 
     void TearDown() GTEST_OVERRIDE {
-        thread_pool::get_instance().stop();
-        if (rpc) {
-            // thread_pool::get_instance().stop();
-            rpc->destroy();
-        } 
-        // Stop the nameserver
+        std::cout << "Tearing down test environment..." << std::endl;
+        // Stop the nameserver FIRST - before we destroy shared memory resources
+        // that the nameserver might be using
         nameserver_manager.stop_nameserver();
+        std::cout << "Nameserver stopped." << std::endl;
+        // Destroy rpc while io_context is still running
+        // This allows pending async operations to complete
+        if (rpc) {
+            rpc->destroy();
+            std::cout << "RPC destroyed." << std::endl;
+            rpc = nullptr;
+        }
+        // Now stop the io_context and wait for threads
+        std::cout << "About to stop io_context..." << std::endl;
+        thread_pool::get_instance().stop();
+        std::cout << "IO context stopped, about to wait..." << std::endl;
+        thread_pool::get_instance().wait();
+        std::cout << "Thread pool wait completed." << std::endl;
+        std::cout << "Test environment torn down." << std::endl;
     }
 };
 

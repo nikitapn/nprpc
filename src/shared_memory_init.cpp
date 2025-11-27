@@ -43,4 +43,11 @@ void init_shared_memory_listener(boost::asio::io_context& ioc) {
   std::cout << "Shared memory listener started successfully" << std::endl;
 }
 
+void stop_shared_memory_listener() {
+  if (g_shared_memory_listener) {
+    g_shared_memory_listener->stop();
+    g_shared_memory_listener.reset();
+  }
+}
+
 } // namespace nprpc::impl

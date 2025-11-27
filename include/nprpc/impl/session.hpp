@@ -14,8 +14,6 @@
 namespace nprpc::impl {
 
 class Session {
-public:
-  bool closed_ = false;
 protected:
   Buffers rx_buffer_;
   SessionContext ctx_;
@@ -24,8 +22,10 @@ protected:
   boost::asio::deadline_timer inactive_timer_;
   boost::posix_time::time_duration timeout_ = boost::posix_time::milliseconds(1000);
 
+  std::atomic<bool> closed_{false};
+
   void close();
-  bool is_closed() { return closed_; }
+  bool is_closed() { return closed_.load(); }
 
   virtual void timeout_action() = 0;
 public:
@@ -65,6 +65,13 @@ public:
   const EndPoint& remote_endpoint() const noexcept { return ctx_.remote_endpoint; }
   SessionContext& ctx() noexcept { return ctx_; }
   void handle_request();
+
+  virtual void shutdown() {
+    closed_.store(true);
+    boost::system::error_code ec;
+    timeout_timer_.cancel(ec);
+    inactive_timer_.cancel(ec);
+  }
 
   Session(boost::asio::any_io_executor executor)
     : timeout_timer_{executor}

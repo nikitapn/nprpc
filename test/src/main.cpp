@@ -355,9 +355,7 @@ TEST_F(NprpcTest, TestUdpAck) {
     public:
         nprpc::ObjectPtr<nprpc::test::Ack> ack;
 
-        void Shutdown() override {
-            // noop for this test
-        }
+        void Shutdown() override {}
 
         void RegisterAckHandler(::nprpc::Object* handler) override {
             auto obj = nprpc::narrow<nprpc::test::Ack>(handler);
@@ -412,7 +410,7 @@ TEST_F(NprpcTest, TestUdpAck) {
         }
 
         std::string wait_for_ack() {
-            constexpr auto max_timeout_ms = 5000;
+            constexpr auto max_timeout_ms = 1000;
             std::unique_lock<std::mutex> lock(mtx_);
             if (cv_.wait_for(lock, std::chrono::milliseconds(max_timeout_ms)) == std::cv_status::timeout) {
                 throw nprpc::Exception("Timeout waiting for ACK");
@@ -428,13 +426,20 @@ TEST_F(NprpcTest, TestUdpAck) {
         auto proxy_server_control = make_stuff_happen<nprpc::test::ServerControl>(
             server_control_servant, nprpc::ObjectActivationFlags::ALLOW_SHARED_MEMORY, "udp_server_control");
 
-        auto oid = poa->activate_object(&ack_servant, nprpc::ObjectActivationFlags::ALLOW_SHARED_MEMORY);
+        // Important: Do not use SHARED_MEMORY for the callback object, as the server and client both shares
+        // the same g_shared_memory_listener object, which can lead to conflicts and unexpected behavior.
+        auto oid = poa->activate_object(&ack_servant, nprpc::ObjectActivationFlags::ALLOW_TCP);
         proxy_server_control->RegisterAckHandler(oid);
 
         // Now invoke UpdatePosition which should trigger an ACK
         proxy_game->UpdatePosition(1, {0.0f, 1.0f, 2.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
         auto ack_msg = ack_servant.wait_for_ack();
         EXPECT_EQ(ack_msg, "UpdatePosition ACK");
+
+        // Clean up: release the server's reference to the client callback
+        // and deactivate the local servant before TearDown
+        server_control_servant.ack.reset();
+        poa->deactivate_object(oid.object_id());
     } catch (nprpc::Exception& ex) {
         FAIL() << "Exception in TestUdpAck: " << ex.what();
     }

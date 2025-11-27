@@ -237,4 +237,12 @@ void init_udp_listener(boost::asio::io_context& ioc) {
     start_udp_listener(ioc, g_cfg.listen_udp_port);
 }
 
+void stop_udp_listener() {
+    std::lock_guard<std::mutex> lock(g_udp_listener_mutex);
+    if (g_udp_listener) {
+        g_udp_listener->stop();
+        g_udp_listener.reset();
+    }
+}
+
 } // namespace nprpc::impl

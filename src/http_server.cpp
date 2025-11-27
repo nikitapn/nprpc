@@ -618,6 +618,7 @@ class listener : public std::enable_shared_from_this<listener> {
   ssl::context &ctx_;
   tcp::acceptor acceptor_;
   std::shared_ptr<std::string const> doc_root_;
+  bool running_ = true;
 
 public:
   listener(
@@ -667,9 +668,17 @@ public:
     do_accept();
   }
 
+  void stop() {
+    running_ = false;
+    beast::error_code ec;
+    acceptor_.cancel(ec);
+    acceptor_.close(ec);
+  }
+
 private:
   void
   do_accept() {
+    if (!running_) return;
     // The new connection gets its own strand
     acceptor_.async_accept(
         net::make_strand(ioc_),
@@ -681,20 +690,26 @@ private:
   void
   on_accept(beast::error_code ec, tcp_stream_strand socket) {
     if (ec) {
-      fail(ec, "accept");
-    } else {
-      // Create the detector http_session and run it
-      std::make_shared<detect_session>(
-          beast_tcp_stream_strand(std::move(socket)),
-          ctx_,
-          doc_root_)
-          ->run();
+      if (ec != boost::asio::error::operation_aborted) {
+        fail(ec, "accept");
+      }
+      return;
     }
+    if (!running_) return;
+    
+    // Create the detector http_session and run it
+    std::make_shared<detect_session>(
+        beast_tcp_stream_strand(std::move(socket)),
+        ctx_,
+        doc_root_)
+        ->run();
 
     // Accept another connection
     do_accept();
   }
 };
+
+static std::shared_ptr<listener> g_http_listener;
 
 void init_http_server(boost::asio::io_context &ioc) {
   if (!nprpc::impl::g_cfg.listen_http_port) {
@@ -703,12 +718,20 @@ void init_http_server(boost::asio::io_context &ioc) {
   }
 
   // Create and launch a listening port
-  std::make_shared<listener>(
+  g_http_listener = std::make_shared<listener>(
     ioc,
     g_cfg.ssl_context_server,
     tcp::endpoint{net::ip::make_address(g_cfg.listen_address), g_cfg.listen_http_port},
     std::make_shared<std::string const>(g_cfg.http_root_dir)
-  )->run();
+  );
+  g_http_listener->run();
+}
+
+void stop_http_server() {
+  if (g_http_listener) {
+    g_http_listener->stop();
+    g_http_listener.reset();
+  }
 }
 
 } // namespace nprpc::impl

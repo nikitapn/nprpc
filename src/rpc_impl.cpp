@@ -34,8 +34,36 @@ extern void init_udp_listener(boost::asio::io_context& ioc);
 NPRPC_API Config   g_cfg;
 NPRPC_API RpcImpl* g_orb;
 
+// Forward declarations for cleanup
+void stop_udp_listener();
+void clear_udp_connections();
+void stop_shared_memory_listener();
+void stop_socket_listener();
+void stop_http_server();
+
 void RpcImpl::destroy()
 {
+  // Stop all listeners first
+  stop_socket_listener();
+  stop_http_server();
+  stop_udp_listener();
+  clear_udp_connections();
+  stop_shared_memory_listener();
+  
+  // Shutdown and clear open sessions to release their async operations
+  // Move sessions out of the locked section to avoid deadlock:
+  // destructor -> close() -> close_session() -> lock connections_mut_
+  std::vector<std::shared_ptr<Session>> sessions_to_destroy;
+  {
+    std::lock_guard<std::mutex> lk(connections_mut_);
+    for (auto& session : opened_sessions_) {
+      session->shutdown();
+    }
+    sessions_to_destroy = std::move(opened_sessions_);
+  }
+  // Now destroy sessions outside the lock
+  sessions_to_destroy.clear();
+
   delete this;
   g_orb = nullptr;
 }

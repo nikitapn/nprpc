@@ -47,7 +47,6 @@ class WebSocketSession
   std::atomic<uint32_t> next_request_id_{1};
   std::atomic<bool> reading_{false};
   std::atomic<bool> writing_{false};
-  std::atomic<bool> closed_{false};
 
   Derived &derived() { return static_cast<Derived &>(*this); }
 

@@ -128,6 +128,14 @@ class SocketConnection
     boost::asio::async_write(socket_, buf.cdata(), std::forward<WriteHandler>(handler));
   }
 
+  // UNTESTED
+  void shutdown() override {
+    Session::shutdown();
+    boost::system::error_code ec;
+    socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+    socket_.close(ec);
+  }
+
   SocketConnection(const EndPoint&                endpoint,
                    boost::asio::ip::tcp::socket&& socket);
 };
@@ -388,7 +396,7 @@ inline int handle_standart_reply(
 
 inline void Session::close()
 {
-  closed_ = true;
+  closed_.store(true);
   impl::g_orb->close_session(this);
 }
 

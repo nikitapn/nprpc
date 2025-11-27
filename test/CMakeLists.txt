@@ -186,3 +186,24 @@ add_dependencies(nprpc_test
   test_shared_memory_endpoint
   test_shared_memory_listener
 )
+
+
+
+
+
+# TO BE REMOVED
+add_executable(test_clean_up
+  src/test_clean_up.cpp
+  ${nprpc_test_stub_GENERATED_SOURCES}
+)
+
+target_include_directories(test_clean_up
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${nprpc_test_stub_INCLUDE_DIR}
+)
+
+target_link_libraries(test_clean_up
+  PRIVATE
+    nprpc::nprpc
+)
