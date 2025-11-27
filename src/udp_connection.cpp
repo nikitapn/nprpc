@@ -446,9 +446,10 @@ void UdpConnection::close() {
 }
 
 // Connection cache for reusing UDP connections
+// Uses shared_ptr to keep connections alive across calls
 namespace {
     std::mutex udp_connections_mutex_;
-    std::unordered_map<std::string, std::weak_ptr<UdpConnection>> udp_connections_;
+    std::unordered_map<std::string, std::shared_ptr<UdpConnection>> udp_connections_;
     
     std::string make_key(const std::string& host, uint16_t port) {
         return host + ":" + std::to_string(port);
@@ -472,16 +473,14 @@ NPRPC_API std::shared_ptr<UdpConnection> get_udp_connection(
     // Check if we have a cached connection
     auto it = udp_connections_.find(key);
     if (it != udp_connections_.end()) {
-        if (auto conn = it->second.lock()) {
-            if (conn->is_open()) {
-                return conn;
-            }
+        if (it->second->is_open()) {
+            return it->second;
         }
-        // Connection expired or closed, remove it
+        // Connection closed, remove it
         udp_connections_.erase(it);
     }
     
-    // Create new connection
+    // Create new connection and cache it
     auto conn = std::make_shared<UdpConnection>(ioc, host, port);
     udp_connections_[key] = conn;
     

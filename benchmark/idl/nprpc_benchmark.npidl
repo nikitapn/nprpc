@@ -38,3 +38,10 @@ interface Benchmark {
   // Large data benchmark
   vector<u8> ProcessLargeData(data: in vector<u8>);
 }
+
+
+[udp]
+interface BenchmarkUDP {
+  [reliable]
+  void Ping();
+}
