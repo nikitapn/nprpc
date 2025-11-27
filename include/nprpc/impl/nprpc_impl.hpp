@@ -191,6 +191,22 @@ class RpcImpl : public Rpc
   NPRPC_API void send_udp(const EndPoint& endpoint, flat_buffer&& buffer);
 
   /**
+   * @brief Send reliable UDP call and wait for response
+   * 
+   * Used for [reliable] UDP methods that need acknowledgment and response.
+   * Implements timeout and automatic retransmission.
+   * 
+   * @param endpoint Target UDP endpoint
+   * @param buffer Message buffer to send (input/output - response overwrites)
+   * @param timeout_ms Timeout per attempt in milliseconds
+   * @param max_retries Maximum retransmit attempts before failure
+   */
+  NPRPC_API void call_udp_reliable(const EndPoint& endpoint, 
+                                   flat_buffer& buffer,
+                                   uint32_t timeout_ms = 500,
+                                   uint32_t max_retries = 3);
+
+  /**
    * @brief Check if endpoint uses shared memory transport
    */
   static bool is_shared_memory(const EndPoint& endpoint) noexcept {

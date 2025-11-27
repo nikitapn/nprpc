@@ -156,7 +156,8 @@ void UdpListener::handle_datagram(
     }
     
     // Create a buffer wrapper for the received data
-    // For fire-and-forget, we don't need to keep the response
+    // TODO: This copies the buffer, which is inefficient. Consider adding
+    // a view-based Buffers variant for receive-only paths.
     Buffers bufs(bytes_received + 128);
     auto& buf = bufs();
     buf.consume(buf.size());
@@ -164,15 +165,42 @@ void UdpListener::handle_datagram(
     std::memcpy(mb.data(), recv_buffer_.data(), bytes_received);
     buf.commit(bytes_received);
     
+    // Save request_id to determine if we need to send a response
+    uint32_t request_id = header->request_id;
+    
     SessionContext ctx;  // Empty context for UDP (no session)
     
     // Dispatch to servant
     try {
         servant->dispatch(bufs, ctx, false);
         
-        // For UDP fire-and-forget, we typically don't send a response
-        // But if the servant produced a response and this is a reliable call,
-        // we could send it back here
+        // For reliable UDP calls (request_id != 0), send the response back
+        if (request_id != 0) {
+            auto& response_buf = bufs();
+            if (response_buf.size() > 0) {
+                // Ensure the response has the same request_id
+                auto* resp_header = reinterpret_cast<Header*>(response_buf.data().data());
+                resp_header->request_id = request_id;
+                
+                if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+                    std::cout << "[UDP Listener] Sending response for request_id=" 
+                              << request_id << " size=" << response_buf.size() << std::endl;
+                }
+                
+                // Move response to flat_buffer for sending
+                flat_buffer send_buf(response_buf.size());
+                auto src = response_buf.cdata();
+                auto send_mb = send_buf.prepare(src.size());
+                std::memcpy(send_mb.data(), src.data(), src.size());
+                send_buf.commit(src.size());
+                
+                send_response(sender, std::move(send_buf));
+            } else if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
+                std::cerr << "[UDP Listener] WARNING: response_buf is empty for reliable call!" << std::endl;
+            }
+        } else if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+            std::cout << "[UDP Listener] Fire-and-forget, no response sent" << std::endl;
+        }
         
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "[UDP Listener] Dispatched to " << servant->get_class() << std::endl;
@@ -181,6 +209,19 @@ void UdpListener::handle_datagram(
     } catch (const std::exception& e) {
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
             std::cerr << "[UDP Listener] Dispatch error: " << e.what() << std::endl;
+        }
+        
+        // For reliable calls, send error response
+        if (request_id != 0) {
+            flat_buffer error_buf(sizeof(Header));
+            auto error_mb = error_buf.prepare(sizeof(Header));
+            auto* err_header = reinterpret_cast<Header*>(error_mb.data());
+            err_header->size = sizeof(Header) - 4;
+            err_header->msg_id = MessageId::Error_BadInput;
+            err_header->msg_type = MessageType::Answer;
+            err_header->request_id = request_id;
+            error_buf.commit(sizeof(Header));
+            send_response(sender, std::move(error_buf));
         }
     }
 }

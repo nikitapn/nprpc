@@ -8,6 +8,7 @@
 #include <boost/uuid/uuid_io.hpp>
 
 #include <cassert>
+#include <future>
 
 namespace nprpc::impl {
 
@@ -144,6 +145,53 @@ NPRPC_API void RpcImpl::send_udp(
   // This allows UDP-style interfaces to work over TCP/SharedMemory for testing
   get_session(endpoint)->send_receive_async(
     std::move(buffer), std::nullopt, 0);
+}
+
+NPRPC_API void RpcImpl::call_udp_reliable(
+  const EndPoint& endpoint, 
+  flat_buffer& buffer,
+  uint32_t timeout_ms,
+  uint32_t max_retries)
+{
+  if (endpoint.type() == EndPointType::Udp) {
+    // Use dedicated UDP socket with reliable delivery
+    auto udp_conn = get_udp_connection(ioc_, std::string(endpoint.hostname()), endpoint.port());
+    
+    // Use a promise/future to wait for the async response
+    std::promise<boost::system::error_code> promise;
+    auto future = promise.get_future();
+    flat_buffer* buffer_ptr = &buffer;
+    
+    // Create a copy for sending (original will receive response)
+    flat_buffer send_buf(buffer.size());
+    auto src = buffer.cdata();
+    auto mb = send_buf.prepare(src.size());
+    std::memcpy(mb.data(), src.data(), src.size());
+    send_buf.commit(src.size());
+    
+    udp_conn->send_reliable(
+      std::move(send_buf),
+      [&promise, buffer_ptr](const boost::system::error_code& ec, flat_buffer& response) {
+        if (!ec) {
+          // Copy response to output buffer
+          *buffer_ptr = std::move(response);
+        }
+        promise.set_value(ec);
+      },
+      timeout_ms,
+      max_retries
+    );
+    
+    // Wait for completion
+    auto ec = future.get();
+    if (ec) {
+      throw nprpc::Exception(std::string("UDP reliable call failed: ") + ec.message());
+    }
+    return;
+  }
+  
+  // Fallback: use existing transport (synchronous call)
+  get_session(endpoint)->send_receive(buffer, timeout_ms * (max_retries + 1));
 }
 
 NPRPC_API void RpcImpl::call_async(

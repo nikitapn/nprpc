@@ -6,16 +6,18 @@
 
 #include <boost/asio/ip/udp.hpp>
 #include <boost/asio/strand.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <nprpc/nprpc.hpp>
 #include <nprpc/buffer.hpp>
 #include <deque>
 #include <memory>
 #include <functional>
+#include <unordered_map>
 
 namespace nprpc::impl {
 
 /**
- * @brief UDP connection for fire-and-forget RPC calls
+ * @brief UDP connection for RPC calls (both fire-and-forget and reliable)
  * 
  * Unlike TCP/WebSocket connections, UDP doesn't maintain a session.
  * Each datagram is independent. This class manages a UDP socket for
@@ -23,12 +25,14 @@ namespace nprpc::impl {
  * 
  * Features:
  * - Fire-and-forget send (no reply expected)
+ * - Reliable send with ACK/retransmit for [reliable] methods
  * - Optional sequence numbers for ordering
  * - Asynchronous send queue to prevent blocking
  */
 class UdpConnection : public std::enable_shared_from_this<UdpConnection> {
 public:
     using endpoint_type = boost::asio::ip::udp::endpoint;
+    using response_handler = std::function<void(const boost::system::error_code&, flat_buffer&)>;
     
     /**
      * @brief Construct UDP connection to a specific endpoint
@@ -72,6 +76,22 @@ public:
                     std::function<void(const boost::system::error_code&, std::size_t)> handler);
     
     /**
+     * @brief Send reliable datagram and wait for response
+     * 
+     * Sends the buffer and waits for a response with the matching request_id.
+     * If no response is received within timeout, retransmits up to max_retries times.
+     * 
+     * @param buffer Message buffer to send (moved)
+     * @param handler Called with response or error (timeout, etc.)
+     * @param timeout_ms Timeout per attempt in milliseconds
+     * @param max_retries Maximum number of retransmit attempts
+     */
+    void send_reliable(flat_buffer&& buffer,
+                       response_handler handler,
+                       uint32_t timeout_ms = 500,
+                       uint32_t max_retries = 3);
+    
+    /**
      * @brief Get the remote endpoint
      */
     const endpoint_type& remote_endpoint() const noexcept { return remote_endpoint_; }
@@ -99,7 +119,11 @@ public:
 private:
     void do_send();
     void start_send_queue();
+    void start_receive();
+    void handle_response(size_t bytes_received);
+    void do_retransmit(uint32_t request_id);
     
+    boost::asio::io_context& ioc_;
     boost::asio::ip::udp::socket socket_;
     endpoint_type remote_endpoint_;
     
@@ -111,8 +135,27 @@ private:
     std::deque<PendingSend> send_queue_;
     bool sending_ = false;
     
+    // Receive buffer for responses
+    std::array<uint8_t, 65536> recv_buffer_;
+    endpoint_type recv_endpoint_;
+    bool receiving_ = false;
+    
+    // Pending reliable calls awaiting response
+    struct PendingCall {
+        flat_buffer request;           // Original request for retransmit
+        response_handler handler;       // Completion handler
+        std::unique_ptr<boost::asio::steady_timer> timer;
+        uint32_t timeout_ms;
+        uint32_t max_retries;
+        uint32_t retry_count = 0;
+    };
+    std::unordered_map<uint32_t, PendingCall> pending_calls_;
+    
     // Sequence number for ordered delivery
     std::atomic<uint32_t> sequence_{0};
+    
+    // Request ID for reliable calls
+    std::atomic<uint32_t> next_request_id_{1};
 };
 
 /**

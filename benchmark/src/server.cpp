@@ -33,7 +33,8 @@ public:
         } else if (nameserver_pid == 0) {
             // Child process - run the nameserver
             // Try to find npnameserver in the build directory
-            execl("/home/nikita/projects/nprpc/build/npnameserver", "npnameserver", nullptr);
+            execl("/home/nikita/projects/nprpc/.build_release/npnameserver", "npnameserver", nullptr);
+            execl("/home/nikita/projects/nprpc/.build_debug/npnameserver", "npnameserver", nullptr);
 
             // If all fail, exit with error
             std::cerr << LOG_PREFIX "Failed to execute npnameserver" << std::endl;

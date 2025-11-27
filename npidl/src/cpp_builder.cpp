@@ -1242,6 +1242,48 @@ void CppBuilder::proxy_udp_call(AstFunctionDecl* fn) {
     ;
 }
 
+void CppBuilder::proxy_udp_reliable_call(AstFunctionDecl* fn) {
+  // Reliable UDP call - wait for reply with retransmit
+  oc <<
+    "  ::nprpc::impl::g_orb->call_udp_reliable(this->get_endpoint(), buf);\n"
+    "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n"
+    ;
+
+  if (fn->ex) 
+    oc << "  if (std_reply == 1) " << ctx_->current_file() << "_throw_exception(buf);\n";
+  
+  if (!fn->out_s) {
+    oc <<
+      "  if (std_reply != 0) {\n"
+      "    throw ::nprpc::Exception(\"Unknown Error\");\n"
+      "  }\n"
+      ;
+  } else {
+    oc <<
+      "  if (std_reply != -1) {\n"
+      "    throw ::nprpc::Exception(\"Unknown Error\");\n"
+      "  }\n"
+      ;
+
+    oc << "  " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
+
+    int ix = fn->is_void() ? 0 : 1;
+    bd = 2;
+    for (auto out : fn->args) {
+      if (out->modifier == ArgumentModifier::In) continue;
+      assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), oc, false,
+        out->type->id == FieldType::Object && out->direct == false);
+    }
+
+    if (!fn->is_void()) {
+      oc << bd; emit_type(fn->ret_value, oc); oc << " __ret_value;\n";
+      assign_from_flat_type(fn->ret_value, "__ret_value", "out._1", oc, false,
+        fn->ret_value->id == FieldType::Object);
+      oc << "  return __ret_value;\n";
+    }
+  }
+}
+
 void CppBuilder::proxy_async_call(AstFunctionDecl* fn) {
   oc <<
     "  ::nprpc::impl::g_orb->call_async(this->get_endpoint(), std::move(buf), !handler ? std::nullopt : std::make_optional([handler = move(handler)] (\n"
@@ -1435,6 +1477,9 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
     if (ifs->is_udp && !fn->is_reliable) {
       // UDP fire-and-forget - no reply expected
       proxy_udp_call(fn);
+    } else if (ifs->is_udp && fn->is_reliable) {
+      // UDP with reliable delivery - ACK/retransmit
+      proxy_udp_reliable_call(fn);
     } else if (!fn->is_async) {
       proxy_call(fn);
     } else {

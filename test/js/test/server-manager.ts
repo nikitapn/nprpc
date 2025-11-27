@@ -13,9 +13,8 @@ export class ServerManager {
         
         // Try different paths for the nameserver binary
         const nameserverPaths = [
-            './build/linux/bin/npnameserver',
-            '../../../build/linux/bin/npnameserver',
-            '/home/nikita/projects/npsystem/build/linux/bin/npnameserver'
+            '/home/nikita/projects/nprpc/.build_release/npnameserver',
+            '/home/nikita/projects/nprpc/.build_debug/npnameserver'
         ];
 
         for (const path of nameserverPaths) {
@@ -53,10 +52,8 @@ export class ServerManager {
         
         // Try different paths for the test server binary
         const serverPaths = [
-            '../../../build/linux/bin/nprpc_server_test',
-            '../../build/linux/bin/nprpc_server_test', 
-            './build/linux/bin/nprpc_server_test',
-            '/home/nikita/projects/npsystem/build/linux/bin/nprpc_server_test'
+            '/home/nikita/projects/nprpc/.build_release/test/nprpc_server_test',
+            '/home/nikita/projects/nprpc/.build_debug/test/nprpc_server_test'
         ];
 
         for (const path of serverPaths) {

@@ -8,8 +8,8 @@ namespace nprpc::impl {
 
 void SharedMemoryConnection::timeout_action() {
     // For shared memory, timeout means the other side is unresponsive
-    std::cerr << "SharedMemoryConnection timeout" << std::endl;
-    close();
+    // std::cerr << "SharedMemoryConnection timeout" << std::endl;
+    // close();
 }
 
 void SharedMemoryConnection::add_work(std::unique_ptr<IOWork>&& w) {

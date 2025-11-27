@@ -1,4 +1,4 @@
-/build
 /.build*
 /include/nprpc_nameserver.hpp
 /include/nprpc_base.hpp
+/compile_commands.json

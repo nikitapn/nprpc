@@ -445,6 +445,69 @@ TEST_F(NprpcTest, TestUdpAck) {
     }
 }
 
+TEST_F(NprpcTest, TestUdpReliable) {
+    // Test reliable UDP calls with return values
+    
+    class GameSyncImpl : public test_udp::IGameSync_Servant {
+    public:
+        std::atomic<int> damage_calls{0};
+        std::atomic<int> spawn_calls{0};
+        std::atomic<uint64_t> next_entity_id{1000};
+
+        void UpdatePosition(uint32_t player_id, test_udp::flat::Vec3_Direct pos, test_udp::flat::Quaternion_Direct rot) override {}
+        void FireWeapon(uint32_t player_id, uint8_t weapon_id, test_udp::flat::Vec3_Direct direction) override {}
+        void PlaySound(uint16_t sound_id, test_udp::flat::Vec3_Direct position, float volume) override {}
+
+        bool ApplyDamage(uint32_t target_id, int32_t amount) override {
+            damage_calls++;
+            // Return true if target survives (amount < 100), false if killed
+            return amount < 100;
+        }
+
+        uint64_t SpawnEntity(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+            spawn_calls++;
+            return next_entity_id++;
+        }
+    } game_sync_servant;
+
+    try {
+        auto proxy_game = make_stuff_happen<test_udp::GameSync>(
+            game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP, "udp_reliable_test");
+
+        // Test ApplyDamage with different amounts
+        bool survived1 = proxy_game->ApplyDamage(1, 50);
+        EXPECT_TRUE(survived1) << "Player should survive 50 damage";
+
+        bool survived2 = proxy_game->ApplyDamage(1, 99);
+        EXPECT_TRUE(survived2) << "Player should survive 99 damage";
+
+        bool survived3 = proxy_game->ApplyDamage(1, 100);
+        EXPECT_FALSE(survived3) << "Player should be killed by 100 damage";
+
+        bool survived4 = proxy_game->ApplyDamage(1, 150);
+        EXPECT_FALSE(survived4) << "Player should be killed by 150 damage";
+
+        EXPECT_EQ(game_sync_servant.damage_calls.load(), 4);
+
+        // Test SpawnEntity
+        uint64_t entity1 = proxy_game->SpawnEntity(1, {0.0f, 0.0f, 0.0f});
+        EXPECT_EQ(entity1, 1000);
+
+        uint64_t entity2 = proxy_game->SpawnEntity(2, {10.0f, 0.0f, 0.0f});
+        EXPECT_EQ(entity2, 1001);
+
+        uint64_t entity3 = proxy_game->SpawnEntity(3, {20.0f, 0.0f, 0.0f});
+        EXPECT_EQ(entity3, 1002);
+
+        EXPECT_EQ(game_sync_servant.spawn_calls.load(), 3);
+
+        std::cout << "Reliable UDP test completed successfully!" << std::endl;
+
+    } catch (nprpc::Exception& ex) {
+        FAIL() << "Exception in TestUdpReliable: " << ex.what();
+    }
+}
+
 } // namespace nprpctest
 
 
