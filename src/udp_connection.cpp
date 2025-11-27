@@ -146,78 +146,150 @@ UdpConnection::endpoint_type UdpConnection::local_endpoint() const {
 }
 
 void UdpConnection::send_reliable(
-    flat_buffer&& buffer,
+    flat_buffer& buffer,
     response_handler handler,
     uint32_t timeout_ms,
     uint32_t max_retries)
 {
-    // Get the request_id from the header
+    // Blocking variant: buffer is a reference, caller is blocked
+    // We can send directly from the buffer without copying
+    // Only copy on first timeout for retransmit
+    
     auto* header = reinterpret_cast<Header*>(buffer.data().data());
     uint32_t request_id = header->request_id;
     
-    // If request_id is 0, assign a new one
     if (request_id == 0) {
         request_id = next_request_id_++;
         header->request_id = request_id;
     }
     
     if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        std::cout << "[UDP] send_reliable() request_id=" << request_id 
-                  << " timeout=" << timeout_ms << "ms retries=" << max_retries << std::endl;
+        std::cout << "[UDP] send_reliable() blocking request_id=" << request_id 
+                  << " timeout=" << timeout_ms << "ms" << std::endl;
     }
     
-    // Store pending call info
-    boost::asio::post(socket_.get_executor(), [
-        this,
-        self = shared_from_this(),
-        buf = std::move(buffer),
-        h = std::move(handler),
-        request_id,
+    auto timer = std::make_unique<boost::asio::steady_timer>(ioc_);
+    
+    // Store pending call WITHOUT copying the buffer yet
+    // We pass a pointer to the caller's buffer for potential copy on retransmit
+    pending_calls_[request_id] = PendingCall{
+        flat_buffer{},  // Empty - will be filled on first timeout
+        std::move(handler),
+        std::move(timer),
         timeout_ms,
-        max_retries
-    ]() mutable {
-        // Create a copy of the buffer for potential retransmits
-        flat_buffer request_copy(buf.size());
-        auto src = buf.cdata();
-        auto mb = request_copy.prepare(src.size());
-        std::memcpy(mb.data(), src.data(), src.size());
-        request_copy.commit(src.size());
-        
-        // Create timer
-        auto timer = std::make_unique<boost::asio::steady_timer>(ioc_);
-        
-        // Store pending call
-        pending_calls_[request_id] = PendingCall{
-            std::move(request_copy),
-            std::move(h),
-            std::move(timer),
-            timeout_ms,
-            max_retries,
-            0
-        };
-        
-        // Start receiving if not already
-        if (!receiving_) {
-            start_receive();
-        }
-        
-        // Start timeout timer
-        auto& pending = pending_calls_[request_id];
-        pending.timer->expires_after(std::chrono::milliseconds(timeout_ms));
-        pending.timer->async_wait([this, self = shared_from_this(), request_id](
-            const boost::system::error_code& ec)
-        {
-            if (!ec) {
-                do_retransmit(request_id);
+        max_retries,
+        0,
+        false  // request_saved = false (lazy copy)
+    };
+    
+    if (!receiving_) {
+        start_receive();
+    }
+    
+    auto& pending = pending_calls_[request_id];
+    
+    // Start timeout timer - on timeout, we'll copy the buffer for retransmit
+    pending.timer->expires_after(std::chrono::milliseconds(timeout_ms));
+    pending.timer->async_wait([this, self = shared_from_this(), request_id, &buffer](
+        const boost::system::error_code& ec)
+    {
+        if (!ec) {
+            // First timeout - need to save the buffer for retransmit
+            auto it = pending_calls_.find(request_id);
+            if (it != pending_calls_.end() && !it->second.request_saved) {
+                // Copy buffer now for retransmit
+                flat_buffer saved(buffer.size());
+                auto src = buffer.cdata();
+                auto mb = saved.prepare(src.size());
+                std::memcpy(mb.data(), src.data(), src.size());
+                saved.commit(src.size());
+                it->second.request = std::move(saved);
+                it->second.request_saved = true;
             }
-        });
-        
-        // Send the original buffer
-        send_queue_.push_back(PendingSend{std::move(buf), nullptr});
-        if (!sending_) {
-            do_send();
+            do_retransmit(request_id);
         }
     });
+    
+    // Send directly from caller's buffer - NO COPY!
+    auto data = buffer.cdata();
+    socket_.async_send_to(
+        boost::asio::buffer(data.data(), data.size()),
+        remote_endpoint_,
+        [this, self = shared_from_this(), request_id](
+            const boost::system::error_code& ec,
+            std::size_t bytes_sent)
+        {
+            if (ec && g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
+                std::cerr << "[UDP] Send error for request_id=" << request_id 
+                          << ": " << ec.message() << std::endl;
+            }
+        });
+}
+
+void UdpConnection::send_reliable_async(
+    flat_buffer&& buffer,
+    response_handler handler,
+    uint32_t timeout_ms,
+    uint32_t max_retries)
+{
+    // Async variant: buffer is moved, caller may be gone
+    // Must copy buffer immediately for retransmit
+    
+    auto* header = reinterpret_cast<Header*>(buffer.data().data());
+    uint32_t request_id = header->request_id;
+    
+    if (request_id == 0) {
+        request_id = next_request_id_++;
+        header->request_id = request_id;
+    }
+    
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+        std::cout << "[UDP] send_reliable_async() request_id=" << request_id 
+                  << " timeout=" << timeout_ms << "ms" << std::endl;
+    }
+    
+    auto timer = std::make_unique<boost::asio::steady_timer>(ioc_);
+    
+    // Store pending call WITH the moved buffer
+    pending_calls_[request_id] = PendingCall{
+        std::move(buffer),  // Take ownership of the buffer
+        std::move(handler),
+        std::move(timer),
+        timeout_ms,
+        max_retries,
+        0,
+        true  // request_saved = true (we own it)
+    };
+    
+    if (!receiving_) {
+        start_receive();
+    }
+    
+    auto& pending = pending_calls_[request_id];
+    
+    pending.timer->expires_after(std::chrono::milliseconds(timeout_ms));
+    pending.timer->async_wait([this, self = shared_from_this(), request_id](
+        const boost::system::error_code& ec)
+    {
+        if (!ec) {
+            do_retransmit(request_id);
+        }
+    });
+    
+    // Send from our owned buffer
+    auto data = pending.request.cdata();
+    socket_.async_send_to(
+        boost::asio::buffer(data.data(), data.size()),
+        remote_endpoint_,
+        [this, self = shared_from_this(), request_id](
+            const boost::system::error_code& ec,
+            std::size_t bytes_sent)
+        {
+            if (ec && g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
+                std::cerr << "[UDP] Send error for request_id=" << request_id 
+                          << ": " << ec.message() << std::endl;
+            }
+        });
 }
 
 void UdpConnection::start_receive() {
@@ -331,13 +403,6 @@ void UdpConnection::do_retransmit(uint32_t request_id) {
                   << " for request_id=" << request_id << std::endl;
     }
     
-    // Create a copy of the request for retransmit
-    flat_buffer retransmit_buf(pending.request.size());
-    auto src = pending.request.cdata();
-    auto mb = retransmit_buf.prepare(src.size());
-    std::memcpy(mb.data(), src.data(), src.size());
-    retransmit_buf.commit(src.size());
-    
     // Restart timer
     pending.timer->expires_after(std::chrono::milliseconds(pending.timeout_ms));
     pending.timer->async_wait([this, self = shared_from_this(), request_id](
@@ -348,11 +413,20 @@ void UdpConnection::do_retransmit(uint32_t request_id) {
         }
     });
     
-    // Queue the retransmit
-    send_queue_.push_back(PendingSend{std::move(retransmit_buf), nullptr});
-    if (!sending_) {
-        do_send();
-    }
+    // Send directly from the saved request buffer - NO copy needed!
+    auto data = pending.request.cdata();
+    socket_.async_send_to(
+        boost::asio::buffer(data.data(), data.size()),
+        remote_endpoint_,
+        [this, self = shared_from_this(), request_id](
+            const boost::system::error_code& ec,
+            std::size_t bytes_sent)
+        {
+            if (ec && g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
+                std::cerr << "[UDP] Retransmit error for request_id=" << request_id 
+                          << ": " << ec.message() << std::endl;
+            }
+        });
 }
 
 void UdpConnection::close() {

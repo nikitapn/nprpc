@@ -207,6 +207,25 @@ class RpcImpl : public Rpc
                                    uint32_t max_retries = 3);
 
   /**
+   * @brief Send async reliable UDP call with completion handler
+   * 
+   * Used for [reliable] async UDP methods. Buffer is moved (copied for retransmit).
+   * Handler is called when response is received or on timeout.
+   * 
+   * @param endpoint Target UDP endpoint
+   * @param buffer Message buffer to send (moved - copied internally for retransmit)
+   * @param completion_handler Called on completion with error code and response buffer
+   * @param timeout_ms Timeout per attempt in milliseconds
+   * @param max_retries Maximum retransmit attempts before failure
+   */
+  NPRPC_API void call_udp_reliable_async(
+    const EndPoint& endpoint,
+    flat_buffer&& buffer,
+    std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& completion_handler,
+    uint32_t timeout_ms = 500,
+    uint32_t max_retries = 3);
+
+  /**
    * @brief Check if endpoint uses shared memory transport
    */
   static bool is_shared_memory(const EndPoint& endpoint) noexcept {

@@ -315,6 +315,10 @@ TEST_F(NprpcTest, TestUdpFireAndForget) {
             return 0;
         }
 
+        void SpawnEntity1(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+            // async reliable - just log
+        }
+
         bool wait_for_count(int expected_total, int timeout_ms = 2000) {
             std::unique_lock<std::mutex> lock(mtx_);
             return cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] {
@@ -394,6 +398,10 @@ TEST_F(NprpcTest, TestUdpAck) {
             // Implementation of SpawnEntity
             return 0; // Example return value
         }
+
+        void SpawnEntity1 (uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+            // Async reliable - no return value
+        }
     } game_sync_servant(server_control_servant); // Remote
 
     class TestUdpAckImpl : public nprpc::test::IAck_Servant {
@@ -467,6 +475,10 @@ TEST_F(NprpcTest, TestUdpReliable) {
         uint64_t SpawnEntity(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
             spawn_calls++;
             return next_entity_id++;
+        }
+
+        void SpawnEntity1(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+            // Async reliable - no return value
         }
     } game_sync_servant;
 

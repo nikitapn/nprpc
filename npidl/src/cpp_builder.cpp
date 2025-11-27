@@ -1284,6 +1284,21 @@ void CppBuilder::proxy_udp_reliable_call(AstFunctionDecl* fn) {
   }
 }
 
+void CppBuilder::proxy_udp_reliable_async_call(AstFunctionDecl* fn) {
+  // Async reliable UDP call - buffer is moved, handler called on completion
+  oc <<
+    "  ::nprpc::impl::g_orb->call_udp_reliable_async(this->get_endpoint(), std::move(buf), "
+    "!handler ? std::nullopt : std::make_optional([handler = move(handler)] (\n"
+    "    const boost::system::error_code& ec, ::nprpc::flat_buffer& buf) {\n"
+    "      if (ec) {\n"
+    "        // Error occurred - just call handler with no args or handle error\n"
+    "        // For now, we don't propagate errors through async handler\n"
+    "      }\n"
+    "      (*handler)();\n"
+    "  }));\n"
+    ;
+}
+
 void CppBuilder::proxy_async_call(AstFunctionDecl* fn) {
   oc <<
     "  ::nprpc::impl::g_orb->call_async(this->get_endpoint(), std::move(buf), !handler ? std::nullopt : std::make_optional([handler = move(handler)] (\n"
@@ -1477,8 +1492,11 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
     if (ifs->is_udp && !fn->is_reliable) {
       // UDP fire-and-forget - no reply expected
       proxy_udp_call(fn);
+    } else if (ifs->is_udp && fn->is_reliable && fn->is_async) {
+      // UDP reliable + async - buffer moved, handler called on completion
+      proxy_udp_reliable_async_call(fn);
     } else if (ifs->is_udp && fn->is_reliable) {
-      // UDP with reliable delivery - ACK/retransmit
+      // UDP reliable blocking - caller blocks, no buffer copy needed
       proxy_udp_reliable_call(fn);
     } else if (!fn->is_async) {
       proxy_call(fn);

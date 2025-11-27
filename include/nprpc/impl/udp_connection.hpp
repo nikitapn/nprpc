@@ -76,20 +76,36 @@ public:
                     std::function<void(const boost::system::error_code&, std::size_t)> handler);
     
     /**
-     * @brief Send reliable datagram and wait for response
+     * @brief Send blocking reliable datagram and wait for response
      * 
-     * Sends the buffer and waits for a response with the matching request_id.
-     * If no response is received within timeout, retransmits up to max_retries times.
+     * For blocking callers - buffer passed by reference (no copy for initial send).
+     * Buffer is copied on first timeout for retransmit.
      * 
-     * @param buffer Message buffer to send (moved)
+     * @param buffer Message buffer (reference - caller blocks, so no copy needed)
      * @param handler Called with response or error (timeout, etc.)
      * @param timeout_ms Timeout per attempt in milliseconds
      * @param max_retries Maximum number of retransmit attempts
      */
-    void send_reliable(flat_buffer&& buffer,
+    void send_reliable(flat_buffer& buffer,
                        response_handler handler,
                        uint32_t timeout_ms = 500,
                        uint32_t max_retries = 3);
+    
+    /**
+     * @brief Send async reliable datagram with completion handler
+     * 
+     * For async callers - buffer is moved and copied for retransmit.
+     * Handler is called when response is received or on timeout.
+     * 
+     * @param buffer Message buffer (moved - copied for retransmit)
+     * @param handler Called with response or error (timeout, etc.)
+     * @param timeout_ms Timeout per attempt in milliseconds
+     * @param max_retries Maximum number of retransmit attempts
+     */
+    void send_reliable_async(flat_buffer&& buffer,
+                             response_handler handler,
+                             uint32_t timeout_ms = 500,
+                             uint32_t max_retries = 3);
     
     /**
      * @brief Get the remote endpoint
@@ -142,12 +158,13 @@ private:
     
     // Pending reliable calls awaiting response
     struct PendingCall {
-        flat_buffer request;           // Original request for retransmit
+        flat_buffer request;           // Copy of request for retransmit (lazy - copied on first timeout)
         response_handler handler;       // Completion handler
         std::unique_ptr<boost::asio::steady_timer> timer;
         uint32_t timeout_ms;
         uint32_t max_retries;
         uint32_t retry_count = 0;
+        bool request_saved = false;    // True once we've saved a copy for retransmit
     };
     std::unordered_map<uint32_t, PendingCall> pending_calls_;
     

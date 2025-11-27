@@ -157,41 +157,71 @@ NPRPC_API void RpcImpl::call_udp_reliable(
     // Use dedicated UDP socket with reliable delivery
     auto udp_conn = get_udp_connection(ioc_, std::string(endpoint.hostname()), endpoint.port());
     
-    // Use a promise/future to wait for the async response
-    std::promise<boost::system::error_code> promise;
-    auto future = promise.get_future();
-    flat_buffer* buffer_ptr = &buffer;
-    
-    // Create a copy for sending (original will receive response)
-    flat_buffer send_buf(buffer.size());
-    auto src = buffer.cdata();
-    auto mb = send_buf.prepare(src.size());
-    std::memcpy(mb.data(), src.data(), src.size());
-    send_buf.commit(src.size());
+    // Use condition variable for lower overhead than promise/future
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool done = false;
+    boost::system::error_code result_ec;
     
     udp_conn->send_reliable(
-      std::move(send_buf),
-      [&promise, buffer_ptr](const boost::system::error_code& ec, flat_buffer& response) {
-        if (!ec) {
-          // Copy response to output buffer
-          *buffer_ptr = std::move(response);
+      buffer,  // Pass reference - caller is blocked, no copy needed for first send
+      [&](const boost::system::error_code& ec, flat_buffer& response) {
+        {
+          std::lock_guard<std::mutex> lock(mtx);
+          result_ec = ec;
+          if (!ec) {
+            buffer = std::move(response);
+          }
+          done = true;
         }
-        promise.set_value(ec);
+        cv.notify_one();
       },
       timeout_ms,
       max_retries
     );
     
     // Wait for completion
-    auto ec = future.get();
-    if (ec) {
-      throw nprpc::Exception(std::string("UDP reliable call failed: ") + ec.message());
+    {
+      std::unique_lock<std::mutex> lock(mtx);
+      cv.wait(lock, [&done] { return done; });
+    }
+    
+    if (result_ec) {
+      throw nprpc::Exception(std::string("UDP reliable call failed: ") + result_ec.message());
     }
     return;
   }
   
   // Fallback: use existing transport (synchronous call)
   get_session(endpoint)->send_receive(buffer, timeout_ms * (max_retries + 1));
+}
+
+NPRPC_API void RpcImpl::call_udp_reliable_async(
+  const EndPoint& endpoint,
+  flat_buffer&& buffer,
+  std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& completion_handler,
+  uint32_t timeout_ms,
+  uint32_t max_retries)
+{
+  if (endpoint.type() == EndPointType::Udp) {
+    auto udp_conn = get_udp_connection(ioc_, std::string(endpoint.hostname()), endpoint.port());
+    
+    udp_conn->send_reliable_async(
+      std::move(buffer),
+      [handler = std::move(completion_handler)](const boost::system::error_code& ec, flat_buffer& response) mutable {
+        if (handler) {
+          (*handler)(ec, response);
+        }
+      },
+      timeout_ms,
+      max_retries
+    );
+    return;
+  }
+  
+  // Fallback: use existing transport (async call)
+  get_session(endpoint)->send_receive_async(
+    std::move(buffer), std::move(completion_handler), timeout_ms * (max_retries + 1));
 }
 
 NPRPC_API void RpcImpl::call_async(

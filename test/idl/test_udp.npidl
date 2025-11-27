@@ -33,4 +33,7 @@ interface GameSync {
 
   [reliable]
   u64 SpawnEntity(entity_type: in u16, position: in Vec3);
+
+  [reliable]
+  async SpawnEntity1(entity_type: in u16, position: in Vec3);
 }
