@@ -1,112 +1,33 @@
-Executable directory: "/home/nikita/projects/nprpc/build/./benchmark"
-
-=== NPRPC Benchmark Environment Setup ===
-nprpc UUID: ad20824a-3580-4068-8472-9201c717d1a2
-SSL client verification paths set successfully.
-TCP listen port is not set, skipping socket server initialization.
-HTTP server port is not set, skipping HTTP server initialization.
-Starting shared memory listener: dacd1df5-9519-4147-8531-c5978e1c6e7b
-Shared memory listener started successfully
-nprpc UUID: ad20824a-3580-4068-8472-9201c717d1a2
-SSL client verification paths set successfully.
-Starting shared memory listener: 4c0213f7-cb17-4a82-acea-b311164d99d4
-Shared memory listener started successfully
-[benchmark_server] Nameserver started with PID: 137139
-nprpc UUID: ad20824a-3580-4068-8472-9201c717d1a2
-SSL client verification paths set successfully.
-Loaded self-signed certificate for SSL client: /home/nikita/projects/npsystem/certs/server.crt
-Starting shared memory listener: 2b9f2b95-315a-417a-ba93-12c9f4b5f99e
-Shared memory listener started successfully
-[benchmark_server] NPRPC Benchmark Server is running
-Starting NPRPC benchmark server...
-NPRPC benchmark server started with PID: 137138
-Waiting for server to initialize...
-NPRPC server ready
-Starting gRPC benchmark server...
-Starting NPRPC benchmark server...
-NPRPC benchmark server started with PID: 137138
-Waiting for server to initialize...
-NPRPC server ready
-Starting gRPC benchmark server...
-gRPC benchmark server started with PID: 137171
-gRPC server ready
-Starting Cap'n Proto benchmark server...
-Starting NPRPC benchmark server...
-NPRPC benchmark server started with PID: 137138
-Waiting for server to initialize...
-NPRPC server ready
-Starting gRPC benchmark server...
-gRPC benchmark server started with PID: 137171
-gRPC server ready
-Starting Cap'n Proto benchmark server...
-Cap'n Proto benchmark server started with PID: 137185
-Cap'n Proto server ready
-=== Setup Complete ===
-
-2025-11-26T12:27:43+03:00
-Running ./benchmark/nprpc_benchmarks
-Run on (8 X 3193.93 MHz CPU s)
-CPU Caches:
-  L1 Data 32 KiB (x4)
-  L1 Instruction 32 KiB (x4)
-  L2 Unified 512 KiB (x4)
-  L3 Unified 16384 KiB (x1)
-Load Average: 0.39, 0.31, 0.30
-***WARNING*** ASLR is enabled, the results may have unreproducible noise in them.
-Failed to open ring buffer '/nprpc_002b3382-3d46-45ae-8916-4fed724cb568_c2s': No such file or directory
-Failed to create/open ring buffers: No such file or directory
-Cleaning up SharedMemoryChannel rings for channel: 002b3382-3d46-45ae-8916-4fed724cb568
 ----------------------------------------------------------------------------------------------
 Benchmark                                    Time             CPU   Iterations UserCounters...
 ----------------------------------------------------------------------------------------------
-LatencyFixture/EmptyCall/0                 135 us         17.2 us        40808 calls/sec=58.0685k/s SharedMemory
-LatencyFixture/EmptyCall/1                 122 us         18.2 us        38517 calls/sec=54.834k/s TCP
-LatencyFixture/EmptyCall/2                 131 us         21.1 us        33236 calls/sec=47.4021k/s WebSocket
-LatencyFixture/CallWithReturn/0            135 us         17.1 us        41049 calls/sec=58.5514k/s SharedMemory
-LatencyFixture/CallWithReturn/1            123 us         18.3 us        38566 calls/sec=54.7366k/s TCP
-LatencyFixture/CallWithReturn/2            131 us         20.9 us        33603 calls/sec=47.7581k/s WebSocket
-LatencyFixture/SmallStringCall/0           136 us         17.3 us        41398 bytes_per_second=5.51511Mi/s calls/sec=57.8301k/s SharedMemory
-LatencyFixture/SmallStringCall/1           122 us         18.3 us        38098 bytes_per_second=5.20935Mi/s calls/sec=54.624k/s TCP
-LatencyFixture/SmallStringCall/2           131 us         21.4 us        32948 bytes_per_second=4.45568Mi/s calls/sec=46.7212k/s WebSocket
-LatencyFixture/NestedDataCall/0            137 us         17.7 us        40379
-LatencyFixture/NestedDataCall/1            124 us         19.0 us        37056
-LatencyFixture/NestedDataCall/2            134 us         22.3 us        31785
-LatencyFixture/LargeData1MB/0            0.910 ms        0.224 ms         3064 bytes_per_second=4.35609Gi/s calls/sec=4.46063k/s SharedMemory
-LatencyFixture/LargeData1MB/1             7.12 ms         1.16 ms          569 bytes_per_second=861.505Mi/s calls/sec=861.505/s TCP
-LatencyFixture/LargeData1MB/2             80.0 ms        0.368 ms          100 bytes_per_second=2.65574Gi/s calls/sec=2.71948k/s WebSocket
-LatencyFixture/LargeData10MB/0            17.5 ms         3.66 ms          190 bytes_per_second=2.66983Gi/s calls/sec=273.391/s SharedMemory
-LatencyFixture/LargeData10MB/1            27.4 ms         5.43 ms          134 bytes_per_second=1.79714Gi/s calls/sec=184.027/s TCP
-LatencyFixture/LargeData10MB/2            46.6 ms         4.88 ms          100 bytes_per_second=2.00263Gi/s calls/sec=205.069/s WebSocket
-GrpcLatencyFixture/EmptyCall               351 us         63.9 us        11092 calls/sec=15.6516k/s gRPC
-GrpcLatencyFixture/CallWithReturn          351 us         63.6 us        10962 calls/sec=15.7238k/s gRPC
-GrpcLatencyFixture/SmallStringCall         355 us         64.4 us        10880 bytes_per_second=1.47977Mi/s calls/sec=15.5165k/s gRPC
-GrpcLatencyFixture/NestedDataCall          368 us         68.0 us        10262 calls/sec=14.6997k/s gRPC
-GrpcLatencyFixture/LargeData1MB           2.71 ms        0.465 ms         1000 bytes_per_second=2.10203Gi/s calls/sec=2.15248k/s gRPC
-GrpcLatencyFixture/LargeData10MB          14.2 ms         4.40 ms          164 bytes_per_second=2.21751Gi/s calls/sec=227.073/s gRPC
-CapnpLatencyFixture/EmptyCall            10203 us         80.9 us         1000 calls/sec=12.3623k/s Cap'n Proto
-CapnpLatencyFixture/CallWithReturn       10205 us         80.0 us         1000 calls/sec=12.4951k/s Cap'n Proto
-CapnpLatencyFixture/SmallStringCall      10198 us         81.9 us         1000 bytes_per_second=232.087k/s calls/sec=12.2151k/s Cap'n Proto
-CapnpLatencyFixture/NestedDataCall       10211 us         82.5 us         1000 calls/sec=12.1246k/s Cap'n Proto
-CapnpLatencyFixture/LargeData1MB          11.8 ms        0.626 ms         1107 bytes_per_second=1.55966Gi/s calls/sec=1.59709k/s Cap'n Proto
-CapnpLatencyFixture/LargeData10MB         22.8 ms         9.23 ms           75 bytes_per_second=1.05788Gi/s calls/sec=108.327/s Cap'n Proto
-[benchmark_server] Shutdown requested
-[benchmark_server] Server shutting down...
-ioc thread exited: 134029080778432
-ioc1 thread exited: 134029097563840
-[benchmark_server] Stopping nameserver with PID: 137139
-[nprpc] WebSocketSession: server_session_socket: on_read_size: End of file
-
-=== NPRPC Benchmark Environment Teardown ===
-
-Shutting down NPRPC benchmark server...
-Graceful shutdown signal sent
-[nprpc] WebSocketSession: read: End of file
-NPRPC server shut down gracefully
-Shutting down gRPC benchmark server...
-gRPC server stopped
-Shutting down Cap'n Proto benchmark server...
-Cap'n Proto server stopped
-ioc thread exited: 125543582258880
-ioc1 thread exited: 125543599044288
-Cleaning up SharedMemoryChannel rings for channel: 002b3382-3d46-45ae-8916-4fed724cb568
-=== Teardown Complete ===
+LatencyFixture/EmptyCall/0                 128 us         16.5 us        42367 calls/sec=60.479k/s SharedMemory
+LatencyFixture/EmptyCall/1                 116 us         17.6 us        38147 calls/sec=56.874k/s TCP
+LatencyFixture/EmptyCall/2                 126 us         20.4 us        34486 calls/sec=48.9132k/s WebSocket
+LatencyFixture/CallWithReturn/0            129 us         16.4 us        40723 calls/sec=60.8814k/s SharedMemory
+LatencyFixture/CallWithReturn/1            117 us         17.4 us        39995 calls/sec=57.3159k/s TCP
+LatencyFixture/CallWithReturn/2            123 us         20.0 us        34559 calls/sec=49.9643k/s WebSocket
+LatencyFixture/SmallStringCall/0           130 us         17.0 us        42784 bytes_per_second=5.59441Mi/s calls/sec=58.6617k/s SharedMemory
+LatencyFixture/SmallStringCall/1           116 us         17.5 us        39675 bytes_per_second=5.44952Mi/s calls/sec=57.1424k/s TCP
+LatencyFixture/SmallStringCall/2           124 us         20.3 us        34117 bytes_per_second=4.69151Mi/s calls/sec=49.1941k/s WebSocket
+LatencyFixture/NestedDataCall/0            133 us         18.2 us        40832
+LatencyFixture/NestedDataCall/1            118 us         18.3 us        37959
+LatencyFixture/NestedDataCall/2            127 us         21.2 us        33203
+LatencyFixture/LargeData1MB/0            0.922 ms        0.228 ms         3227 bytes_per_second=4.27986Gi/s calls/sec=4.38258k/s SharedMemory
+LatencyFixture/LargeData1MB/1             7.73 ms         1.18 ms          587 bytes_per_second=850.594Mi/s calls/sec=850.594/s TCP
+LatencyFixture/LargeData1MB/2             80.3 ms        0.366 ms          100 bytes_per_second=2.66691Gi/s calls/sec=2.73091k/s WebSocket
+LatencyFixture/LargeData10MB/0            17.2 ms         3.53 ms          196 bytes_per_second=2.76519Gi/s calls/sec=283.156/s SharedMemory
+LatencyFixture/LargeData10MB/1            27.1 ms         5.38 ms          128 bytes_per_second=1.81597Gi/s calls/sec=185.956/s TCP
+LatencyFixture/LargeData10MB/2            42.8 ms         4.17 ms          100 bytes_per_second=2.33964Gi/s calls/sec=239.579/s WebSocket
+GrpcLatencyFixture/EmptyCall               325 us         59.2 us        12173 calls/sec=16.8836k/s gRPC
+GrpcLatencyFixture/CallWithReturn          327 us         59.1 us        11745 calls/sec=16.9075k/s gRPC
+GrpcLatencyFixture/SmallStringCall         327 us         59.4 us        11621 bytes_per_second=1.60597Mi/s calls/sec=16.8398k/s gRPC
+GrpcLatencyFixture/NestedDataCall          337 us         62.4 us        11243 calls/sec=16.0294k/s gRPC
+GrpcLatencyFixture/LargeData1MB           2.64 ms        0.418 ms         1000 bytes_per_second=2.33711Gi/s calls/sec=2.3932k/s gRPC
+GrpcLatencyFixture/LargeData10MB          13.0 ms         3.99 ms          175 bytes_per_second=2.44899Gi/s calls/sec=250.777/s gRPC
+CapnpLatencyFixture/EmptyCall            10216 us         70.4 us         1000 calls/sec=14.213k/s Cap'n Proto
+CapnpLatencyFixture/CallWithReturn       10217 us         68.4 us         1000 calls/sec=14.6092k/s Cap'n Proto
+CapnpLatencyFixture/SmallStringCall      10222 us         68.3 us         1000 bytes_per_second=278.285k/s calls/sec=14.6466k/s Cap'n Proto
+CapnpLatencyFixture/NestedDataCall       10244 us         72.4 us         1000 calls/sec=13.8108k/s Cap'n Proto
+CapnpLatencyFixture/LargeData1MB          11.7 ms        0.550 ms         1279 bytes_per_second=1.77576Gi/s calls/sec=1.81838k/s Cap'n Proto
+CapnpLatencyFixture/LargeData10MB         23.6 ms         7.97 ms           83 bytes_per_second=1.22577Gi/s calls/sec=125.519/s Cap'n Proto

@@ -378,39 +378,41 @@ await objectManager.ProcessData(oid, data);
 
 NPRPC includes comprehensive benchmarks comparing against gRPC and Cap'n Proto.
 
+*Benchmarks built with -O3 optimization.*
+
 ### Benchmark Results
 
 #### Empty Call Latency (no payload)
 | Framework | Time | Calls/sec |
 |-----------|------|-----------|
-| **NPRPC TCP** | 119 μs | 56k/s |
-| **NPRPC WebSocket** | 126 μs | 48k/s |
-| **NPRPC SharedMemory** | 129 μs | 61k/s |
-| gRPC | 341 μs | 16k/s |
-| Cap'n Proto | 10,176 μs | 16k/s |
+| **NPRPC TCP** | 116 μs | 56.874k/s |
+| **NPRPC WebSocket** | 126 μs | 48.913k/s |
+| **NPRPC SharedMemory** | 128 μs | 60.479k/s |
+| gRPC | 325 μs | 16.884k/s |
+| Cap'n Proto | 10,216 μs | 14.213k/s |
 
 #### Large Data Transfer (1 MB payload)
 | Framework | Time | Throughput |
 |-----------|------|------------|
-| **NPRPC SharedMemory** | **0.83 ms** | **4.78 GiB/s** |
-| **NPRPC TCP** | 6.61 ms | 907 MiB/s |
-| **NPRPC WebSocket** | 81.1 ms | 2.94 GiB/s |
-| gRPC | 2.70 ms | 2.23 GiB/s |
+| **NPRPC SharedMemory** | **0.922 ms** | **4.28 GiB/s** |
+| gRPC | 2.64 ms | 2.34 GiB/s |
+| **NPRPC TCP** | 7.73 ms | 850.59 MiB/s |
 | Cap'n Proto | 11.7 ms | 1.78 GiB/s |
+| **NPRPC WebSocket** | 80.3 ms | 2.67 GiB/s |
 
 #### Large Data Transfer (10 MB payload)
 | Framework | Time | Throughput |
 |-----------|------|------------|
-| gRPC | 14.2 ms | 2.22 GiB/s |
-| **NPRPC SharedMemory** | 17.5 ms | 2.67 GiB/s |
-| Cap'n Proto | 22.8 ms | 1.06 GiB/s |
-| **NPRPC TCP** | 27.4 ms | 1.80 GiB/s |
-| **NPRPC WebSocket** | 46.6 ms | 2.00 GiB/s |
+| gRPC | 13.0 ms | 2.45 GiB/s |
+| **NPRPC SharedMemory** | 17.2 ms | 2.77 GiB/s |
+| Cap'n Proto | 23.6 ms | 1.23 GiB/s |
+| **NPRPC TCP** | 27.1 ms | 1.82 GiB/s |
+| **NPRPC WebSocket** | 42.8 ms | 2.34 GiB/s |
 
 **Key Takeaways:**
 - NPRPC SharedMemory with zero-copy is **8x faster** than TCP for large payloads
 - NPRPC is **2-4x faster** than gRPC for empty calls
-- NPRPC SharedMemory achieves **4.78 GiB/s** throughput for 1MB payloads
+- NPRPC SharedMemory achieves **4.28 GiB/s** throughput for 1MB payloads
 
 ### Running Benchmarks
 
@@ -484,4 +486,4 @@ Check out the complete examples:
 
 ---
 
-**NPRPC** - 2-4x faster than gRPC, with zero-copy shared memory reaching 4.78 GiB/s! 🚀
+**NPRPC** - 2-4x faster than gRPC, with zero-copy shared memory reaching 4.28 GiB/s! 🚀
