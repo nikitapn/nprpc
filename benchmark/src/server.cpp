@@ -93,6 +93,7 @@ public:
                 .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
                 .set_listen_tcp_port(22222)
                 .set_listen_http_port(22223)
+                .set_listen_udp_port(22224)
                 .set_hostname("localhost")
                 .enable_ssl_server(
                     "/home/nikita/projects/npsystem/certs/server.crt",
@@ -157,6 +158,10 @@ class BenchmarkServerImpl : public ::nprpc::benchmark::IBenchmark_Servant {
   }
 };
 
+class BenchmarkUDPImpl : public ::nprpc::benchmark::IBenchmarkUDP_Servant {
+  void Ping() override {}
+};
+
 int main(int argc, char** argv) {
   Environment env;
   env.SetUp();
@@ -172,6 +177,10 @@ int main(int argc, char** argv) {
   BenchmarkServerImpl benchmark_server;
   oid = poa->activate_object(&benchmark_server, flags);
   nameserver->Bind(oid, "nprpc_benchmark");
+
+  BenchmarkUDPImpl benchmark_udp;
+  oid = poa->activate_object(&benchmark_udp, nprpc::ObjectActivationFlags::ALLOW_UDP);
+  nameserver->Bind(oid, "nprpc_benchmark_udp");
 
   // Capture interrupt signal to allow graceful shutdown
   signal(SIGINT, [](int signum) {
