@@ -281,7 +281,7 @@ void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type, s
     break;
   case FieldType::Array:
   case FieldType::Vector: {
-    auto wt = static_cast<AstWrapType*>(type)->real_type();
+    auto wt = cwt(type)->real_type();
     if (input || type->id == FieldType::Array) {
       if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
         os << "::nprpc::flat::Span<"; emit_flat_type(wt, os); os << ">";
@@ -327,10 +327,15 @@ void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type, s
     os << ns(cenum(type)->nm) << cenum(type)->name;
     break;
   case FieldType::Alias: {
+    auto rt = calias(type)->get_real_type();
     if (!input) {
-      os << ns(calias(type)->nm) << calias(type)->name;
+      if (rt->id == FieldType::Array || rt->id == FieldType::Vector) {
+        // At least for now, only arrays/vectors need special handling
+        emit_parameter_type_for_servant_callback_r(calias(type)->get_real_type(), os, input);
+      } else {
+        os << ns(calias(type)->nm) << calias(type)->name;
+      }
     } else {
-      auto rt = calias(type)->get_real_type();
       if (rt->id == FieldType::Fundamental) {
         os << ns(calias(type)->nm) << calias(type)->name;
       } else {
@@ -579,7 +584,8 @@ void CppBuilder::assign_from_cpp_type(
     break;
 
   case FieldType::Alias:
-    assign_from_cpp_type(calias(type)->type, op1, op2, os, from_iterator);
+    // For alias types top_type should be forwarded as is
+    assign_from_cpp_type(calias(type)->type, op1, op2, os, from_iterator, top_type);
     break;
 
   case FieldType::String:
@@ -1587,8 +1593,12 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
     size_t out_ix = fn->is_void() ? 0 : 1, out_temp_ix = 0;
 
     auto passed_as_direct = [](AstFunctionArgument* arg) {
+      auto real_type = arg->type;
+        if (real_type->id == FieldType::Alias)
+          real_type = calias(real_type)->get_real_type();
+
       return arg->modifier == ArgumentModifier::Out &&
-        (arg->type->id == FieldType::Vector || arg->type->id == FieldType::String || arg->type->id == FieldType::Struct);
+        (real_type->id == FieldType::Vector || real_type->id == FieldType::String || real_type->id == FieldType::Struct);
     };
 
     if (fn->out_s && fn->out_s->flat) {
@@ -1609,8 +1619,12 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
           continue;
         }
 
+        auto real_type = arg->type;
+        if (real_type->id == FieldType::Alias)
+          real_type = calias(real_type)->get_real_type();
+
         oc << bd << "auto oa_" << ++out_temp_ix << " = oa._" << ++out_ix <<
-          ((arg->type->id == FieldType::Vector || arg->type->id == FieldType::String) ? "_d();\n" : "();\n");
+          ((real_type->id == FieldType::Vector || real_type->id == FieldType::String) ? "_d();\n" : "();\n");
       }
     }
 

@@ -2,3 +2,8 @@
 /include/nprpc_nameserver.hpp
 /include/nprpc_base.hpp
 /compile_commands.json
+
+/perf.*
+/report.txt
+/cmake_test_discovery*
+/hotspots_with_symbols.txt

@@ -45,6 +45,10 @@ public:
 
 template<typename T>
 struct TSpan {
+	// Forward iterators for concept compliance
+	using iterator = T*;
+	using const_iterator = const T*;
+
 	T* const first;
 	T* const last;
 
@@ -78,6 +82,10 @@ struct TSpan {
 
 	void* data() {
 		return (void*)begin();
+	}
+
+	const void* data() const {
+		return (const void*)begin();
 	}
 };
 

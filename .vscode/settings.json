@@ -73,6 +73,15 @@
     "regex": "cpp",
     "any": "cpp",
     "*.inc": "cpp",
-    "iostream": "cpp"
+    "iostream": "cpp",
+    "chrono": "cpp",
+    "iomanip": "cpp",
+    "istream": "cpp",
+    "ratio": "cpp",
+    "sstream": "cpp",
+    "streambuf": "cpp",
+    "__locale": "cpp",
+    "ios": "cpp",
+    "print": "cpp"
   }
 }
