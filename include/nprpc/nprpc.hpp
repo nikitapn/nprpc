@@ -99,6 +99,11 @@ enum class Lifespan {
   Transient  = 0,
   Persistent = 1
 };
+
+enum class ObjectIdPolicy {
+  SystemGenerated = 0,
+  UserSupplied    = 1
+};
 } // namespace PoaPolicy
 
 namespace ObjectActivationFlags {
@@ -130,6 +135,7 @@ enum Enum : uint32_t {
 class NPRPC_API PoaBuilder {
   uint32_t objects_max_ = 1000;
   PoaPolicy::Lifespan lifespan_policy_ = PoaPolicy::Lifespan::Transient;
+  PoaPolicy::ObjectIdPolicy object_id_policy_ = PoaPolicy::ObjectIdPolicy::SystemGenerated;
   Rpc* rpc_ = nullptr;
 
 public:
@@ -144,6 +150,12 @@ public:
   // Set lifespan policy
   PoaBuilder& with_lifespan(PoaPolicy::Lifespan policy) {
     lifespan_policy_ = policy;
+    return *this;
+  }
+
+  // Set object id policy (system-generated vs user-supplied)
+  PoaBuilder& with_object_id_policy(PoaPolicy::ObjectIdPolicy policy) {
+    object_id_policy_ = policy;
     return *this;
   }
 
@@ -165,6 +177,16 @@ class NPRPC_API Poa
    * @throws std::runtime_error if the object cannot be activated.
    */ 
   virtual ObjectId activate_object(
+    ObjectServant*  obj,
+    uint32_t        activation_flags,
+    SessionContext* ctx = nullptr) = 0;
+
+  /**
+   * @brief Activate an object servant with a user-supplied object ID.
+   * Available only when POA is configured with ObjectIdPolicy::UserSupplied.
+   */
+  virtual ObjectId activate_object_with_id(
+    oid_t           object_id,
     ObjectServant*  obj,
     uint32_t        activation_flags,
     SessionContext* ctx = nullptr) = 0;

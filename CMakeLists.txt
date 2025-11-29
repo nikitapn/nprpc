@@ -22,6 +22,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Options
+# For systems with OpenSSL < 3.5, can use system libcrypto (faster builds)
+# For OpenSSL 3.5+, must build from source due to ossl_time_now being internal
+# Set NPRPC_QUIC_USE_SYSTEM_LIBCRYPTO=ON when building on Debian-based systems with OpenSSL < 3.5
+option(NPRPC_QUIC_USE_SYSTEM_LIBCRYPTO "Use system libcrypto for QUIC (requires OpenSSL < 3.5)" OFF)
 option(NPRPC_BUILD_TOOLS "Build npidl tool and nameserver" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_BUILD_TESTS "Build tests" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_BUILD_JS "Build JavaScript bindings" ${NPRPC_IS_TOPLEVEL_PROJECT})
@@ -38,8 +42,11 @@ if(NPRPC_ENABLE_QUIC)
   message(STATUS "QUIC transport enabled - building MsQuic")
   
   # Configure MsQuic options before adding subdirectory
-  set(QUIC_TLS_LIB "openssl" CACHE STRING "Use system OpenSSL" FORCE)
-  set(QUIC_USE_SYSTEM_LIBCRYPTO ON CACHE BOOL "Use system libcrypto" FORCE)
+  # Use MsQuic's bundled OpenSSL build (not system libcrypto) to avoid
+  # symbol compatibility issues with OpenSSL 3.5+ (ossl_time_now is internal)
+  # See: https://github.com/microsoft/msquic/issues/5210
+  set(QUIC_TLS_LIB "openssl" CACHE STRING "Use OpenSSL for TLS" FORCE)
+  set(QUIC_USE_SYSTEM_LIBCRYPTO ${NPRPC_QUIC_USE_SYSTEM_LIBCRYPTO} CACHE BOOL "Build libcrypto from source" FORCE)
   set(QUIC_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
   set(QUIC_BUILD_TEST OFF CACHE BOOL "" FORCE)
   set(QUIC_BUILD_PERF OFF CACHE BOOL "" FORCE)

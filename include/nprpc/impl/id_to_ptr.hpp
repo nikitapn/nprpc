@@ -87,7 +87,8 @@ public:
 
   std::remove_pointer_t<T> *get(uint64_t id) noexcept {
     const auto idx = index(id);
-    if (idx >= max_size_) return nullptr;
+    if (idx >= max_size_)
+      return nullptr;
     
     // Acquire fence to ensure we see writes from add()
     std::atomic_thread_fence(std::memory_order_acquire);
@@ -114,8 +115,10 @@ public:
   }
 
   IdToPtr(uint32_t max_size) noexcept
-    : max_size_(max_size) {
-    items_ = (Items) new char[max_size * sizeof(Item)];
+    : max_size_{max_size}
+  {
+    assert(max_size_ > 0);
+    items_ = reinterpret_cast<Items>(new char[max_size * sizeof(Item)]);
     init();
   }
 };

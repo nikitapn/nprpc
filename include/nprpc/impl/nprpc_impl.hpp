@@ -13,9 +13,11 @@
 #include <iostream>
 #include <iomanip>
 #include <stdexcept>
-#include <mutex>
 #include <optional>
 #include <deque>
+#include <variant>
+#include <atomic>
+#include <memory>
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
@@ -272,7 +274,9 @@ class RpcImpl : public Rpc
 
   RpcImpl(boost::asio::io_context& ioc);
 protected:
- Poa* create_poa_impl(uint32_t max_objects, PoaPolicy::Lifespan lifespan);
+ Poa* create_poa_impl(uint32_t max_objects,
+                      PoaPolicy::Lifespan lifespan,
+                      PoaPolicy::ObjectIdPolicy object_id_policy);
 };
 
 class ObjectGuard
@@ -311,26 +315,47 @@ class PoaImpl
   : public Poa
   , public std::enable_shared_from_this<PoaImpl>
 {
-  IdToPtr<ObjectServant*> id_to_ptr_;
-  PoaPolicy::Lifespan     pl_lifespan_;
+  // User-supplied IDs: simple array indexed by object_id (0..max_objects_-1), lock-free
+  struct UserObjects {
+    std::unique_ptr<std::atomic<ObjectServant*>[]> slots;
+    explicit UserObjects(uint32_t max_objects)
+      : slots{std::make_unique<std::atomic<ObjectServant*>[]>(max_objects)}
+    {
+      for (uint32_t i = 0; i < max_objects; ++i) {
+        slots[i].store(nullptr, std::memory_order_relaxed);
+      }
+    }
+  };
+  using SystemObjects = IdToPtr<ObjectServant*>;
+
+  const uint32_t max_objects_;
+  std::variant<SystemObjects, UserObjects> id_to_ptr_;
+  PoaPolicy::Lifespan pl_lifespan_;
+
  public:
   auto get_lifespan() const noexcept
   {
     return pl_lifespan_;
   }
 
+  bool is_user_supplied_policy() const noexcept
+  {
+    return std::holds_alternative<UserObjects>(id_to_ptr_);
+  }
+
   virtual ~PoaImpl()
   {
   }
 
-  std::optional<ObjectGuard> get_object(oid_t oid) noexcept
-  {
-    auto obj = id_to_ptr_.get(oid);
-    if (obj) return ObjectGuard(obj);
-    return std::nullopt;
-  }
+  std::optional<ObjectGuard> get_object(oid_t oid) noexcept;
 
   ObjectId activate_object(
+    ObjectServant*  obj,
+    uint32_t        activation_flags,
+    SessionContext* ctx) override;
+
+  ObjectId activate_object_with_id(
+    oid_t           object_id,
     ObjectServant*  obj,
     uint32_t        activation_flags,
     SessionContext* ctx) override;
@@ -339,12 +364,24 @@ class PoaImpl
  
   static void delete_object(ObjectServant* obj);
 
-  PoaImpl(uint32_t objects_max, uint16_t idx, PoaPolicy::Lifespan lifespan)
+  PoaImpl(uint32_t objects_max,
+          uint16_t idx,
+          PoaPolicy::Lifespan lifespan,
+          PoaPolicy::ObjectIdPolicy object_id_policy)
       : Poa(idx)
-      , id_to_ptr_{objects_max}
+      , max_objects_{objects_max}
+      , id_to_ptr_{object_id_policy == PoaPolicy::ObjectIdPolicy::UserSupplied
+                     ? std::variant<SystemObjects, UserObjects>{std::in_place_type<UserObjects>, objects_max}
+                     : std::variant<SystemObjects, UserObjects>{std::in_place_type<SystemObjects>, objects_max}}
       , pl_lifespan_{lifespan}
   {
   }
+
+ private:
+  ObjectId finalize_activation(ObjectServant*  obj,
+                               oid_t           object_id,
+                               uint32_t        activation_flags,
+                               SessionContext* ctx);
 };
 
 inline void make_simple_answer(

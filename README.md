@@ -276,6 +276,30 @@ if (found) {
 }
 ```
 
+### POA Object ID Policy (deterministic IDs)
+
+Use `with_object_id_policy(PoaPolicy::ObjectIdPolicy::UserSupplied)` when you need stable object IDs (for example, when bundling pre-known IDs into a web client). In this mode you must provide the ID explicitly:
+
+```cpp
+auto static_poa = rpc->create_poa()
+  .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+  .with_object_id_policy(nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied)
+  .with_max_objects(10)
+  .build();
+
+constexpr nprpc::oid_t calculator_id = 0;
+
+static_poa->activate_object_with_id(
+  calculator_id,
+  calculator_servant.get(),
+  nprpc::ObjectActivationFlags::ALLOW_TCP | nprpc::ObjectActivationFlags::ALLOW_HTTP
+);
+```
+
+NOTE: Ensure the IDs are unique and in the valid range (0 to max_objects - 1).
+
+POAs default to `SystemGenerated`, so `activate_object_with_id` is only available when the policy is set to `UserSupplied`, and plain `activate_object` is disabled to prevent accidental mismatches.
+
 ### SSL/TLS Support
 
 ```cpp

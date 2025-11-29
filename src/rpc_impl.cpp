@@ -12,7 +12,10 @@
 
 namespace nprpc::impl {
 
-Poa* RpcImpl::create_poa_impl(uint32_t objects_max, PoaPolicy::Lifespan lifespan) {
+Poa* RpcImpl::create_poa_impl(
+  uint32_t objects_max,
+  PoaPolicy::Lifespan lifespan,
+  PoaPolicy::ObjectIdPolicy object_id_policy) {
   std::lock_guard<std::mutex> lk(poas_mut_);
 
   auto it = std::find(std::begin(poas_created_), std::end(poas_created_), false);
@@ -20,7 +23,10 @@ Poa* RpcImpl::create_poa_impl(uint32_t objects_max, PoaPolicy::Lifespan lifespan
     throw std::runtime_error("Maximum number of POAs reached");
 
   auto index = std::distance(std::begin(poas_created_), it);
-  auto poa = std::make_shared<PoaImpl>(objects_max, static_cast<uint16_t>(index), lifespan);
+  auto poa = std::make_shared<PoaImpl>(objects_max,
+                                       static_cast<uint16_t>(index),
+                                       lifespan,
+                                       object_id_policy);
   poas_[index] = poa;
   (*it) = true; // Mark this POA as created
 
@@ -413,23 +419,36 @@ NPRPC_API void fill_guid(std::array<std::uint8_t, 16>& guid) noexcept {
   std::copy(g.begin(), g.end(), guid.begin());
 }
 
-ObjectId PoaImpl::activate_object(
-    ObjectServant*  obj,
-    uint32_t        activation_flags,
-    SessionContext* ctx)
+std::optional<ObjectGuard> PoaImpl::get_object(oid_t oid) noexcept
+{
+  if (auto* user = std::get_if<UserObjects>(&id_to_ptr_)) {
+    if (oid >= max_objects_) return std::nullopt;
+    auto* obj = user->slots[oid].load(std::memory_order_acquire);
+    if (obj) return ObjectGuard(obj);
+    return std::nullopt;
+  }
+
+  auto& sys = std::get<SystemObjects>(id_to_ptr_);
+  if (auto obj = sys.get(oid))
+    return ObjectGuard(obj);
+
+  return std::nullopt;
+}
+
+ObjectId PoaImpl::finalize_activation(
+  ObjectServant*  obj,
+  oid_t           object_id,
+  uint32_t        activation_flags,
+  SessionContext* ctx)
 {
   ObjectId result;
-  auto& oid                = result.get_data();
-  auto  object_id_internal = id_to_ptr_.add(obj);
-
-  if (object_id_internal == invalid_object_id)
-    throw Exception("Poa fixed size has been exceeded");
+  auto& oid = result.get_data();
 
   obj->poa_             = shared_from_this();
-  obj->object_id_       = object_id_internal;
+  obj->object_id_       = object_id;
   obj->activation_time_ = std::chrono::system_clock::now();
 
-  oid.object_id = object_id_internal;
+  oid.object_id = object_id;
   oid.poa_idx   = get_index();
   oid.flags     = 0;
   if (pl_lifespan_ == PoaPolicy::Lifespan::Persistent)
@@ -438,7 +457,6 @@ ObjectId PoaImpl::activate_object(
   oid.class_id  = obj->get_class();
 
   using namespace std::string_literals;
-  // hostname is preferred over localhost
   const std::string default_url =
     g_cfg.hostname.empty() ? "127.0.0.1"s : g_cfg.hostname;
 
@@ -486,11 +504,10 @@ ObjectId PoaImpl::activate_object(
   }
 
   if (pl_lifespan_ == PoaPolicy::Lifespan::Transient) {
-    // std::lock_guard<std::mutex> lk(g_orb->new_activated_objects_mut_);
-    // g_orb->new_activated_objects_.push_back(obj);
-    if (!ctx) throw std::runtime_error(
-      "Object created with transient policy requires session context for activation");
-
+    if (!ctx) {
+      throw std::runtime_error(
+        "Object created with transient policy requires session context for activation");
+    }
     ctx->ref_list.add_ref(obj);
   }
 
@@ -502,12 +519,69 @@ ObjectId PoaImpl::activate_object(
   return result;
 }
 
+ObjectId PoaImpl::activate_object(
+    ObjectServant*  obj,
+    uint32_t        activation_flags,
+    SessionContext* ctx)
+{
+  if (std::holds_alternative<UserObjects>(id_to_ptr_)) {
+    throw Exception("POA requires user-supplied object IDs; call activate_object_with_id");
+  }
+
+  auto& sys = std::get<SystemObjects>(id_to_ptr_);
+  auto object_id_internal = sys.add(obj);
+  if (object_id_internal == invalid_object_id)
+    throw Exception("Poa fixed size has been exceeded");
+
+  return finalize_activation(obj, object_id_internal, activation_flags, ctx);
+}
+
+ObjectId PoaImpl::activate_object_with_id(
+    oid_t           object_id,
+    ObjectServant*  obj,
+    uint32_t        activation_flags,
+    SessionContext* ctx)
+{
+  auto* user = std::get_if<UserObjects>(&id_to_ptr_);
+  if (!user) {
+    throw Exception("POA is configured for system-generated object IDs");
+  }
+  if (object_id >= max_objects_) {
+    throw Exception("Object id exceeds max_objects for this POA");
+  }
+
+  ObjectServant* expected = nullptr;
+  if (!user->slots[object_id].compare_exchange_strong(
+        expected, obj, std::memory_order_acq_rel)) {
+    throw Exception("Object id already in use");
+  }
+
+  try {
+    return finalize_activation(obj, object_id, activation_flags, ctx);
+  } catch (...) {
+    user->slots[object_id].store(nullptr, std::memory_order_release);
+    throw;
+  }
+}
+
 void PoaImpl::deactivate_object(oid_t object_id)
 {
-  auto obj = id_to_ptr_.get(object_id);
+  ObjectServant* obj = nullptr;
+
+  if (auto* user = std::get_if<UserObjects>(&id_to_ptr_)) {
+    if (object_id < max_objects_) {
+      obj = user->slots[object_id].exchange(nullptr, std::memory_order_acq_rel);
+    }
+  } else {
+    auto& sys = std::get<SystemObjects>(id_to_ptr_);
+    obj = sys.get(object_id);
+    if (obj) {
+      sys.remove(object_id);
+    }
+  }
+
   if (obj) {
     obj->to_delete_.store(true);
-    id_to_ptr_.remove(object_id);
   } else {
     std::cerr << "deactivate_object: object not found. id = " << object_id
               << '\n';

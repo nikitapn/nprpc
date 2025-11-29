@@ -232,6 +232,60 @@ TEST_F(NprpcTest, TestLargeMessage) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
 }
 
+TEST_F(NprpcTest, UserSuppliedObjectIdPolicy) {
+    struct StaticIdServant : nprpc::ObjectServant {
+        std::string_view get_class() const noexcept override {
+            return "StaticIdServant";
+        }
+
+        void dispatch(::nprpc::Buffers&, ::nprpc::SessionContext&, bool) override {
+            throw nprpc::Exception("Not implemented");
+        }
+    } servant_one, servant_two, servant_three;
+
+    auto custom_poa = rpc->create_poa()
+        .with_max_objects(4)
+        .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+        .with_object_id_policy(nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied)
+        .build();
+
+    // User-supplied IDs must be in range [0, max_objects)
+    const nprpc::oid_t manual_id = 2;
+
+    auto oid = custom_poa->activate_object_with_id(
+        manual_id,
+        &servant_one,
+        nprpc::ObjectActivationFlags::ALLOW_TCP);
+
+    EXPECT_EQ(oid.object_id(), manual_id);
+
+    // Duplicate ID should fail
+    EXPECT_THROW(
+        custom_poa->activate_object_with_id(
+            manual_id,
+            &servant_two,
+            nprpc::ObjectActivationFlags::ALLOW_TCP),
+        nprpc::Exception);
+
+    // activate_object should fail on UserSupplied policy
+    EXPECT_THROW(
+        custom_poa->activate_object(
+            &servant_two,
+            nprpc::ObjectActivationFlags::ALLOW_TCP),
+        nprpc::Exception);
+
+    // ID out of range should fail
+    EXPECT_THROW(
+        custom_poa->activate_object_with_id(
+            100,  // exceeds max_objects (4)
+            &servant_three,
+            nprpc::ObjectActivationFlags::ALLOW_TCP),
+        nprpc::Exception);
+
+    custom_poa->deactivate_object(manual_id);
+    rpc->destroy_poa(custom_poa);
+}
+
 // Bad input validation test
 TEST_F(NprpcTest, TestBadInput) {
     class TestBadInputImpl : public nprpc::test::ITestBadInput_Servant {
