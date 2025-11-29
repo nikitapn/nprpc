@@ -26,11 +26,28 @@ option(NPRPC_BUILD_TOOLS "Build npidl tool and nameserver" ${NPRPC_IS_TOPLEVEL_P
 option(NPRPC_BUILD_TESTS "Build tests" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_BUILD_JS "Build JavaScript bindings" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_INSTALL "Generate install target" ${NPRPC_IS_TOPLEVEL_PROJECT})
+option(NPRPC_ENABLE_QUIC "Enable QUIC transport using MsQuic" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
 # Find dependencies
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
+
+# MsQuic integration
+if(NPRPC_ENABLE_QUIC)
+  message(STATUS "QUIC transport enabled - building MsQuic")
+  
+  # Configure MsQuic options before adding subdirectory
+  set(QUIC_TLS_LIB "openssl" CACHE STRING "Use system OpenSSL" FORCE)
+  set(QUIC_USE_SYSTEM_LIBCRYPTO ON CACHE BOOL "Use system libcrypto" FORCE)
+  set(QUIC_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+  set(QUIC_BUILD_TEST OFF CACHE BOOL "" FORCE)
+  set(QUIC_BUILD_PERF OFF CACHE BOOL "" FORCE)
+  set(QUIC_BUILD_SHARED ON CACHE BOOL "" FORCE)
+  set(QUIC_ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
+  
+  add_subdirectory(third_party/msquic)
+endif()
 
 # Add subdirectories
 if(NPRPC_BUILD_TOOLS)
@@ -105,6 +122,7 @@ add_library(nprpc
   src/session.cpp
   src/udp_connection.cpp
   src/udp_listener.cpp
+  src/quic_transport.cpp
   src/uuid.cpp
   src/helper.hpp
   src/helper.cpp
@@ -128,6 +146,7 @@ add_library(nprpc
   include/nprpc/impl/session.hpp
   include/nprpc/impl/udp_connection.hpp
   include/nprpc/impl/udp_listener.hpp
+  include/nprpc/impl/quic_transport.hpp
   include/nprpc/impl/uuid.hpp
   include/nprpc/impl/websocket_session.hpp
   include/nprpc/serialization/iarchive.h
@@ -165,6 +184,15 @@ target_link_libraries(nprpc
     OpenSSL::SSL
     OpenSSL::Crypto
 )
+
+# MsQuic linking
+if(NPRPC_ENABLE_QUIC)
+  target_link_libraries(nprpc PUBLIC msquic)
+  target_include_directories(nprpc PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/msquic/src/inc
+  )
+  target_compile_definitions(nprpc PUBLIC NPRPC_QUIC_ENABLED)
+endif()
 
 # Platform-specific settings
 if(WIN32)

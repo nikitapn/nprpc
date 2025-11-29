@@ -1,3 +1,6 @@
 [submodule "third_party/glaze"]
 	path = third_party/glaze
 	url = git@github.com:stephenberry/glaze.git
+[submodule "third_party/msquic"]
+	path = third_party/msquic
+	url = https://github.com/microsoft/msquic.git

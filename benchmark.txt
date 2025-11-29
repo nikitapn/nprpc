@@ -1,33 +1,35 @@
+11/29/2025
 ----------------------------------------------------------------------------------------------
 Benchmark                                    Time             CPU   Iterations UserCounters...
 ----------------------------------------------------------------------------------------------
-LatencyFixture/EmptyCall/0                 128 us         16.5 us        42367 calls/sec=60.479k/s SharedMemory
-LatencyFixture/EmptyCall/1                 116 us         17.6 us        38147 calls/sec=56.874k/s TCP
-LatencyFixture/EmptyCall/2                 126 us         20.4 us        34486 calls/sec=48.9132k/s WebSocket
-LatencyFixture/CallWithReturn/0            129 us         16.4 us        40723 calls/sec=60.8814k/s SharedMemory
-LatencyFixture/CallWithReturn/1            117 us         17.4 us        39995 calls/sec=57.3159k/s TCP
-LatencyFixture/CallWithReturn/2            123 us         20.0 us        34559 calls/sec=49.9643k/s WebSocket
-LatencyFixture/SmallStringCall/0           130 us         17.0 us        42784 bytes_per_second=5.59441Mi/s calls/sec=58.6617k/s SharedMemory
-LatencyFixture/SmallStringCall/1           116 us         17.5 us        39675 bytes_per_second=5.44952Mi/s calls/sec=57.1424k/s TCP
-LatencyFixture/SmallStringCall/2           124 us         20.3 us        34117 bytes_per_second=4.69151Mi/s calls/sec=49.1941k/s WebSocket
-LatencyFixture/NestedDataCall/0            133 us         18.2 us        40832
-LatencyFixture/NestedDataCall/1            118 us         18.3 us        37959
-LatencyFixture/NestedDataCall/2            127 us         21.2 us        33203
-LatencyFixture/LargeData1MB/0            0.922 ms        0.228 ms         3227 bytes_per_second=4.27986Gi/s calls/sec=4.38258k/s SharedMemory
-LatencyFixture/LargeData1MB/1             7.73 ms         1.18 ms          587 bytes_per_second=850.594Mi/s calls/sec=850.594/s TCP
-LatencyFixture/LargeData1MB/2             80.3 ms        0.366 ms          100 bytes_per_second=2.66691Gi/s calls/sec=2.73091k/s WebSocket
-LatencyFixture/LargeData10MB/0            17.2 ms         3.53 ms          196 bytes_per_second=2.76519Gi/s calls/sec=283.156/s SharedMemory
-LatencyFixture/LargeData10MB/1            27.1 ms         5.38 ms          128 bytes_per_second=1.81597Gi/s calls/sec=185.956/s TCP
-LatencyFixture/LargeData10MB/2            42.8 ms         4.17 ms          100 bytes_per_second=2.33964Gi/s calls/sec=239.579/s WebSocket
-GrpcLatencyFixture/EmptyCall               325 us         59.2 us        12173 calls/sec=16.8836k/s gRPC
-GrpcLatencyFixture/CallWithReturn          327 us         59.1 us        11745 calls/sec=16.9075k/s gRPC
-GrpcLatencyFixture/SmallStringCall         327 us         59.4 us        11621 bytes_per_second=1.60597Mi/s calls/sec=16.8398k/s gRPC
-GrpcLatencyFixture/NestedDataCall          337 us         62.4 us        11243 calls/sec=16.0294k/s gRPC
-GrpcLatencyFixture/LargeData1MB           2.64 ms        0.418 ms         1000 bytes_per_second=2.33711Gi/s calls/sec=2.3932k/s gRPC
-GrpcLatencyFixture/LargeData10MB          13.0 ms         3.99 ms          175 bytes_per_second=2.44899Gi/s calls/sec=250.777/s gRPC
-CapnpLatencyFixture/EmptyCall            10216 us         70.4 us         1000 calls/sec=14.213k/s Cap'n Proto
-CapnpLatencyFixture/CallWithReturn       10217 us         68.4 us         1000 calls/sec=14.6092k/s Cap'n Proto
-CapnpLatencyFixture/SmallStringCall      10222 us         68.3 us         1000 bytes_per_second=278.285k/s calls/sec=14.6466k/s Cap'n Proto
-CapnpLatencyFixture/NestedDataCall       10244 us         72.4 us         1000 calls/sec=13.8108k/s Cap'n Proto
-CapnpLatencyFixture/LargeData1MB          11.7 ms        0.550 ms         1279 bytes_per_second=1.77576Gi/s calls/sec=1.81838k/s Cap'n Proto
-CapnpLatencyFixture/LargeData10MB         23.6 ms         7.97 ms           83 bytes_per_second=1.22577Gi/s calls/sec=125.519/s Cap'n Proto
+LatencyFixture/EmptyCall/0                 131 us         16.4 us        40695 calls/sec=60.8762k/s SharedMemory
+LatencyFixture/EmptyCall/1                 119 us         18.1 us        38055 calls/sec=55.2307k/s TCP
+LatencyFixture/EmptyCall/2                 127 us         20.9 us        33556 calls/sec=47.8819k/s WebSocket
+LatencyFixture/EmptyCall/3                75.8 us         25.7 us        27010 calls/sec=38.8418k/s UDP
+LatencyFixture/CallWithReturn/0            136 us         18.5 us        39153 calls/sec=53.9736k/s SharedMemory
+LatencyFixture/CallWithReturn/1            117 us         18.0 us        39041 calls/sec=55.6472k/s TCP
+LatencyFixture/CallWithReturn/2            126 us         20.5 us        34354 calls/sec=48.7228k/s WebSocket
+LatencyFixture/SmallStringCall/0           128 us         16.7 us        40500 bytes_per_second=5.70368Mi/s calls/sec=59.8074k/s SharedMemory
+LatencyFixture/SmallStringCall/1           117 us         17.9 us        39132 bytes_per_second=5.3204Mi/s calls/sec=55.7885k/s TCP
+LatencyFixture/SmallStringCall/2           126 us         20.7 us        33605 bytes_per_second=4.61613Mi/s calls/sec=48.4036k/s WebSocket
+LatencyFixture/NestedDataCall/0            132 us         17.4 us        39950
+LatencyFixture/NestedDataCall/1            119 us         18.6 us        37414
+LatencyFixture/NestedDataCall/2            128 us         21.5 us        32983
+LatencyFixture/LargeData1MB/0            0.850 ms        0.217 ms         3331 bytes_per_second=4.50412Gi/s calls/sec=4.61221k/s SharedMemory
+LatencyFixture/LargeData1MB/1             9.39 ms         1.19 ms          599 bytes_per_second=842.741Mi/s calls/sec=842.741/s TCP
+LatencyFixture/LargeData1MB/2             82.8 ms        0.363 ms          100 bytes_per_second=2.6921Gi/s calls/sec=2.75672k/s WebSocket
+LatencyFixture/LargeData10MB/0            17.6 ms         3.77 ms          187 bytes_per_second=2.59366Gi/s calls/sec=265.591/s SharedMemory
+LatencyFixture/LargeData10MB/1            18.4 ms         5.11 ms          128 bytes_per_second=1.90973Gi/s calls/sec=195.556/s TCP
+LatencyFixture/LargeData10MB/2            43.3 ms         4.38 ms          100 bytes_per_second=2.23101Gi/s calls/sec=228.455/s WebSocket
+GrpcLatencyFixture/EmptyCall               332 us         59.9 us        11502 calls/sec=16.6859k/s gRPC
+GrpcLatencyFixture/CallWithReturn          329 us         59.3 us        11672 calls/sec=16.8552k/s gRPC
+GrpcLatencyFixture/SmallStringCall         323 us         58.0 us        11730 bytes_per_second=1.64525Mi/s calls/sec=17.2517k/s gRPC
+GrpcLatencyFixture/NestedDataCall          330 us         60.0 us        11523 calls/sec=16.6586k/s gRPC
+GrpcLatencyFixture/LargeData1MB           2.64 ms        0.404 ms         1000 bytes_per_second=2.4199Gi/s calls/sec=2.47797k/s gRPC
+GrpcLatencyFixture/LargeData10MB          13.8 ms         4.30 ms          163 bytes_per_second=2.26968Gi/s calls/sec=232.416/s gRPC
+CapnpLatencyFixture/EmptyCall            10185 us         62.6 us         1000 calls/sec=15.975k/s Cap'n Proto
+CapnpLatencyFixture/CallWithReturn       10197 us         66.3 us         1000 calls/sec=15.0764k/s Cap'n Proto
+CapnpLatencyFixture/SmallStringCall      10188 us         67.7 us         1000 bytes_per_second=280.785k/s calls/sec=14.7781k/s Cap'n Proto
+CapnpLatencyFixture/NestedDataCall       10183 us         65.5 us         1000 calls/sec=15.2785k/s Cap'n Proto
+CapnpLatencyFixture/LargeData1MB          11.9 ms        0.627 ms         1156 bytes_per_second=1.55806Gi/s calls/sec=1.59545k/s Cap'n Proto
+CapnpLatencyFixture/LargeData10MB         29.5 ms         9.35 ms           81 bytes_per_second=1.0439Gi/s calls/sec=106.895/s Cap'n Proto

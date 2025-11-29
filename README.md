@@ -27,6 +27,34 @@ NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framewo
 | **HTTP** | Web apps, stateless APIs | Browser compatible, stateless, simple | Higher overhead per request |
 | **TCP** | High-performance IPC | Low overhead, reliable | No browser support |
 | **Shared Memory** | Same-machine IPC | Zero-copy, 8x memory efficient | Local only |
+| **UDP** | Game networking, low-latency | 76µs latency, fire-and-forget | Connectionless, size limits |
+| **QUIC** | Next-gen transport | Multiplexed, encrypted, 0-RTT | *Coming soon* |
+
+## 🎮 UDP Transport
+
+UDP support is designed for game networking and other latency-sensitive applications:
+
+```cpp
+// game.npidl
+namespace game;
+
+[udp]  // All methods default to fire-and-forget
+interface GameUpdates {
+  void PlayerMoved(f32 x, f32 y, f32 z);           // ~76µs latency
+  void BulletFired(u32 weapon_id, vector3 dir);
+  
+  [reliable]  // ACK-based reliable delivery
+  void PlayerDied(u32 killer_id, u32 victim_id);
+}
+```
+
+**Features:**
+- **Fire-and-forget**: Send and don't wait - ideal for position updates
+- **Reliable mode**: ACK-based delivery with retransmission
+- **Connection caching**: Reuse connections for ~40k calls/sec throughput
+- **Low latency**: ~76µs vs ~119µs for TCP on same machine
+
+See [UDP_TRANSPORT.md](docs/UDP_TRANSPORT.md) for details.
 
 ## 🛠️ Installation
 
@@ -378,41 +406,52 @@ await objectManager.ProcessData(oid, data);
 
 NPRPC includes comprehensive benchmarks comparing against gRPC and Cap'n Proto.
 
-*Benchmarks built with -O3 optimization.*
+*Benchmarks built with -O3 optimization. Results from November 2025.*
 
 ### Benchmark Results
 
 #### Empty Call Latency (no payload)
 | Framework | Time | Calls/sec |
 |-----------|------|-----------|
-| **NPRPC TCP** | 116 μs | 56.874k/s |
-| **NPRPC WebSocket** | 126 μs | 48.913k/s |
-| **NPRPC SharedMemory** | 128 μs | 60.479k/s |
-| gRPC | 325 μs | 16.884k/s |
-| Cap'n Proto | 10,216 μs | 14.213k/s |
+| **NPRPC UDP** | **76 μs** | **38.8k/s** |
+| **NPRPC TCP** | 119 μs | 55.2k/s |
+| **NPRPC WebSocket** | 127 μs | 47.9k/s |
+| **NPRPC SharedMemory** | 131 μs | 60.9k/s |
+| gRPC | 332 μs | 16.7k/s |
+| Cap'n Proto | 10,185 μs | 16.0k/s |
+
+#### Call With Return Value
+| Framework | Time | Calls/sec |
+|-----------|------|-----------|
+| **NPRPC TCP** | 117 μs | 55.6k/s |
+| **NPRPC WebSocket** | 126 μs | 48.7k/s |
+| **NPRPC SharedMemory** | 136 μs | 54.0k/s |
+| gRPC | 329 μs | 16.9k/s |
+| Cap'n Proto | 10,197 μs | 15.1k/s |
 
 #### Large Data Transfer (1 MB payload)
 | Framework | Time | Throughput |
 |-----------|------|------------|
-| **NPRPC SharedMemory** | **0.922 ms** | **4.28 GiB/s** |
-| gRPC | 2.64 ms | 2.34 GiB/s |
-| **NPRPC TCP** | 7.73 ms | 850.59 MiB/s |
-| Cap'n Proto | 11.7 ms | 1.78 GiB/s |
-| **NPRPC WebSocket** | 80.3 ms | 2.67 GiB/s |
+| **NPRPC SharedMemory** | **0.85 ms** | **4.50 GiB/s** |
+| gRPC | 2.64 ms | 2.42 GiB/s |
+| **NPRPC TCP** | 9.39 ms | 843 MiB/s |
+| Cap'n Proto | 11.9 ms | 1.56 GiB/s |
+| **NPRPC WebSocket** | 82.8 ms | 2.69 GiB/s |
 
 #### Large Data Transfer (10 MB payload)
 | Framework | Time | Throughput |
 |-----------|------|------------|
-| gRPC | 13.0 ms | 2.45 GiB/s |
-| **NPRPC SharedMemory** | 17.2 ms | 2.77 GiB/s |
-| Cap'n Proto | 23.6 ms | 1.23 GiB/s |
-| **NPRPC TCP** | 27.1 ms | 1.82 GiB/s |
-| **NPRPC WebSocket** | 42.8 ms | 2.34 GiB/s |
+| gRPC | 13.8 ms | 2.27 GiB/s |
+| **NPRPC SharedMemory** | 17.6 ms | 2.59 GiB/s |
+| **NPRPC TCP** | 18.4 ms | 1.91 GiB/s |
+| Cap'n Proto | 29.5 ms | 1.04 GiB/s |
+| **NPRPC WebSocket** | 43.3 ms | 2.23 GiB/s |
 
 **Key Takeaways:**
-- NPRPC SharedMemory with zero-copy is **8x faster** than TCP for large payloads
-- NPRPC is **2-4x faster** than gRPC for empty calls
-- NPRPC SharedMemory achieves **4.28 GiB/s** throughput for 1MB payloads
+- **UDP is fastest** for fire-and-forget calls at 76μs latency
+- NPRPC is **3-4x faster** than gRPC for RPC calls
+- NPRPC SharedMemory achieves **4.50 GiB/s** throughput for 1MB payloads
+- Cap'n Proto has high latency due to 10ms polling interval
 
 ### Running Benchmarks
 
