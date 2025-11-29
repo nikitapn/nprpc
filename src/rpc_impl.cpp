@@ -1,6 +1,9 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/shared_memory_connection.hpp>
 #include <nprpc/impl/udp_connection.hpp>
+#ifdef NPRPC_QUIC_ENABLED
+#include <nprpc/impl/quic_transport.hpp>
+#endif
 #include <nprpc_nameserver.hpp>
 
 #include <boost/uuid/uuid.hpp>
@@ -56,6 +59,9 @@ void RpcImpl::destroy()
   stop_udp_listener();
   clear_udp_connections();
   stop_shared_memory_listener();
+#ifdef NPRPC_QUIC_ENABLED
+  stop_quic_listener();
+#endif
   
   // Shutdown and clear open sessions to release their async operations
   // Move sessions out of the locked section to avoid deadlock:
@@ -120,6 +126,11 @@ NPRPC_API std::shared_ptr<Session> RpcImpl::get_session(
       case EndPointType::SharedMemory:
         con = std::make_shared<SharedMemoryConnection>(endpoint, ioc_);
         break;
+#ifdef NPRPC_QUIC_ENABLED
+      case EndPointType::Quic:
+        con = make_quic_client_session(endpoint, ioc_);
+        break;
+#endif
       default:
         throw nprpc::ExceptionCommFailure("nprpc::impl::RpcImpl::get_session: Unknown endpoint type: " + 
                                           std::to_string(static_cast<int>(endpoint.type())));
@@ -341,6 +352,9 @@ RpcImpl::RpcImpl(
   init_http_server(ioc_);
   init_shared_memory_listener(ioc_);
   init_udp_listener(ioc_);
+#ifdef NPRPC_QUIC_ENABLED
+  init_quic(ioc_);
+#endif
 }
 
 void ReferenceListImpl::add_ref(ObjectServant* obj)
@@ -501,6 +515,14 @@ ObjectId PoaImpl::finalize_activation(
     }
     oid.urls += (std::string(udp_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_udp_port)) + ';';
+  }
+
+  if (activation_flags & ObjectActivationFlags::ALLOW_QUIC) {
+    if (g_cfg.listen_quic_port == 0) {
+      throw std::runtime_error("QUIC port not configured. Use set_listen_quic_port()");
+    }
+    oid.urls += (std::string(quic_prefix) + default_url + ":" +
+                 std::to_string(g_cfg.listen_quic_port)) + ';';
   }
 
   if (pl_lifespan_ == PoaPolicy::Lifespan::Transient) {

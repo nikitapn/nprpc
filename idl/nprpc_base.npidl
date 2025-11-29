@@ -38,10 +38,11 @@ enum EndPointType {
   TcpTethered,
   WebSocket,
   SecuredWebSocket,
-  Http,
+  Http, // HTTP/1.1 or HTTP/3 (not implemented yet)
   SecuredHttp,
   SharedMemory,
   Udp,
+  Quic
 };
 
 namespace detail {
@@ -80,6 +81,7 @@ message ObjectId {
     *   [PLAIN]            http://<hostname|ip>:<port>/rpc
     *   [SECURED]          https://<hostname>:<port>/rpc
     *   [PLAIN]            mem://<path>
+    *   [SECURED]          quic://<hostname>:<port>
     */
   urls: string;
 }
@@ -88,18 +90,31 @@ message ObjectId {
 
 namespace impl {
 enum MessageId: u32 {
+  // Function call
   FunctionCall = 0,
+  // Function response
   BlockResponse,
+  // Increase reference count
   AddReference,
+  // Decrease reference count
   ReleaseObject,
+  // Success of the operation
   Success,
+  // Generic exception
   Exception,
+  // Poa does not exist
   Error_PoaNotExist,
+  // Object does not exist
   Error_ObjectNotExist,
+  // Timeout waiting for response
   Error_CommFailure,
+  // Unknown function index
   Error_UnknownFunctionIdx,
+  // Unknown message id
   Error_UnknownMessageId,
+  // Attempt to access unsecured object
   Error_BadAccess,
+  // Invalid input data (array out of bounds, etc)
   Error_BadInput
 }
 

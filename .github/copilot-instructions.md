@@ -8,8 +8,8 @@
 - Benchmarks under `benchmark/src` reuse IDL from `benchmark/idl`; use them when checking regressions against gRPC/Cap'n Proto.
 - JavaScript bindings are in `nprpc_js/` (webpack build) and exercised in `test/js`; the current bundle assumes a browser global `self`, so Node-based tests need a shim or a Node flavor build.
 ## Build & Generation Workflow
-- Standard dev configure: `cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNPRPC_BUILD_TESTS=ON -DNPRPC_BUILD_TOOLS=ON -DNPRPC_BUILD_JS=ON`; add `-DNPRPC_ENABLE_QUIC=ON` to pull `third_party/msquic`.
-- Build everything with `cmake --build build -j$(nproc)`; npidl, npnameserver, and shared libs all come from the same tree (no separate bootstrap).
+- Standard dev configure: `cmake -S . -B .build_release -DCMAKE_BUILD_TYPE=Release -DNPRPC_BUILD_TESTS=ON -DNPRPC_BUILD_TOOLS=ON -DNPRPC_BUILD_JS=ON`; add `-DNPRPC_ENABLE_QUIC=ON` to pull `third_party/msquic`.
+- Build everything with `cmake --build .build_release -j$(nproc)`; npidl, npnameserver, and shared libs all come from the same tree (no separate bootstrap).
 - To regenerate stubs manually: `npidl path/to/foo.npidl --cpp --ts --output-dir gen`; in CMake, depend on the `<module>_gen` custom target exposed by `npidl_generate_idl_files`.
 - POAs are created via `nprpc::PoaBuilder` off an `Rpc`; set limits (`with_max_objects`), lifetime, and optionally `with_object_id_policy` (default system-generated, `UserSupplied` unlocks `activate_object_with_id` for deterministic IDs embedded in JS bundles) before calling the relevant activation API with explicit `ObjectActivationFlags` for allowed transports.
 - Shared-memory URLs are appended during activation only when `ALLOW_SHARED_MEMORY` is set and the process listener UUID has been registered; consult `docs/SHARED_MEMORY_ARCHITECTURE.md` because several TODOs still exist.
@@ -20,7 +20,7 @@
 - Handy targets: `run_nprpc_tests`, `run_nprpc_tests_verbose`, and the focused executables (`test_lock_free_ring_buffer`, `test_shared_memory_endpoint`, etc.) that ctest registers as separate suites.
 - Large-message coverage matters: `NprpcTest.TestLargeMessage` verifies the async_write fix for 3MB payloads, while `TestNested` pushes 6.7MB nested data—keep these updated when touching serialization.
 - JS parity tests run from `test/js` with `npm install && npm test`; ensure `nprpc_js` is built (`npm run build-prd`) and copy the generated `test.ts` from the build tree before running.
-- Benchmarks build via `cmake --build build --target nprpc_benchmarks` or the convenience script `./run_benchmark.sh --benchmark_filter=LatencyFixture/LargeData1MB/0` (script auto-builds `.build_release`).
+- Benchmarks build via `cmake --build .build_release --target nprpc_benchmarks` or the convenience script `./run_benchmark.sh --benchmark_filter=LatencyFixture/LargeData1MB/0` (script auto-builds `.build_release`).
 ## Contribution Conventions
 - Update the transport matrix/table in `README.md` whenever you add or deprecate a transport flag, and document new workflows under `docs/*`.
 - Keep host/endpoint metadata in sync across `include/nprpc/host_json.hpp`, generated TS clients, and sample configs—HTTP clients rely on `.http` proxies mirroring those structs.

@@ -53,11 +53,13 @@ QUIC provides everything UDP fragmentation tries to do, plus more:
 * [x] Create `QuicListener` class (server-side)
   - Accepts incoming QUIC connections
   - Creates server sessions per connection
-* [ ] Implement `QuicServerSession` for dispatching
-* [ ] Wire up QUIC to RPC framework (endpoint URL: `quic://host:port`)
+* [x] Implement `QuicServerSession` for dispatching
+* [x] Wire up QUIC to RPC framework (endpoint URL: `quic://host:port`)
+* [x] Add `ALLOW_QUIC` activation flag
+* [x] Add `set_listen_quic_port()` to RpcBuilder
 
 ### Phase 2: Stream Management
-* [ ] Use bidirectional streams for request/response RPC (default, reliable)
+* [x] Use bidirectional streams for request/response RPC (default, reliable)
 * [ ] Use QUIC DATAGRAM extension for `[unreliable]` methods
 * [ ] Connection pooling and multiplexing
 
@@ -81,7 +83,7 @@ QUIC provides everything UDP fragmentation tries to do, plus more:
 Options for serving web clients over HTTP/3:
 1. **msh3** - Minimal HTTP/3 on MsQuic (same author)
 2. **External proxy** - Caddy/nginx with HTTP/3, proxy to NPRPC
-3. **Custom** - Build HTTP/3 framing on MsQuic streams
+3. **Custom** - Build HTTP/3 framing on MsQuic streams (this sounds complex)
 
 ### Considerations
 * msh3 is minimal (68 stars) but integrates well with MsQuic
@@ -98,7 +100,7 @@ Options for serving web clients over HTTP/3:
 │  (IPC)      │  (boost)    │  (boost)    │   (MsQuic)        │
 ├─────────────┴─────────────┴─────────────┴───────────────────┤
 │                    Transport Selection                      │
-│  shm://     tcp://        udp://        quic://             │
+│  shm://     tcp://         udp://        quic://             │
 │             ws://  wss://                                   │
 │             http:// https://  (browser RPC over HTTP/1.1)   │
 │                               (future: HTTP/3 over QUIC)    │

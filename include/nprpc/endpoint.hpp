@@ -18,6 +18,7 @@ static constexpr std::string_view http_prefix   = "http://";
 static constexpr std::string_view https_prefix  = "https://";
 static constexpr std::string_view mem_prefix    = "mem://";
 static constexpr std::string_view udp_prefix    = "udp://";
+static constexpr std::string_view quic_prefix   = "quic://";
 
 class EndPoint
 {
@@ -44,6 +45,8 @@ class EndPoint
         return mem_prefix;
       case EndPointType::Udp:
         return udp_prefix;
+      case EndPointType::Quic:
+        return quic_prefix;
       default:
         assert(false);
         return "unknown://";
@@ -153,6 +156,9 @@ class EndPoint
     } else if (url.find(udp_prefix) == 0) {
       type_ = EndPointType::Udp;
       split(url, udp_prefix, true);
+    } else if (url.find(quic_prefix) == 0) {
+      type_ = EndPointType::Quic;
+      split(url, quic_prefix, true);
     } else {
       throw std::invalid_argument("Invalid URL format");
     }

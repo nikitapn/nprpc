@@ -5,6 +5,8 @@
 #ifdef NPRPC_QUIC_ENABLED
 
 #include <nprpc/export.hpp>
+#include <nprpc/flat_buffer.hpp>
+#include <nprpc/endpoint.hpp>
 #include <msquic.h>
 #include <boost/asio.hpp>
 #include <memory>
@@ -12,12 +14,17 @@
 #include <functional>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
+#include <deque>
+#include <condition_variable>
 
 namespace nprpc::impl {
 
 // Forward declarations
 class QuicConnection;
+class QuicServerConnection;
 class QuicListener;
+class Session;
 
 /**
  * MsQuic API wrapper - manages the QUIC API handle
@@ -72,6 +79,9 @@ public:
     ConnectCallback callback
   );
   
+  // Send/receive for RPC - blocking style
+  void send_receive(flat_buffer& buffer, uint32_t timeout_ms);
+  
   // Send data on a stream (reliable)
   void async_send_stream(
     const uint8_t* data,
@@ -90,7 +100,11 @@ public:
   
   bool is_connected() const { return connected_; }
   
+  boost::asio::io_context& io_context() { return ioc_; }
+  
 private:
+  friend class QuicListener;
+  
   // MsQuic callbacks
   static QUIC_STATUS QUIC_API connection_callback(
     HQUIC connection,
@@ -116,17 +130,77 @@ private:
   ConnectCallback connect_callback_;
   ReceiveCallback receive_callback_;
   
+  // For synchronous send/receive
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  std::vector<uint8_t> pending_receive_;
+  bool receive_complete_ = false;
+};
+
+/**
+ * QUIC Server Connection - wraps a server-side accepted connection
+ * 
+ * This is similar to QuicConnection but manages the server side of an
+ * accepted QUIC connection. It handles RPC request/response pairs.
+ */
+class NPRPC_API QuicServerConnection : public std::enable_shared_from_this<QuicServerConnection> {
+public:
+  using MessageCallback = std::function<void(std::vector<uint8_t>&&)>;
+  
+  QuicServerConnection(boost::asio::io_context& ioc, HQUIC connection, HQUIC configuration);
+  ~QuicServerConnection();
+  
+  // Set callback for complete messages
+  void set_message_callback(MessageCallback callback);
+  
+  // Send response data
+  bool send(const void* data, size_t len);
+  
+  // Get remote address for endpoint
+  std::string remote_address() const { return remote_addr_; }
+  uint16_t remote_port() const { return remote_port_; }
+  
+  void start();
+  void close();
+  
+private:
+  static QUIC_STATUS QUIC_API connection_callback(
+    HQUIC connection,
+    void* context,
+    QUIC_CONNECTION_EVENT* event
+  );
+  
+  static QUIC_STATUS QUIC_API stream_callback(
+    HQUIC stream,
+    void* context,
+    QUIC_STREAM_EVENT* event
+  );
+  
+  void handle_connection_event(QUIC_CONNECTION_EVENT* event);
+  void handle_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event);
+  void process_receive_buffer();
+  
+  boost::asio::io_context& ioc_;
+  HQUIC connection_;
+  HQUIC configuration_;
+  HQUIC stream_ = nullptr;
+  
+  MessageCallback message_callback_;
+  std::vector<uint8_t> receive_buffer_;
+  std::string remote_addr_;
+  uint16_t remote_port_ = 0;
+  
   std::mutex mutex_;
 };
 
 /**
  * QUIC Listener - server side
  * 
- * Listens for incoming QUIC connections and creates sessions.
+ * Listens for incoming QUIC connections and creates server sessions.
  */
 class NPRPC_API QuicListener {
 public:
-  using AcceptCallback = std::function<void(std::shared_ptr<QuicConnection>)>;
+  using AcceptCallback = std::function<void(std::shared_ptr<QuicServerConnection>)>;
   
   QuicListener(
     boost::asio::io_context& ioc,
@@ -158,6 +232,16 @@ private:
   std::string cert_file_;
   std::string key_file_;
 };
+
+// Global functions for QUIC transport initialization
+NPRPC_API void init_quic(boost::asio::io_context& ioc);
+NPRPC_API void stop_quic_listener();
+
+// Create a client-side QUIC session (called from get_session)
+NPRPC_API std::shared_ptr<Session> make_quic_client_session(
+  const EndPoint& endpoint,
+  boost::asio::io_context& ioc
+);
 
 } // namespace nprpc::impl
 

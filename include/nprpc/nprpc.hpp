@@ -126,14 +126,16 @@ enum Enum : uint32_t {
   ALLOW_SHARED_MEMORY      = 1 << 6,
   // Allow udp connections to this object
   ALLOW_UDP                = 1 << 7,
+  // Allow QUIC connections to this object
+  ALLOW_QUIC               = 1 << 8,
   // Allow all connection types
   ALLOW_ALL =
-    ALLOW_TCP | ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET | ALLOW_HTTP | ALLOW_SECURED_HTTP | ALLOW_SHARED_MEMORY
+    ALLOW_TCP | ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET | ALLOW_HTTP | ALLOW_SECURED_HTTP | ALLOW_SHARED_MEMORY | ALLOW_QUIC
 };
 }
 
 class NPRPC_API PoaBuilder {
-  uint32_t objects_max_ = 1000;
+  uint32_t objects_max_ = 32;
   PoaPolicy::Lifespan lifespan_policy_ = PoaPolicy::Lifespan::Transient;
   PoaPolicy::ObjectIdPolicy object_id_policy_ = PoaPolicy::ObjectIdPolicy::SystemGenerated;
   Rpc* rpc_ = nullptr;
@@ -319,6 +321,9 @@ struct Config {
   uint16_t                   listen_tcp_port   = 0;
   uint16_t                   listen_http_port  = 0;
   uint16_t                   listen_udp_port   = 0;
+  uint16_t                   listen_quic_port  = 0;
+  std::string                quic_cert_file;
+  std::string                quic_key_file;
   std::string                http_root_dir;
   std::vector<std::string>   spa_links;
   ssl::context               ssl_context_server{ssl::context::tlsv13_server};
@@ -370,6 +375,17 @@ class RpcBuilder {
   RpcBuilder& set_listen_udp_port(uint16_t port) noexcept
   {
     cfg_.listen_udp_port = port;
+    return *this;
+  }
+
+  RpcBuilder& set_listen_quic_port(
+    uint16_t port,
+    std::string_view cert_file,
+    std::string_view key_file) noexcept
+  {
+    cfg_.listen_quic_port = port;
+    cfg_.quic_cert_file = cert_file;
+    cfg_.quic_key_file = key_file;
     return *this;
   }
 
