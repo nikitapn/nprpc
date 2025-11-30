@@ -180,6 +180,71 @@ target_link_libraries(test_shared_memory_listener
 
 add_test(NAME SharedMemoryListener COMMAND test_shared_memory_listener)
 
+# HTTP/3 Shell Script Tests (requires server to be started manually or via wrapper)
+if(NPRPC_ENABLE_HTTP3)
+  # Create a wrapper script that starts the server, runs tests, and stops it
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_http3_rpc.sh
+    ${CMAKE_CURRENT_BINARY_DIR}/test_http3_rpc.sh
+    COPYONLY
+  )
+  
+  # Create a test wrapper script
+  file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/run_http3_tests.sh
+"#!/bin/bash
+# Auto-generated wrapper to run HTTP/3 tests with server
+
+SCRIPT_DIR=\"$(cd \"$(dirname \"\${BASH_SOURCE[0]}\")\" && pwd)\"
+SERVER=\"\${SCRIPT_DIR}/nprpc_server_test\"
+TEST_SCRIPT=\"\${SCRIPT_DIR}/test_http3_rpc.sh\"
+
+cleanup() {
+    # Kill server and nameserver processes
+    kill \$SERVER_PID 2>/dev/null
+    pkill -P \$SERVER_PID 2>/dev/null  # Kill child processes (nameserver)
+    sleep 1
+    kill -9 \$SERVER_PID 2>/dev/null   # Force kill if still running
+    pkill -9 -f npnameserver 2>/dev/null
+}
+
+trap cleanup EXIT
+
+# Start server in background
+\"\$SERVER\" &
+SERVER_PID=\$!
+
+# Wait for server to start
+sleep 3
+
+# Run tests
+\"\$TEST_SCRIPT\"
+RESULT=\$?
+
+exit \$RESULT
+")
+
+  # Make the wrapper executable
+  file(CHMOD ${CMAKE_CURRENT_BINARY_DIR}/run_http3_tests.sh
+    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                GROUP_READ GROUP_EXECUTE
+                WORLD_READ WORLD_EXECUTE
+  )
+  
+  add_test(
+    NAME HTTP3Transport
+    COMMAND ${CMAKE_CURRENT_BINARY_DIR}/run_http3_tests.sh
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
+  
+  set_tests_properties(HTTP3Transport PROPERTIES
+    TIMEOUT 60
+    LABELS "http3;integration"
+  )
+  
+  # Add dependency on the server test executable
+  add_dependencies(nprpc_test nprpc_server_test)
+endif()
+
 # Ensure the auxiliary shared-memory test executables are built before
 # running the post-build CTest invocation on the main `nprpc_test` target.
 add_dependencies(nprpc_test
