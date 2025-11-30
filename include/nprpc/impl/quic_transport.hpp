@@ -219,8 +219,14 @@ public:
   // Start listening
   void start(uint16_t port, AcceptCallback callback);
   
-  // Stop listening
+  // Stop listening and close all connections
   void stop();
+  
+  // Track a connection (called internally)
+  void add_connection(std::shared_ptr<QuicServerConnection> conn);
+  
+  // Remove a connection (called when connection closes)
+  void remove_connection(QuicServerConnection* conn);
   
 private:
   static QUIC_STATUS QUIC_API listener_callback(
@@ -238,6 +244,10 @@ private:
   AcceptCallback accept_callback_;
   std::string cert_file_;
   std::string key_file_;
+  
+  // Track active connections for cleanup
+  std::mutex connections_mutex_;
+  std::vector<std::shared_ptr<QuicServerConnection>> connections_;
 };
 
 // Global functions for QUIC transport initialization

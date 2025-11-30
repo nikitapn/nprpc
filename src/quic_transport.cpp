@@ -879,6 +879,21 @@ void QuicListener::start(uint16_t port, AcceptCallback callback) {
 }
 
 void QuicListener::stop() {
+  // First, close all tracked connections to break callback cycles
+  std::vector<std::shared_ptr<QuicServerConnection>> connections_to_close;
+  {
+    std::lock_guard lock(connections_mutex_);
+    connections_to_close = std::move(connections_);
+    connections_.clear();
+  }
+  
+  for (auto& conn : connections_to_close) {
+    conn->set_message_callback(nullptr);
+    conn->set_datagram_callback(nullptr);
+    conn->close();
+  }
+  connections_to_close.clear();
+  
   auto& quic = QuicApi::instance();
   
   if (listener_) {
@@ -890,6 +905,22 @@ void QuicListener::stop() {
     quic.api()->ConfigurationClose(configuration_);
     configuration_ = nullptr;
   }
+}
+
+void QuicListener::add_connection(std::shared_ptr<QuicServerConnection> conn) {
+  std::lock_guard lock(connections_mutex_);
+  connections_.push_back(std::move(conn));
+}
+
+void QuicListener::remove_connection(QuicServerConnection* conn) {
+  std::lock_guard lock(connections_mutex_);
+  connections_.erase(
+    std::remove_if(connections_.begin(), connections_.end(),
+      [conn](const std::shared_ptr<QuicServerConnection>& c) {
+        return c.get() == conn;
+      }),
+    connections_.end()
+  );
 }
 
 QUIC_STATUS QUIC_API QuicListener::listener_callback(
@@ -929,6 +960,9 @@ void QuicListener::handle_listener_event(QUIC_LISTENER_EVENT* event) {
         configuration_
       );
       conn->start();
+      
+      // Track connection for cleanup
+      add_connection(conn);
       
       if (accept_callback_) {
         accept_callback_(conn);
