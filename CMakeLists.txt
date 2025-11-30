@@ -31,7 +31,14 @@ option(NPRPC_BUILD_TESTS "Build tests" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_BUILD_JS "Build JavaScript bindings" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_INSTALL "Generate install target" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_ENABLE_QUIC "Enable QUIC transport using MsQuic" OFF)
+option(NPRPC_ENABLE_HTTP3 "Enable HTTP/3 server using msh3" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+
+# HTTP/3 requires QUIC
+if(NPRPC_ENABLE_HTTP3 AND NOT NPRPC_ENABLE_QUIC)
+  message(STATUS "HTTP/3 requires QUIC - enabling QUIC transport")
+  set(NPRPC_ENABLE_QUIC ON CACHE BOOL "Enable QUIC transport using MsQuic" FORCE)
+endif()
 
 # Find dependencies
 find_package(Threads REQUIRED)
@@ -54,6 +61,22 @@ if(NPRPC_ENABLE_QUIC)
   set(QUIC_ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
   
   add_subdirectory(third_party/msquic)
+endif()
+
+# HTTP/3 support via msh3
+if(NPRPC_ENABLE_HTTP3)
+  message(STATUS "HTTP/3 server enabled - building msh3")
+  
+  # Build ls-qpack first (msh3 needs it)
+  set(LSQPACK_TESTS OFF CACHE BOOL "" FORCE)
+  set(LSQPACK_BIN OFF CACHE BOOL "" FORCE)
+  add_subdirectory(third_party/ls-qpack)
+  
+  # Build msh3 (will find existing msquic and ls-qpack targets)
+  set(MSH3_TOOL OFF CACHE BOOL "" FORCE)
+  set(MSH3_PING OFF CACHE BOOL "" FORCE)
+  set(MSH3_TEST OFF CACHE BOOL "" FORCE)
+  add_subdirectory(third_party/msh3)
 endif()
 
 # Add subdirectories

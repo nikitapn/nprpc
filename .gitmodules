@@ -4,3 +4,9 @@
 [submodule "third_party/msquic"]
 	path = third_party/msquic
 	url = https://github.com/microsoft/msquic.git
+[submodule "third_party/ls-qpack"]
+	path = third_party/ls-qpack
+	url = https://github.com/nikitapn/ls-qpack.git
+[submodule "third_party/msh3"]
+	path = third_party/msh3
+	url = https://github.com/nikitapn/msh3.git
