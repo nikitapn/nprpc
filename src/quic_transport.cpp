@@ -17,7 +17,7 @@
 
 #if NPRPC_QUIC_DEBUG
 # define NPRPC_QUIC_DEBUG_LOG(format_string, ...) \
-    std::clog << std::format("[QUIC DEBUG] " format_string "\n", __VA_ARGS__) << std::endl;
+    std::clog << std::format("[QUIC DEBUG] " format_string "\n" __VA_OPT__(,) __VA_ARGS__) << std::endl;
 #else
 # define NPRPC_QUIC_DEBUG_LOG(format_string, ...) \
     do { } while(0)

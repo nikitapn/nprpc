@@ -3,9 +3,11 @@ import './websocket-polyfill';
 
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
+import { installHttp3Fetch, http3Fetch } from './http3-fetch-polyfill';
 // Use the Node.js compatible build
 // const NPRPC = require('nprpc/index.node.js');
 import * as NPRPC from 'nprpc';
+import { EndPointType } from 'nprpc';
 import * as test from '../src/gen/nprpc_test';
 import { ServerManager } from './server-manager';
 
@@ -482,4 +484,166 @@ describe('NPRPC Integration Tests', function() {
             expect(result).to.equal(100);
         });
     }); // describe HTTP Transport
+
+    describe('HTTP/3 Transport', function() {
+        let testBasic: test.TestBasic;
+        let testOptional: test.TestOptional;
+        let testNested: test.TestNested;
+        let http3Available = false;
+        // HTTP/3 now uses same port as HTTP (22223)
+        const HTTP3_PORT = 22223;
+
+        before(async function() {
+            this.timeout(10000);
+            
+            // Check if HTTP/3 is available (curl with HTTP/3 support)
+            http3Available = await installHttp3Fetch();
+            if (!http3Available) {
+                console.log('[HTTP/3] Skipping HTTP/3 tests - curl does not support HTTP/3');
+                return;
+            }
+            
+            testBasic = await resolveTestObject('nprpc_test_basic', test.TestBasic);
+            testOptional = await resolveTestObject('nprpc_test_optional', test.TestOptional);
+            testNested = await resolveTestObject('nprpc_test_nested', test.TestNested);
+            
+            // Override endpoint for HTTP/3: set port and type to SecuredHttp
+            (testBasic.endpoint as any).port = HTTP3_PORT;
+            (testBasic.endpoint as any).type = EndPointType.SecuredHttp;
+            (testOptional.endpoint as any).port = HTTP3_PORT;
+            (testOptional.endpoint as any).type = EndPointType.SecuredHttp;
+            (testNested.endpoint as any).port = HTTP3_PORT;
+            (testNested.endpoint as any).type = EndPointType.SecuredHttp;
+            
+            console.log(`[HTTP/3] Test endpoint configured: https://127.0.0.1:${HTTP3_PORT}`);
+        });
+
+        it('should return boolean via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            const result = await testBasic.http.ReturnBoolean();
+            expect(result).to.be.true;
+        });
+
+        it('should return u32 via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            const result = await testBasic.http.ReturnU32();
+            expect(result).to.equal(42);
+        });
+
+        it('should handle input parameters via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            const testData = new Array(256);
+            for (let i = 0; i < 256; i++) {
+                testData[i] = i;
+            }
+            const result = await testBasic.http.In(100, true, new Uint8Array(testData));
+            expect(result).to.be.true;
+        });
+
+        it('should return output parameters directly via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            const result = await testBasic.http.Out();
+            
+            expect(result.a).to.equal(100);
+            expect(result.b).to.be.true;
+            expect(result.c.length).to.equal(256);
+            
+            for (let i = 0; i < 256; i++) {
+                expect(result.c[i]).to.equal(i);
+            }
+        });
+
+        it('should return array of IDs via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            const result = await testBasic.http.ReturnIdArray();
+            expect(result).to.be.an('array').that.has.lengthOf(10);
+            expect(result).to.deep.equal([1,2,3,4,5,6,7,8,9,10]);
+        });
+
+        it('should return struct via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            const result = await testBasic.http.OutStruct();
+            expect(result).to.not.be.undefined;
+            expect(result.a).to.equal(12345);
+            expect(result.b).to.equal('Hello from OutStruct');
+            expect(result.c).to.equal('Another string');
+        });
+
+        it('should return array of structs via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            const result = await testBasic.http.OutArrayOfStructs();
+            expect(result).to.not.be.undefined;
+            expect(result).to.be.an('array').that.has.lengthOf(10);
+            for (let i = 0; i < 10; i++) {
+                expect(result[i].id).to.equal(i + 1);
+            }
+        });
+
+        it('should throw exception via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            try {
+                await testBasic.http.InException();
+                expect.fail('Expected InException to throw an exception');
+            } catch (error) {
+                expect(error).to.be.instanceOf(test.SimpleException);
+                const simpleEx = error as unknown as test.SimpleException;
+                expect(simpleEx.message).to.equal('This is a test exception');
+                expect(simpleEx.code).to.equal(123);
+            }
+        });
+
+        it('should handle optional values via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            const result = await testOptional.http.In(100, {
+                a: 100,
+                b: "test_b",
+                c: "test_c"
+            });
+            expect(result).to.be.true;
+        });
+
+        it('should return optional via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            const result = await testOptional.http.ReturnOpt1();
+            expect(result.str).to.equal('test_string');
+            expect(result.stream).to.be.an('uint8array').that.has.lengthOf(10);
+            expect(result.stream).to.deep.equal(new Uint8Array([0,1,2,3,4,5,6,7,8,9]));
+        });
+
+        it('should handle nested structures via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            const result = await testNested.http.Out();
+            
+            expect(result).to.not.be.undefined;
+            expect(result.a).to.be.an('array').that.has.lengthOf(1024);
+            for (let i = 0; i < 1024; i++) {
+                expect(result.a[i].a).to.equal(i);
+                expect(result.a[i].b).to.equal(nested_test_str1);
+                expect(result.a[i].c).to.equal(nested_test_str2);
+            }
+            expect(result.b).to.be.an('array').that.has.lengthOf(2048);
+            let b = false;
+            for (let i = 0; i < 2048; i++) {
+                expect(result.b[i].a).to.equal(nested_test_str1);
+                expect(result.b[i].b).to.equal(nested_test_str2);
+                expect(result.b[i].c).to.not.be.undefined;
+                expect(result.b[i].c).to.equal(b = !b);
+            }
+        });
+
+        it('should return deeply nested structures via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            const result = await testNested.http.ReturnNested();
+            expect(result.x).to.equal('top_level_string');
+            expect(result.z).to.equal(1n);
+            expect(result.y).to.not.be.undefined;
+            expect(result.y.x).to.equal('level1_string');
+            expect(result.y.z).to.equal(2n);
+            expect(result.y.y).to.not.be.undefined;
+            expect(result.y.y.x).to.equal('level2_string');
+            expect(result.y.y.z).to.equal(3n);
+            expect(result.y.y.y).to.be.an('uint8array').that.has.lengthOf(10);
+            expect(result.y.y.y).to.deep.equal(new Uint8Array([1,2,3,4,5,6,7,8,9,10]));
+        });
+    }); // describe HTTP/3 Transport
 });

@@ -19,6 +19,17 @@
 #include <memory>
 #include <vector>
 #include <cstring>
+#include <format>
+
+#define NPRPC_HTTP3_DEBUG 0
+
+#if NPRPC_HTTP3_DEBUG
+# define NPRPC_HTTP3_DEBUG_LOG(format_string, ...) \
+    std::clog << std::format("[HTTP3 DEBUG] " format_string "\n" __VA_OPT__(,) __VA_ARGS__) << std::endl;
+#else
+# define NPRPC_HTTP3_DEBUG_LOG(format_string, ...) \
+    do { } while(0)
+#endif
 
 namespace nprpc::impl {
 
@@ -35,17 +46,27 @@ struct Http3Request {
     std::string method;
     std::string path;
     std::string content_type;
+    uint32_t content_length = 0;
     std::vector<uint8_t> body;
     bool headers_complete = false;
     bool body_complete = false;
+    bool processed = false;  // Track if request has been processed
+    
+    // Response data - must be kept alive until SEND_COMPLETE
+    std::string response_body;
+    std::string response_status;
+    std::string response_content_type;
+    std::string response_content_length;
     
     void reset() {
         method.clear();
         path.clear();
         content_type.clear();
+        content_length = 0;
         body.clear();
         headers_complete = false;
         body_complete = false;
+        processed = false;
     }
 };
 
@@ -178,10 +199,11 @@ bool Http3Server::start() {
         return false;
     }
     
-    // Set up local address
+    // Set up local address - use IPv6 any address for dual-stack support
+    // This allows both IPv4 and IPv6 clients to connect
     MSH3_ADDR local_addr = {};
-    local_addr.Ipv4.sin_family = AF_INET;
-    local_addr.Ipv4.sin_addr.s_addr = INADDR_ANY;
+    local_addr.Ipv6.sin6_family = AF_INET6;
+    local_addr.Ipv6.sin6_addr = in6addr_any;  // :: - accepts both IPv4 and IPv6
     MSH3_SET_PORT(&local_addr, port_);
     
     // Create listener
@@ -238,15 +260,20 @@ MSH3_STATUS MSH3_CALL Http3Server::listener_callback(
     MSH3_LISTENER_EVENT* event)
 {
     auto* self = static_cast<Http3Server*>(context);
-    
+
     switch (event->Type) {
     case MSH3_LISTENER_EVENT_NEW_CONNECTION:
+        NPRPC_HTTP3_DEBUG_LOG("Listener New connection");
+        if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+            std::cout << "[HTTP/3] New connection" << std::endl;
+        }
         self->handle_new_connection(
             event->NEW_CONNECTION.Connection,
             event->NEW_CONNECTION.ServerName);
         break;
         
     case MSH3_LISTENER_EVENT_SHUTDOWN_COMPLETE:
+        NPRPC_HTTP3_DEBUG_LOG("Listener shutdown complete");
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "[HTTP/3] Listener shutdown complete" << std::endl;
         }
@@ -303,7 +330,9 @@ MSH3_STATUS MSH3_CALL Http3Server::request_callback(
         }
     }
     
-    if (!req) return MSH3_STATUS_SUCCESS;
+    if (!req) {
+        return MSH3_STATUS_SUCCESS;
+    }
     
     switch (event->Type) {
     case MSH3_REQUEST_EVENT_HEADER_RECEIVED:
@@ -311,14 +340,40 @@ MSH3_STATUS MSH3_CALL Http3Server::request_callback(
         break;
         
     case MSH3_REQUEST_EVENT_DATA_RECEIVED:
-        self->handle_data(req, event->DATA_RECEIVED.Data, event->DATA_RECEIVED.Length);
-        MsH3RequestCompleteReceive(request, event->DATA_RECEIVED.Length);
+        // Skip if already processed
+        if (req->processed) {
+            if (event->DATA_RECEIVED.Length > 0 && event->DATA_RECEIVED.Length < 100*1024*1024) {
+                MsH3RequestCompleteReceive(request, event->DATA_RECEIVED.Length);
+            }
+            break;
+        }
+        
+        // Validate length - msh3 sometimes sends bogus large values
+        if (event->DATA_RECEIVED.Length > 0 && event->DATA_RECEIVED.Length < 100*1024*1024) {
+            self->handle_data(req, event->DATA_RECEIVED.Data, event->DATA_RECEIVED.Length);
+            MsH3RequestCompleteReceive(request, event->DATA_RECEIVED.Length);
+            
+            // Check if we've received all expected data
+            if (req->content_length > 0 && req->body.size() >= req->content_length) {
+                req->body_complete = true;
+                req->processed = true;
+                self->handle_request_complete(req);
+            }
+        } else if (event->DATA_RECEIVED.Length == 0) {
+            // Zero-length receive, just acknowledge
+            MsH3RequestCompleteReceive(request, 0);
+        } else if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+            std::cerr << "[HTTP/3] Ignoring bogus data length: " << event->DATA_RECEIVED.Length << std::endl;
+        }
         break;
         
     case MSH3_REQUEST_EVENT_PEER_SEND_SHUTDOWN:
-        // Client finished sending, process the request
-        req->body_complete = true;
-        self->handle_request_complete(req);
+        // Client finished sending, process the request if not already done
+        if (!req->processed) {
+            req->body_complete = true;
+            req->processed = true;
+            self->handle_request_complete(req);
+        }
         break;
         
     case MSH3_REQUEST_EVENT_SHUTDOWN_COMPLETE:
@@ -329,7 +384,15 @@ MSH3_STATUS MSH3_CALL Http3Server::request_callback(
         }
         break;
         
+    case MSH3_REQUEST_EVENT_SEND_COMPLETE:
+    case MSH3_REQUEST_EVENT_SEND_SHUTDOWN_COMPLETE:
+        // These are informational only
+        break;
+        
     default:
+        if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+            std::cout << "[HTTP/3] Unknown request event type: " << (int)event->Type << std::endl;
+        }
         break;
     }
     
@@ -382,6 +445,8 @@ void Http3Server::handle_header(Http3Request* req, const MSH3_HEADER* header) {
         req->path = value;
     } else if (name == "content-type") {
         req->content_type = value;
+    } else if (name == "content-length") {
+        req->content_length = std::stoul(value);
     }
     
     if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
@@ -390,6 +455,10 @@ void Http3Server::handle_header(Http3Request* req, const MSH3_HEADER* header) {
 }
 
 void Http3Server::handle_data(Http3Request* req, const uint8_t* data, uint32_t length) {
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+        std::cout << "[HTTP/3] Data received: " << length << " bytes (total: " 
+                  << req->body.size() + length << "/" << req->content_length << ")" << std::endl;
+    }
     req->body.insert(req->body.end(), data, data + length);
 }
 
@@ -467,6 +536,10 @@ void Http3Server::handle_rpc_request(Http3Request* req) {
             return;
         }
         
+        if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+            std::cout << "[HTTP/3] RPC processed, response size: " << response_body.size() << " bytes" << std::endl;
+        }
+        
         send_response(req, 200, "application/octet-stream", response_body);
         
     } catch (const std::exception& e) {
@@ -482,23 +555,33 @@ void Http3Server::handle_rpc_request(Http3Request* req) {
 void Http3Server::send_response(Http3Request* req, int status_code,
                                  const std::string& content_type,
                                  const std::string& body) {
-    std::string status_str = std::to_string(status_code);
-    std::string content_length = std::to_string(body.size());
+    // Store response data in request object to keep it alive until SEND_COMPLETE
+    // MsQuic/msh3 takes ownership of buffers until send is complete!
+    req->response_body = body;
+    req->response_status = std::to_string(status_code);
+    req->response_content_type = content_type;
+    req->response_content_length = std::to_string(req->response_body.size());
+
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+        std::cout << "[HTTP/3] Sending response: status=" << status_code 
+                  << ", content-type=" << content_type
+                  << ", body size=" << req->response_body.size() << std::endl;
+    }
     
     MSH3_HEADER headers[] = {
-        { ":status", 7, status_str.c_str(), status_str.size() },
-        { "content-type", 12, content_type.c_str(), content_type.size() },
-        { "content-length", 14, content_length.c_str(), content_length.size() },
+        { ":status", 7, req->response_status.c_str(), req->response_status.size() },
+        { "content-type", 12, req->response_content_type.c_str(), req->response_content_type.size() },
+        { "content-length", 14, req->response_content_length.c_str(), req->response_content_length.size() },
         { "access-control-allow-origin", 27, "*", 1 },
     };
-    
+
     MsH3RequestSend(
         req->handle,
         MSH3_REQUEST_SEND_FLAG_FIN,
         headers,
         sizeof(headers) / sizeof(headers[0]),
-        body.data(),
-        static_cast<uint32_t>(body.size()),
+        req->response_body.data(),
+        static_cast<uint32_t>(req->response_body.size()),
         nullptr);
 }
 
@@ -548,31 +631,31 @@ void Http3Server::send_cors_preflight(Http3Request* req) {
 static std::unique_ptr<Http3Server> g_http3_server;
 
 NPRPC_API void init_http3_server(boost::asio::io_context& ioc) {
-    if (g_cfg.listen_http3_port == 0) {
-        // Only print debug message if explicitly configured
+    // HTTP/3 is enabled when http3_enabled flag is set and we have an HTTP port
+    if (!g_cfg.http3_enabled || g_cfg.listen_http_port == 0) {
         return;
     }
     
-    std::cout << "[HTTP/3] Initializing on port " << g_cfg.listen_http3_port << std::endl;
+    std::cout << "[HTTP/3] Initializing on port " << g_cfg.listen_http_port << std::endl;
     
-    if (g_cfg.quic_cert_file.empty() || g_cfg.quic_key_file.empty()) {
-        std::cerr << "[HTTP/3] Certificate and key files required (from QUIC config)" << std::endl;
+    if (g_cfg.http3_cert_file.empty() || g_cfg.http3_key_file.empty()) {
+        std::cerr << "[HTTP/3] Certificate and key files required" << std::endl;
         return;
     }
     
-    std::cout << "[HTTP/3] Using cert: " << g_cfg.quic_cert_file << std::endl;
+    std::cout << "[HTTP/3] Using cert: " << g_cfg.http3_cert_file << std::endl;
     
     g_http3_server = std::make_unique<Http3Server>(
         ioc,
-        g_cfg.quic_cert_file,
-        g_cfg.quic_key_file,
-        g_cfg.listen_http3_port);
+        g_cfg.http3_cert_file,
+        g_cfg.http3_key_file,
+        g_cfg.listen_http_port);  // Use same port as HTTP/1.1
     
     if (!g_http3_server->start()) {
         std::cerr << "[HTTP/3] Failed to start server" << std::endl;
         g_http3_server.reset();
     } else {
-        std::cout << "[HTTP/3] Server started successfully on port " << g_cfg.listen_http3_port << std::endl;
+        std::cout << "[HTTP/3] Server started successfully on port " << g_cfg.listen_http_port << std::endl;
     }
 }
 

@@ -56,7 +56,7 @@ int main() {
 	auto rpc = nprpc::RpcBuilder()
 		.set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
 		.set_listen_tcp_port(15000)
-		.set_listen_http_port(15001)
+		.enable_http(15001)
 		// .set_hostname("localhost")
 		.build(ioc);
 

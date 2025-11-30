@@ -319,10 +319,12 @@ struct Config {
   std::string                hostname;
   std::string                listen_address    = "0.0.0.0";
   uint16_t                   listen_tcp_port   = 0;
-  uint16_t                   listen_http_port  = 0;
+  uint16_t                   listen_http_port  = 0;  // Used for both HTTP/1.1 and HTTP/3
   uint16_t                   listen_udp_port   = 0;
   uint16_t                   listen_quic_port  = 0;
-  uint16_t                   listen_http3_port = 0;
+  bool                       http3_enabled     = false;  // Enable HTTP/3 on same port as HTTP
+  std::string                http3_cert_file;  // TLS cert for HTTP/3
+  std::string                http3_key_file;   // TLS key for HTTP/3
   std::string                quic_cert_file;
   std::string                quic_key_file;
   std::string                http_root_dir;
@@ -332,7 +334,7 @@ struct Config {
   std::string                ssl_client_self_signed_cert_path;
   bool                       ssl_client_disable_verification = false;
 };
-} // namespace detail
+} // namespace impl
 
 class RpcBuilder {
   impl::Config cfg_;
@@ -367,6 +369,25 @@ class RpcBuilder {
     return *this;
   }
 
+  // Enable HTTP server on specified port
+  // If cert_file and key_file are provided, HTTP/3 (QUIC) will also be enabled
+  // on the same port, and Alt-Svc header will advertise HTTP/3 support
+  RpcBuilder& enable_http(
+    uint16_t port,
+    std::string_view cert_file = "",
+    std::string_view key_file = "") noexcept
+  {
+    cfg_.listen_http_port = port;
+    if (!cert_file.empty() && !key_file.empty()) {
+      cfg_.http3_enabled = true;
+      cfg_.http3_cert_file = cert_file;
+      cfg_.http3_key_file = key_file;
+    }
+    return *this;
+  }
+
+  // Deprecated: use enable_http() instead
+  [[deprecated("Use enable_http() instead")]]
   RpcBuilder& set_listen_http_port(uint16_t port) noexcept
   {
     cfg_.listen_http_port = port;
@@ -387,12 +408,6 @@ class RpcBuilder {
     cfg_.listen_quic_port = port;
     cfg_.quic_cert_file = cert_file;
     cfg_.quic_key_file = key_file;
-    return *this;
-  }
-
-  RpcBuilder& set_listen_http3_port(uint16_t port) noexcept
-  {
-    cfg_.listen_http3_port = port;
     return *this;
   }
 

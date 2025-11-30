@@ -9,8 +9,21 @@
 #include <boost/beast/http.hpp>
 
 #include <queue>
+#include <sstream>
 
 namespace nprpc::impl {
+
+// Helper to add Alt-Svc header for HTTP/3 advertisement
+// Format: Alt-Svc: h3=":port"; ma=86400
+template<class Response>
+void add_alt_svc_header(Response& res) {
+    if (g_cfg.http3_enabled && g_cfg.listen_http_port != 0) {
+        std::ostringstream alt_svc;
+        alt_svc << "h3=\":" << g_cfg.listen_http_port << "\"; ma=86400";
+        res.set("Alt-Svc", alt_svc.str());
+    }
+}
+
 // Return a reasonable mime type based on the extension of a file.
 beast::string_view mime_type(beast::string_view path) {
   using beast::iequals;
@@ -92,6 +105,9 @@ http::message_generator handle_rpc_request(
           res.set(http::field::access_control_allow_headers, "Content-Type");
         }
         
+        // Advertise HTTP/3 support
+        add_alt_svc_header(res);
+        
         res.keep_alive(req.keep_alive());
         res.body() = std::move(body_data);
         res.prepare_payload();
@@ -105,6 +121,7 @@ http::message_generator handle_rpc_request(
         res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
         res.set(http::field::content_type, "text/plain");
         res.set(http::field::access_control_allow_origin, "*");
+        add_alt_svc_header(res);
         res.keep_alive(req.keep_alive());
         res.body() = std::string("RPC Error: ") + std::string(what);
         res.prepare_payload();
@@ -152,6 +169,7 @@ http::message_generator handle_request(
         http::response<http::string_body> res{http::status::bad_request, req.version()};
         res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
         res.set(http::field::content_type, "text/html");
+        add_alt_svc_header(res);
         res.keep_alive(req.keep_alive());
         res.body() = std::string(why);
         res.prepare_payload();
@@ -164,6 +182,7 @@ http::message_generator handle_request(
         http::response<http::string_body> res{http::status::not_found, req.version()};
         res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
         res.set(http::field::content_type, "text/html");
+        add_alt_svc_header(res);
         res.keep_alive(req.keep_alive());
         res.body() = "The resource '" + std::string(target) + "' was not found.";
         res.prepare_payload();
@@ -176,6 +195,7 @@ http::message_generator handle_request(
         http::response<http::string_body> res{http::status::internal_server_error, req.version()};
         res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
         res.set(http::field::content_type, "text/html");
+        add_alt_svc_header(res);
         res.keep_alive(req.keep_alive());
         res.body() = "An error occurred: '" + std::string(what) + "'";
         res.prepare_payload();
@@ -190,6 +210,7 @@ http::message_generator handle_request(
     res.set(http::field::access_control_allow_methods, "GET, POST, OPTIONS");
     res.set(http::field::access_control_allow_headers, "Content-Type");
     res.set(http::field::access_control_max_age, "86400"); // 24 hours
+    add_alt_svc_header(res);
     res.keep_alive(req.keep_alive());
     return res;
   }
@@ -246,6 +267,7 @@ http::message_generator handle_request(
     http::response<http::empty_body> res{http::status::ok, req.version()};
     res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
     res.set(http::field::content_type, mime_type(path));
+    add_alt_svc_header(res);
     res.content_length(size);
     res.keep_alive(req.keep_alive());
     return res;
@@ -258,6 +280,7 @@ http::message_generator handle_request(
       std::make_tuple(http::status::ok, req.version())};
   res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
   res.set(http::field::content_type, mime_type(path));
+  add_alt_svc_header(res);
   res.content_length(size);
   res.keep_alive(req.keep_alive());
   return res;

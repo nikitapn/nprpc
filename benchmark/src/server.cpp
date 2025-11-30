@@ -92,17 +92,19 @@ public:
             rpc = nprpc::RpcBuilder()
                 .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
                 .set_listen_tcp_port(22222)
-                .set_listen_http_port(22223)
+                .enable_http(22223,
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.crt",
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.key")
                 .set_listen_udp_port(22224)
                 .set_listen_quic_port(22225,
-                    "/home/nikita/projects/npsystem/certs/server.crt",
-                    "/home/nikita/projects/npsystem/certs/server.key")
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.crt",
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.key")
                 .set_hostname("localhost")
                 .enable_ssl_server(
-                    "/home/nikita/projects/npsystem/certs/server.crt",
-                    "/home/nikita/projects/npsystem/certs/server.key",
-                    "/home/nikita/projects/npsystem/certs/dhparam.pem")
-                .enable_ssl_client_self_signed_cert("/home/nikita/projects/npsystem/certs/server.crt")
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.crt",
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.key",
+                    "/home/nikita/projects/nscalc/certs/dhparam.pem")
+                .enable_ssl_client_self_signed_cert("/home/nikita/projects/nscacl/certs/server.crt")
                 .build(thread_pool::get_instance().ctx());
 
             // Use the new PoaBuilder API  

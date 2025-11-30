@@ -117,22 +117,27 @@ public:
             rpc = nprpc::RpcBuilder()
                 .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
                 .set_listen_tcp_port(22222)
-                .set_listen_http_port(22223)
+#ifdef NPRPC_HTTP3_ENABLED
+                // Enable HTTP with HTTP/3 support (uses same port for both)
+                .enable_http(22223,
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.crt",
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.key")
+#else
+                .enable_http(22223)
+#endif
                 .set_listen_udp_port(22224)
 #if defined(NPRPC_HAS_QUIC) || defined(NPRPC_QUIC_ENABLED)
                 .set_listen_quic_port(22225,
-                    "/home/nikita/projects/npsystem/certs/server.crt",
-                    "/home/nikita/projects/npsystem/certs/server.key")
-#ifdef NPRPC_HTTP3_ENABLED
-                .set_listen_http3_port(22226)
-#endif
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.crt",
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.key")
 #endif
                 .set_hostname("localhost")
                 .enable_ssl_server(
-                    "/home/nikita/projects/npsystem/certs/server.crt",
-                    "/home/nikita/projects/npsystem/certs/server.key",
-                    "/home/nikita/projects/npsystem/certs/dhparam.pem")
-                .enable_ssl_client_self_signed_cert("/home/nikita/projects/npsystem/certs/server.crt")
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.crt",
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.key",
+                    "/home/nikita/projects/nscalc/certs/dhparam.pem")
+                .enable_ssl_client_self_signed_cert("/home/nikita/projects/nscalc/certs/archvm.lan.crt")
+                .set_http_root_dir("/home/nikita/projects/nprpc/test/http")
                 .build(thread_pool::get_instance().ctx());
 
             // Use the new PoaBuilder API  
