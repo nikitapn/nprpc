@@ -16,6 +16,7 @@ protected:
     TCP = 1,
     WebSocket = 2,
     UDP = 3,
+    QUIC = 4
   };
 
   TransportType transport_;
@@ -32,6 +33,8 @@ protected:
         return "ws://";
       case TransportType::UDP:
         return "udp://";
+      case TransportType::QUIC:
+        return "quic://";
       default:
         assert(false);
         return "";
@@ -44,6 +47,7 @@ protected:
       case TransportType::TCP: return "TCP";
       case TransportType::WebSocket: return "WebSocket";
       case TransportType::UDP: return "UDP";
+      case TransportType::QUIC: return "QUIC";
       default: assert(false); return "Unknown";
     }
   }
@@ -204,36 +208,42 @@ BENCHMARK_REGISTER_F(LatencyFixture, EmptyCall)
   ->Arg(1)  // TCP
   ->Arg(2)  // WebSocket
   ->Arg(3)  // UDP
+  ->Arg(4)  // QUIC
   ->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(LatencyFixture, CallWithReturn)
   ->Arg(0)
   ->Arg(1)
   ->Arg(2)
+  ->Arg(4)  // QUIC
   ->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(LatencyFixture, SmallStringCall)
   ->Arg(0)
   ->Arg(1)
   ->Arg(2)
+  ->Arg(4)  // QUIC
   ->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(LatencyFixture, NestedDataCall)
   ->Arg(0)
   ->Arg(1)
   ->Arg(2)
+  ->Arg(4)  // QUIC
   ->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(LatencyFixture, LargeData1MB)
   ->Arg(0)
   ->Arg(1)
   ->Arg(2)
+  ->Arg(4)  // QUIC
   ->Unit(benchmark::kMillisecond);
 
 BENCHMARK_REGISTER_F(LatencyFixture, LargeData10MB)
   ->Arg(0)
   ->Arg(1)
   ->Arg(2)
+  ->Arg(4)  // QUIC
   ->Unit(benchmark::kMillisecond);
 
 

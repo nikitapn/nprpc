@@ -31,10 +31,7 @@
 
 ## HTTP/3 Server
 
-## QUIC Transport
-* [ ] Initial implementation using msquic or quiche library
-
-## QUIC Transport (MsQuic)
+## QUIC Transport (MsQuic) ✅ COMPLETE
 
 QUIC provides everything UDP fragmentation tries to do, plus more:
 - Reliable streams with automatic retransmission
@@ -44,7 +41,16 @@ QUIC provides everything UDP fragmentation tries to do, plus more:
 - 0-RTT connection establishment
 - Connection migration (survives IP changes)
 
-### Phase 1: Core Integration
+### Benchmark Results (Nov 2025)
+```
+LatencyFixture/EmptyCall/0   127 us   16.6 us   43981 calls/sec   SharedMemory
+LatencyFixture/EmptyCall/1   116 us   17.7 us   39629 calls/sec   TCP
+LatencyFixture/EmptyCall/2   125 us   20.7 us   34186 calls/sec   WebSocket
+LatencyFixture/EmptyCall/3  76.1 us   26.0 us   27468 calls/sec   UDP
+LatencyFixture/EmptyCall/4   231 us   23.4 us   30361 calls/sec   QUIC
+```
+
+### Phase 1: Core Integration ✅
 * [x] Add MsQuic as submodule/dependency in CMake
 * [x] Create `QuicConnection` class (client-side)
   - Wraps `QUIC_CONNECTION` handle
@@ -58,32 +64,48 @@ QUIC provides everything UDP fragmentation tries to do, plus more:
 * [x] Add `ALLOW_QUIC` activation flag
 * [x] Add `set_listen_quic_port()` to RpcBuilder
 
-### Phase 2: Stream Management
+### Phase 2: Stream Management ✅
 * [x] Use bidirectional streams for request/response RPC (default, reliable)
-* [ ] Use QUIC DATAGRAM extension for `[unreliable]` methods
-* [ ] Connection pooling and multiplexing
+* [x] Use QUIC DATAGRAM extension for `[unreliable]` methods
+* [x] Graceful shutdown (track connections, clear callbacks)
+* [ ] Connection pooling and multiplexing (future optimization)
 
-### Phase 3: IDL `[unreliable]` Attribute
+### Phase 3: IDL `[unreliable]` Attribute ✅
 * [x] Support `[unreliable]` attribute on methods (not interface-level)
 * [x] Code generator handles `[unreliable]` for UDP (fire-and-forget)
-* [ ] Transport behavior:
+* [x] Transport behavior:
   - **TCP/WebSocket**: Ignore `[unreliable]` (always reliable)
   - **UDP**: `[unreliable]` methods use fire-and-forget, others use ACK
   - **QUIC**: Default reliable (streams), `[unreliable]` uses datagrams
 * [ ] Deprecate `[udp]` interface attribute (use URL-based transport selection)
 
-### Phase 4: Testing & Benchmarks
-* [ ] Unit tests for QUIC transport
-* [ ] Latency benchmarks vs TCP/UDP
+### Phase 4: Testing & Benchmarks ✅
+* [x] Unit tests for QUIC transport (TestQuicBasic, TestQuicUnreliable)
+* [x] Latency benchmarks vs TCP/UDP
 * [ ] Throughput benchmarks
 * [ ] Connection establishment time (0-RTT)
 
-## HTTP/3 Server (Future)
+## HTTP/3 Server (Next Goal)
 
-Options for serving web clients over HTTP/3:
-1. **msh3** - Minimal HTTP/3 on MsQuic (same author)
-2. **External proxy** - Caddy/nginx with HTTP/3, proxy to NPRPC
-3. **Custom** - Build HTTP/3 framing on MsQuic streams (this sounds complex)
+Serve web clients over HTTP/3 using msh3 (Microsoft's minimal HTTP/3 on MsQuic).
+
+### Why HTTP/3?
+- Modern web standard, shows technical credibility
+- Reuse existing MsQuic infrastructure
+- Lower latency for web clients (0-RTT, multiplexing)
+- "My personal site runs on HTTP/3" 🚀
+
+### Implementation Plan
+* [ ] Add msh3 as dependency (git submodule in third_party/)
+* [ ] Create `Http3Server` class
+  - Integrate with existing QuicApi singleton
+  - Reuse certificate handling from QUIC transport
+* [ ] HTTP/3 request routing
+  - Static file serving for web assets
+  - RPC endpoint for NPRPC calls (bridge to existing dispatch)
+* [ ] QUIC/HTTP/3 endpoint sharing
+  - Same port serves both raw QUIC RPC and HTTP/3
+  - Distinguish by ALPN (nprpc vs h3)
 
 ### Considerations
 * msh3 is minimal (68 stars) but integrates well with MsQuic

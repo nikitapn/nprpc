@@ -94,6 +94,9 @@ public:
                 .set_listen_tcp_port(22222)
                 .set_listen_http_port(22223)
                 .set_listen_udp_port(22224)
+                .set_listen_quic_port(22225,
+                    "/home/nikita/projects/npsystem/certs/server.crt",
+                    "/home/nikita/projects/npsystem/certs/server.key")
                 .set_hostname("localhost")
                 .enable_ssl_server(
                     "/home/nikita/projects/npsystem/certs/server.crt",
