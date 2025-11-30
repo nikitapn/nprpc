@@ -10,12 +10,12 @@
 ## UDP Transport (Game Networking)
 
 ### Done
-* [x] IDL: `[udp]` interface attribute and `[reliable]` method attribute
+* [x] IDL: `[udp]` interface attribute and `[unreliable]` method attribute
 * [x] Code generation: `send_udp()` for fire-and-forget calls
 * [x] UdpConnection: async send queue, connection caching
 * [x] UdpListener: receive datagrams and dispatch to servants
 * [x] UDP endpoint selection and URL construction
-* [x] Reliable UDP with ACK/retransmit for `[reliable]` methods
+* [x] Reliable UDP with ACK/retransmit for methods without `[unreliable]`
 
 ### Known Issues
 * [ ] UdpListener copies received buffer to satisfy Buffers interface (see udp_listener.cpp:160)
@@ -64,13 +64,13 @@ QUIC provides everything UDP fragmentation tries to do, plus more:
 * [ ] Connection pooling and multiplexing
 
 ### Phase 3: IDL `[unreliable]` Attribute
-* [ ] Support `[unreliable]` attribute on methods (not interface-level)
+* [x] Support `[unreliable]` attribute on methods (not interface-level)
+* [x] Code generator handles `[unreliable]` for UDP (fire-and-forget)
 * [ ] Transport behavior:
   - **TCP/WebSocket**: Ignore `[unreliable]` (always reliable)
-  - **UDP**: Methods are unreliable by default, `[reliable]` forces ACK
+  - **UDP**: `[unreliable]` methods use fire-and-forget, others use ACK
   - **QUIC**: Default reliable (streams), `[unreliable]` uses datagrams
 * [ ] Deprecate `[udp]` interface attribute (use URL-based transport selection)
-* [ ] Update code generator for `[unreliable]` attribute
 
 ### Phase 4: Testing & Benchmarks
 * [ ] Unit tests for QUIC transport
@@ -108,9 +108,12 @@ Options for serving web clients over HTTP/3:
 │                    Method Attributes                        │
 │  [unreliable] - Use best-effort delivery where supported    │
 │                 TCP/WS/HTTP: ignored (always reliable)      │
-│                 UDP: default behavior                       │
+│                 UDP: fire-and-forget, no ACK                │
 │                 QUIC: use DATAGRAM instead of stream        │
 │                                                             │
-│  [reliable]   - Force reliable delivery (UDP only, legacy)  │
+│  (no attribute) - Default reliable delivery                 │
+│                 TCP/WS/HTTP: normal RPC                     │
+│                 UDP: ACK/retransmit                         │
+│                 QUIC: use stream                            │
 └─────────────────────────────────────────────────────────────┘
 ```

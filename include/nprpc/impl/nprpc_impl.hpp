@@ -228,6 +228,19 @@ class RpcImpl : public Rpc
     uint32_t max_retries = 3);
 
   /**
+   * @brief Send unreliable message (fire-and-forget, no reply expected)
+   * 
+   * Used for [unreliable] methods across all transports:
+   * - UDP: Uses UDP datagram (existing send_udp)
+   * - QUIC: Uses QUIC DATAGRAM extension (RFC 9221)
+   * - TCP/WebSocket: Falls back to regular async call (reliable)
+   * 
+   * @param endpoint Target endpoint
+   * @param buffer Message buffer to send (moved)
+   */
+  NPRPC_API void send_unreliable(const EndPoint& endpoint, flat_buffer&& buffer);
+
+  /**
    * @brief Check if endpoint uses shared memory transport
    */
   static bool is_shared_memory(const EndPoint& endpoint) noexcept {

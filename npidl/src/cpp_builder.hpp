@@ -55,6 +55,7 @@ private:
   void proxy_call(AstFunctionDecl* fn);
   void proxy_async_call(AstFunctionDecl* fn);
   void proxy_udp_call(AstFunctionDecl* fn);  // Fire-and-forget UDP call
+  void proxy_unreliable_call(AstFunctionDecl* fn);  // Fire-and-forget for non-UDP (e.g., QUIC DATAGRAM)
   void proxy_udp_reliable_call(AstFunctionDecl* fn);  // Blocking reliable UDP call with ACK
   void proxy_udp_reliable_async_call(AstFunctionDecl* fn);  // Async reliable UDP call with ACK
   std::string_view proxy_arguments(AstFunctionDecl* fn);

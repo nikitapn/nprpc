@@ -164,6 +164,23 @@ NPRPC_API void RpcImpl::send_udp(
     std::move(buffer), std::nullopt, 0);
 }
 
+NPRPC_API void RpcImpl::send_unreliable(
+  const EndPoint& endpoint, flat_buffer&& buffer)
+{
+  switch (endpoint.type()) {
+    case EndPointType::Udp: {
+      // UDP: Use dedicated socket for fire-and-forget
+      auto udp_conn = get_udp_connection(ioc_, std::string(endpoint.hostname()), endpoint.port());
+      udp_conn->send(std::move(buffer));
+      break;
+    }
+    default:
+      // All other transports: Use session's send_datagram (QUIC uses DATAGRAM, others fall back)
+      get_session(endpoint)->send_datagram(std::move(buffer));
+      break;
+  }
+}
+
 NPRPC_API void RpcImpl::call_udp_reliable(
   const EndPoint& endpoint, 
   flat_buffer& buffer,

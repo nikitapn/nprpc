@@ -96,6 +96,7 @@ TEST_F(NprpcTest, TestBasic) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
 // Optional types test
@@ -134,6 +135,7 @@ TEST_F(NprpcTest, TestOptional) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
 // Nested structures test
@@ -180,6 +182,7 @@ TEST_F(NprpcTest, TestNested) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
 // Large message test to verify async_write fix for messages >2.6MB
@@ -230,6 +233,7 @@ TEST_F(NprpcTest, TestLargeMessage) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
 TEST_F(NprpcTest, UserSuppliedObjectIdPolicy) {
@@ -333,6 +337,7 @@ TEST_F(NprpcTest, TestBadInput) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
 TEST_F(NprpcTest, TestUdpFireAndForget) {
@@ -573,6 +578,106 @@ TEST_F(NprpcTest, TestUdpReliable) {
         FAIL() << "Exception in TestUdpReliable: " << ex.what();
     }
 }
+
+#ifdef NPRPC_HAS_QUIC
+// QUIC transport test - basic RPC over QUIC streams
+TEST_F(NprpcTest, TestQuicBasic) {
+    #include "common/tests/basic.inl"
+    TestBasicImpl servant;
+    
+    try {
+        auto obj = make_stuff_happen<nprpc::test::TestBasic>(
+            servant, nprpc::ObjectActivationFlags::ALLOW_QUIC, "quic_basic_test");
+
+        // ReturnBoolean test
+        EXPECT_TRUE(obj->ReturnBoolean());
+
+        // In/Out test
+        std::vector<uint8_t> ints;
+        ints.reserve(256);
+        boost::push_back(ints, boost::irange(0, 255));
+
+        EXPECT_TRUE(obj->In(100, true, nprpc::flat::make_read_only_span(ints)));
+
+        uint32_t a;
+        bool b;
+
+        obj->Out(a, b, ints);
+
+        EXPECT_EQ(a, 100u);
+        EXPECT_TRUE(b);
+
+        uint8_t ix = 0;
+        for (auto i : ints) {
+            EXPECT_EQ(ix++, i);
+        }
+
+        // ReturnU32 test
+        EXPECT_EQ(obj->ReturnU32(), 42u);
+
+        std::cout << "QUIC basic test completed successfully!" << std::endl;
+
+    } catch (nprpc::Exception& ex) {
+        FAIL() << "Exception in TestQuicBasic: " << ex.what();
+    }
+}
+
+// QUIC transport test - unreliable delivery via DATAGRAM
+TEST_F(NprpcTest, TestQuicUnreliable) {
+    class TestUnreliableImpl : public nprpc::test::ITestUnreliable_Servant {
+    public:
+        std::atomic<int> fire_and_forget_count{0};
+        std::atomic<uint32_t> last_a{0};
+        std::atomic<bool> last_b{false};
+        std::mutex mtx_;
+        std::condition_variable cv_;
+
+        void FireAndForget(uint32_t a, ::nprpc::flat::Boolean b, ::nprpc::flat::Span<uint8_t> c) override {
+            last_a = a;
+            last_b = static_cast<bool>(b);
+            fire_and_forget_count++;
+            cv_.notify_all();
+        }
+
+        bool ReliableCall(uint32_t a, ::nprpc::flat::Boolean b, ::nprpc::flat::Span<uint8_t> c) override {
+            return a == 42 && static_cast<bool>(b) == true && c.size() == 10;
+        }
+
+        bool wait_for_count(int expected, int timeout_ms = 2000) {
+            std::unique_lock<std::mutex> lock(mtx_);
+            return cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] {
+                return fire_and_forget_count >= expected;
+            });
+        }
+    } servant;
+
+    try {
+        auto obj = make_stuff_happen<nprpc::test::TestUnreliable>(
+            servant, nprpc::ObjectActivationFlags::ALLOW_QUIC, "quic_unreliable_test");
+
+        // Test reliable call first (over QUIC stream)
+        std::vector<uint8_t> data(10, 0x55);
+        bool result = obj->ReliableCall(42, true, nprpc::flat::make_read_only_span(data));
+        EXPECT_TRUE(result);
+
+        // Test fire-and-forget (over QUIC DATAGRAM)
+        for (int i = 0; i < 10; i++) {
+            obj->FireAndForget(i, i % 2 == 0, nprpc::flat::make_read_only_span(data));
+        }
+
+        // Wait for messages to be processed
+        EXPECT_TRUE(servant.wait_for_count(10));
+        EXPECT_EQ(servant.fire_and_forget_count.load(), 10);
+        EXPECT_EQ(servant.last_a.load(), 9u);  // Last call had a=9
+        EXPECT_FALSE(servant.last_b.load());    // 9 % 2 != 0
+
+        std::cout << "QUIC unreliable test completed successfully!" << std::endl;
+
+    } catch (nprpc::Exception& ex) {
+        FAIL() << "Exception in TestQuicUnreliable: " << ex.what();
+    }
+}
+#endif // NPRPC_HAS_QUIC
 
 } // namespace nprpctest
 

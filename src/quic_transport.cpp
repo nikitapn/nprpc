@@ -11,6 +11,17 @@
 #include <iostream>
 #include <cstring>
 #include <chrono>
+#include <format>
+
+#define NPRPC_QUIC_DEBUG 0
+
+#if NPRPC_QUIC_DEBUG
+# define NPRPC_QUIC_DEBUG_LOG(format_string, ...) \
+    std::clog << std::format("[QUIC DEBUG] " format_string "\n", __VA_ARGS__) << std::endl;
+#else
+# define NPRPC_QUIC_DEBUG_LOG(format_string, ...) \
+    do { } while(0)
+#endif
 
 namespace nprpc::impl {
 
@@ -152,14 +163,17 @@ void QuicConnection::async_connect(
   uint16_t port,
   ConnectCallback callback
 ) {
+  NPRPC_QUIC_DEBUG_LOG("async_connect called: {}:{}", host, port);
   auto& quic = QuicApi::instance();
   
   // Create client configuration
   configuration_ = quic.create_configuration("nprpc", false);
   if (!configuration_) {
+    NPRPC_QUIC_DEBUG_LOG("create_configuration failed");
     boost::asio::post(ioc_, [callback]() { callback(false); });
     return;
   }
+  NPRPC_QUIC_DEBUG_LOG("configuration created");
   
   connect_callback_ = std::move(callback);
   
@@ -178,6 +192,7 @@ void QuicConnection::async_connect(
     boost::asio::post(ioc_, [callback = connect_callback_]() { callback(false); });
     return;
   }
+  NPRPC_QUIC_DEBUG_LOG("connection opened");
   
   // Start connection
   status = quic.api()->ConnectionStart(
@@ -195,6 +210,8 @@ void QuicConnection::async_connect(
     quic.api()->ConfigurationClose(configuration_);
     configuration_ = nullptr;
     boost::asio::post(ioc_, [callback = connect_callback_]() { callback(false); });
+  } else {
+    NPRPC_QUIC_DEBUG_LOG("connection start initiated");
   }
 }
 
@@ -214,13 +231,20 @@ void QuicConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
   
   // Set up receive callback to notify us
   set_receive_callback([this](const uint8_t* data, size_t len) {
+    NPRPC_QUIC_DEBUG_LOG(std::format("receive_callback called, len={}", len));
     std::lock_guard lock(mutex_);
     pending_receive_.insert(pending_receive_.end(), data, data + len);
     
-    // Check if we have a complete message (first 4 bytes = size)
+    // Check if we have a complete message
+    // First 4 bytes = payload size (not including the 4-byte size field)
+    // Total message size = payload_size + 4
     if (pending_receive_.size() >= 4) {
-      uint32_t msg_size = *reinterpret_cast<uint32_t*>(pending_receive_.data());
-      if (pending_receive_.size() >= msg_size) {
+      uint32_t payload_size = *reinterpret_cast<uint32_t*>(pending_receive_.data());
+      uint32_t total_size = payload_size + 4;
+      NPRPC_QUIC_DEBUG_LOG(std::format("checking complete: pending={}, payload_size={}, total_size={}", 
+                pending_receive_.size(), payload_size, total_size));
+      if (pending_receive_.size() >= total_size) {
+        NPRPC_QUIC_DEBUG_LOG("message complete, notifying cv");
         receive_complete_ = true;
         cv_.notify_one();
       }
@@ -301,25 +325,48 @@ void QuicConnection::async_send_stream(
 }
 
 bool QuicConnection::send_datagram(const uint8_t* data, size_t len) {
+  NPRPC_QUIC_DEBUG_LOG(std::format("send_datagram called, len={}, connected={}, datagram_enabled={}", 
+            len, (bool)connected_, datagram_send_enabled_.load()));
   if (!connected_ || !connection_) {
+    NPRPC_QUIC_DEBUG_LOG("send_datagram: not connected!");
+    return false;
+  }
+  
+  if (!datagram_send_enabled_) {
+    NPRPC_QUIC_DEBUG_LOG("send_datagram: datagrams not enabled by peer!");
+    return false;
+  }
+  
+  if (len > max_datagram_size_) {
+    NPRPC_QUIC_DEBUG_LOG(std::format("send_datagram: size {} exceeds max {}", len, max_datagram_size_));
     return false;
   }
   
   auto& quic = QuicApi::instance();
   
-  QUIC_BUFFER buf;
-  buf.Length = static_cast<uint32_t>(len);
-  buf.Buffer = const_cast<uint8_t*>(data);
+  // Allocate buffer that will be freed on DATAGRAM_SEND_STATE_CHANGED event
+  QUIC_BUFFER* send_buf = new QUIC_BUFFER;
+  send_buf->Length = static_cast<uint32_t>(len);
+  send_buf->Buffer = new uint8_t[len];
+  std::memcpy(send_buf->Buffer, data, len);
   
   QUIC_STATUS status = quic.api()->DatagramSend(
     connection_,
-    &buf,
+    send_buf,
     1,
     QUIC_SEND_FLAG_NONE,
-    nullptr
+    send_buf  // Context for cleanup
   );
   
-  return QUIC_SUCCEEDED(status);
+  if (QUIC_FAILED(status)) {
+    NPRPC_QUIC_DEBUG_LOG(std::format("DatagramSend failed, status={}", status));
+    delete[] send_buf->Buffer;
+    delete send_buf;
+    return false;
+  }
+  
+  NPRPC_QUIC_DEBUG_LOG("DatagramSend succeeded");
+  return true;
 }
 
 void QuicConnection::set_receive_callback(ReceiveCallback callback) {
@@ -353,6 +400,7 @@ QUIC_STATUS QUIC_API QuicConnection::connection_callback(
   void* context,
   QUIC_CONNECTION_EVENT* event
 ) {
+  NPRPC_QUIC_DEBUG_LOG(std::format("connection_callback event type: {}", event->Type));
   auto* self = static_cast<QuicConnection*>(context);
   self->handle_connection_event(event);
   return QUIC_STATUS_SUCCESS;
@@ -361,6 +409,7 @@ QUIC_STATUS QUIC_API QuicConnection::connection_callback(
 void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event) {
   switch (event->Type) {
     case QUIC_CONNECTION_EVENT_CONNECTED: {
+      NPRPC_QUIC_DEBUG_LOG("CONNECTED event received");
       if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
         std::cout << "[QUIC] Client connection established" << std::endl;
       }
@@ -382,8 +431,12 @@ void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event) {
       
       if (connect_callback_) {
         bool success = QUIC_SUCCEEDED(status);
+        NPRPC_QUIC_DEBUG_LOG(std::format("posting callback, success={}", success));
         auto cb = std::move(connect_callback_);
-        boost::asio::post(ioc_, [cb, success]() { cb(success); });
+        boost::asio::post(ioc_, [cb, success]() { 
+          NPRPC_QUIC_DEBUG_LOG("callback executing");
+          cb(success); 
+        });
       }
       break;
     }
@@ -415,7 +468,17 @@ void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event) {
       
     case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
       connected_ = false;
+      datagram_send_enabled_ = false;
       break;
+    
+    case QUIC_CONNECTION_EVENT_DATAGRAM_STATE_CHANGED: {
+      // Peer has indicated whether they support receiving datagrams
+      datagram_send_enabled_ = event->DATAGRAM_STATE_CHANGED.SendEnabled;
+      max_datagram_size_ = event->DATAGRAM_STATE_CHANGED.MaxSendLength;
+      NPRPC_QUIC_DEBUG_LOG(std::format("DATAGRAM_STATE_CHANGED: SendEnabled={}, MaxSendLength={}", 
+                (int)datagram_send_enabled_.load(), max_datagram_size_));
+      break;
+    }
       
     case QUIC_CONNECTION_EVENT_DATAGRAM_RECEIVED: {
       // Handle received datagram (unreliable)
@@ -423,6 +486,26 @@ void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event) {
       if (receive_callback_) {
         auto& buf = event->DATAGRAM_RECEIVED.Buffer;
         receive_callback_(buf->Buffer, buf->Length);
+      }
+      break;
+    }
+    
+    case QUIC_CONNECTION_EVENT_DATAGRAM_SEND_STATE_CHANGED: {
+      // Clean up datagram send buffer only when send is complete
+      // States: 0=Unknown, 1=Sent, 2=LostSuspect, 3=LostDiscarded, 4=Acknowledged, 5=AcknowledgedSpurious, 6=Canceled
+      auto state = event->DATAGRAM_SEND_STATE_CHANGED.State;
+      NPRPC_QUIC_DEBUG_LOG(std::format("DATAGRAM_SEND_STATE_CHANGED: state={}", (int)state));
+      
+      // Only free on terminal states
+      if (state == QUIC_DATAGRAM_SEND_ACKNOWLEDGED ||
+          state == QUIC_DATAGRAM_SEND_ACKNOWLEDGED_SPURIOUS ||
+          state == QUIC_DATAGRAM_SEND_LOST_DISCARDED ||
+          state == QUIC_DATAGRAM_SEND_CANCELED) {
+        auto* send_buf = static_cast<QUIC_BUFFER*>(event->DATAGRAM_SEND_STATE_CHANGED.ClientContext);
+        if (send_buf && send_buf->Buffer) {
+          delete[] send_buf->Buffer;
+          delete send_buf;
+        }
       }
       break;
     }
@@ -443,15 +526,24 @@ QUIC_STATUS QUIC_API QuicConnection::stream_callback(
 }
 
 void QuicConnection::handle_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event) {
+  NPRPC_QUIC_DEBUG_LOG(std::format("Client stream_event type: {}", event->Type));
   switch (event->Type) {
     case QUIC_STREAM_EVENT_RECEIVE: {
-      // Data received on stream
-      std::lock_guard lock(mutex_);
-      if (receive_callback_) {
+      NPRPC_QUIC_DEBUG_LOG(std::format("Client STREAM_RECEIVE, buffers: {}", event->RECEIVE.BufferCount));
+      // Data received on stream - copy callback under lock, then call without lock
+      ReceiveCallback cb;
+      {
+        std::lock_guard lock(mutex_);
+        cb = receive_callback_;
+      }
+      if (cb) {
         for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) {
           auto& buf = event->RECEIVE.Buffers[i];
-          receive_callback_(buf.Buffer, buf.Length);
+          NPRPC_QUIC_DEBUG_LOG(std::format("Client received {} bytes", buf.Length));
+          cb(buf.Buffer, buf.Length);
         }
+      } else {
+        NPRPC_QUIC_DEBUG_LOG("Client no receive_callback_!");
       }
       break;
     }
@@ -528,6 +620,11 @@ void QuicServerConnection::set_message_callback(MessageCallback callback) {
   message_callback_ = std::move(callback);
 }
 
+void QuicServerConnection::set_datagram_callback(DatagramCallback callback) {
+  std::lock_guard lock(mutex_);
+  datagram_callback_ = std::move(callback);
+}
+
 bool QuicServerConnection::send(const void* data, size_t len) {
   if (!stream_) {
     return false;
@@ -582,10 +679,12 @@ QUIC_STATUS QUIC_API QuicServerConnection::connection_callback(
 }
 
 void QuicServerConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event) {
+  NPRPC_QUIC_DEBUG_LOG(std::format("Server connection_event type: {}", event->Type));
   auto& quic = QuicApi::instance();
   
   switch (event->Type) {
     case QUIC_CONNECTION_EVENT_CONNECTED:
+      NPRPC_QUIC_DEBUG_LOG("Server CONNECTED");
       if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
         std::cout << "[QUIC] Server connection established from " 
                   << remote_addr_ << ":" << remote_port_ << std::endl;
@@ -593,6 +692,7 @@ void QuicServerConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
       break;
       
     case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED: {
+      NPRPC_QUIC_DEBUG_LOG("Server PEER_STREAM_STARTED");
       // Accept the incoming stream
       stream_ = event->PEER_STREAM_STARTED.Stream;
       quic.api()->SetCallbackHandler(
@@ -613,14 +713,18 @@ void QuicServerConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
       break;
       
     case QUIC_CONNECTION_EVENT_DATAGRAM_RECEIVED: {
-      // Handle unreliable datagram
+      NPRPC_QUIC_DEBUG_LOG("Server DATAGRAM_RECEIVED!");
+      // Handle unreliable datagram - use datagram_callback_ (no response expected)
       std::lock_guard lock(mutex_);
-      if (message_callback_) {
+      if (datagram_callback_) {
         auto& buf = event->DATAGRAM_RECEIVED.Buffer;
+        NPRPC_QUIC_DEBUG_LOG(std::format("Server datagram size={}", buf->Length));
         std::vector<uint8_t> data(buf->Buffer, buf->Buffer + buf->Length);
         boost::asio::post(ioc_, [this, self = shared_from_this(), data = std::move(data)]() mutable {
-          message_callback_(std::move(data));
+          datagram_callback_(std::move(data));
         });
+      } else {
+        NPRPC_QUIC_DEBUG_LOG("Server datagram_callback_ is null!");
       }
       break;
     }
@@ -641,11 +745,14 @@ QUIC_STATUS QUIC_API QuicServerConnection::stream_callback(
 }
 
 void QuicServerConnection::handle_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event) {
+  NPRPC_QUIC_DEBUG_LOG(std::format("Server stream_event type: {}", event->Type));
   switch (event->Type) {
     case QUIC_STREAM_EVENT_RECEIVE: {
+      NPRPC_QUIC_DEBUG_LOG(std::format("Server STREAM_RECEIVE, buffers: {}", event->RECEIVE.BufferCount));
       // Append data to receive buffer
       for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) {
         auto& buf = event->RECEIVE.Buffers[i];
+        NPRPC_QUIC_DEBUG_LOG(std::format("Server received {} bytes", buf.Length));
         receive_buffer_.insert(receive_buffer_.end(), buf.Buffer, buf.Buffer + buf.Length);
       }
       
@@ -669,24 +776,32 @@ void QuicServerConnection::handle_stream_event(HQUIC stream, QUIC_STREAM_EVENT* 
 }
 
 void QuicServerConnection::process_receive_buffer() {
-  // NPRPC message format: first 4 bytes = message size (including header)
+  // NPRPC message format: first 4 bytes = payload size (not including the 4-byte size field)
+  // Total message size = payload_size + 4
   while (receive_buffer_.size() >= 4) {
-    uint32_t msg_size = *reinterpret_cast<uint32_t*>(receive_buffer_.data());
+    uint32_t payload_size = *reinterpret_cast<uint32_t*>(receive_buffer_.data());
+    uint32_t total_size = payload_size + 4;
+    NPRPC_QUIC_DEBUG_LOG(std::format("process_receive_buffer: payload_size={}, total_size={}, buffer_size={}", 
+              payload_size, total_size, receive_buffer_.size()));
     
-    if (receive_buffer_.size() < msg_size) {
+    if (receive_buffer_.size() < total_size) {
       break;  // Incomplete message
     }
     
     // Extract complete message
-    std::vector<uint8_t> message(receive_buffer_.begin(), receive_buffer_.begin() + msg_size);
-    receive_buffer_.erase(receive_buffer_.begin(), receive_buffer_.begin() + msg_size);
+    std::vector<uint8_t> message(receive_buffer_.begin(), receive_buffer_.begin() + total_size);
+    receive_buffer_.erase(receive_buffer_.begin(), receive_buffer_.begin() + total_size);
     
     // Dispatch to callback
     std::lock_guard lock(mutex_);
     if (message_callback_) {
+      NPRPC_QUIC_DEBUG_LOG(std::format("posting message to callback, size={}", message.size()));
       boost::asio::post(ioc_, [this, self = shared_from_this(), msg = std::move(message)]() mutable {
+        NPRPC_QUIC_DEBUG_LOG("executing message callback");
         message_callback_(std::move(msg));
       });
+    } else {
+      NPRPC_QUIC_DEBUG_LOG("no message_callback_ set!");
     }
   }
 }
@@ -868,6 +983,7 @@ public:
     }
 
     void on_message_received(std::vector<uint8_t>&& data) {
+        NPRPC_QUIC_DEBUG_LOG(std::format("on_message_received called, data.size={}", data.size()));
         try {
             // Move data into rx_buffer
             rx_buffer_().consume(rx_buffer_().size());
@@ -876,15 +992,43 @@ public:
             rx_buffer_().commit(data.size());
 
             // Dispatch the RPC request
+            NPRPC_QUIC_DEBUG_LOG("calling handle_request");
             handle_request();
+            NPRPC_QUIC_DEBUG_LOG(std::format("handle_request returned, rx_buffer size={}", rx_buffer_().size()));
 
             // Send response back
             auto response_data = rx_buffer_().cdata();
+            NPRPC_QUIC_DEBUG_LOG(std::format("sending response, size={}", response_data.size()));
             if (!connection_->send(response_data.data(), response_data.size())) {
                 std::cerr << "QuicServerSession: Failed to send response" << std::endl;
+            } else {
+                NPRPC_QUIC_DEBUG_LOG("response sent successfully");
             }
         } catch (const std::exception& e) {
             std::cerr << "QuicServerSession: Error processing message: " << e.what() << std::endl;
+        }
+    }
+
+    /**
+     * @brief Handle unreliable datagram message (no response expected)
+     */
+    void on_datagram_received(std::vector<uint8_t>&& data) {
+        try {
+            // Move data into rx_buffer
+            rx_buffer_().consume(rx_buffer_().size());
+            auto mb = rx_buffer_().prepare(data.size());
+            std::memcpy(mb.data(), data.data(), data.size());
+            rx_buffer_().commit(data.size());
+
+            // Dispatch the RPC request (fire-and-forget, no response)
+            handle_request();
+            
+            // No response sent for datagram messages
+            if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+                std::cout << "QuicServerSession: Processed datagram (no response)" << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "QuicServerSession: Error processing datagram: " << e.what() << std::endl;
         }
     }
 
@@ -909,6 +1053,9 @@ public:
     void start() {
         connection_->set_message_callback([this, self = shared_from_this()](std::vector<uint8_t>&& data) {
             on_message_received(std::move(data));
+        });
+        connection_->set_datagram_callback([this, self = shared_from_this()](std::vector<uint8_t>&& data) {
+            on_datagram_received(std::move(data));
         });
     }
 
@@ -982,6 +1129,36 @@ public:
                 (*handler)(boost::asio::error::connection_aborted, buffer);
             }
         }
+    }
+
+    /**
+     * @brief Send unreliable datagram via QUIC DATAGRAM extension
+     */
+    virtual bool send_datagram(flat_buffer&& buffer) override {
+        if (!connected_) {
+            // Need to connect first
+            std::promise<bool> promise;
+            auto future = promise.get_future();
+            
+            connection_->async_connect(
+                std::string(endpoint_.hostname()),
+                endpoint_.port(),
+                [&promise](bool success) {
+                    promise.set_value(success);
+                }
+            );
+            
+            if (!future.get()) {
+                return false;
+            }
+            connected_ = true;
+        }
+        
+        auto data = buffer.cdata();
+        return connection_->send_datagram(
+            reinterpret_cast<const uint8_t*>(data.data()), 
+            data.size()
+        );
     }
 
     const EndPoint& remote_endpoint() const noexcept { return endpoint_; }

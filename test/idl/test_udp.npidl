@@ -19,7 +19,6 @@ exception SyncError {
   code: i32;
 }
 
-// UDP interface - all methods are fire-and-forget by default
 [udp]
 interface GameSync {
   // Unreliable, no reply (default for UDP)

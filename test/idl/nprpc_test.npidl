@@ -148,3 +148,12 @@ interface TestNested {
 interface TestBadInput {
 	void In(a: in vector<u8>);
 }
+
+interface TestUnreliable {
+	// Unreliable, no reply
+	[unreliable]
+	async FireAndForget(a: in u32, b: in boolean, c: in vector<u8>);
+
+	// Reliable UDP - needs ACK, can have return value and throw
+	boolean ReliableCall(a: in u32, b: in boolean, c: in vector<u8>) raises (AssertionFailed);
+}

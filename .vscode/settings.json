@@ -82,6 +82,16 @@
     "streambuf": "cpp",
     "__locale": "cpp",
     "ios": "cpp",
-    "print": "cpp"
+    "print": "cpp",
+    "cctype": "cpp",
+    "charconv": "cpp",
+    "cinttypes": "cpp",
+    "clocale": "cpp",
+    "cstdarg": "cpp",
+    "cstdio": "cpp",
+    "ctime": "cpp",
+    "system_error": "cpp",
+    "typeindex": "cpp",
+    "__bit_reference": "cpp"
   }
 }

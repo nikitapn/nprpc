@@ -127,6 +127,8 @@ private:
   HQUIC stream_ = nullptr;  // Main bidirectional stream
   
   std::atomic<bool> connected_{false};
+  std::atomic<bool> datagram_send_enabled_{false};  // Set when peer accepts datagrams
+  uint16_t max_datagram_size_ = 0;  // Maximum datagram size peer supports
   ConnectCallback connect_callback_;
   ReceiveCallback receive_callback_;
   
@@ -146,12 +148,16 @@ private:
 class NPRPC_API QuicServerConnection : public std::enable_shared_from_this<QuicServerConnection> {
 public:
   using MessageCallback = std::function<void(std::vector<uint8_t>&&)>;
+  using DatagramCallback = std::function<void(std::vector<uint8_t>&&)>;
   
   QuicServerConnection(boost::asio::io_context& ioc, HQUIC connection, HQUIC configuration);
   ~QuicServerConnection();
   
-  // Set callback for complete messages
+  // Set callback for complete messages (stream - reliable, expects response)
   void set_message_callback(MessageCallback callback);
+  
+  // Set callback for datagram messages (unreliable, no response)
+  void set_datagram_callback(DatagramCallback callback);
   
   // Send response data
   bool send(const void* data, size_t len);
@@ -186,6 +192,7 @@ private:
   HQUIC stream_ = nullptr;
   
   MessageCallback message_callback_;
+  DatagramCallback datagram_callback_;
   std::vector<uint8_t> receive_buffer_;
   std::string remote_addr_;
   uint16_t remote_port_ = 0;

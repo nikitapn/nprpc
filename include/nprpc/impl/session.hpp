@@ -38,6 +38,21 @@ public:
     std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& completion_handler,
     uint32_t timeout_ms) = 0;
 
+  /**
+   * @brief Send unreliable datagram (fire-and-forget, no response expected)
+   * 
+   * Default implementation falls back to send_receive_async with no handler.
+   * QUIC sessions override this to use DATAGRAM extension.
+   * 
+   * @param buffer Message buffer to send (moved)
+   * @return true if datagram was sent successfully
+   */
+  virtual bool send_datagram(flat_buffer&& buffer) {
+    // Default: fall back to async send (fire-and-forget)
+    send_receive_async(std::move(buffer), std::nullopt, 0);
+    return true;
+  }
+
   void set_timeout(uint32_t timeout_ms) {
     timeout_ = boost::posix_time::milliseconds(timeout_ms);
     timeout_timer_.expires_from_now(timeout_);

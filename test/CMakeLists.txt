@@ -49,6 +49,7 @@ target_link_libraries(nprpc_test
 target_compile_definitions(nprpc_test
   PRIVATE
     NPRPC_USE_GTEST
+    $<$<BOOL:${NPRPC_ENABLE_QUIC}>:NPRPC_HAS_QUIC>
 )
 
 # Server for JavaScript tests
@@ -116,13 +117,13 @@ add_custom_target(run_nprpc_tests_verbose
 )
 
 # Run tests automatically after building the main test executable
-add_custom_command(
-  TARGET nprpc_test
-  POST_BUILD
-  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-  COMMENT "Automatically running nprpc C++ tests after build..."
-)
+# add_custom_command(
+#   TARGET nprpc_test
+#   POST_BUILD
+#   COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+#   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+#   COMMENT "Automatically running nprpc C++ tests after build..."
+# )
 
 # Test executable for lock-free ring buffer
 add_executable(test_lock_free_ring_buffer

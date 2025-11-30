@@ -1248,6 +1248,12 @@ void CppBuilder::proxy_udp_call(AstFunctionDecl* fn) {
     ;
 }
 
+void CppBuilder::proxy_unreliable_call(AstFunctionDecl* fn) {
+  // Fire-and-forget call for non-UDP transports (e.g., QUIC DATAGRAM)
+  oc <<
+    "  ::nprpc::impl::g_orb->send_unreliable(this->get_endpoint(), std::move(buf));\n"
+    ;
+}
 void CppBuilder::proxy_udp_reliable_call(AstFunctionDecl* fn) {
   // Reliable UDP call - wait for reply with retransmit
   oc <<
@@ -1504,6 +1510,9 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
     } else if (ifs->is_udp && fn->is_reliable) {
       // UDP reliable blocking - caller blocks, no buffer copy needed
       proxy_udp_reliable_call(fn);
+    } else if (!fn->is_reliable) {
+      // Non-UDP unreliable (e.g., QUIC DATAGRAM) - fire-and-forget
+      proxy_unreliable_call(fn);
     } else if (!fn->is_async) {
       proxy_call(fn);
     } else {
