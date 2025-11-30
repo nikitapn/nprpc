@@ -63,6 +63,8 @@ NPRPC provides several CMake options to customize the build:
 - `NPRPC_BUILD_JS` (default: ON when standalone) - Build JavaScript/TypeScript bindings
 - `NPRPC_INSTALL` (default: ON when standalone) - Generate install targets
 - `BUILD_SHARED_LIBS` (default: ON) - Build shared libraries instead of static
+- `NPRPC_ENABLE_QUIC` (default: OFF) - Enable QUIC transport (builds MsQuic from submodule)
+- `NPRPC_ENABLE_HTTP3` (default: OFF) - Enable HTTP/3 server support (requires QUIC, builds msh3)
 
 #### Examples
 
@@ -72,6 +74,12 @@ Build only the library (minimal build):
 cmake -DNPRPC_BUILD_TOOLS=OFF -DNPRPC_BUILD_TESTS=OFF -DNPRPC_BUILD_JS=OFF ..
 cmake --build .
 ```
+
+Build with QUIC and HTTP/3 support:
+
+```bash
+cmake -DNPRPC_ENABLE_QUIC=ON -DNPRPC_ENABLE_HTTP3=ON ..
+cmake --build .
 
 Build static library:
 

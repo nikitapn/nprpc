@@ -153,6 +153,7 @@ add_library(nprpc
   src/udp_connection.cpp
   src/udp_listener.cpp
   src/quic_transport.cpp
+  src/http3_server.cpp
   src/uuid.cpp
   src/helper.hpp
   src/helper.cpp
@@ -177,6 +178,7 @@ add_library(nprpc
   include/nprpc/impl/udp_connection.hpp
   include/nprpc/impl/udp_listener.hpp
   include/nprpc/impl/quic_transport.hpp
+  include/nprpc/impl/http3_server.hpp
   include/nprpc/impl/uuid.hpp
   include/nprpc/impl/websocket_session.hpp
   include/nprpc/serialization/iarchive.h
@@ -222,6 +224,15 @@ if(NPRPC_ENABLE_QUIC)
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/msquic/src/inc
   )
   target_compile_definitions(nprpc PUBLIC NPRPC_QUIC_ENABLED)
+endif()
+
+# HTTP/3 linking (msh3)
+if(NPRPC_ENABLE_HTTP3)
+  target_link_libraries(nprpc PRIVATE msh3)
+  target_include_directories(nprpc PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/msh3
+  )
+  target_compile_definitions(nprpc PUBLIC NPRPC_HTTP3_ENABLED)
 endif()
 
 # Platform-specific settings

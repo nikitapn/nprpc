@@ -322,6 +322,7 @@ struct Config {
   uint16_t                   listen_http_port  = 0;
   uint16_t                   listen_udp_port   = 0;
   uint16_t                   listen_quic_port  = 0;
+  uint16_t                   listen_http3_port = 0;
   std::string                quic_cert_file;
   std::string                quic_key_file;
   std::string                http_root_dir;
@@ -386,6 +387,12 @@ class RpcBuilder {
     cfg_.listen_quic_port = port;
     cfg_.quic_cert_file = cert_file;
     cfg_.quic_key_file = key_file;
+    return *this;
+  }
+
+  RpcBuilder& set_listen_http3_port(uint16_t port) noexcept
+  {
+    cfg_.listen_http3_port = port;
     return *this;
   }
 

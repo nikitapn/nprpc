@@ -50,6 +50,9 @@ void clear_udp_connections();
 void stop_shared_memory_listener();
 void stop_socket_listener();
 void stop_http_server();
+#ifdef NPRPC_HTTP3_ENABLED
+void stop_http3_server();
+#endif
 
 void RpcImpl::destroy()
 {
@@ -61,6 +64,9 @@ void RpcImpl::destroy()
   stop_shared_memory_listener();
 #ifdef NPRPC_QUIC_ENABLED
   stop_quic_listener();
+#endif
+#ifdef NPRPC_HTTP3_ENABLED
+  stop_http3_server();
 #endif
   
   // Shutdown and clear open sessions to release their async operations
@@ -371,6 +377,10 @@ RpcImpl::RpcImpl(
   init_udp_listener(ioc_);
 #ifdef NPRPC_QUIC_ENABLED
   init_quic(ioc_);
+#endif
+#ifdef NPRPC_HTTP3_ENABLED
+  extern void init_http3_server(boost::asio::io_context& ioc);
+  init_http3_server(ioc_);
 #endif
 }
 

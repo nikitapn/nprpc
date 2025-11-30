@@ -65,6 +65,10 @@ void run() {
             // Implementation of SpawnEntity
             return 0; // Example return value
         }
+
+        void SpawnEntity1(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+            // Implementation of SpawnEntity1 (async version)
+        }
     } game_sync_servant(server_control_servant); // Remote
 
     class TestUdpAckImpl : public nprpc::test::IAck_Servant {

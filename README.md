@@ -8,8 +8,11 @@ NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framewo
   - **WebSocket** - Persistent bidirectional communication
   - **Secure WebSocket (WSS)** - Encrypted persistent connections
   - **HTTP** - Stateless request/response for web applications
+  - **HTTP/3** - Modern web transport over QUIC (via msh3)
   - **TCP** - Direct socket communication
   - **Shared Memory** - Zero-copy IPC with 8x memory efficiency
+  - **UDP** - Fire-and-forget for game networking
+  - **QUIC** - Next-gen encrypted transport (via MsQuic)
 - **Efficient Binary Protocol**: FlatBuffers-based serialization for minimal overhead
 - **Type-Safe IDL**: Interface Definition Language with code generation for C++ and TypeScript
 - **Cross-Language Support**: Seamless C++ ↔ TypeScript/JavaScript communication
@@ -28,7 +31,8 @@ NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framewo
 | **TCP** | High-performance IPC | Low overhead, reliable | No browser support |
 | **Shared Memory** | Same-machine IPC | Zero-copy, 8x memory efficient | Local only |
 | **UDP** | Game networking, low-latency | 76µs latency, fire-and-forget | Connectionless, size limits |
-| **QUIC** | Next-gen transport | Multiplexed, encrypted, 0-RTT | *Coming soon* |
+| **QUIC** | Next-gen transport | Multiplexed, encrypted, 0-RTT, ~43k calls/sec | Requires MsQuic |
+| **HTTP/3** | Modern web | HTTP/3 over QUIC, msh3-based | Requires msh3 |
 
 ## 🎮 UDP Transport
 

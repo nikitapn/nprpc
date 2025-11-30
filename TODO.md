@@ -85,7 +85,7 @@ LatencyFixture/EmptyCall/4   231 us   23.4 us   30361 calls/sec   QUIC
 * [ ] Throughput benchmarks
 * [ ] Connection establishment time (0-RTT)
 
-## HTTP/3 Server (Next Goal)
+## HTTP/3 Server ✅ Core Implementation Complete
 
 Serve web clients over HTTP/3 using msh3 (Microsoft's minimal HTTP/3 on MsQuic).
 
@@ -95,17 +95,24 @@ Serve web clients over HTTP/3 using msh3 (Microsoft's minimal HTTP/3 on MsQuic).
 - Lower latency for web clients (0-RTT, multiplexing)
 - "My personal site runs on HTTP/3" 🚀
 
-### Implementation Plan
-* [ ] Add msh3 as dependency (git submodule in third_party/)
-* [ ] Create `Http3Server` class
-  - Integrate with existing QuicApi singleton
-  - Reuse certificate handling from QUIC transport
-* [ ] HTTP/3 request routing
+### Implementation Status
+* [x] Add msh3 and ls-qpack as dependencies (git submodules in third_party/)
+* [x] Create `Http3Server` class (include/nprpc/impl/http3_server.hpp, src/http3_server.cpp)
+  - Integrates with existing Rpc singleton for configuration
+  - Reuses certificate handling from QUIC transport
+  - Manages connections and request lifecycle
+* [x] HTTP/3 request routing
   - Static file serving for web assets
-  - RPC endpoint for NPRPC calls (bridge to existing dispatch)
-* [ ] QUIC/HTTP/3 endpoint sharing
-  - Same port serves both raw QUIC RPC and HTTP/3
-  - Distinguish by ALPN (nprpc vs h3)
+  - RPC endpoint for NPRPC calls (via process_http_rpc)
+* [x] CMake integration (NPRPC_ENABLE_HTTP3 option)
+* [x] init_http3_server() / stop_http3_server() integration in rpc_impl.cpp
+
+### Remaining Work
+* [ ] Test with actual HTTP/3 client (curl --http3, browser)
+* [ ] Error handling improvements
+* [ ] Performance tuning
+* [ ] QUIC/HTTP/3 endpoint sharing (same port, ALPN differentiation)
+* [ ] CORS headers for browser requests
 
 ### Considerations
 * msh3 is minimal (68 stars) but integrates well with MsQuic
@@ -118,14 +125,13 @@ Serve web clients over HTTP/3 using msh3 (Microsoft's minimal HTTP/3 on MsQuic).
 ┌─────────────────────────────────────────────────────────────┐
 │                         NPRPC                               │
 ├─────────────┬─────────────┬─────────────┬───────────────────┤
-│  Shared Mem │  TCP/WS/HTTP│     UDP     │      QUIC         │
-│  (IPC)      │  (boost)    │  (boost)    │   (MsQuic)        │
+│  Shared Mem │  TCP/WS/HTTP│     UDP     │   QUIC/HTTP3      │
+│  (IPC)      │  (boost)    │  (boost)    │   (MsQuic/msh3)   │
 ├─────────────┴─────────────┴─────────────┴───────────────────┤
 │                    Transport Selection                      │
 │  shm://     tcp://         udp://        quic://            │
-│             ws://  wss://                                   │
-│             http:// https://  (browser RPC over HTTP/1.1)   │
-│                               (future: HTTP/3 over QUIC)    │
+│             ws://  wss://                https:// (HTTP/3)  │
+│             http:// https://                                │
 ├─────────────────────────────────────────────────────────────┤
 │                    Method Attributes                        │
 │  [unreliable] - Use best-effort delivery where supported    │
