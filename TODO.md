@@ -139,3 +139,35 @@ Serve web clients over HTTP/3 using msh3 (Microsoft's minimal HTTP/3 on MsQuic).
 │                 QUIC: use stream                            │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## Swift Language Bindings (Future)
+
+Write business logic in Swift while reusing the C++ nprpc runtime.
+
+### Strategy: Swift C++ Interop (Swift 5.9+)
+Swift has direct C++ interoperability - call C++ code without Objective-C bridging.
+This allows reusing 100% of the existing runtime (transports, serialization, POA).
+
+### Implementation Plan
+* [ ] Add `swift_builder.cpp` to npidl
+  - Generate Swift structs/enums matching IDL types
+  - Generate Swift protocols for interfaces
+  - Generate proxy classes that call into C++ runtime
+* [ ] Create `nprpc_swift/` Swift package
+  - Module map exposing C++ headers to Swift
+  - Swift wrappers for `ObjectPtr`, `Rpc`, `Poa`
+  - async/await integration (Swift concurrency)
+  - Codable support for serialization
+* [ ] Bridge layer (C++ interop module)
+  - Expose nprpc types to Swift's C++ interop
+  - Handle memory management at boundary
+
+### Reuse Matrix
+| Component | Reuse | Notes |
+|-----------|-------|-------|
+| C++ Runtime (libnprpc) | ✅ 100% | All transports, serialization, POA |
+| IDL Parser (npidl_core) | ✅ 100% | Just add swift_builder backend |
+| Wire format | ✅ 100% | Binary compatible with C++ |
+| Swift types | 🆕 Generate | Structs, enums, protocols |
+| Swift proxies | 🆕 Generate | Thin wrappers calling C++ |
+| Swift package | 🆕 Create | ~500 lines of wrapper code |
