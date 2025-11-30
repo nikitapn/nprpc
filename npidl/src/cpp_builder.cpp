@@ -1342,7 +1342,7 @@ std::string_view CppBuilder::proxy_arguments(AstFunctionDecl* fn) {
     return it->second;
 
   std::stringstream ss;
-  if (!fn->is_async) {
+  if (!fn->is_async || !fn->is_reliable) {
     emit_function_arguments(fn, ss,
       std::bind(&CppBuilder::emit_parameter_type_for_proxy_call, this, _1, _2)
     );

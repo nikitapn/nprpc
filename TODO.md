@@ -1,10 +1,11 @@
 # TODO.md
 
 ## Build System
-* Generate npnameserver stubs when building nprpc target, to avoid full rebuilds when npnameserver is built separately.
+ [ ] Generate npnameserver stubs when building nprpc target, to avoid full rebuilds when npnameserver is built separately.
 
 ## Shared Memory Transport
-* Optimize shared memory server session to avoid unnecessary copies when receiving messages.
+ [ ] Optimize shared memory server session to avoid unnecessary copies when receiving messages.
+ [ ] Build on Windows is broken due to missing `sys/mman.h` and `shm_open()`. Need to implement Windows shared memory APIs using `CreateFileMapping` and `MapViewOfFile`.
 
 ## UDP Transport (Game Networking)
 
@@ -29,7 +30,6 @@
 * [ ] Bandwidth throttling / rate limiting
 
 ## HTTP/3 Server
-
 
 ## QUIC Transport
 * [ ] Initial implementation using msquic or quiche library
@@ -100,7 +100,7 @@ Options for serving web clients over HTTP/3:
 │  (IPC)      │  (boost)    │  (boost)    │   (MsQuic)        │
 ├─────────────┴─────────────┴─────────────┴───────────────────┤
 │                    Transport Selection                      │
-│  shm://     tcp://         udp://        quic://             │
+│  shm://     tcp://         udp://        quic://            │
 │             ws://  wss://                                   │
 │             http:// https://  (browser RPC over HTTP/1.1)   │
 │                               (future: HTTP/3 over QUIC)    │

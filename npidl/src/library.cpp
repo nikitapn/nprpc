@@ -1224,30 +1224,26 @@ class Parser : public IParser {
     AstFunctionDecl* f;
     for (;;) {
       if (check(&Parser::one, TokenId::BracketClose)) break;
-      
-      // Check for function-level attributes like [reliable]
+
+      // Check for function-level attributes like [unreliable]
       attributes_t fn_attr;
       check(&Parser::attributes_decl, std::ref(fn_attr));
-      
+
       if (check(&Parser::function_decl, std::ref(f))) {
         // Apply function-level attributes
         for (const auto& a : fn_attr) {
-          if (a.first == "reliable")
-            f->is_reliable = (a.second.empty() || a.second == "1");
+          if (a.first == "unreliable")
+            f->is_reliable = !(a.second.empty() || a.second == "1");
           else
             throw_error("Unknown attribute: " + a.first + " for function " + f->name);
         }
-        
-        // UDP interface validation
-        if (ifs->is_udp) {
-          if (!f->is_void() && !f->is_reliable) {
-            throw_error("UDP function '" + f->name + "' must return void (fire-and-forget) unless marked [reliable]");
-          }
-          if (f->ex && !f->is_reliable) {
-            throw_error("UDP function '" + f->name + "' cannot throw exceptions unless marked [reliable]");
-          }
-        }
-        
+
+        if (!f->is_async && !f->is_reliable)
+          throw_error("Function '" + f->name + "' can only be marked [unreliable] if declared as 'async'");
+
+        if (f->ex && !f->is_reliable)
+          throw_error("Function' " + f->name + "' cannot throw exceptions when marked [unreliable]");
+
         ifs->fns.emplace_back(f);
         continue;
       }

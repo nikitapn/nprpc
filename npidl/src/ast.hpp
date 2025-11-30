@@ -489,7 +489,7 @@ struct AstFunctionDecl : AstNodeWithPosition {
   AstStructDecl* ex = nullptr;
   std::vector<AstFunctionArgument*> args, in_args, out_args;
   bool is_async;
-  bool is_reliable = false;  // [reliable] attribute for UDP methods that need ACK
+  bool is_reliable = true;  // [unreliable] attribute maybe used for UDP and quic methods
 
   bool is_void() const noexcept { return ret_value->id == FieldType::Void; }
 };
