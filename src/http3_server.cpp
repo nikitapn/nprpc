@@ -549,16 +549,18 @@ static std::unique_ptr<Http3Server> g_http3_server;
 
 NPRPC_API void init_http3_server(boost::asio::io_context& ioc) {
     if (g_cfg.listen_http3_port == 0) {
-        if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-            std::cout << "[HTTP/3] Port not set, skipping initialization" << std::endl;
-        }
+        // Only print debug message if explicitly configured
         return;
     }
     
+    std::cout << "[HTTP/3] Initializing on port " << g_cfg.listen_http3_port << std::endl;
+    
     if (g_cfg.quic_cert_file.empty() || g_cfg.quic_key_file.empty()) {
-        std::cerr << "[HTTP/3] Certificate and key files required" << std::endl;
+        std::cerr << "[HTTP/3] Certificate and key files required (from QUIC config)" << std::endl;
         return;
     }
+    
+    std::cout << "[HTTP/3] Using cert: " << g_cfg.quic_cert_file << std::endl;
     
     g_http3_server = std::make_unique<Http3Server>(
         ioc,
@@ -569,6 +571,8 @@ NPRPC_API void init_http3_server(boost::asio::io_context& ioc) {
     if (!g_http3_server->start()) {
         std::cerr << "[HTTP/3] Failed to start server" << std::endl;
         g_http3_server.reset();
+    } else {
+        std::cout << "[HTTP/3] Server started successfully on port " << g_cfg.listen_http3_port << std::endl;
     }
 }
 

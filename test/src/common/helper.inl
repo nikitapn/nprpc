@@ -119,10 +119,13 @@ public:
                 .set_listen_tcp_port(22222)
                 .set_listen_http_port(22223)
                 .set_listen_udp_port(22224)
-#ifdef NPRPC_HAS_QUIC
+#if defined(NPRPC_HAS_QUIC) || defined(NPRPC_QUIC_ENABLED)
                 .set_listen_quic_port(22225,
                     "/home/nikita/projects/npsystem/certs/server.crt",
                     "/home/nikita/projects/npsystem/certs/server.key")
+#ifdef NPRPC_HTTP3_ENABLED
+                .set_listen_http3_port(22226)
+#endif
 #endif
                 .set_hostname("localhost")
                 .enable_ssl_server(
