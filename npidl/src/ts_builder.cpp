@@ -639,8 +639,6 @@ void TSBuilder::finalize() {
   filename.replace_extension(".ts");
   std::ofstream ofs(out_dir_ / filename, std::ios::binary);
 
-  std::cout << "Generating TypeScript file:\n\t" << (out_dir_ / filename).string() << std::endl;
-
   if (ctx_->is_nprpc_base()) {
     ofs << "import * as NPRPC from '@/base'\n\n";
   } else if (ctx_->is_nprpc_nameserver()) {

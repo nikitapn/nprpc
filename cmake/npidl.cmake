@@ -18,7 +18,7 @@ function(npidl_generate_idl_files idl_files_list module_name)
         ${file}
       DEPENDS npidl ${file}
       # BYPRODUCTS ${CMAKE_BINARY_DIR}/${module_name}/src/gen/js/${basename}.ts
-      COMMENT "Generating npc files from ${file}"
+      COMMENT "Generating stubs from ${file}"
       # Copy the generated files to the correct locations
       COMMAND ${CMAKE_COMMAND} -E copy
         ${CMAKE_BINARY_DIR}/npidl_tmp/${basename}.hpp

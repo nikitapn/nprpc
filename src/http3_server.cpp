@@ -199,11 +199,9 @@ bool Http3Server::start() {
         return false;
     }
     
-    // Set up local address - use IPv6 any address for dual-stack support
-    // This allows both IPv4 and IPv6 clients to connect
-    MSH3_ADDR local_addr = {};
-    local_addr.Ipv6.sin6_family = AF_INET6;
-    local_addr.Ipv6.sin6_addr = in6addr_any;  // :: - accepts both IPv4 and IPv6
+    MSH3_ADDR local_addr = {0};
+    local_addr.Ipv4.sin_family = AF_INET;
+    local_addr.Ipv4.sin_addr.s_addr = INADDR_ANY;
     MSH3_SET_PORT(&local_addr, port_);
     
     // Create listener
@@ -410,7 +408,7 @@ void Http3Server::handle_new_connection(MSH3_CONNECTION* connection, const char*
     
     // Set connection callback
     MsH3ConnectionSetCallbackHandler(connection, connection_callback, this);
-    
+
     // Apply configuration
     MSH3_STATUS status = MsH3ConnectionSetConfiguration(connection, config_);
     if (MSH3_FAILED(status)) {

@@ -868,9 +868,6 @@ void CppBuilder::finalize() {
   auto const header_file_path = filename.replace_extension(".hpp");
   auto const cpp_file_path = filename.replace_extension(".cpp");
 
-  std::cout << "Generating C++ files:\n"
-    << '\t' << (out_path_ / header_file_path).string() << std::endl;
-
   std::ofstream ofs_hpp(out_path_ / header_file_path, std::ios::binary);
   std::ofstream ofs_cpp(out_path_ / cpp_file_path, std::ios::binary);
 

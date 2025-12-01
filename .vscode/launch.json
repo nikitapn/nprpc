@@ -1,0 +1,34 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug: app_server",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/.build_release/test/nprpc_server_test",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "setupCommands": [
+        {
+          "text": "set disassembly-flavor intel"
+        }
+      ]
+    },
+    {
+      "name": "Debug: app_client",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/app_client",
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Debug: tool_x",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/tools/tool_x",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

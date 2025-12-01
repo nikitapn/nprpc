@@ -10,6 +10,7 @@
 
 #include <queue>
 #include <sstream>
+#include <format>
 
 namespace nprpc::impl {
 
@@ -18,9 +19,7 @@ namespace nprpc::impl {
 template<class Response>
 void add_alt_svc_header(Response& res) {
     if (g_cfg.http3_enabled && g_cfg.listen_http_port != 0) {
-        std::ostringstream alt_svc;
-        alt_svc << "h3=\":" << g_cfg.listen_http_port << "\"; ma=86400";
-        res.set("Alt-Svc", alt_svc.str());
+        res.set("Alt-Svc", std::format("h3=\":{}\"; ma=86400", g_cfg.listen_http_port));
     }
 }
 
