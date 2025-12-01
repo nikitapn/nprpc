@@ -8,45 +8,6 @@ export class ServerManager {
     private serverProcess: ChildProcess | null = null;
     private nameserverProcess: ChildProcess | null = null;
 
-    async startNameserver(): Promise<boolean> {
-        console.log('Starting nameserver...');
-        
-        // Try different paths for the nameserver binary
-        const nameserverPaths = [
-            '/home/nikita/projects/nprpc/.build_release/npnameserver',
-            '/home/nikita/projects/nprpc/.build_debug/npnameserver'
-        ];
-
-        for (const path of nameserverPaths) {
-            if (!fs.existsSync(path))
-                continue;
-            try {
-                this.nameserverProcess = spawn(path, [], {
-                    stdio: ['ignore', 'pipe', 'pipe'],
-                    detached: false
-                });
-
-                if (this.nameserverProcess.pid) {
-                    console.log(`Nameserver started with PID: ${this.nameserverProcess.pid}`);
-                    
-                    // Wait a bit for the nameserver to initialize
-                    await sleep(1000);
-                    
-                    // Check if process is still running
-                    if (!this.nameserverProcess.killed) {
-                        return true;
-                    }
-                }
-            } catch (error) {
-                console.log(`Failed to start nameserver at ${path}: ${error}`);
-                continue;
-            }
-        }
-
-        console.error('Failed to start nameserver from any of the tried paths');
-        return false;
-    }
-
     async startTestServer(): Promise<boolean> {
         console.log('Starting test server...');
         
@@ -86,14 +47,6 @@ export class ServerManager {
         return false;
     }
 
-    stopNameserver(): void {
-        if (this.nameserverProcess && !this.nameserverProcess.killed) {
-            console.log('Stopping nameserver...');
-            this.nameserverProcess.kill('SIGTERM');
-            this.nameserverProcess = null;
-        }
-    }
-
     stopTestServer(): void {
         if (this.serverProcess && !this.serverProcess.killed) {
             console.log('Stopping test server...');
@@ -103,27 +56,18 @@ export class ServerManager {
     }
 
     async startAll(): Promise<boolean> {
-        console.log('Starting nameserver and test server...');
-        
-        // Start nameserver first
-        const nameserverStarted = await this.startNameserver();
-        if (!nameserverStarted) {
-            return false;
-        }
+        console.log('Starting test server...');
 
         // Start test server
         const testServerStarted = await this.startTestServer();
-        if (!testServerStarted) {
-            this.stopNameserver();
+        if (!testServerStarted)
             return false;
-        }
 
-        console.log('All servers started successfully');
+        console.log('Test server started successfully');
         return true;
     }
 
     stopAll(): void {
         this.stopTestServer();
-        this.stopNameserver();
     }
 }

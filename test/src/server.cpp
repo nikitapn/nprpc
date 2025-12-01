@@ -24,14 +24,14 @@
 
 std::condition_variable cv;
 std::mutex cv_m;
-bool shutdown_requested = false;
+int shutdown_requested = 0;
 
 class ServerControlImpl : public ::nprpc::test::IServerControl_Servant {
   void Shutdown() override {
     std::cout << "Shutdown requested" << std::endl;
     {
-      std::lock_guard<std::mutex> lk(cv_m);
-      shutdown_requested = true;
+      std::lock_guard lk(cv_m);
+      shutdown_requested = 1;
     }
     cv.notify_one();
   }
@@ -69,21 +69,19 @@ int main(int argc, char** argv) {
   // Capture interrupt signal to allow graceful shutdown
   signal(SIGINT, [](int signum) {
     std::cout << "Interrupt signal (" << signum << ") received." << std::endl;
-    {
-      std::lock_guard<std::mutex> lk(cv_m);
-      shutdown_requested = true;
-    }
+    shutdown_requested = 2;
     cv.notify_one();
   });
 
   // Wait for shutdown signal from JavaScript client
-  std::unique_lock<std::mutex> lk(cv_m);
+  std::unique_lock lk(cv_m);
   cv.wait(lk, [] { return shutdown_requested; });
 
   std::cout << "Server shutting down..." << std::endl;
 
   // Give some time for the client to receive the response
-  std::this_thread::sleep_for(std::chrono::seconds(1));
+  if (shutdown_requested == 1)
+    std::this_thread::sleep_for(std::chrono::seconds(1));
 
   // Calling TearDown to clean up manually since we are not using gtest main
   env.TearDown();
