@@ -11,7 +11,7 @@
             "cppStandard": "c++23",
             "intelliSenseMode": "linux-clang-x64",
             "compileCommands": [
-                "${workspaceFolder}/compile_commands.json"
+                "${workspaceFolder}/.build_nghttp3/compile_commands.json"
             ]
         }
     ],

@@ -3,7 +3,8 @@
 
 #include <nprpc/impl/http3_server.hpp>
 
-#ifdef NPRPC_HTTP3_ENABLED
+// This file implements HTTP/3 using msh3 (MsQuic) backend
+#if defined(NPRPC_HTTP3_ENABLED) && defined(NPRPC_HTTP3_BACKEND_MSH3)
 
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/http_rpc_session.hpp>
@@ -666,4 +667,4 @@ NPRPC_API void stop_http3_server() {
 
 } // namespace nprpc::impl
 
-#endif // NPRPC_HTTP3_ENABLED
+#endif // NPRPC_HTTP3_ENABLED && NPRPC_HTTP3_BACKEND_MSH3

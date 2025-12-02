@@ -31,12 +31,24 @@ option(NPRPC_BUILD_TESTS "Build tests" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_BUILD_JS "Build JavaScript bindings" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_INSTALL "Generate install target" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_ENABLE_QUIC "Enable QUIC transport using MsQuic" OFF)
-option(NPRPC_ENABLE_HTTP3 "Enable HTTP/3 server using msh3" OFF)
+option(NPRPC_ENABLE_HTTP3 "Enable HTTP/3 server" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
-# HTTP/3 requires QUIC
-if(NPRPC_ENABLE_HTTP3 AND NOT NPRPC_ENABLE_QUIC)
-  message(STATUS "HTTP/3 requires QUIC - enabling QUIC transport")
+# HTTP/3 backend selection: msh3 (default, uses MsQuic) or nghttp3 (uses ngtcp2)
+set(NPRPC_HTTP3_BACKEND "msh3" CACHE STRING "HTTP/3 backend: msh3 or nghttp3")
+set_property(CACHE NPRPC_HTTP3_BACKEND PROPERTY STRINGS "msh3" "nghttp3")
+
+# Validate HTTP/3 backend choice
+if(NPRPC_ENABLE_HTTP3)
+  if(NOT NPRPC_HTTP3_BACKEND STREQUAL "msh3" AND NOT NPRPC_HTTP3_BACKEND STREQUAL "nghttp3")
+    message(FATAL_ERROR "Invalid NPRPC_HTTP3_BACKEND: ${NPRPC_HTTP3_BACKEND}. Must be 'msh3' or 'nghttp3'")
+  endif()
+  message(STATUS "HTTP/3 backend: ${NPRPC_HTTP3_BACKEND}")
+endif()
+
+# HTTP/3 with msh3 backend requires QUIC (MsQuic)
+if(NPRPC_ENABLE_HTTP3 AND NPRPC_HTTP3_BACKEND STREQUAL "msh3" AND NOT NPRPC_ENABLE_QUIC)
+  message(STATUS "HTTP/3 with msh3 backend requires QUIC - enabling QUIC transport")
   set(NPRPC_ENABLE_QUIC ON CACHE BOOL "Enable QUIC transport using MsQuic" FORCE)
 endif()
 
@@ -63,20 +75,40 @@ if(NPRPC_ENABLE_QUIC)
   add_subdirectory(third_party/msquic)
 endif()
 
-# HTTP/3 support via msh3
+# HTTP/3 support
 if(NPRPC_ENABLE_HTTP3)
-  message(STATUS "HTTP/3 server enabled - building msh3")
-  
-  # Build ls-qpack first (msh3 needs it)
-  set(LSQPACK_TESTS OFF CACHE BOOL "" FORCE)
-  set(LSQPACK_BIN OFF CACHE BOOL "" FORCE)
-  add_subdirectory(third_party/ls-qpack)
-  
-  # Build msh3 (will find existing msquic and ls-qpack targets)
-  set(MSH3_TOOL OFF CACHE BOOL "" FORCE)
-  set(MSH3_PING OFF CACHE BOOL "" FORCE)
-  set(MSH3_TEST OFF CACHE BOOL "" FORCE)
-  add_subdirectory(third_party/msh3)
+  if(NPRPC_HTTP3_BACKEND STREQUAL "msh3")
+    message(STATUS "HTTP/3 server enabled - building msh3 backend")
+    
+    # Build ls-qpack first (msh3 needs it)
+    set(LSQPACK_TESTS OFF CACHE BOOL "" FORCE)
+    set(LSQPACK_BIN OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/ls-qpack)
+    
+    # Build msh3 (will find existing msquic and ls-qpack targets)
+    set(MSH3_TOOL OFF CACHE BOOL "" FORCE)
+    set(MSH3_PING OFF CACHE BOOL "" FORCE)
+    set(MSH3_TEST OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/msh3)
+    
+  elseif(NPRPC_HTTP3_BACKEND STREQUAL "nghttp3")
+    message(STATUS "HTTP/3 server enabled - building nghttp3 backend")
+    
+    # Build ngtcp2 (QUIC implementation)
+    set(ENABLE_STATIC_LIB ON CACHE BOOL "" FORCE)
+    set(ENABLE_SHARED_LIB OFF CACHE BOOL "" FORCE)
+    set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
+    set(ENABLE_OPENSSL ON CACHE BOOL "" FORCE)
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/ngtcp2 EXCLUDE_FROM_ALL)
+    
+    # Build nghttp3 (HTTP/3 framing)
+    set(ENABLE_STATIC_LIB ON CACHE BOOL "" FORCE)
+    set(ENABLE_SHARED_LIB OFF CACHE BOOL "" FORCE)
+    set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/nghttp3 EXCLUDE_FROM_ALL)
+  endif()
 endif()
 
 # Add subdirectories
@@ -154,6 +186,7 @@ add_library(nprpc
   src/udp_listener.cpp
   src/quic_transport.cpp
   src/http3_server.cpp
+  src/http3_server_nghttp3.cpp
   src/uuid.cpp
   src/helper.hpp
   src/helper.cpp
@@ -226,13 +259,32 @@ if(NPRPC_ENABLE_QUIC)
   target_compile_definitions(nprpc PUBLIC NPRPC_QUIC_ENABLED)
 endif()
 
-# HTTP/3 linking (msh3)
+# HTTP/3 linking
 if(NPRPC_ENABLE_HTTP3)
-  target_link_libraries(nprpc PRIVATE msh3)
-  target_include_directories(nprpc PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/msh3
-  )
   target_compile_definitions(nprpc PUBLIC NPRPC_HTTP3_ENABLED)
+  
+  if(NPRPC_HTTP3_BACKEND STREQUAL "msh3")
+    target_link_libraries(nprpc PRIVATE msh3)
+    target_include_directories(nprpc PRIVATE 
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/msh3
+    )
+    target_compile_definitions(nprpc PRIVATE NPRPC_HTTP3_BACKEND_MSH3)
+    
+  elseif(NPRPC_HTTP3_BACKEND STREQUAL "nghttp3")
+    target_link_libraries(nprpc PRIVATE 
+      ngtcp2
+      ngtcp2_crypto_ossl
+      nghttp3
+    )
+    target_include_directories(nprpc PRIVATE 
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ngtcp2/lib/includes
+      ${CMAKE_CURRENT_BINARY_DIR}/third_party/ngtcp2/lib/includes
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ngtcp2/crypto/includes
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nghttp3/lib/includes
+      ${CMAKE_CURRENT_BINARY_DIR}/third_party/nghttp3/lib/includes
+    )
+    target_compile_definitions(nprpc PRIVATE NPRPC_HTTP3_BACKEND_NGHTTP3)
+  endif()
 endif()
 
 # Platform-specific settings
