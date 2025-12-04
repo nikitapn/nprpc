@@ -22,15 +22,7 @@
 #include <cstring>
 #include <format>
 
-#define NPRPC_HTTP3_DEBUG 0
-
-#if NPRPC_HTTP3_DEBUG
-# define NPRPC_HTTP3_DEBUG_LOG(format_string, ...) \
-    std::clog << std::format("[HTTP3 DEBUG] " format_string "\n" __VA_OPT__(,) __VA_ARGS__) << std::endl;
-#else
-# define NPRPC_HTTP3_DEBUG_LOG(format_string, ...) \
-    do { } while(0)
-#endif
+#include "debug.hpp"
 
 namespace nprpc::impl {
 
@@ -262,7 +254,7 @@ MSH3_STATUS MSH3_CALL Http3Server::listener_callback(
 
     switch (event->Type) {
     case MSH3_LISTENER_EVENT_NEW_CONNECTION:
-        NPRPC_HTTP3_DEBUG_LOG("Listener New connection");
+        NPRPC_HTTP3_TRACE("Listener New connection");
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "[HTTP/3] New connection" << std::endl;
         }
@@ -272,7 +264,7 @@ MSH3_STATUS MSH3_CALL Http3Server::listener_callback(
         break;
         
     case MSH3_LISTENER_EVENT_SHUTDOWN_COMPLETE:
-        NPRPC_HTTP3_DEBUG_LOG("Listener shutdown complete");
+        NPRPC_HTTP3_TRACE("Listener shutdown complete");
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "[HTTP/3] Listener shutdown complete" << std::endl;
         }

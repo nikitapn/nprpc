@@ -113,13 +113,15 @@ public:
         try {
             // Use the new RpcBuilder API
             rpc = nprpc::RpcBuilder()
-                .set_debug_level(nprpc::DebugLevel::DebugLevel_TraceAll)
+                .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
                 .set_listen_tcp_port(22222)
 #ifdef NPRPC_HTTP3_ENABLED
                 // Enable HTTP with HTTP/3 support (uses same port for both)
                 .enable_http(22223,
-                    "/home/nikita/projects/nprpc/certs/out/archvm.crt",
-                    "/home/nikita/projects/nprpc/certs/out/archvm.key"
+                    // "/home/nikita/projects/nprpc/certs/out/archvm.crt",
+                    // "/home/nikita/projects/nprpc/certs/out/archvm.key"
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.crt",
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.key"
                 )
 #else
                 .enable_http(22223)
@@ -133,8 +135,10 @@ public:
 #endif
                 .set_hostname("localhost")
                 .enable_ssl_server(
-                    "/home/nikita/projects/nprpc/certs/out/archvm.crt",
-                    "/home/nikita/projects/nprpc/certs/out/archvm.key"
+                    // "/home/nikita/projects/nprpc/certs/out/archvm.crt",
+                    // "/home/nikita/projects/nprpc/certs/out/archvm.key"
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.crt",
+                    "/home/nikita/projects/nscalc/certs/archvm.lan.key"
                 )
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/archvm.crt")
                 .set_http_root_dir("/home/nikita/projects/nprpc/test/http")

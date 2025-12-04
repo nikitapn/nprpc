@@ -12,7 +12,7 @@
 	url = https://github.com/nikitapn/msh3.git
 [submodule "third_party/ngtcp2"]
 	path = third_party/ngtcp2
-	url = https://github.com/ngtcp2/ngtcp2.git
+	url = https://github.com/nikitapn/ngtcp2.git
 [submodule "third_party/nghttp3"]
 	path = third_party/nghttp3
-	url = https://github.com/ngtcp2/nghttp3.git
+	url = https://github.com/nikitapn/nghttp3.git

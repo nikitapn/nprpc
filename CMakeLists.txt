@@ -100,6 +100,8 @@ if(NPRPC_ENABLE_HTTP3)
     set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
     set(ENABLE_OPENSSL ON CACHE BOOL "" FORCE)
     set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    # Need PIC for static libs that will be linked into shared libraries
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "" FORCE)
     add_subdirectory(third_party/ngtcp2 EXCLUDE_FROM_ALL)
     
     # Build nghttp3 (HTTP/3 framing)
@@ -272,9 +274,9 @@ if(NPRPC_ENABLE_HTTP3)
     
   elseif(NPRPC_HTTP3_BACKEND STREQUAL "nghttp3")
     target_link_libraries(nprpc PRIVATE 
-      ngtcp2
-      ngtcp2_crypto_ossl
-      nghttp3
+      ngtcp2_static
+      ngtcp2_crypto_ossl_static
+      nghttp3_static
     )
     target_include_directories(nprpc PRIVATE 
       ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ngtcp2/lib/includes
