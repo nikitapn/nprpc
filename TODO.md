@@ -106,9 +106,9 @@ Serve web clients over HTTP/3 using msh3 (Microsoft's minimal HTTP/3 on MsQuic).
   - RPC endpoint for NPRPC calls (via process_http_rpc)
 * [x] CMake integration (NPRPC_ENABLE_HTTP3 option)
 * [x] init_http3_server() / stop_http3_server() integration in rpc_impl.cpp
+* [x] Test with actual HTTP/3 client (curl --http3, browser)
 
 ### Remaining Work
-* [ ] Test with actual HTTP/3 client (curl --http3, browser)
 * [ ] Error handling improvements
 * [ ] Performance tuning
 * [ ] QUIC/HTTP/3 endpoint sharing (same port, ALPN differentiation)
