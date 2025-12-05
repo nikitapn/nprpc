@@ -6,7 +6,6 @@ const sleep = promisify(setTimeout);
 
 export class ServerManager {
     private serverProcess: ChildProcess | null = null;
-    private nameserverProcess: ChildProcess | null = null;
 
     async startTestServer(): Promise<boolean> {
         console.log('Starting test server...');
@@ -17,12 +16,15 @@ export class ServerManager {
             '/home/nikita/projects/nprpc/.build_debug/test/nprpc_server_test'
         ];
 
+        const outFile = fs.openSync('/tmp/nprpc_test_server_stdout.log', 'w');
+        const errFile = fs.openSync('/tmp/nprpc_test_server_stderr.log', 'w');
+
         for (const path of serverPaths) {
             if (!fs.existsSync(path))
                 continue;
             try {
                 this.serverProcess = spawn(path, [], {
-                    stdio: ['pipe', 'pipe', 'pipe'],
+                    stdio: ['pipe', outFile, errFile],
                     detached: false
                 });
 

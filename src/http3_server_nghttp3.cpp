@@ -1238,7 +1238,7 @@ int Http3Connection::handle_rpc_request(Http3Stream* stream) {
 
     try {
         // FIXME: Avoid copy
-        std::string request_body(stream->request_body.begin(), stream->request_body.begin());
+        std::string request_body(stream->request_body.begin(), stream->request_body.end());
         std::string response_body;
 
         if (!process_http_rpc(server_->io_context(), request_body, response_body))

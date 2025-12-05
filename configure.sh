@@ -1,0 +1,8 @@
+#!/bin/bash
+
+cmake -S . -B .build_release \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DNPRPC_BUILD_TESTS=ON \
+  -DNPRPC_BUILD_TOOLS=ON \
+  -DNPRPC_ENABLE_HTTP3=ON \
+  -DNPRPC_HTTP3_BACKEND=nghttp3
