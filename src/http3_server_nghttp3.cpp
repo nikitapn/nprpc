@@ -8,6 +8,8 @@
 
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/http_rpc_session.hpp>
+#include <nprpc/impl/http_utils.hpp>
+#include <nprpc/impl/http_file_cache.hpp>
 #include <nprpc/common.hpp>
 
 #include <ngtcp2/ngtcp2.h>
@@ -41,10 +43,6 @@
 #include "debug.hpp"
 
 namespace nprpc::impl {
-
-// Forward declaration - implemented in http_server.cpp
-extern beast::string_view mime_type(beast::string_view path);
-extern std::string path_cat(beast::string_view base, beast::string_view path);
 
 //==============================================================================
 // Constants
@@ -141,6 +139,9 @@ struct Http3Stream {
     std::vector<uint8_t> request_body;
 
     // Response data - kept alive for async sending
+    // For cached files: cached_file keeps the data alive (zero-copy)
+    // For dynamic responses: response_body holds the data
+    CachedFileGuard cached_file;
     std::vector<uint8_t> response_body;
     const uint8_t* response_data = nullptr;
     size_t response_len = 0;
@@ -151,7 +152,6 @@ struct Http3Stream {
 
     // HTTP/3 response status and headers (kept alive for nghttp3)
     std::string status_str;
-    std::string content_type_str;
     std::string content_length_str;
 };
 
@@ -222,8 +222,12 @@ private:
 
     // Response handling
     int start_response(Http3Stream* stream);
+    // Zero-copy response using cached file
+    int send_cached_response(Http3Stream* stream, unsigned int status_code,
+                             CachedFileGuard cached_file);
+    // Copy-based response for dynamic content
     int send_response(Http3Stream* stream, unsigned int status_code,
-                      const std::string& content_type,
+                      std::string_view content_type,
                       const std::vector<uint8_t>& body);
 
     // Error handling
@@ -497,7 +501,7 @@ bool Http3Connection::init() {
     }
 
     // Set up ngtcp2 callbacks
-    ngtcp2_callbacks callbacks{
+    ngtcp2_callbacks callbacks {
         .recv_client_initial = on_recv_client_initial,
         .recv_crypto_data = on_recv_crypto_data, // Use our wrapper
         .handshake_completed = on_handshake_completed,
@@ -524,7 +528,7 @@ bool Http3Connection::init() {
     // Configure settings
     ngtcp2_settings settings;
     ngtcp2_settings_default(&settings);
-    settings.log_printf = log_printf;
+    settings.log_printf = nullptr; //log_printf;
     settings.initial_ts = timestamp_ns();
     if (!initial_token_.empty()) {
         settings.token = initial_token_.data();
@@ -1051,11 +1055,6 @@ void Http3Connection::extend_max_stream_data(int64_t stream_id, uint64_t max_dat
 // HTTP/3 header handling
 void Http3Connection::http_begin_headers(int64_t stream_id) {
     auto* stream = find_stream(stream_id);
-    if (!stream) {
-        // Stream might not exist yet if on_stream_open wasn't called
-        // This can happen for client-initiated streams
-        stream = create_stream(stream_id);
-    }
     if (stream) {
         nghttp3_conn_set_stream_user_data(httpconn_, stream_id, stream);
     }
@@ -1122,8 +1121,9 @@ int Http3Connection::start_response(Http3Stream* stream) {
         NPRPC_HTTP3_TRACE("Serving file: {} (root={}, path={})", 
                           file_path, g_cfg.http_root_dir, request_path);
 
-        std::ifstream file(file_path, std::ios::binary | std::ios::ate);
-        if (!file.is_open()) {
+        // Get file from cache (zero-copy)
+        auto cached_file = get_file_cache().get(file_path);
+        if (!cached_file) {
             // 404 Not Found
             NPRPC_HTTP3_TRACE("File not found: {}", file_path);
             std::string body = "<!DOCTYPE html><html><body><h1>404 Not Found</h1></body></html>";
@@ -1131,31 +1131,18 @@ int Http3Connection::start_response(Http3Stream* stream) {
                 std::vector<uint8_t>(body.begin(), body.end()));
         }
 
-        auto size = file.tellg();
-        NPRPC_HTTP3_TRACE("File size: {}", (long long)size);
-        
-        if (size < 0) {
-            // tellg() failed - might be a directory
-            std::string body = "<!DOCTYPE html><html><body><h1>403 Forbidden</h1></body></html>";
-            return send_response(stream, 403, "text/html",
-                std::vector<uint8_t>(body.begin(), body.end()));
-        }
-        
-        if (size > 100 * 1024 * 1024) {  // Limit to 100MB
-            std::string body = "<!DOCTYPE html><html><body><h1>500 File Too Large</h1></body></html>";
-            return send_response(stream, 500, "text/html",
-                std::vector<uint8_t>(body.begin(), body.end()));
-        }
-        file.seekg(0, std::ios::beg);
+        NPRPC_HTTP3_TRACE("File size: {} (from cache)", cached_file->size());
 
-        std::vector<uint8_t> body;
-        if (stream->method != "HEAD") {
-            body.resize(static_cast<size_t>(size));
-            file.read(reinterpret_cast<char*>(body.data()), size);
+        // For HEAD requests, we still need headers but no body
+        if (stream->method == "HEAD") {
+            // Create empty body response with correct content-length from cache
+            stream->content_length_str = std::to_string(cached_file->size());
+            std::vector<uint8_t> empty_body;
+            return send_response(stream, 200, cached_file->content_type(), empty_body);
         }
 
-        auto content_type = std::string(mime_type(request_path));
-        return send_response(stream, 200, content_type, body);
+        // Use zero-copy response
+        return send_cached_response(stream, 200, std::move(cached_file));
     }
     else if (stream->method == "POST") {
         // Handle POST request (e.g., RPC)
@@ -1172,9 +1159,78 @@ int Http3Connection::start_response(Http3Stream* stream) {
     }
 }
 
+int Http3Connection::send_cached_response(Http3Stream* stream, unsigned int status_code,
+                                          CachedFileGuard cached_file) {
+    NPRPC_HTTP3_TRACE("Sending cached response: {} Content-Type: {} Body length: {}",
+                      status_code, cached_file->content_type(), cached_file->size());
+    
+    // Store cached file guard in stream - this keeps the file pinned
+    // The guard's acquire() was called when it was created, and release()
+    // will be called when the stream is destroyed after transfer completes
+    stream->cached_file = std::move(cached_file);
+    
+    // Zero-copy: point directly to cached file data
+    stream->response_data = stream->cached_file->data();
+    stream->response_len = stream->cached_file->size();
+    stream->response_offset = 0;
+
+    // Build headers
+    stream->status_str = std::to_string(status_code);
+    stream->content_length_str = std::to_string(stream->response_len);
+    
+    // Content-type from cache points to static storage, safe to use with NO_COPY
+    auto content_type = stream->cached_file->content_type();
+
+    std::array<nghttp3_nv, 4> nva;
+    nva[0] = {
+        .name = reinterpret_cast<uint8_t*>(const_cast<char*>(":status")),
+        .value = reinterpret_cast<uint8_t*>(stream->status_str.data()),
+        .namelen = 7,
+        .valuelen = stream->status_str.size(),
+        .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME
+    };
+    nva[1] = {
+        .name = reinterpret_cast<uint8_t*>(const_cast<char*>("server")),
+        .value = reinterpret_cast<uint8_t*>(const_cast<char*>("nprpc/nghttp3")),
+        .namelen = 6,
+        .valuelen = 13,
+        .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
+    };
+    nva[2] = {
+        .name = reinterpret_cast<uint8_t*>(const_cast<char*>("content-type")),
+        .value = reinterpret_cast<const uint8_t*>(content_type.data()),
+        .namelen = 12,
+        .valuelen = content_type.size(),
+        .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
+    };
+    nva[3] = {
+        .name = reinterpret_cast<uint8_t*>(const_cast<char*>("content-length")),
+        .value = reinterpret_cast<uint8_t*>(stream->content_length_str.data()),
+        .namelen = 14,
+        .valuelen = stream->content_length_str.size(),
+        .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME
+    };
+
+    nghttp3_data_reader dr{
+        .read_data = http_read_data_cb,
+    };
+
+    int rv = nghttp3_conn_submit_response(httpconn_, stream->stream_id,
+                                          nva.data(), nva.size(), &dr);
+    if (rv != 0) {
+        std::cerr << "[HTTP/3] nghttp3_conn_submit_response: " << nghttp3_strerror(rv) << std::endl;
+        return -1;
+    }
+
+    return 0;
+}
+
 int Http3Connection::send_response(Http3Stream* stream, unsigned int status_code,
-                                   const std::string& content_type,
+                                   std::string_view content_type,
                                    const std::vector<uint8_t>& body) {
+    std::cerr << "[HTTP/3] Sending response: " << status_code 
+              << " Content-Type: " << content_type 
+              << " Body length: " << body.size() << std::endl;
     // Store response data in stream to keep it alive
     stream->response_body = body;
     stream->response_data = stream->response_body.data();
@@ -1183,7 +1239,6 @@ int Http3Connection::send_response(Http3Stream* stream, unsigned int status_code
 
     // Build headers
     stream->status_str = std::to_string(status_code);
-    stream->content_type_str = content_type;
     stream->content_length_str = std::to_string(body.size());
 
     std::array<nghttp3_nv, 4> nva;
@@ -1192,28 +1247,28 @@ int Http3Connection::send_response(Http3Stream* stream, unsigned int status_code
         .value = reinterpret_cast<uint8_t*>(stream->status_str.data()),
         .namelen = 7,
         .valuelen = stream->status_str.size(),
-        .flags = NGHTTP3_NV_FLAG_NONE,
+        .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME
     };
     nva[1] = {
         .name = reinterpret_cast<uint8_t*>(const_cast<char*>("server")),
         .value = reinterpret_cast<uint8_t*>(const_cast<char*>("nprpc/nghttp3")),
         .namelen = 6,
         .valuelen = 13,
-        .flags = NGHTTP3_NV_FLAG_NONE,
+        .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
     };
     nva[2] = {
         .name = reinterpret_cast<uint8_t*>(const_cast<char*>("content-type")),
-        .value = reinterpret_cast<uint8_t*>(stream->content_type_str.data()),
+        .value = reinterpret_cast<const uint8_t*>(content_type.data()),
         .namelen = 12,
-        .valuelen = stream->content_type_str.size(),
-        .flags = NGHTTP3_NV_FLAG_NONE,
+        .valuelen = content_type.size(),
+        .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
     };
     nva[3] = {
         .name = reinterpret_cast<uint8_t*>(const_cast<char*>("content-length")),
         .value = reinterpret_cast<uint8_t*>(stream->content_length_str.data()),
         .namelen = 14,
         .valuelen = stream->content_length_str.size(),
-        .flags = NGHTTP3_NV_FLAG_NONE,
+        .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME
     };
 
     nghttp3_data_reader dr{

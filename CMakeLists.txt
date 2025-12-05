@@ -166,6 +166,8 @@ endif()
 # Main library target
 add_library(nprpc
   src/http_server.cpp
+  src/http_utils.cpp
+  src/http_file_cache.cpp
   ${nprpc_stub_GENERATED_SOURCES}
   src/framework.h
   src/nprpc.cpp
