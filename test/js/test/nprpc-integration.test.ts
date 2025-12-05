@@ -40,7 +40,7 @@ describe('NPRPC Integration Tests', function() {
             poa = rpc.create_poa(128);
             console.log('RPC initialized successfully');
         } catch (error) {
-            serverManager.stopAll();
+            serverManager.killServer();
             throw new Error(`Failed to initialize RPC: ${error}`);
         }
 
@@ -52,16 +52,23 @@ describe('NPRPC Integration Tests', function() {
             // Wait a bit more for test server to register objects
             await new Promise(resolve => setTimeout(resolve, 3000));
         } catch (error) {
-            serverManager.stopAll();
+            serverManager.killServer();
             throw new Error(`Failed to get nameserver: ${error}`);
         }
 
         console.log('NPRPC test environment setup complete');
     });
 
-    after(function() {
+    after(async function() {
         console.log('Cleaning up NPRPC test environment...');
-        serverManager.stopAll();
+        try {
+            const serverControl = await resolveTestObject('nprpc_test_server_control', test.ServerControl);
+            await serverControl.Shutdown();
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            // Server shutdown should also stop nameserver
+        } catch (error) {
+            serverManager.killServer();
+        }
     });
 
     async function resolveTestObject<T extends NPRPC.ObjectProxy>(objectName: string, obj: new() => T): Promise<any> {

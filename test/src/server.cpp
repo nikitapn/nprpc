@@ -35,6 +35,10 @@ class ServerControlImpl : public ::nprpc::test::IServerControl_Servant {
     }
     cv.notify_one();
   }
+  void RegisterAckHandler (::nprpc::Object* handler) override {
+    (void)handler;
+    assert(false && "Should not be called in server");
+  }
 };
 
 int main(int argc, char** argv) {
@@ -44,6 +48,9 @@ int main(int argc, char** argv) {
 
   using namespace nprpc::ObjectActivationFlags;
   constexpr auto flags = ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET | ALLOW_HTTP | ALLOW_SECURED_HTTP;
+
+  ServerControlImpl server_control;
+  nprpctest::make_stuff_happen<nprpc::test::ServerControl>(server_control, flags, "nprpc_test_server_control");
 
   // Activating test objects
   #include "common/tests/basic.inl"
