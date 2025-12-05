@@ -27,7 +27,7 @@ namespace nprpc::impl {
  * 
  * For subscriptions and live updates, WebSocket is still preferred.
  */
-class HttpRpcSession 
+class HttpRpcSession
     : public Session
     , public std::enable_shared_from_this<HttpRpcSession>
 {
@@ -51,6 +51,7 @@ public:
      */
     bool process_rpc_request(const std::string& request_data, std::string& response_data) {
         try {
+            // FIXME: Avoid copy
             // Clear previous buffer
             rx_buffer_().consume(rx_buffer_().size());
 

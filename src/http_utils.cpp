@@ -10,11 +10,11 @@ namespace nprpc::impl {
 
 std::string_view mime_type(std::string_view path) {
     using boost::beast::iequals;
-    
+
     auto const pos = path.rfind(".");
-    if (pos == std::string_view::npos) {
+    if (pos == std::string_view::npos)
         return "application/octet-stream";
-    }
+
     auto ext = path.substr(pos);
 
     if (iequals(ext, ".htm"))   return "text/html";
@@ -48,9 +48,9 @@ std::string path_cat(std::string_view base, std::string_view path) {
     if (base.empty()) {
         return std::string(path);
     }
-    
+
     std::string result(base);
-    
+
 #ifdef _WIN32
     char constexpr path_separator = '\\';
     if (result.back() == path_separator) {
@@ -69,7 +69,7 @@ std::string path_cat(std::string_view base, std::string_view path) {
     }
     result.append(path);
 #endif
-    
+
     return result;
 }
 

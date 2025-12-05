@@ -114,6 +114,18 @@ Serve web clients over HTTP/3 using msh3 (Microsoft's minimal HTTP/3 on MsQuic).
 * [ ] QUIC/HTTP/3 endpoint sharing (same port, ALPN differentiation)
 * [ ] CORS headers for browser requests
 
+### Ideas for Future Enhancements
+| Area | Improvement | Complexity |
+|------|-------------|------------|
+| Compression | Add gzip/brotli compression for text files (cache compressed versions) | Medium |
+| ETag/Caching | Add ETag and If-None-Match support for 304 responses | Low |
+| Range requests | Support Range header for video streaming / resumable downloads | Medium |
+| Cache warming | Pre-load common files at startup | Low |
+| Metrics | Expose cache stats (hit rate, memory usage) via /stats endpoint | Low |
+| HTTP/2 | Add HTTP/2 support via nghttp2 (between HTTP/1.1 and HTTP/3) | High |
+| sendfile() | For non-cached large files, use sendfile() syscall | Medium |
+| Cache-Control | Respect/set Cache-Control headers for browser caching | Low |
+
 ### Considerations
 * msh3 is minimal (68 stars) but integrates well with MsQuic
 * For production, reverse proxy (Caddy) is more battle-tested

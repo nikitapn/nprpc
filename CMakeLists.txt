@@ -165,9 +165,6 @@ endif()
 
 # Main library target
 add_library(nprpc
-  src/http_server.cpp
-  src/http_utils.cpp
-  src/http_file_cache.cpp
   ${nprpc_stub_GENERATED_SOURCES}
   src/framework.h
   src/nprpc.cpp
@@ -189,7 +186,10 @@ add_library(nprpc
   src/udp_connection.cpp
   src/udp_listener.cpp
   src/quic_transport.cpp
-  src/http3_server.cpp
+  src/http_server.cpp
+  src/http_utils.cpp
+  src/http_file_cache.cpp
+  src/http3_server_msh3.cpp
   src/http3_server_nghttp3.cpp
   src/uuid.cpp
   src/helper.hpp
