@@ -40,15 +40,15 @@ struct Config {
   uint16_t                   listen_udp_port   = 0;
   uint16_t                   listen_quic_port  = 0;
   bool                       http3_enabled     = false;  // Enable HTTP/3 on same port as HTTP
+  bool                       ssr_enabled       = false;  // Enable node worker for SSR
   std::string                http_cert_file;             // TLS cert for HTTP/3
   std::string                http_key_file;              // TLS key for HTTP/3
   std::string                quic_cert_file;
   std::string                quic_key_file;
   std::string                http_root_dir;
+  std::string                ssr_handler_dir;            // Path to SSR handler (index.js)
   ssl::context               ssl_context_server{ssl::context::tlsv13_server};
   ssl::context               ssl_context_client{ssl::context::tlsv13_client};
-  std::string                ssl_client_self_signed_cert_path;
-  bool                       ssl_client_disable_verification = false;
 };
 
 NPRPC_API void fill_guid(std::array<std::uint8_t, 16>& guid) noexcept;

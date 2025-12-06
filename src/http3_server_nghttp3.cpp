@@ -10,6 +10,9 @@
 #include <nprpc/impl/http_rpc_session.hpp>
 #include <nprpc/impl/http_utils.hpp>
 #include <nprpc/impl/http_file_cache.hpp>
+#ifdef NPRPC_SSR_ENABLED
+#include <nprpc/impl/ssr_manager.hpp>
+#endif
 #include <nprpc/common.hpp>
 
 #include <ngtcp2/ngtcp2.h>
@@ -135,6 +138,8 @@ struct Http3Stream {
     std::string path;
     std::string authority;
     std::string content_type;
+    std::string accept;  // Accept header for SSR detection
+    std::map<std::string, std::string> headers;  // All headers for SSR
     size_t content_length = 0;
     std::vector<uint8_t> request_body;
 
@@ -143,6 +148,7 @@ struct Http3Stream {
     // For static responses: response_data points to body data
     // For dynamic responses: use a string to hold the body
     std::string dynamic_body;
+    std::string response_content_type;  // Store response content-type for lifetime
     CachedFileGuard cached_file;
     const uint8_t* response_data = nullptr;
     size_t response_len = 0;
@@ -1070,23 +1076,31 @@ void Http3Connection::http_begin_headers(int64_t stream_id) {
 void Http3Connection::http_recv_header(Http3Stream* stream, int32_t token,
                                        nghttp3_rcbuf* name, nghttp3_rcbuf* value) {
     auto v = nghttp3_rcbuf_get_buf(value);
+    auto n = nghttp3_rcbuf_get_buf(name);
+    
+    // Store all headers for SSR
+    std::string header_name(reinterpret_cast<const char*>(n.base), n.len);
+    std::string header_value(reinterpret_cast<const char*>(v.base), v.len);
+    stream->headers[header_name] = header_value;
 
     switch (token) {
     case NGHTTP3_QPACK_TOKEN__PATH:
-        stream->path = std::string(reinterpret_cast<const char*>(v.base), v.len);
+        stream->path = std::move(header_value);
         break;
     case NGHTTP3_QPACK_TOKEN__METHOD:
-        stream->method = std::string(reinterpret_cast<const char*>(v.base), v.len);
+        stream->method = std::move(header_value);
         break;
     case NGHTTP3_QPACK_TOKEN__AUTHORITY:
-        stream->authority = std::string(reinterpret_cast<const char*>(v.base), v.len);
+        stream->authority = std::move(header_value);
         break;
     case NGHTTP3_QPACK_TOKEN_CONTENT_TYPE:
-        stream->content_type = std::string(reinterpret_cast<const char*>(v.base), v.len);
+        stream->content_type = std::move(header_value);
         break;
     case NGHTTP3_QPACK_TOKEN_CONTENT_LENGTH:
-        stream->content_length = std::stoull(std::string(
-            reinterpret_cast<const char*>(v.base), v.len));
+        stream->content_length = std::stoull(header_value);
+        break;
+    case NGHTTP3_QPACK_TOKEN_ACCEPT:
+        stream->accept = std::move(header_value);
         break;
     }
 }
@@ -1115,6 +1129,55 @@ void Http3Connection::http_stream_close(int64_t stream_id, uint64_t app_error_co
 int Http3Connection::start_response(Http3Stream* stream) {
     // Handle the HTTP request
     if (stream->method == "GET" || stream->method == "HEAD") {
+#ifdef NPRPC_SSR_ENABLED
+        // Check if this request should be handled by SSR
+        if (g_cfg.ssr_enabled && 
+            nprpc::impl::should_ssr(stream->method, stream->path, stream->accept)) {
+            
+            NPRPC_HTTP3_TRACE("Forwarding to SSR: {} {}", stream->method, stream->path);
+            
+            // Build full URL
+            std::string url = std::string("https://") + stream->authority + stream->path;
+            
+            // Filter out HTTP/2 pseudo-headers (start with ':') for Web API compatibility
+            std::map<std::string, std::string> filtered_headers;
+            for (const auto& [key, value] : stream->headers) {
+                if (!key.empty() && key[0] != ':') {
+                    filtered_headers[key] = value;
+                }
+            }
+            
+            // Forward to SSR (synchronous call)
+            auto ssr_response = nprpc::impl::forward_to_ssr(
+                stream->method,
+                url,
+                filtered_headers,
+                "", // No body for GET/HEAD
+                remote_ep_.address().to_string()
+            );
+            
+            if (ssr_response) {
+                NPRPC_HTTP3_TRACE("SSR response: {} ({} bytes)", 
+                    ssr_response->status_code, ssr_response->body.size());
+                
+                // Determine content type from SSR response headers
+                std::string content_type = "text/html; charset=utf-8";
+                for (const auto& [key, value] : ssr_response->headers) {
+                    if (key == "content-type" || key == "Content-Type") {
+                        content_type = value;
+                        break;
+                    }
+                }
+                
+                return send_dynamic_response(stream, ssr_response->status_code, 
+                    content_type, std::move(ssr_response->body));
+            } else {
+                NPRPC_HTTP3_TRACE("SSR failed, falling back to static file");
+                // Fall through to static file serving
+            }
+        }
+#endif
+        
         // Serve static file
         std::string request_path = stream->path;
 
@@ -1132,7 +1195,7 @@ int Http3Connection::start_response(Http3Stream* stream) {
         auto cached_file = get_file_cache().get(file_path);
         if (!cached_file) {
             // 404 Not Found
-            NPRPC_HTTP3_TRACE("File not found: {}", file_path);
+            std::cerr << "[HTTP/3][E] File not found: " << file_path << " (path=" << request_path << ")" << std::endl;
             return send_static_response(stream, 404, "text/html",
                 "<!DOCTYPE html><html><body><h1>404 Not Found</h1></body></html>");
         }
@@ -1152,10 +1215,59 @@ int Http3Connection::start_response(Http3Stream* stream) {
         if (stream->path == "/rpc") {
             NPRPC_HTTP3_TRACE("Handling RPC request");
             return handle_rpc_request(stream);
-        } else {
-            // For now, return 200 OK for other POST requests
-            return send_static_response(stream, 200, "text/plain", "OK");
         }
+        
+#ifdef NPRPC_SSR_ENABLED
+        // Check if this is a SvelteKit form action (POST with ?/ in path)
+        if (g_cfg.ssr_enabled && 
+            nprpc::impl::should_ssr(stream->method, stream->path, stream->accept)) {
+            
+            NPRPC_HTTP3_TRACE("Forwarding POST to SSR: {}", stream->path);
+            
+            // Build full URL
+            std::string url = std::string("https://") + stream->authority + stream->path;
+            
+            // Filter out HTTP/2 pseudo-headers
+            std::map<std::string, std::string> filtered_headers;
+            for (const auto& [key, value] : stream->headers) {
+                if (!key.empty() && key[0] != ':') {
+                    filtered_headers[key] = value;
+                }
+            }
+            
+            // Get request body as string
+            std::string body_str(stream->request_body.begin(), stream->request_body.end());
+            
+            // Forward to SSR
+            auto ssr_response = nprpc::impl::forward_to_ssr(
+                stream->method,
+                url,
+                filtered_headers,
+                body_str,
+                remote_ep_.address().to_string()
+            );
+            
+            if (ssr_response) {
+                NPRPC_HTTP3_TRACE("SSR POST response: {} ({} bytes)", 
+                    ssr_response->status_code, ssr_response->body.size());
+                
+                std::string content_type = "text/html; charset=utf-8";
+                for (const auto& [key, value] : ssr_response->headers) {
+                    if (key == "content-type" || key == "Content-Type") {
+                        content_type = value;
+                        break;
+                    }
+                }
+                
+                return send_dynamic_response(stream, ssr_response->status_code, 
+                    content_type, std::move(ssr_response->body));
+            }
+            // Fall through to default response on error
+        }
+#endif
+        
+        // Default: return 200 OK for other POST requests
+        return send_static_response(stream, 200, "text/plain", "OK");
     } else {
         // Method not allowed
         return send_static_response(stream, 405, "text/html",
@@ -1324,6 +1436,7 @@ int Http3Connection::send_dynamic_response(Http3Stream* stream, unsigned int sta
 
     // Store response data in stream to keep it alive
     stream->dynamic_body = std::move(body);
+    stream->response_content_type = std::string(content_type);  // Store content-type for lifetime
     stream->response_data = reinterpret_cast<const uint8_t*>(stream->dynamic_body.data());
     stream->response_len = stream->dynamic_body.size();
     stream->response_offset = 0;
@@ -1349,9 +1462,9 @@ int Http3Connection::send_dynamic_response(Http3Stream* stream, unsigned int sta
     };
     nva[2] = {
         .name = reinterpret_cast<uint8_t*>(const_cast<char*>("content-type")),
-        .value = reinterpret_cast<const uint8_t*>(content_type.data()),
+        .value = reinterpret_cast<const uint8_t*>(stream->response_content_type.data()),
         .namelen = 12,
-        .valuelen = content_type.size(),
+        .valuelen = stream->response_content_type.size(),
         .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
     };
     nva[3] = {

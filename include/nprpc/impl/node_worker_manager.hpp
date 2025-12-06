@@ -10,6 +10,7 @@
 
 #include <boost/asio.hpp>
 #include <boost/process.hpp>
+#include <boost/process/v2/environment.hpp>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>

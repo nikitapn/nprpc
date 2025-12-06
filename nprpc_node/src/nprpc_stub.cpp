@@ -1,7 +1,7 @@
 // Stub for nprpc globals needed by lock_free_ring_buffer.cpp
 // This allows the Node.js addon to link without the full nprpc library
 
-#include <nprpc/nprpc.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
 
 namespace nprpc::impl {
 // Default configuration with debug disabled for the Node.js addon

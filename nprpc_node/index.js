@@ -22,4 +22,7 @@ try {
     }
 }
 
+// Export both for ESM and CommonJS compatibility
 module.exports = addon;
+module.exports.default = addon;
+module.exports.ShmChannel = addon.ShmChannel;

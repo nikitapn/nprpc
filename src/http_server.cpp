@@ -7,6 +7,9 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/http_utils.hpp>
 #include <nprpc/impl/http_file_cache.hpp>
+#ifdef NPRPC_SSR_ENABLED
+#include <nprpc/impl/ssr_manager.hpp>
+#endif
 
 #include <boost/beast/http.hpp>
 
@@ -228,6 +231,80 @@ http::message_generator handle_request(
       (req.target() == "/rpc" || req.target().starts_with("/rpc/"))) {
     return handle_rpc_request(req);
   }
+
+#ifdef NPRPC_SSR_ENABLED
+  // Check if this request should be handled by SSR
+  if (g_cfg.ssr_enabled && 
+      (req.method() == http::verb::get || req.method() == http::verb::head)) {
+    
+    std::string_view method = (req.method() == http::verb::get) ? "GET" : "HEAD";
+    std::string_view target = req.target();
+    
+    // Get Accept header
+    std::string accept_header;
+    auto it = req.find(http::field::accept);
+    if (it != req.end()) {
+      accept_header = std::string(it->value());
+    }
+    
+    if (should_ssr(method, target, accept_header)) {
+      // Build headers map
+      std::map<std::string, std::string> headers;
+      for (const auto& field : req) {
+        headers[std::string(field.name_string())] = std::string(field.value());
+      }
+      
+      // Get host for URL construction
+      std::string host = "localhost";  // Default
+      auto host_it = req.find(http::field::host);
+      if (host_it != req.end()) {
+        host = std::string(host_it->value());
+      }
+      
+      // Build full URL (SSL if cert files are configured)
+      std::string scheme = !g_cfg.http_cert_file.empty() ? "https" : "http";
+      std::string url = scheme + "://" + host + std::string(target);
+      
+      // Forward to SSR
+      auto ssr_response = forward_to_ssr(
+        method,
+        url,
+        headers,
+        "", // No body for GET/HEAD
+        ""  // TODO: Get client address from session
+      );
+      
+      if (ssr_response) {
+        // Create response with SSR result
+        http::response<http::string_body> res{
+            static_cast<http::status>(ssr_response->status_code), 
+            req.version()};
+        res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+        
+        // Copy headers from SSR response
+        for (const auto& [key, value] : ssr_response->headers) {
+          // Skip certain headers that Beast handles
+          if (key != "content-length" && key != "transfer-encoding") {
+            res.set(key, value);
+          }
+        }
+        
+        // If no content-type set, default to HTML
+        auto ct_it = res.find(http::field::content_type);
+        if (ct_it == res.end()) {
+          res.set(http::field::content_type, "text/html; charset=utf-8");
+        }
+        
+        add_alt_svc_header(res);
+        res.keep_alive(req.keep_alive());
+        res.body() = std::move(ssr_response->body);
+        res.prepare_payload();
+        return res;
+      }
+      // SSR failed, fall through to static file serving
+    }
+  }
+#endif
 
   if (g_cfg.http_root_dir.empty())
     return bad_request("Illegal request: only Upgrade is allowed");

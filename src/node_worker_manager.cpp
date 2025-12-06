@@ -64,6 +64,25 @@ bool NodeWorkerManager::start(const std::string& handler_path,
         return false;
     }
 
+    // Find the node executable in PATH if not an absolute path
+    boost::process::filesystem::path node_path;
+    if (fs::path(node_executable).is_absolute()) {
+        node_path = boost::process::filesystem::path(node_executable);
+    } else {
+        // Search PATH for the executable
+        node_path = boost::process::v2::environment::find_executable(node_executable);
+        if (node_path.empty()) {
+            std::cerr << "NodeWorkerManager: Could not find '" << node_executable 
+                      << "' in PATH" << std::endl;
+            return false;
+        }
+    }
+    
+    if (!fs::exists(node_path.string())) {
+        std::cerr << "NodeWorkerManager: Node executable not found: " << node_path << std::endl;
+        return false;
+    }
+
     try {
         // Create shared memory channel (server side - creates the rings)
         channel_ = std::make_unique<SharedMemoryChannel>(
@@ -79,6 +98,10 @@ bool NodeWorkerManager::start(const std::string& handler_path,
             handle_response(std::move(data));
         };
 
+        // Determine working directory - use parent of handler_path to find node_modules
+        // Structure: client/build/index.js, node_modules is at client/node_modules
+        fs::path working_dir = fs::path(handler_path).parent_path();
+        
         // Build environment for Node.js process (Boost.Process v2)
         namespace bpe = boost::process::environment;
         std::unordered_map<bpe::key, bpe::value> env =
@@ -89,7 +112,9 @@ bool NodeWorkerManager::start(const std::string& handler_path,
         // Start Node.js process
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "NodeWorkerManager: Starting Node.js worker" << std::endl;
+            std::cout << "  Node: " << node_path << std::endl;
             std::cout << "  Handler: " << index_path << std::endl;
+            std::cout << "  Working dir: " << working_dir << std::endl;
             std::cout << "  Channel: " << channel_id_ << std::endl;
         }
 
@@ -100,9 +125,10 @@ bool NodeWorkerManager::start(const std::string& handler_path,
         // Launch process with Boost.Process v2 API
         node_process_ = std::make_unique<boost::process::process>(
             ioc_,
-            boost::process::filesystem::path(node_executable),
+            boost::process::filesystem::path(node_path),
             std::vector<std::string>{index_path.string()},
             boost::process::process_environment(env),
+            boost::process::process_start_dir{working_dir.string()},
             boost::process::process_stdio{{}, *node_stdout_, *node_stderr_}
         );
 
@@ -272,16 +298,27 @@ std::optional<NodeWorkerManager::SsrResponse> NodeWorkerManager::forward_request
         return std::nullopt;
     }
 
-    // Wait for response
-    {
-        std::unique_lock<std::mutex> lock(pending->mtx);
-        if (!pending->cv.wait_until(lock, pending->deadline, 
-                [&] { return pending->completed; })) {
-            // Timeout
-            std::lock_guard<std::mutex> plock(pending_mtx_);
-            pending_requests_.erase(request_id);
-            return std::nullopt;
+    // Wait for response - poll io_context while waiting to avoid deadlock
+    // The response comes via shared memory which posts to io_context
+    while (true) {
+        {
+            std::unique_lock<std::mutex> lock(pending->mtx);
+            if (pending->completed) {
+                break;
+            }
+            if (std::chrono::steady_clock::now() >= pending->deadline) {
+                // Timeout
+                std::lock_guard<std::mutex> plock(pending_mtx_);
+                pending_requests_.erase(request_id);
+                return std::nullopt;
+            }
         }
+        
+        // Process any pending io_context work (including response callbacks)
+        ioc_.poll_one();
+        
+        // Brief sleep to avoid busy spinning
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     return pending->response;

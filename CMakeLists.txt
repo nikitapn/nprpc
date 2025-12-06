@@ -231,7 +231,9 @@ add_library(nprpc
 if(NPRPC_ENABLE_SSR)
   target_sources(nprpc PRIVATE
     src/node_worker_manager.cpp
+    src/ssr_manager.cpp
     include/nprpc/impl/node_worker_manager.hpp
+    include/nprpc/impl/ssr_manager.hpp
   )
 endif()
 
@@ -365,6 +367,10 @@ endif()
 # Benchmarks (optional, requires Google Benchmark)
 if(NPRPC_BUILD_TESTS AND UNIX)
   add_subdirectory(benchmark)
+endif()
+
+if(NPRPC_BUILD_EXAMPLES)
+  add_subdirectory(examples)
 endif()
 
 # Installation

@@ -325,11 +325,13 @@ struct BuildConfig {
   uint16_t    http_port         = 0;
   bool        http_ssl_enabled                     = false;
   bool        http3_enabled                        = false;
+  bool        ssr_enabled                          = false;
   bool        http_ssl_client_disable_verification = false;
   std::string http_cert_file;
   std::string http_key_file;
   std::string http_dhparams_file;
   std::string http_root_dir;
+  std::string ssr_handler_dir;  // Path to SSR handler (index.js), defaults to http_root_dir
 
   // QUIC settings
   uint16_t    quic_port         = 0;
@@ -429,6 +431,17 @@ class RpcBuilderHttp : public RpcBuilderBase {
     cfg_.http3_enabled = true;
     return *this;
   }
+
+  RpcBuilderHttp& enable_ssr(std::string_view handler_dir = "") noexcept
+  {
+    cfg_.ssr_enabled = true;
+    if (!handler_dir.empty()) {
+      cfg_.ssr_handler_dir = handler_dir;
+    }
+    return *this;
+  }
+
+
 
   RpcBuilderHttp& root_dir(std::string_view root_dir) noexcept
   {

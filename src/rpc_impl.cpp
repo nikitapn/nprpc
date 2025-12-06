@@ -159,9 +159,13 @@ NPRPC_API Rpc* RpcBuilderBase::build(boost::asio::io_context& ioc)
   g_cfg.listen_udp_port                  = cfg_.udp_port;
   g_cfg.listen_quic_port                 = cfg_.quic_port;
   g_cfg.http3_enabled                    = cfg_.http3_enabled;
+  g_cfg.ssr_enabled                      = cfg_.ssr_enabled;
   g_cfg.http_cert_file                   = cfg_.http_cert_file;
   g_cfg.http_key_file                    = cfg_.http_key_file;
   g_cfg.http_root_dir                    = cfg_.http_root_dir;
+  g_cfg.ssr_handler_dir                  = cfg_.ssr_handler_dir.empty() 
+                                             ? cfg_.http_root_dir 
+                                             : cfg_.ssr_handler_dir;
   g_cfg.quic_cert_file                   = cfg_.quic_cert_file;
   g_cfg.quic_key_file                    = cfg_.quic_key_file;
 
@@ -207,6 +211,10 @@ void stop_http_server();
 #ifdef NPRPC_HTTP3_ENABLED
 void stop_http3_server();
 #endif
+#ifdef NPRPC_SSR_ENABLED
+extern void init_ssr(boost::asio::io_context& ioc);
+extern void stop_ssr();
+#endif
 
 void RpcImpl::destroy()
 {
@@ -221,6 +229,9 @@ void RpcImpl::destroy()
 #endif
 #ifdef NPRPC_HTTP3_ENABLED
   stop_http3_server();
+#endif
+#ifdef NPRPC_SSR_ENABLED
+  stop_ssr();
 #endif
   
   // Shutdown and clear open sessions to release their async operations
@@ -535,6 +546,9 @@ RpcImpl::RpcImpl(
 #ifdef NPRPC_HTTP3_ENABLED
   extern void init_http3_server(boost::asio::io_context& ioc);
   init_http3_server(ioc_);
+#endif
+#ifdef NPRPC_SSR_ENABLED
+  init_ssr(ioc_);
 #endif
 }
 
