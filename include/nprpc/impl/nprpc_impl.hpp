@@ -30,13 +30,34 @@
 
 namespace nprpc::impl {
 
+struct Config {
+  DebugLevel                 debug_level = ::nprpc::DebugLevel::DebugLevel_Critical;
+  uuid_t                     uuid;
+  std::string                hostname;
+  std::string                listen_address    = "0.0.0.0";
+  uint16_t                   listen_tcp_port   = 0;
+  uint16_t                   listen_http_port  = 0;  // Used for both HTTP/1.1 and HTTP/3
+  uint16_t                   listen_udp_port   = 0;
+  uint16_t                   listen_quic_port  = 0;
+  bool                       http3_enabled     = false;  // Enable HTTP/3 on same port as HTTP
+  std::string                http_cert_file;             // TLS cert for HTTP/3
+  std::string                http_key_file;              // TLS key for HTTP/3
+  std::string                quic_cert_file;
+  std::string                quic_key_file;
+  std::string                http_root_dir;
+  ssl::context               ssl_context_server{ssl::context::tlsv13_server};
+  ssl::context               ssl_context_client{ssl::context::tlsv13_client};
+  std::string                ssl_client_self_signed_cert_path;
+  bool                       ssl_client_disable_verification = false;
+};
+
 NPRPC_API void fill_guid(std::array<std::uint8_t, 16>& guid) noexcept;
 
 class RpcImpl;
 class PoaImpl;
 
 NPRPC_API extern Config   g_cfg;
-NPRPC_API extern RpcImpl* g_orb;
+NPRPC_API extern RpcImpl* g_rpc;
 NPRPC_API extern std::string g_server_listener_uuid;
 
 struct IOWork {
@@ -482,7 +503,7 @@ inline int handle_standart_reply(
 inline void Session::close()
 {
   closed_.store(true);
-  impl::g_orb->close_session(this);
+  impl::g_rpc->close_session(this);
 }
 
 class ReferenceListImpl

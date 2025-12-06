@@ -489,14 +489,6 @@ void Http3Server::handle_request_complete(Http3Request* req) {
         std::string file_path;
         if (req->path == "/") {
             file_path = path_cat(g_cfg.http_root_dir, "/index.html");
-        } else if (!g_cfg.spa_links.empty() && req->path.find('.') == std::string::npos) {
-            // SPA route handling
-            auto it = std::find(g_cfg.spa_links.begin(), g_cfg.spa_links.end(), req->path);
-            if (it == g_cfg.spa_links.end()) {
-                send_error(req, 404, "Not found");
-                return;
-            }
-            file_path = path_cat(g_cfg.http_root_dir, "/index.html");
         } else {
             file_path = path_cat(g_cfg.http_root_dir, req->path);
         }
@@ -623,23 +615,13 @@ static std::unique_ptr<Http3Server> g_http3_server;
 
 NPRPC_API void init_http3_server(boost::asio::io_context& ioc) {
     // HTTP/3 is enabled when http3_enabled flag is set and we have an HTTP port
-    if (!g_cfg.http3_enabled || g_cfg.listen_http_port == 0) {
+    if (!g_cfg.http3_enabled)
         return;
-    }
-    
-    std::cout << "[HTTP/3] Initializing on port " << g_cfg.listen_http_port << std::endl;
-    
-    if (g_cfg.http3_cert_file.empty() || g_cfg.http3_key_file.empty()) {
-        std::cerr << "[HTTP/3] Certificate and key files required" << std::endl;
-        return;
-    }
-    
-    std::cout << "[HTTP/3] Using cert: " << g_cfg.http3_cert_file << std::endl;
-    
+
     g_http3_server = std::make_unique<Http3Server>(
         ioc,
-        g_cfg.http3_cert_file,
-        g_cfg.http3_key_file,
+        g_cfg.http_cert_file,
+        g_cfg.http_key_file,
         g_cfg.listen_http_port);  // Use same port as HTTP/1.1
     
     if (!g_http3_server->start()) {

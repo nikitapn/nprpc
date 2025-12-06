@@ -1285,7 +1285,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs) {
         if (arg->type->id == FieldType::Object) {
           oc <<
             "{\n"
-            "  auto obj = impl::g_orb->get_object(" << "oa._" << out_ix << "().poa_idx(), " << "oa._" << out_ix << "().object_id());\n"
+            "  auto obj = impl::g_rpc->get_object(" << "oa._" << out_ix << "().poa_idx(), " << "oa._" << out_ix << "().object_id());\n"
             "  if (obj) if (auto real_obj = (*obj).get(); real_obj) ref_list.add_ref(real_obj);\n"
             "}\n"
             ;

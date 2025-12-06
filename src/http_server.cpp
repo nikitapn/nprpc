@@ -142,7 +142,7 @@ http::message_generator handle_rpc_request(
 
     // Process RPC request
     std::string response_body;
-    if (!process_http_rpc(g_orb->ioc(), request_body, response_body)) {
+    if (!process_http_rpc(g_rpc->ioc(), request_body, response_body)) {
       return rpc_error("Failed to process RPC request");
     }
 
@@ -241,11 +241,6 @@ http::message_generator handle_request(
   std::string path;
 
   if (req.target().length() == 1 && req.target().back() == '/') {
-    path = path_cat(doc_root, "/index.html");
-  } else if (
-      !g_cfg.spa_links.empty() &&
-      req.target().find('.') == std::string::npos) {
-    if (std::find(std::begin(g_cfg.spa_links), std::end(g_cfg.spa_links), req.target()) == g_cfg.spa_links.end()) return not_found(req.target());
     path = path_cat(doc_root, "/index.html");
   } else {
     path = path_cat(doc_root, req.target());
@@ -734,10 +729,8 @@ private:
 static std::shared_ptr<listener> g_http_listener;
 
 void init_http_server(boost::asio::io_context &ioc) {
-  if (!nprpc::impl::g_cfg.listen_http_port) {
-    std::cout << "HTTP server port is not set, skipping HTTP server initialization." << std::endl;
+  if (!nprpc::impl::g_cfg.listen_http_port)
     return;
-  }
 
   // Create and launch a listening port
   g_http_listener = std::make_shared<listener>(

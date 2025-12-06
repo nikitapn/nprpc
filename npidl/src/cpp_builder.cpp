@@ -1199,7 +1199,7 @@ void CppBuilder::emit_function_arguments(
 
 void CppBuilder::proxy_call(AstFunctionDecl* fn) {
   oc <<
-    "  ::nprpc::impl::g_orb->call(this->get_endpoint(), buf, this->get_timeout());\n"
+    "  ::nprpc::impl::g_rpc->call(this->get_endpoint(), buf, this->get_timeout());\n"
     "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n"
     ;
 
@@ -1241,20 +1241,20 @@ void CppBuilder::proxy_call(AstFunctionDecl* fn) {
 void CppBuilder::proxy_udp_call(AstFunctionDecl* fn) {
   // Fire-and-forget UDP call - send and don't wait for reply
   oc <<
-    "  ::nprpc::impl::g_orb->send_udp(this->get_endpoint(), std::move(buf));\n"
+    "  ::nprpc::impl::g_rpc->send_udp(this->get_endpoint(), std::move(buf));\n"
     ;
 }
 
 void CppBuilder::proxy_unreliable_call(AstFunctionDecl* fn) {
   // Fire-and-forget call for non-UDP transports (e.g., QUIC DATAGRAM)
   oc <<
-    "  ::nprpc::impl::g_orb->send_unreliable(this->get_endpoint(), std::move(buf));\n"
+    "  ::nprpc::impl::g_rpc->send_unreliable(this->get_endpoint(), std::move(buf));\n"
     ;
 }
 void CppBuilder::proxy_udp_reliable_call(AstFunctionDecl* fn) {
   // Reliable UDP call - wait for reply with retransmit
   oc <<
-    "  ::nprpc::impl::g_orb->call_udp_reliable(this->get_endpoint(), buf);\n"
+    "  ::nprpc::impl::g_rpc->call_udp_reliable(this->get_endpoint(), buf);\n"
     "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n"
     ;
 
@@ -1296,7 +1296,7 @@ void CppBuilder::proxy_udp_reliable_call(AstFunctionDecl* fn) {
 void CppBuilder::proxy_udp_reliable_async_call(AstFunctionDecl* fn) {
   // Async reliable UDP call - buffer is moved, handler called on completion
   oc <<
-    "  ::nprpc::impl::g_orb->call_udp_reliable_async(this->get_endpoint(), std::move(buf), "
+    "  ::nprpc::impl::g_rpc->call_udp_reliable_async(this->get_endpoint(), std::move(buf), "
     "!handler ? std::nullopt : std::make_optional([handler = move(handler)] (\n"
     "    const boost::system::error_code& ec, ::nprpc::flat_buffer& buf) {\n"
     "      if (ec) {\n"
@@ -1310,7 +1310,7 @@ void CppBuilder::proxy_udp_reliable_async_call(AstFunctionDecl* fn) {
 
 void CppBuilder::proxy_async_call(AstFunctionDecl* fn) {
   oc <<
-    "  ::nprpc::impl::g_orb->call_async(this->get_endpoint(), std::move(buf), !handler ? std::nullopt : std::make_optional([handler = move(handler)] (\n"
+    "  ::nprpc::impl::g_rpc->call_async(this->get_endpoint(), std::move(buf), !handler ? std::nullopt : std::make_optional([handler = move(handler)] (\n"
     "    const boost::system::error_code& ec, ::nprpc::flat_buffer& buf) {\n"
     ;
 
@@ -1467,7 +1467,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 
     // Try zero-copy buffer for shared memory transport
     oc <<
-      "  if (!::nprpc::impl::g_orb->prepare_zero_copy_buffer(this->get_endpoint(), buf, " << capacity << ")) {\n"
+      "  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(this->get_endpoint(), buf, " << capacity << ")) {\n"
       "    buf.prepare(" << capacity << ");\n"
       "  }\n"
       "  {\n"
@@ -1675,7 +1675,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
         if (arg->type->id == FieldType::Object) {
           oc <<
             "{\n"
-            "  auto obj = impl::g_orb->get_object(" << "oa._" << out_ix << "().poa_idx(), " << "oa._" << out_ix << "().object_id());\n"
+            "  auto obj = impl::g_rpc->get_object(" << "oa._" << out_ix << "().poa_idx(), " << "oa._" << out_ix << "().object_id());\n"
             "  if (obj) if (auto real_obj = (*obj).get(); real_obj) ref_list.add_ref(real_obj);\n"
             "}\n"
             ;

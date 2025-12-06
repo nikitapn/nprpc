@@ -313,145 +313,172 @@ class NPRPC_API Rpc
 };
 
 namespace impl {
-struct Config {
-  DebugLevel                 debug_level = ::nprpc::DebugLevel::DebugLevel_Critical;
-  uuid_t                     uuid;
-  std::string                hostname;
-  std::string                listen_address    = "0.0.0.0";
-  uint16_t                   listen_tcp_port   = 0;
-  uint16_t                   listen_http_port  = 0;  // Used for both HTTP/1.1 and HTTP/3
-  uint16_t                   listen_udp_port   = 0;
-  uint16_t                   listen_quic_port  = 0;
-  bool                       http3_enabled     = false;  // Enable HTTP/3 on same port as HTTP
-  std::string                http3_cert_file;  // TLS cert for HTTP/3
-  std::string                http3_key_file;   // TLS key for HTTP/3
-  std::string                quic_cert_file;
-  std::string                quic_key_file;
-  std::string                http_root_dir;
-  std::vector<std::string>   spa_links;
-  ssl::context               ssl_context_server{ssl::context::tlsv13_server};
-  ssl::context               ssl_context_client{ssl::context::tlsv13_client};
-  std::string                ssl_client_self_signed_cert_path;
-  bool                       ssl_client_disable_verification = false;
+struct BuildConfig {
+  DebugLevel  debug_level       = DebugLevel::DebugLevel_Critical;
+  uuid_t      uuid;
+
+  uint16_t    tcp_port          = 0;
+  uint16_t    udp_port          = 0;
+  std::string hostname;
+
+  // HTTP/HTTPS settings + WebSocket/SSL WebSocket settings
+  uint16_t    http_port         = 0;
+  bool        http_ssl_enabled                     = false;
+  bool        http3_enabled                        = false;
+  bool        http_ssl_client_disable_verification = false;
+  std::string http_cert_file;
+  std::string http_key_file;
+  std::string http_dhparams_file;
+  std::string http_root_dir;
+
+  // QUIC settings
+  uint16_t    quic_port         = 0;
+  std::string quic_cert_file;
+  std::string quic_key_file;
+  std::string ssl_client_self_signed_cert_path;
 };
-} // namespace impl
 
-class RpcBuilder {
-  impl::Config cfg_;
-  bool         use_ssl_websocket_server_ = false;
-  std::string  ssl_public_key_path_;
-  std::string  ssl_secret_key_path_;
-  std::string  ssl_dh_params_path_;
- public:
-  NPRPC_API RpcBuilder();
+class RpcBuilderHttp;
+class RpcBuilderQuic;
+class RpcBuilderTcp;
+class RpcBuilderUdp;
 
-  RpcBuilder& set_debug_level(::nprpc::DebugLevel level) noexcept
+class RpcBuilderBase {
+protected:
+  BuildConfig& cfg_;
+  RpcBuilderBase(impl::BuildConfig& cfg) : cfg_(cfg) {};
+public:
+  RpcBuilderBase& set_debug_level(::nprpc::DebugLevel level) noexcept
   {
     cfg_.debug_level = level;
     return *this;
   }
 
-  RpcBuilder& set_hostname(std::string_view hostname) noexcept
+  RpcBuilderBase& set_hostname(std::string_view hostname) noexcept
   {
     cfg_.hostname = hostname;
     return *this;
   }
 
-  RpcBuilder& set_listen_address(std::string_view listen_address) noexcept
-  {
-    cfg_.listen_address = listen_address;
-    return *this;
-  }
-
-  RpcBuilder& set_listen_tcp_port(uint16_t port) noexcept
-  {
-    cfg_.listen_tcp_port = port;
-    return *this;
-  }
-
-  // Enable HTTP server on specified port
-  // If cert_file and key_file are provided, HTTP/3 (QUIC) will also be enabled
-  // on the same port, and Alt-Svc header will advertise HTTP/3 support
-  RpcBuilder& enable_http(
-    uint16_t port,
-    std::string_view cert_file = "",
-    std::string_view key_file = "") noexcept
-  {
-    cfg_.listen_http_port = port;
-    if (!cert_file.empty() && !key_file.empty()) {
-      cfg_.http3_enabled = true;
-      cfg_.http3_cert_file = cert_file;
-      cfg_.http3_key_file = key_file;
-    }
-    return *this;
-  }
-
-  // Deprecated: use enable_http() instead
-  [[deprecated("Use enable_http() instead")]]
-  RpcBuilder& set_listen_http_port(uint16_t port) noexcept
-  {
-    cfg_.listen_http_port = port;
-    return *this;
-  }
-
-  RpcBuilder& set_listen_udp_port(uint16_t port) noexcept
-  {
-    cfg_.listen_udp_port = port;
-    return *this;
-  }
-
-  RpcBuilder& set_listen_quic_port(
-    uint16_t port,
-    std::string_view cert_file,
-    std::string_view key_file) noexcept
-  {
-    cfg_.listen_quic_port = port;
-    cfg_.quic_cert_file = cert_file;
-    cfg_.quic_key_file = key_file;
-    return *this;
-  }
-
-  RpcBuilder& set_http_root_dir(std::string_view dir) noexcept
-  {
-    cfg_.http_root_dir = dir;
-    return *this;
-  }
-
-  RpcBuilder& set_spa_links(
-    std::initializer_list<std::string_view> links) noexcept
-  {
-    for (const auto& link : links)
-      cfg_.spa_links.emplace_back(link);
-
-    return *this;
-  }
-
-  RpcBuilder& enable_ssl_server(
-    std::string_view public_key_path,
-    std::string_view private_key_path,
-    std::string_view dh_params_path = "") noexcept
-  {
-    use_ssl_websocket_server_ = true;
-    ssl_public_key_path_      = public_key_path;
-    ssl_secret_key_path_      = private_key_path;
-    ssl_dh_params_path_       = dh_params_path;
-    return *this;
-  }
-
-  RpcBuilder& enable_ssl_client_self_signed_cert(
+  RpcBuilderBase& enable_ssl_client_self_signed_cert(
     std::string_view cert_path) noexcept
   {
     cfg_.ssl_client_self_signed_cert_path = cert_path;
     return *this;
   }
 
-  RpcBuilder& disable_ssl_client_verification() noexcept
+  RpcBuilderBase& disable_ssl_client_verification() noexcept
   {
-    cfg_.ssl_client_disable_verification = true;
+    cfg_.http_ssl_client_disable_verification = true;
     return *this;
   }
 
+  RpcBuilderTcp with_tcp() const noexcept;
+  RpcBuilderHttp with_http() const noexcept;
+  RpcBuilderUdp with_udp() const noexcept;
+  RpcBuilderQuic with_quic() const noexcept;
+
   NPRPC_API Rpc* build(boost::asio::io_context& ioc);
+};
+
+class RpcBuilderTcp : public RpcBuilderBase {
+ public:
+  explicit RpcBuilderTcp(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
+
+  RpcBuilderTcp& port(uint16_t port) noexcept
+  {
+    cfg_.tcp_port = port;
+    return *this;
+  }
+};
+
+class RpcBuilderUdp : public RpcBuilderBase {
+ public:
+  explicit RpcBuilderUdp(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
+
+  RpcBuilderUdp& port(uint16_t port) noexcept
+  {
+    cfg_.udp_port = port;
+    return *this;
+  }
+};
+
+class RpcBuilderHttp : public RpcBuilderBase {
+ public:
+  explicit RpcBuilderHttp(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
+
+  RpcBuilderHttp& port(uint16_t port) noexcept
+  {
+    cfg_.http_port = port;
+    return *this;
+  }
+
+  RpcBuilderHttp& ssl(std::string_view cert_file,
+                      std::string_view key_file,
+                      std::string_view dhparams_file = "") noexcept
+  {
+    cfg_.http_ssl_enabled   = true;
+    cfg_.http_cert_file     = cert_file;
+    cfg_.http_key_file      = key_file;
+    cfg_.http_dhparams_file = dhparams_file;
+    return *this;
+  }
+
+  RpcBuilderHttp& enable_http3() noexcept
+  {
+    cfg_.http3_enabled = true;
+    return *this;
+  }
+
+  RpcBuilderHttp& root_dir(std::string_view root_dir) noexcept
+  {
+    cfg_.http_root_dir = root_dir;
+    return *this;
+  }
+};
+
+
+class RpcBuilderQuic : public RpcBuilderBase {
+ public:
+  explicit RpcBuilderQuic(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
+
+  RpcBuilderQuic& port(uint16_t port) noexcept
+  {
+    cfg_.quic_port = port;
+    return *this;
+  }
+
+  RpcBuilderQuic& ssl(std::string_view cert_file,
+                      std::string_view key_file) noexcept
+  {
+    cfg_.quic_cert_file = cert_file;
+    cfg_.quic_key_file  = key_file;
+    return *this;
+  }
+};
+
+inline RpcBuilderTcp RpcBuilderBase::with_tcp() const noexcept {
+  return RpcBuilderTcp(cfg_);
+}
+
+inline RpcBuilderHttp RpcBuilderBase::with_http() const noexcept {
+  return RpcBuilderHttp(cfg_);
+}
+
+inline RpcBuilderUdp RpcBuilderBase::with_udp() const noexcept {
+  return RpcBuilderUdp(cfg_);
+}
+
+inline RpcBuilderQuic RpcBuilderBase::with_quic() const noexcept {
+  return RpcBuilderQuic(cfg_);
+}
+
+} // namespace impl
+
+class RpcBuilder : public impl::RpcBuilderBase {
+  impl::BuildConfig cfg_;
+ public:
+  NPRPC_API RpcBuilder();
 };
 
 template<class T>

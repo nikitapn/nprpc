@@ -1211,18 +1211,9 @@ public:
 //==============================================================================
 
 NPRPC_API void init_quic(boost::asio::io_context& ioc) {
-  if (g_cfg.listen_quic_port == 0) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      std::cout << "[QUIC] Listen port not set, skipping QUIC initialization" << std::endl;
-    }
+  if (g_cfg.listen_quic_port == 0)
     return;
-  }
-  
-  if (g_cfg.quic_cert_file.empty() || g_cfg.quic_key_file.empty()) {
-    std::cerr << "[QUIC] Certificate and key files required for QUIC server" << std::endl;
-    return;
-  }
-  
+
   try {
     g_quic_listener = std::make_shared<QuicListener>(
       ioc,

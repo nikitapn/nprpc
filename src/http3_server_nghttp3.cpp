@@ -2134,21 +2134,15 @@ std::shared_ptr<Http3Connection> Http3Server::find_connection(const ngtcp2_cid* 
 static std::unique_ptr<Http3Server> g_http3_server;
 
 NPRPC_API void init_http3_server(boost::asio::io_context& ioc) {
-    if (!g_cfg.http3_enabled || g_cfg.listen_http_port == 0) {
+    if (!g_cfg.http3_enabled)
         return;
-    }
 
     NPRPC_HTTP3_TRACE("Initializing on port {} (nghttp3 backend)", g_cfg.listen_http_port);
 
-    if (g_cfg.http3_cert_file.empty() || g_cfg.http3_key_file.empty()) {
-        std::cerr << "[HTTP/3][E] Certificate and key files required" << std::endl;
-        return;
-    }
-
     g_http3_server = std::make_unique<Http3Server>(
         ioc,
-        g_cfg.http3_cert_file,
-        g_cfg.http3_key_file,
+        g_cfg.http_cert_file,
+        g_cfg.http_key_file,
         g_cfg.listen_http_port);
 
     if (!g_http3_server->start()) {

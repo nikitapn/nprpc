@@ -12,8 +12,162 @@
 
 #include <cassert>
 #include <future>
+#include <fstream>
+#include <functional>
+
+#ifdef _WIN32
+#include <boost/asio/ssl/context.hpp>
+#include <wincrypt.h>
+namespace {
+void add_windows_root_certs(boost::asio::ssl::context &ctx)
+{
+    HCERTSTORE hStore = CertOpenSystemStore(0, "ROOT");
+    if (hStore == NULL) {
+        return;
+    }
+
+    X509_STORE *store = X509_STORE_new();
+    PCCERT_CONTEXT pContext = NULL;
+    while ((pContext = CertEnumCertificatesInStore(hStore, pContext)) != NULL) {
+        X509 *x509 = d2i_X509(NULL,
+                              (const unsigned char **)&pContext->pbCertEncoded,
+                              pContext->cbCertEncoded);
+        if(x509 != NULL) {
+            X509_STORE_add_cert(store, x509);
+            X509_free(x509);
+        }
+    }
+
+    CertFreeCertificateContext(pContext);
+    CertCloseStore(hStore, 0);
+
+    SSL_CTX_set_cert_store(ctx.native_handle(), store);
+}
+} // namespace
+#endif // BOOST_OS_WINDOWS
 
 namespace nprpc::impl {
+
+NPRPC_API Rpc* RpcBuilderBase::build(boost::asio::io_context& ioc)
+{
+  if (impl::g_rpc)
+    throw Exception("NPRPC has been previously initialized");
+
+  // First check if the configuration is valid
+  if (cfg_.http_ssl_enabled) {
+    if (cfg_.http_cert_file.empty() || cfg_.http_key_file.empty()) {
+      throw Exception("HTTP SSL enabled but certificate or key file not specified");
+    }
+  }
+
+  if (cfg_.http3_enabled) {
+    if (cfg_.http_cert_file.empty() || cfg_.http_key_file.empty()) {
+      throw Exception("HTTP/3 enabled but certificate or key file not specified");
+    }
+    if (cfg_.http_root_dir.empty()) {
+      throw Exception("HTTP/3 enabled but root directory not specified");
+    }
+  }
+
+  if (cfg_.http_port != 0 && cfg_.http_root_dir.empty()) {
+    std::cout << "[nprpc][I] HTTP root directory not specified, only upgrading to WebSocket will be available." << std::endl;
+  }
+
+  if (cfg_.quic_port != 0) {
+    if (cfg_.quic_cert_file.empty() || cfg_.quic_key_file.empty()) {
+      throw Exception("QUIC enabled but certificate or key file not specified");
+    }
+  }
+
+  if (cfg_.http_ssl_enabled) {
+    auto read_file_to_string = [](std::string const file) {
+      std::ifstream is(file, std::ios_base::in);
+      if (!is) { throw std::runtime_error("could not open certificate file: \"" + file + "\""); }
+      return std::string(std::istreambuf_iterator<char>(is),
+                         std::istreambuf_iterator<char>());
+    };
+
+    std::string const cert = read_file_to_string(cfg_.http_cert_file);
+    std::string const key = read_file_to_string(cfg_.http_key_file);
+
+    // ctx.set_password_callback(
+    //     [](std::size_t, ssl::context_base::password_purpose) {
+    //       return "test";
+    //     });
+
+    g_cfg.ssl_context_server.set_options(
+        boost::asio::ssl::context::default_workarounds |
+        boost::asio::ssl::context::no_sslv2 |
+        boost::asio::ssl::context::no_sslv3 |
+        boost::asio::ssl::context::no_tlsv1 |      // Also disable TLS 1.0
+        boost::asio::ssl::context::no_tlsv1_1 |    // Also disable TLS 1.1
+        boost::asio::ssl::context::single_dh_use |
+        boost::asio::ssl::context::no_compression  // Prevent CRIME attacks
+    );
+
+    g_cfg.ssl_context_server.use_certificate_chain(
+        boost::asio::buffer(cert.data(), cert.size()));
+
+    g_cfg.ssl_context_server.use_private_key(
+        boost::asio::buffer(key.data(), key.size()),
+        boost::asio::ssl::context::file_format::pem);
+
+    if (cfg_.http_dhparams_file.size() > 0) {
+      std::string const dh = read_file_to_string(cfg_.http_dhparams_file);
+      g_cfg.ssl_context_server.use_tmp_dh(
+          boost::asio::buffer(dh.data(), dh.size()));
+    }
+  }
+
+  // Configure SSL client settings based on RpcBuilder options
+  if (cfg_.http_ssl_client_disable_verification) {
+    std::cout << "SSL client verification disabled (for testing only)" << std::endl;
+    g_cfg.ssl_context_client.set_verify_mode(ssl::verify_none);
+  } else {
+#ifdef _WIN32
+    // On Windows, add system root certificates to the SSL context
+    add_windows_root_certs(ctx_client);
+#else
+    // On other platforms, set default verification paths
+    boost::system::error_code ec;
+    g_cfg.ssl_context_client.set_default_verify_paths(ec);
+    if (ec) {
+      std::cerr << "Warning: Failed to set default SSL verification paths: "
+                << ec.message() << std::endl;
+    } else {
+      std::cout << "SSL client verification paths set successfully." << std::endl;
+    }
+#endif // _WIN32
+    if (!cfg_.ssl_client_self_signed_cert_path.empty()) {
+      try {
+        g_cfg.ssl_context_client.load_verify_file(cfg_.ssl_client_self_signed_cert_path);
+        std::cout << "Loaded self-signed certificate for SSL client: " 
+                  << cfg_.ssl_client_self_signed_cert_path << std::endl;
+      } catch (const std::exception& ex) {
+        std::cerr << "Warning: Failed to load self-signed certificate: " 
+                  << ex.what() << std::endl;
+      }
+    }
+    g_cfg.ssl_context_client.set_verify_mode(ssl::verify_peer);
+  }
+
+  // Copy builder config to global config
+  g_cfg.debug_level                      = cfg_.debug_level;
+  g_cfg.hostname                         = cfg_.hostname;
+  g_cfg.listen_tcp_port                  = cfg_.tcp_port;
+  g_cfg.listen_http_port                 = cfg_.http_port;
+  g_cfg.listen_udp_port                  = cfg_.udp_port;
+  g_cfg.listen_quic_port                 = cfg_.quic_port;
+  g_cfg.http3_enabled                    = cfg_.http3_enabled;
+  g_cfg.http_cert_file                   = cfg_.http_cert_file;
+  g_cfg.http_key_file                    = cfg_.http_key_file;
+  g_cfg.http_root_dir                    = cfg_.http_root_dir;
+  g_cfg.quic_cert_file                   = cfg_.quic_cert_file;
+  g_cfg.quic_key_file                    = cfg_.quic_key_file;
+
+  impl::g_rpc = new impl::RpcImpl(ioc);
+  return impl::g_rpc;
+}
 
 Poa* RpcImpl::create_poa_impl(
   uint32_t objects_max,
@@ -42,7 +196,7 @@ extern void init_shared_memory_listener(boost::asio::io_context& ioc);
 extern void init_udp_listener(boost::asio::io_context& ioc);
 
 NPRPC_API Config   g_cfg;
-NPRPC_API RpcImpl* g_orb;
+NPRPC_API RpcImpl* g_rpc;
 
 // Forward declarations for cleanup
 void stop_udp_listener();
@@ -84,7 +238,7 @@ void RpcImpl::destroy()
   sessions_to_destroy.clear();
 
   delete this;
-  g_orb = nullptr;
+  g_rpc = nullptr;
 }
 
 void RpcImpl::destroy_poa(Poa* poa)
@@ -300,7 +454,7 @@ NPRPC_API bool RpcImpl::prepare_zero_copy_buffer(
 NPRPC_API std::optional<ObjectGuard> RpcImpl::get_object(
   poa_idx_t poa_idx, oid_t object_id)
 {
-  auto poa = g_orb->get_poa(poa_idx);
+  auto poa = g_rpc->get_poa(poa_idx);
   if (!poa) return std::nullopt;
   return poa->get_object(object_id);
 }
@@ -319,7 +473,7 @@ NPRPC_API SessionContext* RpcImpl::get_object_session_context(Object* obj)
   if (!obj) return nullptr;
 
   // We need to find the session context based on the endpoint
-  auto session = g_orb->get_session(obj->get_endpoint());
+  auto session = g_rpc->get_session(obj->get_endpoint());
   if (session) {
     return &session->ctx();
   }
@@ -538,7 +692,7 @@ ObjectId PoaImpl::finalize_activation(
 
   if (activation_flags & ObjectActivationFlags::ALLOW_UDP) {
     if (g_cfg.listen_udp_port == 0) {
-      throw std::runtime_error("UDP port not configured. Use set_listen_udp_port()");
+      throw std::runtime_error("UDP port not configured");
     }
     oid.urls += (std::string(udp_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_udp_port)) + ';';
@@ -644,7 +798,7 @@ void PoaImpl::delete_object(ObjectServant* obj)
   } else {
     std::cerr << "delete_object: object is in use. id = " << obj->oid()
               << '\n';
-    boost::asio::post(impl::g_orb->ioc(),
+    boost::asio::post(impl::g_rpc->ioc(),
                       std::bind(&PoaImpl::delete_object, obj));
   }
 }

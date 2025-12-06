@@ -585,8 +585,8 @@ export abstract class ObjectServant {
     let cnt = ++this.ref_cnt_;
 
     //if (cnt == 1 && static_cast<impl::PoaImpl*>(poa())->pl_lifespan == Policy_Lifespan::Transient) {
-    //  std::lock_guard<std::mutex> lk(impl::g_orb->new_activated_objects_mut_);
-    //  auto& list = impl::g_orb->new_activated_objects_;
+    //  std::lock_guard<std::mutex> lk(impl::g_rpc->new_activated_objects_mut_);
+    //  auto& list = impl::g_rpc->new_activated_objects_;
     //  list.erase(std::find(begin(list), end(list), this));
     //}
 

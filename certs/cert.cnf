@@ -6,12 +6,11 @@ req_extensions     = req_ext
 distinguished_name = dn
 
 [dn]
-CN = archvm.lan
+CN = localhost
 
 [req_ext]
 subjectAltName = @alt_names
 
 [alt_names]
-DNS.1 = archvm.lan
-DNS.2 = localhost
+DNS.1 = localhost
 IP.1  = 127.0.0.1

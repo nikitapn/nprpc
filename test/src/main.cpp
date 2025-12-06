@@ -319,7 +319,7 @@ TEST_F(NprpcTest, TestBadInput) {
             // Set size of the vector to be larger than the buffer size
             *reinterpret_cast<uint32_t*>(vec_begin) = 0xDEADBEEF;
        
-            ::nprpc::impl::g_orb->call(obj->get_endpoint(), buf, obj->get_timeout());
+            ::nprpc::impl::g_rpc->call(obj->get_endpoint(), buf, obj->get_timeout());
             auto std_reply = nprpc::impl::handle_standart_reply(buf);
             if (std_reply != 0) {
                 throw nprpc::Exception("Unknown Error");

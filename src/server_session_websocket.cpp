@@ -77,7 +77,7 @@ public:
   // Start the asynchronous operation
   template <class Body, class Allocator>
   void run(http::request<Body, http::basic_fields<Allocator>> req) {
-    g_orb->add_connection(this->shared_from_this());
+    g_rpc->add_connection(this->shared_from_this());
     // Accept the WebSocket upgrade request
     do_accept(std::move(req));
   }

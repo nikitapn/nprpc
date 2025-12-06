@@ -14,7 +14,7 @@ namespace nprpc::impl {
 
 std::optional<ObjectGuard> get_object(flat_buffer& buf, uint16_t poa_idx, uint64_t object_id) {
 	do {
-		auto poa = g_orb->get_poa(poa_idx);
+		auto poa = g_rpc->get_poa(poa_idx);
 		if (!poa) {
 			make_simple_answer(buf, MessageId::Error_PoaNotExist);
 			break;

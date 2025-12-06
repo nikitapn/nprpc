@@ -140,7 +140,7 @@ void UdpListener::handle_datagram(
     }
     
     // Look up the object
-    auto obj_guard = g_orb->get_object(call_header->poa_idx, call_header->object_id);
+    auto obj_guard = g_rpc->get_object(call_header->poa_idx, call_header->object_id);
     if (!obj_guard.has_value()) {
         std::cerr << "[UDP Listener] Object not found: poa=" << call_header->poa_idx
                   << " oid=" << call_header->object_id << std::endl;

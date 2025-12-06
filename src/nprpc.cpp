@@ -7,45 +7,13 @@
 
 #include <boost/uuid/uuid_io.hpp>
 
-#include <fstream>
-#include <functional>
-
-#ifdef _WIN32
-#include <boost/asio/ssl/context.hpp>
-#include <wincrypt.h>
-namespace {
-void add_windows_root_certs(boost::asio::ssl::context &ctx)
-{
-    HCERTSTORE hStore = CertOpenSystemStore(0, "ROOT");
-    if (hStore == NULL) {
-        return;
-    }
-
-    X509_STORE *store = X509_STORE_new();
-    PCCERT_CONTEXT pContext = NULL;
-    while ((pContext = CertEnumCertificatesInStore(hStore, pContext)) != NULL) {
-        X509 *x509 = d2i_X509(NULL,
-                              (const unsigned char **)&pContext->pbCertEncoded,
-                              pContext->cbCertEncoded);
-        if(x509 != NULL) {
-            X509_STORE_add_cert(store, x509);
-            X509_free(x509);
-        }
-    }
-
-    CertFreeCertificateContext(pContext);
-    CertCloseStore(hStore, 0);
-
-    SSL_CTX_set_cert_store(ctx.native_handle(), store);
-}
-} // namespace
-#endif // BOOST_OS_WINDOWS
-
 using namespace nprpc;
 
 namespace nprpc {
 
-NPRPC_API RpcBuilder::RpcBuilder() {
+NPRPC_API RpcBuilder::RpcBuilder()
+  : impl::RpcBuilderBase(cfg_)
+{
   auto& uuid = impl::SharedUUID::instance().get();
   memcpy(cfg_.uuid.data(), &uuid, 16);
 
@@ -58,93 +26,6 @@ NPRPC_API RpcBuilder::RpcBuilder() {
     assert(ret);
     std::cout << "nprpc UUID: " << buf << std::endl;
   }
-}
-
-NPRPC_API Rpc* RpcBuilder::build(boost::asio::io_context& ioc)
-{
-  using namespace impl;
-
-  if (impl::g_orb) 
-    throw Exception("rpc has been previously initialized");
-
-  auto& ctx_server = cfg_.ssl_context_server;
-  auto& ctx_client = cfg_.ssl_context_client;
-
-  if (use_ssl_websocket_server_) {
-    auto read_file_to_string = [](std::string const file) {
-      std::ifstream is(file, std::ios_base::in);
-      if (!is) { throw std::runtime_error("could not open certificate file: \"" + file + "\""); }
-      return std::string(std::istreambuf_iterator<char>(is),
-                         std::istreambuf_iterator<char>());
-    };
-
-    std::string const cert = read_file_to_string(ssl_public_key_path_);
-    std::string const key = read_file_to_string(ssl_secret_key_path_);
-
-    // ctx.set_password_callback(
-    //     [](std::size_t, ssl::context_base::password_purpose) {
-    //       return "test";
-    //     });
-
-    ctx_server.set_options(
-        boost::asio::ssl::context::default_workarounds |
-        boost::asio::ssl::context::no_sslv2 |
-        boost::asio::ssl::context::no_sslv3 |
-        boost::asio::ssl::context::no_tlsv1 |      // Also disable TLS 1.0
-        boost::asio::ssl::context::no_tlsv1_1 |    // Also disable TLS 1.1
-        boost::asio::ssl::context::single_dh_use |
-        boost::asio::ssl::context::no_compression  // Prevent CRIME attacks
-    );
-
-    ctx_server.use_certificate_chain(
-        boost::asio::buffer(cert.data(), cert.size()));
-
-    ctx_server.use_private_key(
-        boost::asio::buffer(key.data(), key.size()),
-        boost::asio::ssl::context::file_format::pem);
-
-    if (ssl_dh_params_path_.size() > 0) {
-      std::string const dh = read_file_to_string(ssl_dh_params_path_);
-      ctx_server.use_tmp_dh(
-          boost::asio::buffer(dh.data(), dh.size()));
-    }
-  }
-
-  // Configure SSL client settings based on RpcBuilder options
-  if (cfg_.ssl_client_disable_verification) {
-    std::cout << "SSL client verification disabled (for testing only)" << std::endl;
-    ctx_client.set_verify_mode(ssl::verify_none);
-  } else {
-#ifdef _WIN32
-    // On Windows, add system root certificates to the SSL context
-    add_windows_root_certs(ctx_client);
-#else
-    // On other platforms, set default verification paths
-    boost::system::error_code ec;
-    ctx_client.set_default_verify_paths(ec);
-    if (ec) {
-      std::cerr << "Warning: Failed to set default SSL verification paths: "
-                << ec.message() << std::endl;
-    } else {
-      std::cout << "SSL client verification paths set successfully." << std::endl;
-    }
-#endif // _WIN32
-    if (!cfg_.ssl_client_self_signed_cert_path.empty()) {
-      try {
-        ctx_client.load_verify_file(cfg_.ssl_client_self_signed_cert_path);
-        std::cout << "Loaded self-signed certificate for SSL client: " 
-                  << cfg_.ssl_client_self_signed_cert_path << std::endl;
-      } catch (const std::exception& ex) {
-        std::cerr << "Warning: Failed to load self-signed certificate: " 
-                  << ex.what() << std::endl;
-      }
-    }
-    ctx_client.set_verify_mode(ssl::verify_peer);
-  }
-
-  impl::g_cfg = std::move(cfg_);
-  impl::g_orb = new impl::RpcImpl(ioc);
-  return impl::g_orb;
 }
 
 NPRPC_API uint32_t ObjectServant::release() noexcept
@@ -191,7 +72,7 @@ NPRPC_API uint32_t Object::add_ref()
   msg.object_id() = object_id();
   msg.poa_idx()   = poa_idx();
 
-  nprpc::impl::g_orb->call_async(get_endpoint(), std::move(buf), std::nullopt);
+  nprpc::impl::g_rpc->call_async(get_endpoint(), std::move(buf), std::nullopt);
 
   return cnt + 1;
 }
@@ -201,7 +82,7 @@ NPRPC_API uint32_t Object::release()
   auto cnt = --local_ref_cnt_;
   if (cnt != 0) return cnt;
 
-  if (::nprpc::impl::g_orb == nullptr) {
+  if (::nprpc::impl::g_rpc == nullptr) {
     delete this;
     return 0;
   }
@@ -210,7 +91,7 @@ NPRPC_API uint32_t Object::release()
     const auto& endpoint = get_endpoint();
 
     if (endpoint.type() == EndPointType::TcpTethered &&
-        ::nprpc::impl::g_orb->has_session(endpoint) == false) {
+        ::nprpc::impl::g_rpc->has_session(endpoint) == false) {
       // session was closed and cannot be created.
     } else {
       flat_buffer buf;
@@ -231,7 +112,7 @@ NPRPC_API uint32_t Object::release()
       msg.poa_idx()   = poa_idx();
 
       try {
-        ::nprpc::impl::g_orb->call_async(
+        ::nprpc::impl::g_rpc->call_async(
           endpoint,
           std::move(buf),
           [](const boost::system::error_code&, flat_buffer&) {
@@ -331,8 +212,8 @@ NPRPC_API uint32_t ObjectServant::add_ref() noexcept
 
   //	if (cnt == 1 && static_cast<impl::PoaImpl*>(poa())->pl_lifespan ==
   // Policy_Lifespan::Transient) { 		std::lock_guard<std::mutex>
-  // lk(impl::g_orb->new_activated_objects_mut_); 		auto& list =
-  // impl::g_orb->new_activated_objects_; list.erase(std::find(begin(list),
+  // lk(impl::g_rpc->new_activated_objects_mut_); 		auto& list =
+  // impl::g_rpc->new_activated_objects_; list.erase(std::find(begin(list),
   // end(list), this));
   //	}
 

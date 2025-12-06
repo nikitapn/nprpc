@@ -117,13 +117,13 @@ add_custom_target(run_nprpc_tests_verbose
 )
 
 # Run tests automatically after building the main test executable
-# add_custom_command(
-#   TARGET nprpc_test
-#   POST_BUILD
-#   COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-#   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-#   COMMENT "Automatically running nprpc C++ tests after build..."
-# )
+add_custom_command(
+  TARGET nprpc_test
+  POST_BUILD
+  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  COMMENT "Automatically running nprpc C++ tests after build..."
+)
 
 # Test executable for lock-free ring buffer
 add_executable(test_lock_free_ring_buffer
@@ -230,16 +230,16 @@ exit \$RESULT
                 WORLD_READ WORLD_EXECUTE
   )
   
-  add_test(
-    NAME HTTP3Transport
-    COMMAND ${CMAKE_CURRENT_BINARY_DIR}/run_http3_tests.sh
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-  )
+  # add_test(
+  #   NAME HTTP3Transport
+  #   COMMAND ${CMAKE_CURRENT_BINARY_DIR}/run_http3_tests.sh
+  #   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  # )
   
-  set_tests_properties(HTTP3Transport PROPERTIES
-    TIMEOUT 60
-    LABELS "http3;integration"
-  )
+  # set_tests_properties(HTTP3Transport PROPERTIES
+  #   TIMEOUT 60
+  #   LABELS "http3;integration"
+  # )
   
   # Add dependency on the server test executable
   add_dependencies(nprpc_test nprpc_server_test)

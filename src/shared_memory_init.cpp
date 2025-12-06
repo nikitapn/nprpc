@@ -36,7 +36,7 @@ void init_shared_memory_listener(boost::asio::io_context& ioc) {
       
       // Add session to the global connection pool
       // This keeps the session alive and allows it to process requests
-      g_orb->add_connection(std::move(session));
+      g_rpc->add_connection(std::move(session));
     });
 
   g_shared_memory_listener->start();

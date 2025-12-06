@@ -55,17 +55,19 @@ int main() {
 
 	auto rpc = nprpc::RpcBuilder()
 		.set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
-		.set_listen_tcp_port(15000)
-		.enable_http(15001)
-		// .set_hostname("localhost")
+		.with_tcp()
+			.port(15000)
+		.with_http()
+			.port(15001)
 		.build(ioc);
 
 	auto poa = nprpc::PoaBuilder(rpc)
 		.with_max_objects(1)
+		.with_object_id_policy(nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied)
 		.with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
 		.build();
 
-	auto oid = poa->activate_object(&server,
+	auto oid = poa->activate_object_with_id(0, &server,
 		nprpc::ObjectActivationFlags::ALLOW_TCP |
 		nprpc::ObjectActivationFlags::ALLOW_WEBSOCKET
 	);
