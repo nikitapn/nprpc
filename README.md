@@ -13,6 +13,7 @@ NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framewo
   - **Shared Memory** - Zero-copy IPC with 8x memory efficiency
   - **UDP** - Fire-and-forget for game networking
   - **QUIC** - Next-gen encrypted transport (via MsQuic)
+- **Server-Side Rendering**: Built-in SvelteKit SSR support via shared memory IPC
 - **Efficient Binary Protocol**: FlatBuffers-based serialization for minimal overhead
 - **Type-Safe IDL**: Interface Definition Language with code generation for C++ and TypeScript
 - **Cross-Language Support**: Seamless C++ ↔ TypeScript/JavaScript communication
@@ -27,14 +28,87 @@ NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framewo
 | Transport | Use Case | Pros | Cons |
 |-----------|----------|------|------|
 | **WebSocket** | Real-time apps, persistent connections | Bidirectional, low latency, stateful | Requires persistent connection |
-| **HTTP** | Web apps, stateless APIs | Browser compatible, stateless, simple | Higher overhead per request |
+| **HTTP** | Web apps, stateless APIs, SSR | Browser compatible, SSR-capable | Higher overhead per request |
 | **TCP** | High-performance IPC | Low overhead, reliable | No browser support |
 | **Shared Memory** | Same-machine IPC | Zero-copy, 8x memory efficient | Local only |
 | **UDP** | Game networking, low-latency | 76µs latency, fire-and-forget | Connectionless, size limits |
 | **QUIC** | Next-gen transport | Multiplexed, encrypted, 0-RTT, ~43k calls/sec | Requires MsQuic |
-| **HTTP/3** | Modern web | HTTP/3 over QUIC, nghttp3/ngtcp2 based | Requires nghttp3/ngtcp2 |
+| **HTTP/3** | Modern web, SSR | HTTP/3 over QUIC, SSR-capable | Requires nghttp3/ngtcp2 |
 
-## 🎮 UDP Transport
+## � Server-Side Rendering (SSR) Support
+
+NPRPC includes built-in support for serving SvelteKit applications with server-side rendering over HTTP/3. This enables high-performance web applications with:
+
+- **Full SSR** - Initial page loads are rendered server-side for SEO and fast first paint
+- **Client-side Navigation** - SvelteKit's `__data.json` endpoints handled seamlessly
+- **Form Actions** - POST requests with `?/action` patterns fully supported
+- **Shared Memory IPC** - Zero-copy communication between C++ and Node.js
+- **HTTP/3** - Modern QUIC-based transport for optimal performance
+
+### Architecture
+
+```
+Browser ──HTTP/3──► C++ Server ──Shared Memory──► Node.js (SvelteKit)
+                        │
+                        └── Static files (zero-copy cache)
+```
+
+### Quick Start
+
+1. **Build your SvelteKit app** with `@nprpc/adapter-sveltekit`:
+
+```javascript
+// svelte.config.js
+import adapter from '@nprpc/adapter-sveltekit';
+
+export default {
+  kit: {
+    adapter: adapter()
+  }
+};
+```
+
+2. **Configure the C++ server**:
+
+```cpp
+#include <nprpc/nprpc.hpp>
+
+int main() {
+    boost::asio::io_context ioc;
+    
+    auto rpc = nprpc::RpcBuilder()
+        .set_hostname("myserver")
+        .with_http()
+            .port(3000)
+            .root_dir("/path/to/build/client")  // Static assets
+            .ssl("cert.pem", "key.pem")
+            .enable_http3()
+            .enable_ssr("/path/to/build")       // SSR handler directory
+        .build(ioc);
+
+    ioc.run();
+    return 0;
+}
+```
+
+3. **Build with SSR support**:
+
+```bash
+cmake -DNPRPC_ENABLE_SSR=ON -DNPRPC_BUILD_HTTP3=ON ..
+cmake --build .
+```
+
+### How It Works
+
+- **HTML Page Requests** - Forwarded to Node.js for SSR, returns fully rendered HTML
+- **Data Requests** (`__data.json`) - SvelteKit client navigation data
+- **Form Actions** (`POST ?/action`) - Server-side form handling
+- **Static Assets** - Served directly from C++ with zero-copy file cache
+- **RPC Calls** - Still handled by NPRPC's binary protocol at `/rpc`
+
+See [SSR_ARCHITECTURE.md](docs/SSR_ARCHITECTURE.md) for detailed documentation.
+
+## �🎮 UDP Transport
 
 UDP support is designed for game networking and other latency-sensitive applications.
 The payload size is limited to fit within a single UDP datagram (typically ~1200 bytes).
