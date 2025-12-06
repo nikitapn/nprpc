@@ -32,6 +32,7 @@ option(NPRPC_BUILD_JS "Build JavaScript bindings" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_INSTALL "Generate install target" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_ENABLE_QUIC "Enable QUIC transport using MsQuic" OFF)
 option(NPRPC_ENABLE_HTTP3 "Enable HTTP/3 server" OFF)
+option(NPRPC_ENABLE_SSR "Enable SSR support via Node.js worker (requires Boost.Process)" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
 # HTTP/3 backend selection: msh3 (default, uses MsQuic) or nghttp3 (uses ngtcp2)
@@ -163,6 +164,8 @@ else()
   endif()
 endif()
 
+add_subdirectory(npidl_post_build_check)
+
 # Main library target
 add_library(nprpc
   ${nprpc_stub_GENERATED_SOURCES}
@@ -223,6 +226,14 @@ add_library(nprpc
   include/nprpc/serialization/oarchive.h
   include/nprpc/serialization/serialization.h
 )
+
+# SSR support (Node.js worker)
+if(NPRPC_ENABLE_SSR)
+  target_sources(nprpc PRIVATE
+    src/node_worker_manager.cpp
+    include/nprpc/impl/node_worker_manager.hpp
+  )
+endif()
 
 # Add alias for namespaced target (modern CMake practice)
 add_library(nprpc::nprpc ALIAS nprpc)
@@ -296,12 +307,26 @@ if(WIN32)
   target_link_libraries(nprpc PUBLIC crypt32)
 endif()
 
+# SSR support (Node.js worker)
+if(NPRPC_ENABLE_SSR)
+  message(STATUS "SSR support enabled - requires Boost.Process v2")
+  
+  # Find Boost with required components for Process v2
+  find_package(Boost REQUIRED COMPONENTS filesystem process)
+  
+  target_include_directories(nprpc PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glaze/include
+  )
+  target_link_libraries(nprpc PRIVATE Boost::filesystem Boost::process)
+  target_compile_definitions(nprpc PUBLIC NPRPC_SSR_ENABLED)
+endif()
+
 # Ensure export macro is defined when building the library so symbols are exported
 target_compile_definitions(nprpc PRIVATE NPRPC_EXPORTS)
 
 # Dependencies for generated files
 if(TARGET npidl)
-  add_dependencies(nprpc nprpc_stub_gen)
+  add_dependencies(nprpc nprpc_stub_gen npidl_check_size)
 endif()
 
 # Build nameserver executable
@@ -327,9 +352,6 @@ if(NPRPC_BUILD_TOOLS)
 endif()
 
 # Optional components
-if(NPRPC_BUILD_TOOLS)
-  add_subdirectory(check)
-endif()
 
 if(NPRPC_BUILD_JS AND UNIX)
   add_subdirectory(nprpc_js)

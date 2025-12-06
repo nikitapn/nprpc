@@ -1,16 +1,15 @@
 # Check size utility
 
-add_library(check_size STATIC
+add_library(npidl_check_size STATIC
   src/check_size.cpp
+  ${nprpc_stub_COPIED_HEADERS}
 )
 
-target_include_directories(check_size 
+target_include_directories(npidl_check_size
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${CMAKE_CURRENT_SOURCE_DIR}/../npidl/src
 )
 
 # Depend on generated headers if they're being generated
-if(TARGET nprpc_copy_headers)
-  add_dependencies(check_size nprpc_copy_headers)
-endif()
+add_dependencies(npidl_check_size nprpc_copy_headers)

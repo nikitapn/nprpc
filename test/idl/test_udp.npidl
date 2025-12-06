@@ -21,7 +21,7 @@ exception SyncError {
 
 [udp]
 interface GameSync {
-  // Unreliable, no reply (default for UDP)
+  // Unreliable, no reply
   [unreliable]
   async UpdatePosition(player_id: in u32, pos: in Vec3, rot: in Quaternion);
   [unreliable]
