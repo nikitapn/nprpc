@@ -8,7 +8,7 @@ NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framewo
   - **WebSocket** - Persistent bidirectional communication
   - **Secure WebSocket (WSS)** - Encrypted persistent connections
   - **HTTP** - Stateless request/response for web applications
-  - **HTTP/3** - Modern web transport over QUIC (via msh3)
+  - **HTTP/3** - Modern web transport over QUIC (via nghttp3/ngtcp2)
   - **TCP** - Direct socket communication
   - **Shared Memory** - Zero-copy IPC with 8x memory efficiency
   - **UDP** - Fire-and-forget for game networking
@@ -32,23 +32,33 @@ NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framewo
 | **Shared Memory** | Same-machine IPC | Zero-copy, 8x memory efficient | Local only |
 | **UDP** | Game networking, low-latency | 76µs latency, fire-and-forget | Connectionless, size limits |
 | **QUIC** | Next-gen transport | Multiplexed, encrypted, 0-RTT, ~43k calls/sec | Requires MsQuic |
-| **HTTP/3** | Modern web | HTTP/3 over QUIC, msh3-based | Requires msh3 |
+| **HTTP/3** | Modern web | HTTP/3 over QUIC, nghttp3/ngtcp2 based | Requires nghttp3/ngtcp2 |
 
 ## 🎮 UDP Transport
 
-UDP support is designed for game networking and other latency-sensitive applications:
+UDP support is designed for game networking and other latency-sensitive applications.
+The payload size is limited to fit within a single UDP datagram (typically ~1200 bytes).
 
-```cpp
+```typescript
 // game.npidl
-namespace game;
+module game;
 
-[udp]  // All methods default to fire-and-forget
+message vector3 {
+  x: f32;
+  y: f32;
+  z: f32;
+}
+
+[udp]
 interface GameUpdates {
-  void PlayerMoved(f32 x, f32 y, f32 z);           // ~76µs latency
-  void BulletFired(u32 weapon_id, vector3 dir);
-  
-  [reliable]  // ACK-based reliable delivery
-  void PlayerDied(u32 killer_id, u32 victim_id);
+  [unreliable]  // Fire-and-forget, no ACK
+  async PlayerMoved(x: f32, y: f32, z: f32);
+
+  [unreliable]
+  async BulletFired(weapon_id: u32, weapon_id, dir: vector3);
+
+  // ACK-based reliable delivery
+  void PlayerDied(killer_id: u32, victim_id: u32);
 }
 ```
 
@@ -108,18 +118,18 @@ Create a `.npidl` file describing your service:
 
 ```cpp
 // calculator.npidl
-namespace nscalc;
+module example;
 
 exception CalculationError {
-  string message;
-  i32 code;
+  message: string;
+  code: i32;
 }
 
 interface Calculator {
-  f64 Add(f64 a, f64 b);
-  f64 Subtract(f64 a, f64 b);
-  f64 Multiply(f64 a, f64 b);
-  f64 Divide(f64 a, f64 b) throws CalculationError;
+  f64 Add(a: in f64, b: in f64);
+  f64 Subtract(a: in f64, b: in f64);
+  f64 Multiply(a: in f64, b: in f64);
+  f64 Divide(a: in f64, b: in f64) raises(CalculationError);
 }
 ```
 
@@ -139,7 +149,7 @@ This generates:
 #include <nprpc/nprpc.hpp>
 #include "calculator.hpp"
 
-class CalculatorImpl : public nscalc::ICalculator_Servant {
+class CalculatorImpl : public example::ICalculator_Servant {
 public:
   double Add(double a, double b) override {
     return a + b;
@@ -155,7 +165,7 @@ public:
 
   double Divide(double a, double b) override {
     if (b == 0.0) {
-      throw nscalc::CalculationError{"Division by zero", 1};
+      throw example::CalculationError{"Division by zero", 1};
     }
     return a / b;
   }
@@ -203,7 +213,7 @@ int main() {
 
 ```typescript
 import * as NPRPC from 'nprpc';
-import * as nscalc from './gen/calculator';
+import * as example from './gen/calculator';
 
 // Initialize RPC with WebSocket
 const rpc = await NPRPC.init();
@@ -214,7 +224,7 @@ const objRef = NPRPC.make_ref<NPRPC.ObjectProxy>();
 await nameserver.Resolve('calculator', objRef);
 
 // Narrow to specific type
-const calculator = NPRPC.narrow(objRef.value, nscalc.Calculator);
+const calculator = NPRPC.narrow(objRef.value, example.Calculator);
 
 // Call methods - uses WebSocket
 const sum = await calculator.Add(10, 20);        // 30
@@ -224,7 +234,7 @@ const product = await calculator.Multiply(5, 6); // 30
 try {
   await calculator.Divide(10, 0);
 } catch (err) {
-  if (err instanceof nscalc.CalculationError) {
+  if (err instanceof example.CalculationError) {
     console.error(`Error ${err.code}: ${err.message}`);
   }
 }
@@ -234,10 +244,10 @@ try {
 
 ```typescript
 import * as NPRPC from 'nprpc';
-import * as nscalc from './gen/calculator';
+import * as example from './gen/calculator';
 
 // Get calculator proxy (from host.json or nameserver)
-const calculator = NPRPC.narrow(host_info.objects.calculator, nscalc.Calculator);
+const calculator = NPRPC.narrow(host_info.objects.calculator, example.Calculator);
 
 // Call via HTTP - returns values directly, no out parameters
 const sum = await calculator.http.Add(10, 20);        // 30
@@ -247,7 +257,7 @@ const product = await calculator.http.Multiply(5, 6); // 30
 try {
   await calculator.http.Divide(10, 0);
 } catch (err) {
-  if (err instanceof nscalc.CalculationError) {
+  if (err instanceof example.CalculationError) {
     console.error(`Error ${err.code}: ${err.message}`);
   }
 }
@@ -355,53 +365,92 @@ obj->MyMethod(data);
 
 NPRPC supports rich data types in IDL:
 
-```cpp
-struct UserProfile {
-  string username;
-  string email;
-  optional<string> avatar_url;
-  vector<string> roles;
-  map<string, string> metadata;
+```typescript
+message UserProfile {
+  username: string;
+  email: string;
+  avatar?: avatar_url; // optional field
+  roles: vector<string>; // dynamic array
 }
+
+// Alias for convenience
+alias UserList = vector<UserProfile>;
 
 struct NestedData {
-  i32 id;
-  vector<UserProfile> users;
-  map<string, vector<f64>> timeseries;
+  id: i32;
+  users: UserList;
+  tenItemsOfSomething: f64[10]; // fixed-size array
 }
 
+
 interface DataService {
-  UserProfile GetUser(string username);
-  vector<UserProfile> SearchUsers(string query);
-  void UpdateProfile(UserProfile profile);
-  NestedData GetComplexData() throws DataError;
+  UserProfile GetUser(username: in string);
+  UserList SearchUsers(query: in string);
+  void UpdateProfile(profile: in UserProfile);
+  NestedData GetComplexData() raises(DataError);
+  // Async method
+  async GetIdsAsync(u32 count, ids: out vector<i32>);
 }
 ```
 
 ### Object References
 
 Pass objects as parameters:
+NOTE: For the time being, use `object` to define parameter type for custom interfaces. Support for typed interface parameters is planned for future releases.
 
-```cpp
+```typescript
+interface IDataProcessor {
+  void ProcessData(data: in vector<u8>);
+}
+
 interface ObjectManager {
-  void ProcessData(IDataProcessor processor, vector<u8> data);
-  IDataProcessor CreateProcessor(string type);
+  object CreateProcessor(type: string);
+  void RegisterProcessor(processor: in object);
 }
 ```
 
 ```typescript
-// Implement servant locally
-class MyProcessor extends nscalc.IDataProcessor_Servant {
+// Implement a processor
+class MyProcessor extends example.IDataProcessor_Servant {
   ProcessData(data: Uint8Array): void {
     // Process data...
   }
 }
+// Object manager that creates processors
+class MyObjectManager extends example.I_Servant {
+  nprpc::Poa* poa_; // Assume initialized
+  std::vector<std::shared_ptr<MyProcessor>> processors_;
+  std::vector<nprpc::ObjectPtr<IDataProcessor>> remote_processors_;
+public:
+  nprpc::ObjectId CreateProcessor(type: string) override {
+    auto processor = std::make_shared<MyProcessor>();
+    processors_.push_back(processor);
+    // This will make the object accessible remotely for everyone
+    return poa->activate_object(processor.get(), nprpc::ObjectActivationFlags::ALLOW_ALL);
+    // If you want to restrict access for anyone else but this connection, add session context parameter
+    return poa->activate_object(processor.get(), nprpc::ObjectActivationFlags::ALLOW_ALL, &nprpc::get_context());
+  }
 
-const processor = new MyProcessor();
-const oid = poa.activate_object(processor);
-
-// Pass to remote object
-await objectManager.ProcessData(oid, data);
+  void RegisterProcessor(processor: in object) override {
+    const auto proc = nprpc::narrow<IDataProcessor>(processor);
+    if (!proc) {
+      throw nprpc::Exception("Invalid processor object");
+    }
+    remote_processors_.push_back(proc);
+  }
+}
+```
+You can pass your local javascript servant objects as parameters too and your server can call back into them! Assuming you use a bidirectional transport like WebSocket.
+```typescript
+class MyDataProcessor extends example.IDataProcessor_Servant {
+  // This is now callable from the server side
+  ProcessData(data: Uint8Array): void {
+    // Process data...
+  }
+}
+const manager = NPRPC.narrow(host_info.objects.object_manager, example.ObjectManager);
+const processor = new MyDataProcessor();
+await manager.RegisterProcessor(processor); // Pass servant as parameter
 ```
 
 ## 🎯 Transport Selection Guide
@@ -501,31 +550,35 @@ See [`benchmark/README.md`](benchmark/README.md) for detailed benchmark document
 ## 🔍 IDL Language Reference
 
 ### Basic Types
-- `bool`, `i8`, `i16`, `i32`, `i64`
+- `boolean`, `i8`, `i16`, `i32`, `i64`
 - `u8`, `u16`, `u32`, `u64`
 - `f32`, `f64`
 - `string`
+- `object` - generic object reference
 
 ### Collections
 - `vector<T>` - dynamic arrays
-- `map<K, V>` - key-value maps
+- `T[N]` - fixed-size arrays
 
 ### Modifiers
-- `optional<T>` - nullable values
+- `?` - nullable values
+- `in` - input parameters
 - `out` - output parameters
-- `throws ExceptionType` - exception specification
+- `raises(ExceptionType)` - exception specification
+
+It pretty much copies CORBA IDL with some simplifications and additions.
 
 ### Example:
 ```cpp
-struct Point { f64 x; f64 y; }
+message Point { x: f64; y: f64; }
 
-exception OutOfBounds { string message; }
+exception OutOfBounds { message: string; }
 
 interface Geometry {
-  f64 Distance(Point a, Point b);
-  void Transform(Point in, out Point result);
-  optional<Point> FindCenter(vector<Point> points);
-  vector<Point> GeneratePoints(u32 count) throws OutOfBounds;
+  f64 Distance(a: in Point, b: in Point);
+  void Transform(pt: in Point, result: out Point);
+  Point? FindCenter(points: in vector<Point>);
+  vector<Point> GeneratePoints(count: in u32) raises(OutOfBounds);
 }
 ```
 
@@ -540,8 +593,10 @@ See [LICENSE](../LICENSE) file in the topmost directory.
 ## 🙏 Acknowledgments
 
 NPRPC is built on top of excellent open-source libraries:
-- [Boost.Asio](https://www.boost.org/doc/libs/release/libs/asio/) - Async I/O
+- [Boost.Asio](https://www.boost.org/doc/libs/release/libs/asio/) - Async I/O, TCP/UDP
 - [Boost.Beast](https://www.boost.org/doc/libs/release/libs/beast/) - HTTP/WebSocket
+- [nghttp3/ngtcp2](https://github.com/ngtcp2/ngtcp2.git) - HTTP/3 and QUIC
+- [MsQuic](https://github.com/microsoft/msquic.git) - QUIC transport
 
 ## 📚 More Examples
 
