@@ -1,11 +1,15 @@
 # TODO.md
 
 ## Build System
- [ ] Generate npnameserver stubs when building nprpc target, to avoid full rebuilds when npnameserver is built separately.
+* [ ] Generate npnameserver stubs when building nprpc target, to avoid full rebuilds when npnameserver is built separately.
 
 ## Shared Memory Transport
- [ ] Optimize shared memory server session to avoid unnecessary copies when receiving messages.
- [ ] Build on Windows is broken due to missing `sys/mman.h` and `shm_open()`. Need to implement Windows shared memory APIs using `CreateFileMapping` and `MapViewOfFile`.
+* [ ] Optimize shared memory server session to avoid unnecessary copies when receiving messages.
+* [ ] Build on Windows is broken due to missing `sys/mman.h` and `shm_open()`. Need to implement Windows shared memory APIs using `CreateFileMapping` and `MapViewOfFile`.
+
+## TCP Transport
+* [ ] Encryption support (TLS) for TCP transport.
+* [ ] Deflate or zlib compression for large messages.
 
 ## UDP Transport (Game Networking)
 

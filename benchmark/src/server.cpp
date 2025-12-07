@@ -15,7 +15,7 @@
 using namespace std::string_literals;
 using namespace std::string_view_literals;
 
-using thread_pool = nprpc::thread_pool_1;
+using thread_pool = nprpc::thread_pool_4;
 
 #define LOG_PREFIX "[benchmark_server] "
 
@@ -91,25 +91,19 @@ public:
             // Use the new RpcBuilder API
             rpc = nprpc::RpcBuilder()
                 .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
-                .set_listen_tcp_port(22222)
-                .enable_http(22223,
-                    "/home/nikita/projects/nprpc/certs/out/archvm.crt",
-                    "/home/nikita/projects/nprpc/certs/out/archvm.key"
-                )
-                .set_listen_udp_port(22224)
-                .set_listen_quic_port(22225,
-                    "/home/nikita/projects/nprpc/certs/out/archvm.crt",
-                    "/home/nikita/projects/nprpc/certs/out/archvm.key"
-                )
                 .set_hostname("localhost")
-                .enable_ssl_server(
-                    "/home/nikita/projects/nprpc/certs/out/archvm.crt",
-                    "/home/nikita/projects/nprpc/certs/out/archvm.key"
-                )
-                .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/archvm.crt")
+                .with_tcp(22222)
+                .with_http(22223)
+                    .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
+                         "/home/nikita/projects/nprpc/certs/out/localhost.key")
+                .with_udp(22224)
+                .with_quic(22225)
+                    .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
+                         "/home/nikita/projects/nprpc/certs/out/localhost.key")
+                .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
                 .build(thread_pool::get_instance().ctx());
 
-            // Use the new PoaBuilder API  
+            // Use the new PoaBuilder API
             poa = rpc->create_poa()
                 .with_max_objects(128)
                 .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
@@ -117,6 +111,9 @@ public:
 
         } catch (nprpc::Exception& ex) {
             nameserver_manager.stop_nameserver();
+            std::cerr << LOG_PREFIX "Failed to set up RPC environment: " 
+                      << ex.what() << std::endl;
+            std::exit(1);
         }
     }
 

@@ -116,12 +116,9 @@ public:
                 .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
                 .set_hostname("localhost")
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
-                .with_tcp()
-                    .port(22222)
-                .with_udp()
-                    .port(22224)
-                .with_http()
-                    .port(22223)
+                .with_tcp(22222)
+                .with_udp(22224)
+                .with_http(22223)
                     .root_dir("/home/nikita/projects/nprpc/test/http")
                     .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                          "/home/nikita/projects/nprpc/certs/out/localhost.key")
@@ -129,8 +126,7 @@ public:
                     .enable_http3()
 #endif
 #if defined(NPRPC_HAS_QUIC) || defined(NPRPC_QUIC_ENABLED)
-                .with_quic()
-                    .port(22225)
+                .with_quic(22225)
                     .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                          "/home/nikita/projects/nprpc/certs/out/localhost.key")
 #endif

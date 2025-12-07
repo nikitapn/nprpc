@@ -375,10 +375,10 @@ public:
     return *this;
   }
 
-  RpcBuilderTcp with_tcp() const noexcept;
-  RpcBuilderHttp with_http() const noexcept;
-  RpcBuilderUdp with_udp() const noexcept;
-  RpcBuilderQuic with_quic() const noexcept;
+  RpcBuilderTcp with_tcp(uint16_t port) noexcept;
+  RpcBuilderHttp with_http(uint16_t port) noexcept;
+  RpcBuilderUdp with_udp(uint16_t port) noexcept;
+  RpcBuilderQuic with_quic(uint16_t port) noexcept;
 
   NPRPC_API Rpc* build(boost::asio::io_context& ioc);
 };
@@ -386,34 +386,16 @@ public:
 class RpcBuilderTcp : public RpcBuilderBase {
  public:
   explicit RpcBuilderTcp(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
-
-  RpcBuilderTcp& port(uint16_t port) noexcept
-  {
-    cfg_.tcp_port = port;
-    return *this;
-  }
 };
 
 class RpcBuilderUdp : public RpcBuilderBase {
  public:
   explicit RpcBuilderUdp(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
-
-  RpcBuilderUdp& port(uint16_t port) noexcept
-  {
-    cfg_.udp_port = port;
-    return *this;
-  }
 };
 
 class RpcBuilderHttp : public RpcBuilderBase {
  public:
   explicit RpcBuilderHttp(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
-
-  RpcBuilderHttp& port(uint16_t port) noexcept
-  {
-    cfg_.http_port = port;
-    return *this;
-  }
 
   RpcBuilderHttp& ssl(std::string_view cert_file,
                       std::string_view key_file,
@@ -440,8 +422,6 @@ class RpcBuilderHttp : public RpcBuilderBase {
     }
     return *this;
   }
-
-
 
   RpcBuilderHttp& root_dir(std::string_view root_dir) noexcept
   {
@@ -470,19 +450,23 @@ class RpcBuilderQuic : public RpcBuilderBase {
   }
 };
 
-inline RpcBuilderTcp RpcBuilderBase::with_tcp() const noexcept {
+inline RpcBuilderTcp RpcBuilderBase::with_tcp(uint16_t port) noexcept {
+  cfg_.tcp_port = port;
   return RpcBuilderTcp(cfg_);
 }
 
-inline RpcBuilderHttp RpcBuilderBase::with_http() const noexcept {
+inline RpcBuilderHttp RpcBuilderBase::with_http(uint16_t port) noexcept {
+  cfg_.http_port = port;
   return RpcBuilderHttp(cfg_);
 }
 
-inline RpcBuilderUdp RpcBuilderBase::with_udp() const noexcept {
+inline RpcBuilderUdp RpcBuilderBase::with_udp(uint16_t port) noexcept {
+  cfg_.udp_port = port;
   return RpcBuilderUdp(cfg_);
 }
 
-inline RpcBuilderQuic RpcBuilderBase::with_quic() const noexcept {
+inline RpcBuilderQuic RpcBuilderBase::with_quic(uint16_t port) noexcept {
+  cfg_.quic_port = port;
   return RpcBuilderQuic(cfg_);
 }
 

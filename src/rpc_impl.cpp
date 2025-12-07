@@ -146,6 +146,7 @@ NPRPC_API Rpc* RpcBuilderBase::build(boost::asio::io_context& ioc)
       } catch (const std::exception& ex) {
         std::cerr << "Warning: Failed to load self-signed certificate: " 
                   << ex.what() << std::endl;
+        throw;
       }
     }
     g_cfg.ssl_context_client.set_verify_mode(ssl::verify_peer);

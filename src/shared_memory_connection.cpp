@@ -32,7 +32,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
         SharedMemoryConnection& this_;
         uint32_t timeout_ms;
         LockFreeRingBuffer::WriteReservation reservation;  // For zero-copy write
-        
+
         std::mutex mtx;
         std::condition_variable cv;
         bool done = false;
@@ -40,7 +40,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
 
         void operator()() noexcept override {
             this_.set_timeout(timeout_ms);
-            
+
             // Validate message size (security check)
             if (buf.size() > max_message_size) {
                 std::cerr << "SharedMemoryConnection: Message too large: " << buf.size() << std::endl;
@@ -50,7 +50,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
                 this_.pop_and_execute_next_task();
                 return;
             }
-            
+
             // Check if this is a zero-copy write (buffer in view mode with active reservation)
             if (buf.is_view_mode() && reservation.valid) {
                 // Zero-copy path: data is already in ring buffer, just commit
@@ -113,7 +113,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
     };
 
     auto ec = post_work_and_wait();
-    
+
     if (!ec) {
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
             dump_message(buffer, true);
@@ -140,10 +140,10 @@ void SharedMemoryConnection::send_receive_async(
         SharedMemoryConnection& this_;
         uint32_t timeout_ms;
         std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>> handler;
-        
+
         void operator()() noexcept override {
             this_.set_timeout(timeout_ms);
-            
+
             // Validate message size (security check)
             if (buf.size() > max_message_size) {
                 std::cerr << "SharedMemoryConnection: Message too large: " << buf.size() << std::endl;
@@ -153,7 +153,7 @@ void SharedMemoryConnection::send_receive_async(
                 this_.pop_and_execute_next_task();
                 return;
             }
-            
+
             if (!this_.channel_->send(buf.data().data(), buf.size())) {
                 on_failed(boost::system::error_code(
                     boost::asio::error::no_buffer_space,
@@ -254,18 +254,18 @@ SharedMemoryConnection::~SharedMemoryConnection() {
 
 bool SharedMemoryConnection::prepare_write_buffer(flat_buffer& buffer, size_t max_size) {
     if (!channel_) return false;
-    
+
     auto reservation = channel_->reserve_write(max_size);
     if (!reservation) {
         return false;  // Buffer full
     }
-    
+
     // Store reservation for later commit
     active_reservation_ = reservation;
-    
+
     // Set buffer to view mode pointing into the ring buffer
     buffer.set_view(reinterpret_cast<char*>(reservation.data), 0, reservation.max_size);
-    
+
     return true;
 }
 

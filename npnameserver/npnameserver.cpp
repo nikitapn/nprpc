@@ -55,10 +55,8 @@ int main() {
 
 	auto rpc = nprpc::RpcBuilder()
 		.set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
-		.with_tcp()
-			.port(15000)
-		.with_http()
-			.port(15001)
+		.with_tcp(15000)
+		.with_http(15001)
 		.build(ioc);
 
 	auto poa = nprpc::PoaBuilder(rpc)

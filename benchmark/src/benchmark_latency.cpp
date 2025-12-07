@@ -207,7 +207,7 @@ BENCHMARK_REGISTER_F(LatencyFixture, EmptyCall)
   ->Arg(0)  // SharedMemory
   ->Arg(1)  // TCP
   ->Arg(2)  // WebSocket
-  ->Arg(3)  // UDP
+  // ->Arg(3)  // UDP
   ->Arg(4)  // QUIC
   ->Unit(benchmark::kMicrosecond);
 
