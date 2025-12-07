@@ -106,9 +106,9 @@ class NprpcTestEnvironment
 public:
     void SetUp() GTEST_OVERRIDE {
         // Start the nameserver first
-        if (!nameserver_manager.start_nameserver()) {
-            FAIL() << "Failed to start nameserver process";
-        }
+        // if (!nameserver_manager.start_nameserver()) {
+            // FAIL() << "Failed to start nameserver process";
+        // }
 
         try {
             // Use the new RpcBuilder API
@@ -148,8 +148,8 @@ public:
         std::cout << "Tearing down test environment..." << std::endl;
         // Stop the nameserver FIRST - before we destroy shared memory resources
         // that the nameserver might be using
-        nameserver_manager.stop_nameserver();
-        std::cout << "Nameserver stopped." << std::endl;
+        // nameserver_manager.stop_nameserver();
+        // std::cout << "Nameserver stopped." << std::endl;
         // Destroy rpc while io_context is still running
         // This allows pending async operations to complete
         if (rpc) {

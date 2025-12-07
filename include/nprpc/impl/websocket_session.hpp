@@ -48,6 +48,9 @@ class WebSocketSession
   std::atomic<bool> reading_{false};
   std::atomic<bool> writing_{false};
 
+  flat_buffer rx_buffer_{flat_buffer::default_initial_size()};
+  flat_buffer tx_buffer_{flat_buffer::default_initial_size()};
+
   Derived &derived() { return static_cast<Derived &>(*this); }
 
   void on_read(beast::error_code ec, std::size_t bytes_transferred);

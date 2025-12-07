@@ -16,7 +16,7 @@
 
 #include <boost/asio/io_context.hpp>
 
-#include <nprpc/buffer.hpp>
+#include <nprpc/flat_buffer.hpp>
 #include <nprpc/common.hpp>
 #include <nprpc_base.hpp>
 #include <nprpc/basic.hpp>
@@ -223,7 +223,8 @@ class ObjectServant
 
  public:
   virtual std::string_view get_class() const noexcept = 0;
-  virtual void             dispatch(::nprpc::Buffers&        bufs,
+  virtual void             dispatch(::nprpc::flat_buffer&    bin,
+                                    ::nprpc::flat_buffer&    bout,
                                     ::nprpc::SessionContext& ctx,
                                     bool                   from_parent) = 0;
   virtual void             destroy() noexcept { delete this; }

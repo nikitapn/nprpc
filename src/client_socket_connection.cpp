@@ -76,15 +76,11 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
     }
   };
 
-  auto post_work_and_wait = [&]() -> boost::system::error_code {
-    auto w = std::make_unique<WorkImpl>(buffer, *this, timeout_ms);
-    auto* w_ptr = w.get();
-    add_work(std::move(w));
-    return w_ptr->wait();
-  };
+  // Post work and wait for completion
+  auto w = std::make_shared<WorkImpl>(buffer, *this, timeout_ms);
+  add_work(w);
+  auto ec = w->wait();
 
-  auto ec = post_work_and_wait();
-  
   if (!ec) {
     if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
       dump_message(buffer, true);
@@ -94,7 +90,9 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
 
   if (ec == boost::asio::error::connection_reset || ec == boost::asio::error::broken_pipe) {
     reconnect();
-    auto ec = post_work_and_wait();
+    auto w = std::make_shared<WorkImpl>(buffer, *this, timeout_ms);
+    add_work(w);
+    auto ec = w->wait();
     if (ec) close();
   } else {
     fail(ec, "send_receive");
@@ -155,7 +153,7 @@ void SocketConnection::send_receive_async(
   };
 
   add_work(
-    std::make_unique<WorkImpl>(std::move(buffer),
+    std::make_shared<WorkImpl>(std::move(buffer),
     shared_from_this(),
     std::move(completion_handler), timeout_ms));
 }

@@ -991,6 +991,9 @@ class QuicServerSession
 {
     std::shared_ptr<QuicServerConnection> connection_;
 
+    flat_buffer rx_buffer_{flat_buffer::default_initial_size()};
+    flat_buffer tx_buffer_{flat_buffer::default_initial_size()};
+
 public:
     virtual void timeout_action() final {
         // Server sessions don't have timeouts
@@ -1020,18 +1023,18 @@ public:
         NPRPC_QUIC_DEBUG_LOG(std::format("on_message_received called, data.size={}", data.size()));
         try {
             // Move data into rx_buffer
-            rx_buffer_().consume(rx_buffer_().size());
-            auto mb = rx_buffer_().prepare(data.size());
+            rx_buffer_.consume(rx_buffer_.size());
+            auto mb = rx_buffer_.prepare(data.size());
             std::memcpy(mb.data(), data.data(), data.size());
-            rx_buffer_().commit(data.size());
+            rx_buffer_.commit(data.size());
 
             // Dispatch the RPC request
             NPRPC_QUIC_DEBUG_LOG("calling handle_request");
-            handle_request();
+            handle_request(rx_buffer_, tx_buffer_);
             NPRPC_QUIC_DEBUG_LOG(std::format("handle_request returned, rx_buffer size={}", rx_buffer_().size()));
 
             // Send response back
-            auto response_data = rx_buffer_().cdata();
+            auto response_data = tx_buffer_.cdata();
             NPRPC_QUIC_DEBUG_LOG(std::format("sending response, size={}", response_data.size()));
             if (!connection_->send(response_data.data(), response_data.size())) {
                 std::cerr << "QuicServerSession: Failed to send response" << std::endl;
@@ -1049,13 +1052,13 @@ public:
     void on_datagram_received(std::vector<uint8_t>&& data) {
         try {
             // Move data into rx_buffer
-            rx_buffer_().consume(rx_buffer_().size());
-            auto mb = rx_buffer_().prepare(data.size());
+            rx_buffer_.consume(rx_buffer_.size());
+            auto mb = rx_buffer_.prepare(data.size());
             std::memcpy(mb.data(), data.data(), data.size());
-            rx_buffer_().commit(data.size());
+            rx_buffer_.commit(data.size());
 
             // Dispatch the RPC request (fire-and-forget, no response)
-            handle_request();
+            handle_request(rx_buffer_, tx_buffer_);
             
             // No response sent for datagram messages
             if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {

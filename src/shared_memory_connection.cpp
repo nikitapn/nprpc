@@ -1,8 +1,8 @@
+#include <iostream>
+
 #include <nprpc/impl/shared_memory_connection.hpp>
 #include <nprpc/impl/shared_memory_listener.hpp>
 #include <nprpc/common.hpp>
-#include <iostream>
-#include <future>
 
 namespace nprpc::impl {
 
@@ -12,11 +12,12 @@ void SharedMemoryConnection::timeout_action() {
     // close();
 }
 
-void SharedMemoryConnection::add_work(std::unique_ptr<IOWork>&& w) {
+void SharedMemoryConnection::add_work(std::shared_ptr<IOWork> w) {
     boost::asio::post(ioc_, [w{std::move(w)}, this]() mutable {
         std::lock_guard lock(mutex_);
         wq_.push_back(std::move(w));
-        if (wq_.size() == 1) (*wq_.front())();
+        if (wq_.size() == 1)
+            (*wq_.front())();
     });
 }
 
@@ -77,11 +78,13 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
         }
 
         void on_executed() noexcept override {
+            std::cout << "SharedMemoryConnection: send_receive completed successfully" << std::endl;
             {
                 std::lock_guard<std::mutex> lock(mtx);
                 result = boost::system::error_code{};
                 done = true;
             }
+            std::cout << "Notifying waiting thread..." << std::endl;
             cv.notify_one();
         }
 
@@ -103,16 +106,15 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
         }
     };
 
-    auto post_work_and_wait = [&]() -> boost::system::error_code {
-        // Transfer reservation from connection to work item
-        auto reservation = std::exchange(active_reservation_, {});
-        auto w = std::make_unique<work_impl>(buffer, *this, timeout_ms, reservation);
-        auto* w_ptr = w.get();
-        add_work(std::move(w));
-        return w_ptr->wait();
-    };
+    // Transfer reservation from connection to work item
+    auto reservation = std::exchange(active_reservation_, {});
+    // Post work and wait for completion
+    // Work remains owned by the connection until completion
+    auto w = std::make_shared<work_impl>(buffer, *this, timeout_ms, reservation);
+    add_work(w);
+    auto ec = w->wait();
 
-    auto ec = post_work_and_wait();
+    std::cout << "SharedMemoryConnection: send_receive finished with ec=" << ec.message() << std::endl;
 
     if (!ec) {
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
@@ -193,7 +195,7 @@ void SharedMemoryConnection::send_receive_async(
         }
     };
 
-    add_work(std::make_unique<work_impl>(
+    add_work(std::make_shared<work_impl>(
         std::move(buffer), *this, std::move(completion_handler), timeout_ms));
 }
 
@@ -219,6 +221,34 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint, boost::
         error_msg += e.what();
         throw nprpc::Exception(error_msg.c_str());
     }
+
+    // Use zero-copy reads by default
+    channel_->on_data_received_view = [this](const LockFreeRingBuffer::ReadView& read_view) {
+        std::lock_guard lock(mutex_);
+        if (wq_.empty()) {
+            // std::cerr << "SharedMemoryConnection: Received unsolicited response" << std::endl;
+            return;
+        }
+
+        // Validate header size (security check)
+        if (read_view.size < sizeof(impl::flat::Header)) {
+            // std::cerr << "SharedMemoryConnection: Message too small: " << read_view.size << std::endl;
+            return;
+        }
+
+        // std::cout << "SharedMemoryConnection: Received data via zero-copy read, size: "
+        //           << read_view.size << std::endl;
+
+        auto& current_buffer = current_rx_buffer();
+        current_buffer.consume(current_buffer.size());
+        auto mb = current_buffer.prepare(read_view.size);
+        std::memcpy(mb.data(), read_view.data, read_view.size);
+        current_buffer.commit(read_view.size);
+
+        // Mark current operation as complete
+        (*wq_.front()).on_executed();
+        pop_and_execute_next_task();
+    };
 
     // Set up data receive handler
     channel_->on_data_received = [this](std::vector<char>&& data) {
@@ -252,19 +282,29 @@ SharedMemoryConnection::~SharedMemoryConnection() {
     close();
 }
 
-bool SharedMemoryConnection::prepare_write_buffer(flat_buffer& buffer, size_t max_size) {
-    if (!channel_) return false;
+bool SharedMemoryConnection::prepare_write_buffer(flat_buffer& buffer, size_t max_size, const EndPoint* endpoint) {
+    if (!channel_)
+        return false;
+
+    std::cout << "prepare_write_buffer called for channel ID: "
+              << channel_->channel_id() << std::endl;
 
     auto reservation = channel_->reserve_write(max_size);
     if (!reservation) {
+        std::cerr << "SharedMemoryConnection: prepare_write_buffer failed to reserve buffer of size "
+                  << max_size << std::endl;
         return false;  // Buffer full
     }
 
-    // Store reservation for later commit
+    // Store reservation for later commit (used by send_receive)
     active_reservation_ = reservation;
 
     // Set buffer to view mode pointing into the ring buffer
-    buffer.set_view(reinterpret_cast<char*>(reservation.data), 0, reservation.max_size);
+    // Pass endpoint and reservation info so the buffer can:
+    // 1. Request a larger buffer if needed (using endpoint)
+    // 2. Return the reservation for commit (using write_idx)
+    buffer.set_view(reservation.data, 0, reservation.max_size, 
+                    endpoint, reservation.write_idx, true);
 
     return true;
 }

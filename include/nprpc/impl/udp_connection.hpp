@@ -4,15 +4,17 @@
 
 #pragma once
 
-#include <boost/asio/ip/udp.hpp>
-#include <boost/asio/strand.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <nprpc/nprpc.hpp>
-#include <nprpc/buffer.hpp>
 #include <deque>
 #include <memory>
 #include <functional>
 #include <unordered_map>
+
+#include <boost/asio/ip/udp.hpp>
+#include <boost/asio/strand.hpp>
+#include <boost/asio/steady_timer.hpp>
+
+#include <nprpc/nprpc.hpp>
+#include <nprpc/flat_buffer.hpp>
 
 namespace nprpc::impl {
 

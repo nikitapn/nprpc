@@ -202,7 +202,6 @@ add_library(nprpc
   include/nprpc_nameserver.hpp
   include/nprpc/common.hpp
   include/nprpc/basic.hpp
-  include/nprpc/buffer.hpp
   include/nprpc/endpoint.hpp
   include/nprpc/exception.hpp
   include/nprpc/export.hpp

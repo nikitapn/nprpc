@@ -45,10 +45,10 @@ void WebSocketSession<Derived>::do_read() {
     return; // Already reading
   }
 
-  rx_buffer_().consume(rx_buffer_().size()); // Clear the buffer before reading
+  rx_buffer_.consume(rx_buffer_.size()); // Clear the buffer before reading
 
   derived().ws().async_read(
-      rx_buffer_(),
+      rx_buffer_,
       beast::bind_front_handler(
           &WebSocketSession::on_read,
           derived().shared_from_this()));
@@ -69,32 +69,33 @@ void WebSocketSession<Derived>::on_read(beast::error_code ec, [[maybe_unused]] s
   }
 
   // Additional safety check: verify message size
-  if (rx_buffer_().size() > max_message_size) {
-    std::cerr << "Rejected oversized WebSocket message: " << rx_buffer_().size() 
+  if (rx_buffer_.size() > max_message_size) {
+    std::cerr << "Rejected oversized WebSocket message: " << rx_buffer_.size()
               << " bytes (max: " << max_message_size << " bytes)\n";
     close();
     return;
   }
 
-  nprpc::impl::flat::Header_Direct header(rx_buffer_(), 0);
+  nprpc::impl::flat::Header_Direct header(rx_buffer_, 0);
   const uint32_t request_id = header.request_id();
 
   if (header.msg_type() == nprpc::impl::MessageType::Request) {
     // Handle incoming request
-    handle_request();
+    handle_request(rx_buffer_, tx_buffer_);
 
     // Queue response for sending
     std::function<void(const boost::system::error_code&)> completion_handler = 
       [](const boost::system::error_code&) {};
 
-    // Inject request ID into the response header: rx_buffer_() was flipped in handle_request()
-    inject_request_id(rx_buffer_(), request_id);
-    write_queue_.emplace_back(rx_buffer_(true), std::move(completion_handler));
+    // Inject request ID into the response header
+    inject_request_id(tx_buffer_, request_id);
+    write_queue_.emplace_back(std::move(tx_buffer_), std::move(completion_handler));
     do_write();
   } else { // received an answer
     auto it = pending_requests_.find(request_id);
     if (it != pending_requests_.end()) {
-      auto response = rx_buffer_(true);
+      // FIXME: Maybe I don't need to move here? I forgot the reason
+      auto response = std::move(rx_buffer_);
       it->second.completion_handler(boost::system::error_code{}, response);
       pending_requests_.erase(it);
     } else {
@@ -225,7 +226,7 @@ void WebSocketSession<Derived>::send_receive(flat_buffer &buffer, uint32_t timeo
   auto future = promise.get_future();
 
   send_receive_async(
-    flat_buffer{buffer},
+    std::move(buffer),
     [&promise](const boost::system::error_code& ec, flat_buffer& response) {
       promise.set_value({ec, std::move(response)});
     },

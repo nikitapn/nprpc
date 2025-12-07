@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <boost/asio/buffer.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -11,8 +10,28 @@
 #include <stdexcept>
 #include <type_traits>
 #include <algorithm>
+#include <optional>
+
+#include <boost/asio/buffer.hpp>
 
 namespace nprpc {
+
+// Forward declaration - actual EndPoint is in endpoint.hpp
+class EndPoint;
+class flat_buffer;
+
+namespace impl {
+// Forward declaration of RPC interface for zero-copy buffer growth
+class RpcImpl;
+extern RpcImpl* g_rpc;
+
+// Forward declaration - will request new shared memory buffer
+bool prepare_zero_copy_buffer_grow(const EndPoint& endpoint, 
+                                   flat_buffer& buffer, 
+                                   size_t new_size,
+                                   const void* existing_data,
+                                   size_t existing_size);
+} // namespace impl
 
 /**
  * @brief A flat buffer that can operate in two modes:
@@ -52,44 +71,103 @@ public:
 
 private:
     // Owned mode storage
-    char* buffer_ = nullptr;    // Base allocation pointer
+    std::uint8_t* buffer_ = nullptr;    // Base allocation pointer
     std::size_t in_ = 0;        // Read position (offset from buffer_)  
     std::size_t out_ = 0;       // Write position (offset from buffer_)
     std::size_t capacity_ = 0;  // Total allocated capacity
-    
+
     // View mode storage
-    char* view_base_ = nullptr;       // External memory base (nullptr if owned)
+    std::uint8_t* view_base_ = nullptr;       // External memory base (nullptr if owned)
     std::size_t view_size_ = 0;       // Current data size in view
     std::size_t view_max_size_ = 0;   // Maximum size available in view
     
+    // Optional endpoint for shared memory buffer growth/fallback
+    const EndPoint* endpoint_ = nullptr;
+    
+    // For shared memory zero-copy: stores the write_idx from WriteReservation
+    // Used to reconstruct the reservation for commit_write()
+    std::size_t reservation_write_idx_ = 0;
+    bool has_reservation_ = false;
+
     static constexpr std::size_t default_growth_factor = 2;
     static constexpr std::size_t min_allocation = 512;
 
     bool is_view() const noexcept { return view_base_ != nullptr; }
 
-    void grow(std::size_t n) {
-        if (is_view()) {
-            throw std::length_error("flat_buffer: cannot grow view mode buffer beyond max_size");
+    /// Convert view mode to owned mode, preserving data
+    /// @param additional Additional capacity needed beyond current data
+    void reallocate_in_view_mode(std::size_t additional) {
+        std::size_t current_data_size = view_size_;
+        std::size_t new_cap = current_data_size + additional;
+        new_cap = std::max(new_cap * default_growth_factor, min_allocation);
+        
+        // Save current view state before any modifications
+        std::uint8_t* old_view_base = view_base_;
+        const EndPoint* old_endpoint = endpoint_;
+        
+        // Try to get a new larger shared memory buffer first
+        if (old_endpoint && impl::g_rpc) {
+            // Clear view state so prepare_zero_copy_buffer_grow can set up new view
+            view_base_ = nullptr;
+            view_size_ = 0;
+            view_max_size_ = 0;
+            endpoint_ = nullptr;
+            has_reservation_ = false;
+            
+            if (impl::prepare_zero_copy_buffer_grow(*old_endpoint, *this, new_cap, 
+                                                     old_view_base, current_data_size)) {
+                // Successfully got a new shared memory buffer with data copied
+                return;
+            }
+            // Fall through to heap allocation
         }
         
+        std::uint8_t* new_buf = new std::uint8_t[new_cap];
+        
+        // Copy existing data from old view
+        if (current_data_size > 0 && old_view_base) {
+            std::memcpy(new_buf, old_view_base, current_data_size);
+        }
+        
+        // Switch to owned mode
+        buffer_ = new_buf;
+        in_ = 0;
+        out_ = current_data_size;
+        capacity_ = new_cap;
+        
+        // Clear view state (may already be cleared)
+        view_base_ = nullptr;
+        view_size_ = 0;
+        view_max_size_ = 0;
+        endpoint_ = nullptr;
+        has_reservation_ = false;
+    }
+
+    void grow(std::size_t n) {
+        if (is_view()) {
+            // View mode buffer exceeded max_size - gracefully fall back to owned mode
+            reallocate_in_view_mode(n);
+            return;
+        }
+
         std::size_t const current_size = out_ - in_;
         std::size_t const required = current_size + n;
-        
+
         // Calculate new capacity
         std::size_t new_cap = std::max(capacity_ * default_growth_factor, required);
         new_cap = std::max(new_cap, min_allocation);
-        
+
         // Allocate new buffer
-        char* new_buf = new char[new_cap];
-        
+        std::uint8_t* new_buf = new std::uint8_t[new_cap];
+
         // Copy existing data
         if (current_size > 0) {
             std::memcpy(new_buf, buffer_ + in_, current_size);
         }
-        
+
         // Free old buffer
         delete[] buffer_;
-        
+
         // Update pointers
         buffer_ = new_buf;
         in_ = 0;
@@ -100,23 +178,26 @@ private:
 public:
     /// Default constructor (owned mode, empty)
     flat_buffer() = default;
-    
+
     /// Constructor with initial capacity (owned mode)
     explicit flat_buffer(std::size_t initial_capacity)
-        : buffer_(new char[initial_capacity])
+        : buffer_(new std::uint8_t[initial_capacity])
         , capacity_(initial_capacity)
     {}
-    
+
     /// View constructor - creates a zero-copy view into external memory
     /// @param base Pointer to external memory (e.g., shared memory)
     /// @param size Current readable size
     /// @param max_size Maximum size available for extension (for prepare())
-    flat_buffer(char* base, std::size_t size, std::size_t max_size)
+    /// @param endpoint Optional endpoint for fallback buffer growth
+    flat_buffer(std::uint8_t* base, std::size_t size, std::size_t max_size, 
+                const EndPoint* endpoint = nullptr)
         : view_base_(base)
         , view_size_(size)
         , view_max_size_(max_size)
+        , endpoint_(endpoint)
     {}
-    
+
     /// Move constructor
     flat_buffer(flat_buffer&& other) noexcept
         : buffer_(other.buffer_)
@@ -126,6 +207,9 @@ public:
         , view_base_(other.view_base_)
         , view_size_(other.view_size_)
         , view_max_size_(other.view_max_size_)
+        , endpoint_(other.endpoint_)
+        , reservation_write_idx_(other.reservation_write_idx_)
+        , has_reservation_(other.has_reservation_)
     {
         other.buffer_ = nullptr;
         other.in_ = 0;
@@ -134,13 +218,16 @@ public:
         other.view_base_ = nullptr;
         other.view_size_ = 0;
         other.view_max_size_ = 0;
+        other.endpoint_ = nullptr;
+        other.reservation_write_idx_ = 0;
+        other.has_reservation_ = false;
     }
-    
+
     /// Move assignment
     flat_buffer& operator=(flat_buffer&& other) noexcept {
         if (this != &other) {
             delete[] buffer_;
-            
+
             buffer_ = other.buffer_;
             in_ = other.in_;
             out_ = other.out_;
@@ -148,7 +235,10 @@ public:
             view_base_ = other.view_base_;
             view_size_ = other.view_size_;
             view_max_size_ = other.view_max_size_;
-            
+            endpoint_ = other.endpoint_;
+            reservation_write_idx_ = other.reservation_write_idx_;
+            has_reservation_ = other.has_reservation_;
+
             other.buffer_ = nullptr;
             other.in_ = 0;
             other.out_ = 0;
@@ -156,13 +246,16 @@ public:
             other.view_base_ = nullptr;
             other.view_size_ = 0;
             other.view_max_size_ = 0;
+            other.endpoint_ = nullptr;
+            other.reservation_write_idx_ = 0;
+            other.has_reservation_ = false;
         }
         return *this;
     }
-    
+
     /// Copy constructor (deep copy, always creates owned buffer)
     flat_buffer(const flat_buffer& other)
-        : buffer_(other.size() > 0 ? new char[other.size()] : nullptr)
+        : buffer_(other.size() > 0 ? new std::uint8_t[other.size()] : nullptr)
         , in_(0)
         , out_(other.size())
         , capacity_(other.size())
@@ -171,7 +264,7 @@ public:
             std::memcpy(buffer_, other.data().data(), out_);
         }
     }
-    
+
     /// Copy assignment
     flat_buffer& operator=(const flat_buffer& other) {
         if (this != &other) {
@@ -180,17 +273,17 @@ public:
         }
         return *this;
     }
-    
+
     /// Destructor
     ~flat_buffer() {
         delete[] buffer_;  // Safe even if nullptr
         // view_base_ is not owned, don't delete
     }
-    
+
     //--------------------------------------------------------------------------
     // boost::beast::flat_buffer compatible interface
     //--------------------------------------------------------------------------
-    
+
     /// Returns the size of the readable area
     std::size_t size() const noexcept {
         if (is_view()) {
@@ -198,7 +291,7 @@ public:
         }
         return out_ - in_;
     }
-    
+
     /// Returns the maximum possible size
     std::size_t max_size() const noexcept {
         if (is_view()) {
@@ -206,7 +299,7 @@ public:
         }
         return static_cast<std::size_t>(-1);  // Essentially unlimited for owned
     }
-    
+
     /// Returns the current capacity
     std::size_t capacity() const noexcept {
         if (is_view()) {
@@ -214,7 +307,7 @@ public:
         }
         return capacity_ - in_;
     }
-    
+
     /// Returns a const buffer representing the readable data
     const_buffers_type data() const noexcept {
         if (is_view()) {
@@ -222,7 +315,7 @@ public:
         }
         return {buffer_ + in_, out_ - in_};
     }
-    
+
     /// Returns a mutable buffer representing the writable area
     mutable_buffers_type data() noexcept
     {
@@ -231,7 +324,7 @@ public:
         }
         return {buffer_ + in_, out_ - in_};
     }
-    
+
     /// Returns a const buffer representing the readable data (alias for compatibility)
     const_buffers_type cdata() const noexcept {
         return data();
@@ -239,22 +332,27 @@ public:
 
     /// Prepare writable area of specified size
     /// @return Mutable buffer for writing
+    /// @note In view mode, if the requested size exceeds max_size, the buffer
+    ///       will gracefully convert to owned mode (copying existing data)
     mutable_buffers_type prepare(std::size_t n) {
         if (is_view()) {
             // In view mode, we can extend up to max_size
             if (view_size_ + n > view_max_size_) {
-                throw std::length_error("flat_buffer: prepare would exceed view max_size");
+                // Graceful fallback: convert to owned buffer and grow
+                grow(n);
+                // After grow(), we're in owned mode - fall through to owned logic
+            } else {
+                return {view_base_ + view_size_, n};
             }
-            return {view_base_ + view_size_, n};
         }
-        
+
         // Owned mode
         if (out_ + n > capacity_) {
             grow(n);
         }
         return {buffer_ + out_, n};
     }
-    
+
     /// Commit written bytes to readable area
     void commit(std::size_t n) noexcept {
         if (is_view()) {
@@ -263,7 +361,7 @@ public:
             out_ = std::min(out_ + n, capacity_);
         }
     }
-    
+
     /// Consume bytes from the readable area
     void consume(std::size_t n) noexcept {
         if (is_view()) {
@@ -287,7 +385,7 @@ public:
             }
         }
     }
-    
+
     /// Clear all data
     void clear() noexcept {
         if (is_view()) {
@@ -297,106 +395,127 @@ public:
             out_ = 0;
         }
     }
-    
+
     //--------------------------------------------------------------------------
     // View mode specific methods
     //--------------------------------------------------------------------------
-    
+
     /// Check if buffer is in view mode
     bool is_view_mode() const noexcept { return is_view(); }
-    
+
     /// Create a view into shared memory
     /// @param base Pointer to shared memory region
     /// @param size Current data size
     /// @param max_size Maximum writable size
-    void set_view(char* base, std::size_t size, std::size_t max_size) {
+    /// @param endpoint Optional endpoint for fallback buffer growth
+    /// @param write_idx Optional write index for WriteReservation tracking
+    void set_view(std::uint8_t* base, std::size_t size, std::size_t max_size,
+                  const EndPoint* endpoint = nullptr, 
+                  std::size_t write_idx = 0, bool has_reservation = false) {
         // Release owned memory if any
         delete[] buffer_;
         buffer_ = nullptr;
         in_ = 0;
         out_ = 0;
         capacity_ = 0;
-        
+
         // Set view
         view_base_ = base;
         view_size_ = size;
         view_max_size_ = max_size;
+        endpoint_ = endpoint;
+        reservation_write_idx_ = write_idx;
+        has_reservation_ = has_reservation;
     }
-    
+
     /// Convert from view mode to owned mode (makes a copy)
     void detach_view() {
         if (!is_view()) return;
-        
+
         std::size_t sz = view_size_;
-        char* old_base = view_base_;
-        
+        std::uint8_t* old_base = view_base_;
+
         // Clear view
         view_base_ = nullptr;
         view_size_ = 0;
         view_max_size_ = 0;
-        
+        endpoint_ = nullptr;
+        reservation_write_idx_ = 0;
+        has_reservation_ = false;
+
         // Allocate and copy
         if (sz > 0) {
-            buffer_ = new char[sz];
+            buffer_ = new std::uint8_t[sz];
             std::memcpy(buffer_, old_base, sz);
             capacity_ = sz;
             in_ = 0;
             out_ = sz;
         }
     }
-    
+
     /// Get raw pointer to data (for compatibility with existing code)
-    char* data_ptr() noexcept {
+    std::uint8_t* data_ptr() noexcept {
+        if (is_view()) {
+            return view_base_;
+        }
+        return buffer_ + in_;
+    }
+
+    const std::uint8_t* data_ptr() const noexcept {
         if (is_view()) {
             return view_base_;
         }
         return buffer_ + in_;
     }
     
-    const char* data_ptr() const noexcept {
-        if (is_view()) {
-            return view_base_;
-        }
-        return buffer_ + in_;
+    /// Get the endpoint associated with this buffer (for view mode)
+    const EndPoint* endpoint() const noexcept { return endpoint_; }
+    
+    //--------------------------------------------------------------------------
+    // Zero-copy write reservation accessors
+    //--------------------------------------------------------------------------
+    
+    /// Check if this buffer has a pending write reservation
+    bool has_write_reservation() const noexcept { return has_reservation_; }
+    
+    /// Get the write_idx for reconstructing WriteReservation
+    std::size_t reservation_write_idx() const noexcept { return reservation_write_idx_; }
+    
+    /// Clear the write reservation (after commit or abandon)
+    void clear_reservation() noexcept {
+        has_reservation_ = false;
+        reservation_write_idx_ = 0;
     }
-    
-    //--------------------------------------------------------------------------
-    // Boost.Beast DynamicBuffer support (ADL functions)
-    //--------------------------------------------------------------------------
-    
-    /// Friend declaration for Boost.Beast read_size ADL lookup
-    // friend std::size_t read_size_helper(flat_buffer& buffer, std::size_t max_size) noexcept;
+
+    /// @brief  Swap two flat_buffer instances
+    /// @param a First buffer
+    /// @param b Second buffer
+    static void swap(flat_buffer& a, flat_buffer& b) noexcept {
+        using std::swap;
+        swap(a.buffer_, b.buffer_);
+        swap(a.in_, b.in_);
+        swap(a.out_, b.out_);
+        swap(a.capacity_, b.capacity_);
+        swap(a.view_base_, b.view_base_);
+        swap(a.view_size_, b.view_size_);
+        swap(a.view_max_size_, b.view_max_size_);
+        swap(a.endpoint_, b.endpoint_);
+        swap(a.reservation_write_idx_, b.reservation_write_idx_);
+        swap(a.has_reservation_, b.has_reservation_);
+    }
+
+    static constexpr std::size_t default_initial_size() noexcept {
+        return 512;
+    }
 };
 
-// Inline definition of read_size_helper for Boost.Beast DynamicBuffer support
-// This function is found via ADL when boost::beast::read_size() is called
-// inline std::size_t read_size_helper(flat_buffer& buffer, std::size_t max_size) noexcept {
-//     auto const current_size = buffer.size();
-//     auto const limit = buffer.max_size() - current_size;
-//     return std::min<std::size_t>(
-//         std::max<std::size_t>(512, buffer.capacity() - current_size),
-//         std::min<std::size_t>(max_size, limit));
-// }
-
 } // namespace nprpc
-
-// namespace boost::beast::detail {
-
-// inline std::size_t read_size_helper(::nprpc::flat_buffer& buffer, std::size_t max_size) noexcept {
-//     auto const current_size = buffer.size();
-//     auto const limit = buffer.max_size() - current_size;
-//     return std::min<std::size_t>(
-//         std::max<std::size_t>(512, buffer.capacity() - current_size),
-//         std::min<std::size_t>(max_size, limit));
-// }
-
-// } // namespace boost::beast
 
 #include <boost/beast/core/detail/config.hpp>
 #include <boost/beast/core/impl/read_size.hpp>
 
-// Probably a bug in /usr/include/boost/beast/core/detect_ssl.hpp:601:30 it says:
-// note: there are 2 candidates but it's refering to read_size() overloads inside boost::beast::detail namespace
+// Probably a bug in /usr/include/boost/beast/core/detect_ssl.hpp:601:30.
+// Error says: "Note: there are 2 candidates but it's refering to read_size() overloads inside boost::beast::detail namespace"
 // So we provide an explicit specialization for boost::beast::detail::read_size to resolve the ambiguity
 // I have no idea why this is needed for custom flat_buffer but not for boost::beast::flat_buffer
 namespace boost::beast::detail {
@@ -409,4 +528,3 @@ read_size(
         has_read_size_helper<DynamicBuffer>{});
 }
 }
-

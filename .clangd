@@ -1,0 +1,6 @@
+CompileFlags:
+  CompilationDatabase: .build_relwith_debinfo
+Index:
+  StandardLibrary: false
+If:
+  PathExclude: third_party/.*

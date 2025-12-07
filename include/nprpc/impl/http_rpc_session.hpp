@@ -31,6 +31,8 @@ class HttpRpcSession
     : public Session
     , public std::enable_shared_from_this<HttpRpcSession>
 {
+    flat_buffer rx_buffer_{flat_buffer::default_initial_size()};
+    flat_buffer tx_buffer_{flat_buffer::default_initial_size()};
 public:
     HttpRpcSession(boost::asio::io_context& ioc)
         : Session(ioc.get_executor())
@@ -53,18 +55,18 @@ public:
         try {
             // FIXME: Avoid copy
             // Clear previous buffer
-            rx_buffer_().consume(rx_buffer_().size());
+            rx_buffer_.consume(rx_buffer_.size());
 
             // Copy request data into rx_buffer
-            auto mb = rx_buffer_().prepare(request_data.size());
+            auto mb = rx_buffer_.prepare(request_data.size());
             std::memcpy(mb.data(), request_data.data(), request_data.size());
-            rx_buffer_().commit(request_data.size());
+            rx_buffer_.commit(request_data.size());
 
             // Dispatch the RPC call
-            handle_request();
+            handle_request(rx_buffer_, tx_buffer_);
 
             // Extract response
-            auto response_span = rx_buffer_().cdata();
+            auto response_span = tx_buffer_.cdata();
             response_data.assign(
                 static_cast<const char*>(response_span.data()),
                 response_span.size());

@@ -57,24 +57,51 @@ public:
      * Called by SharedMemoryChannel when a complete message is received.
      * Processes the RPC request and sends response back.
      */
-    void on_message_received(std::vector<char>&& data) {
+    void on_message_received(const LockFreeRingBuffer::ReadView& read_view)
+    {
         try {
-            // Move data into rx_buffer (zero-copy)
-            // TODO: Optimize to avoid copy with flat_buffer view mode
-            rx_buffer_().consume(rx_buffer_().size());
-            auto mb = rx_buffer_().prepare(data.size());
-            std::memcpy(mb.data(), data.data(), data.size());
-            rx_buffer_().commit(data.size());
+            // Do const_cast for now. TODO: think about a better way
+            flat_buffer rx_buffer(const_cast<std::uint8_t*>(read_view.data), read_view.size, read_view.size);
+            
+            // Pre-allocate response buffer in shared memory for zero-copy
+            // Use a reasonable initial size - most responses are small
+            // If the response grows beyond this, flat_buffer will automatically
+            // request a larger buffer or fall back to owned mode
+            // constexpr size_t initial_response_size = 4096;
+            // auto write_reservation = channel_->reserve_write(initial_response_size);
+            
+            flat_buffer tx_buffer;
+            // if (write_reservation) {
+            //     // Set up tx_buffer as a view into the shared memory ring buffer
+            //     // Pass nullptr for endpoint since server doesn't need to grow via RPC
+            //     tx_buffer.set_view(write_reservation.data, 0, write_reservation.max_size,
+            //                        nullptr, write_reservation.write_idx, true);
+            // }
+            // If reservation failed, tx_buffer stays as owned buffer - fallback to copy
 
             // Dispatch the RPC request (calls servant methods)
-            handle_request();
+            handle_request(rx_buffer, tx_buffer);
 
             // Send response back through the channel
-            auto response_data = rx_buffer_().cdata();
-            if (!channel_->send(response_data.data(), static_cast<uint32_t>(response_data.size()))) {
-                std::cerr << "SharedMemoryServerSession: Failed to send response" << std::endl;
+            if (tx_buffer.has_write_reservation() && tx_buffer.is_view_mode()) {
+                // Zero-copy path: reconstruct the reservation and commit
+                LockFreeRingBuffer::WriteReservation reservation;
+                reservation.data = tx_buffer.data_ptr();
+                reservation.max_size = tx_buffer.max_size();
+                reservation.write_idx = tx_buffer.reservation_write_idx();
+                reservation.valid = true;
+                channel_->commit_write(reservation, tx_buffer.size());
+            } else {
+                // Fallback path: buffer was converted to owned mode or didn't have reservation
+                // Need to get a new reservation and copy the data
+                auto new_reservation = channel_->reserve_write(tx_buffer.size());
+                if (new_reservation) {
+                    std::memcpy(new_reservation.data, tx_buffer.data_ptr(), tx_buffer.size());
+                    channel_->commit_write(new_reservation, tx_buffer.size());
+                } else {
+                    std::cerr << "SharedMemoryServerSession: Failed to allocate response buffer" << std::endl;
+                }
             }
-
         } catch (const std::exception& e) {
             std::cerr << "SharedMemoryServerSession: Error processing message: " << e.what() << std::endl;
         }
@@ -93,6 +120,11 @@ public:
             channel_->channel_id(),
             0);  // Port not used for shared memory
 
+        // Set the channel pointer for server-side zero-copy responses
+        // This allows prepare_zero_copy_buffer to use the existing channel
+        // instead of trying to create a new connection
+        ctx_.shm_channel = channel_.get();
+
         // Note: We can't call shared_from_this() in constructor
         // The handler will be set up after construction
 
@@ -110,8 +142,10 @@ public:
      */
     void start() {
         // Set up the channel to call our handler when data arrives
-        channel_->on_data_received = [this, self = shared_from_this()](std::vector<char>&& data) {
-            on_message_received(std::move(data));
+        channel_->on_data_received_view = [this, self = shared_from_this()](
+            const LockFreeRingBuffer::ReadView& read_view)
+        {
+            on_message_received(read_view);
         };
     }
 

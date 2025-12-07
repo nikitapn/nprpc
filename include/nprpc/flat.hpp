@@ -17,7 +17,7 @@
 #include <vector>
 #include <optional>
 
-#include <nprpc/buffer.hpp>
+#include <nprpc/flat_buffer.hpp>
 
 namespace nprpc::flat {
 

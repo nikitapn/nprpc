@@ -191,11 +191,11 @@ std::unique_ptr<LockFreeRingBuffer> LockFreeRingBuffer::open(const std::string& 
         // Mirrored data region pointer - points to start of reserved area
         uint8_t* mirrored_data_region = static_cast<uint8_t*>(reserved);
 
-        if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+        // if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "Opened ring buffer '" << name << "': "
                       << buffer_size << " bytes with mirrored mapping at "
                       << static_cast<void*>(mirrored_data_region) << " (ring_window=" << ring_window << ")\n";
-        }
+        // }
 
         return std::unique_ptr<LockFreeRingBuffer>(
             new LockFreeRingBuffer(name, std::move(shm), header, mirrored_data_region, reserved, ring_window, false)
@@ -404,19 +404,19 @@ bool LockFreeRingBuffer::is_full(size_t message_size) const {
 
 LockFreeRingBuffer::WriteReservation LockFreeRingBuffer::try_reserve_write(size_t min_size) {
     WriteReservation result{nullptr, 0, 0, false};
-    
+
     // Calculate available space for data (excluding size header overhead)
     size_t avail = available_bytes();
     if (avail <= sizeof(uint32_t) + 1) {
         return result; // Not enough space for even a minimal message
     }
-    
+
     // Maximum data we can write (reserve space for size header + 1 byte to distinguish full/empty)
     size_t max_data_size = avail - sizeof(uint32_t) - 1;
-    
+
     // Clamp to MAX_MESSAGE_SIZE
     max_data_size = std::min(max_data_size, static_cast<size_t>(header_->max_message_size));
-    
+
     // Check if we have at least the minimum requested
     if (max_data_size < min_size) {
         return result; // Buffer too full for the minimum requested size
@@ -428,10 +428,10 @@ LockFreeRingBuffer::WriteReservation LockFreeRingBuffer::try_reserve_write(size_
     // Write placeholder size header (will be updated in commit_write)
     uint32_t placeholder = 0;
     std::memcpy(data_region_ + write_idx, &placeholder, sizeof(uint32_t));
-    
+
     // Store the position where we wrote the size header
     result.write_idx = write_idx;
-    
+
     // Advance past size header
     write_idx = (write_idx + sizeof(uint32_t)) % header_->buffer_size;
 
@@ -449,7 +449,7 @@ void LockFreeRingBuffer::commit_write(const WriteReservation& reservation, size_
         std::cerr << "LockFreeRingBuffer::commit_write: invalid reservation" << std::endl;
         return;
     }
-    
+
     if (actual_size > reservation.max_size) {
         std::cerr << "LockFreeRingBuffer::commit_write: actual_size " << actual_size 
                   << " exceeds reserved " << reservation.max_size << std::endl;

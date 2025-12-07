@@ -15,7 +15,7 @@ UdpListener::UdpListener(boost::asio::io_context& ioc, uint16_t port)
     // Set socket options
     socket_.set_option(boost::asio::socket_base::receive_buffer_size(65536));
     socket_.set_option(boost::asio::socket_base::reuse_address(true));
-    
+
     if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
         std::cout << "[UDP Listener] Created on port " << port << std::endl;
     }
@@ -23,7 +23,7 @@ UdpListener::UdpListener(boost::asio::io_context& ioc, uint16_t port)
 
 UdpListener::~UdpListener() {
     stop();
-    
+
     if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
         std::cout << "[UDP Listener] Destroyed" << std::endl;
     }
@@ -31,10 +31,10 @@ UdpListener::~UdpListener() {
 
 void UdpListener::start() {
     if (running_) return;
-    
+
     running_ = true;
     do_receive();
-    
+
     if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
         std::cout << "[UDP Listener] Started on port " << port_ << std::endl;
     }
@@ -42,13 +42,13 @@ void UdpListener::start() {
 
 void UdpListener::stop() {
     if (!running_) return;
-    
+
     running_ = false;
-    
+
     boost::system::error_code ec;
     socket_.cancel(ec);
     socket_.close(ec);
-    
+
     if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
         std::cout << "[UDP Listener] Stopped" << std::endl;
     }
@@ -56,7 +56,7 @@ void UdpListener::stop() {
 
 void UdpListener::do_receive() {
     if (!running_ || !socket_.is_open()) return;
-    
+
     socket_.async_receive_from(
         boost::asio::buffer(recv_buffer_),
         sender_endpoint_,
@@ -72,11 +72,11 @@ void UdpListener::do_receive() {
                 }
                 return;
             }
-            
+
             if (bytes_received > 0) {
                 handle_datagram(sender_endpoint_, bytes_received);
             }
-            
+
             // Continue receiving
             do_receive();
         });
@@ -90,7 +90,7 @@ void UdpListener::handle_datagram(
         std::cout << "[UDP Listener] Received " << bytes_received << " bytes from "
                   << sender.address().to_string() << ":" << sender.port() << std::endl;
     }
-    
+
     // Validate minimum header size
     if (bytes_received < sizeof(Header)) {
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
@@ -99,10 +99,10 @@ void UdpListener::handle_datagram(
         }
         return;
     }
-    
+
     // Parse header
     auto* header = reinterpret_cast<const Header*>(recv_buffer_.data());
-    
+
     if (header->msg_id != MessageId::FunctionCall) {
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
             std::cerr << "[UDP Listener] Unexpected message ID: " 
@@ -110,7 +110,7 @@ void UdpListener::handle_datagram(
         }
         return;
     }
-    
+
     // Validate size field matches received data
     uint32_t expected_size = header->size + 4;  // size field doesn't include itself
     if (expected_size != bytes_received) {
@@ -120,7 +120,7 @@ void UdpListener::handle_datagram(
         }
         return;
     }
-    
+
     // Parse call header to get POA and object ID
     if (bytes_received < sizeof(Header) + sizeof(flat::CallHeader)) {
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
@@ -128,17 +128,17 @@ void UdpListener::handle_datagram(
         }
         return;
     }
-    
+
     auto* call_header = reinterpret_cast<const flat::CallHeader*>(
         recv_buffer_.data() + sizeof(Header));
-    
+
     if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
         std::cout << "[UDP Listener] Looking for object: poa=" << call_header->poa_idx
                   << " oid=" << call_header->object_id 
                   << " iface=" << (int)call_header->interface_idx
                   << " fn=" << (int)call_header->function_idx << std::endl;
     }
-    
+
     // Look up the object
     auto obj_guard = g_rpc->get_object(call_header->poa_idx, call_header->object_id);
     if (!obj_guard.has_value()) {
@@ -146,7 +146,7 @@ void UdpListener::handle_datagram(
                   << " oid=" << call_header->object_id << std::endl;
         return;
     }
-    
+
     auto* servant = obj_guard->get();
     if (!servant) {
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
@@ -154,46 +154,45 @@ void UdpListener::handle_datagram(
         }
         return;
     }
-    
+
     // Create a buffer wrapper for the received data
     // TODO: This copies the buffer, which is inefficient. Consider adding
     // a view-based Buffers variant for receive-only paths.
-    Buffers bufs(bytes_received + 128);
-    auto& buf = bufs();
-    buf.consume(buf.size());
-    auto mb = buf.prepare(bytes_received);
+    flat_buffer bin(bytes_received + 128);
+    flat_buffer bout(bytes_received + 128);
+    auto mb = bin.prepare(bytes_received);
     std::memcpy(mb.data(), recv_buffer_.data(), bytes_received);
-    buf.commit(bytes_received);
-    
+    bin.commit(bytes_received);
+
     // Save request_id to determine if we need to send a response
     uint32_t request_id = header->request_id;
-    
+
     SessionContext ctx;  // Empty context for UDP (no session)
-    
+
     // Dispatch to servant
     try {
-        servant->dispatch(bufs, ctx, false);
-        
+        servant->dispatch(bin, bout, ctx, false);
+
         // For reliable UDP calls (request_id != 0), send the response back
         if (request_id != 0) {
-            auto& response_buf = bufs();
+            auto& response_buf = bout;
             if (response_buf.size() > 0) {
                 // Ensure the response has the same request_id
                 auto* resp_header = reinterpret_cast<Header*>(response_buf.data().data());
                 resp_header->request_id = request_id;
-                
+
                 if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
                     std::cout << "[UDP Listener] Sending response for request_id=" 
                               << request_id << " size=" << response_buf.size() << std::endl;
                 }
-                
+
                 // Move response to flat_buffer for sending
                 flat_buffer send_buf(response_buf.size());
                 auto src = response_buf.cdata();
                 auto send_mb = send_buf.prepare(src.size());
                 std::memcpy(send_mb.data(), src.data(), src.size());
                 send_buf.commit(src.size());
-                
+
                 send_response(sender, std::move(send_buf));
             } else if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
                 std::cerr << "[UDP Listener] WARNING: response_buf is empty for reliable call!" << std::endl;
@@ -201,16 +200,16 @@ void UdpListener::handle_datagram(
         } else if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "[UDP Listener] Fire-and-forget, no response sent" << std::endl;
         }
-        
+
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "[UDP Listener] Dispatched to " << servant->get_class() << std::endl;
         }
-        
+
     } catch (const std::exception& e) {
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
             std::cerr << "[UDP Listener] Dispatch error: " << e.what() << std::endl;
         }
-        
+
         // For reliable calls, send error response
         if (request_id != 0) {
             flat_buffer error_buf(sizeof(Header));
@@ -228,7 +227,7 @@ void UdpListener::handle_datagram(
 
 void UdpListener::send_response(const endpoint_type& target, flat_buffer&& buffer) {
     auto data = buffer.cdata();
-    
+
     socket_.async_send_to(
         boost::asio::buffer(data.data(), data.size()),
         target,
@@ -262,12 +261,12 @@ NPRPC_API std::shared_ptr<UdpListener> start_udp_listener(
     uint16_t port)
 {
     std::lock_guard<std::mutex> lock(g_udp_listener_mutex);
-    
+
     if (!g_udp_listener || !g_udp_listener->is_running()) {
         g_udp_listener = std::make_shared<UdpListener>(ioc, port);
         g_udp_listener->start();
     }
-    
+
     return g_udp_listener;
 }
 

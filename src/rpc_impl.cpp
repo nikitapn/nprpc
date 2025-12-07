@@ -1,5 +1,6 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/shared_memory_connection.hpp>
+#include <nprpc/impl/shared_memory_channel.hpp>
 #include <nprpc/impl/udp_connection.hpp>
 #ifdef NPRPC_QUIC_ENABLED
 #include <nprpc/impl/quic_transport.hpp>
@@ -442,25 +443,111 @@ NPRPC_API void RpcImpl::call_async(
 }
 
 NPRPC_API bool RpcImpl::prepare_zero_copy_buffer(
-  const EndPoint& endpoint, flat_buffer& buffer, size_t max_size)
+  SessionContext& ctx, flat_buffer& buffer, size_t max_size)
 {
-  if (!is_shared_memory(endpoint)) {
+  if (!is_shared_memory(ctx.remote_endpoint))
     return false;
-  }
-  
-  try {
-    auto session = get_session(endpoint);
-    auto* shm_conn = dynamic_cast<SharedMemoryConnection*>(session.get());
-    if (!shm_conn) {
+
+  // Check if we're on a server-side shared memory session
+  // In that case, ctx.shm_channel is set and we should use it directly
+  // instead of trying to create a client connection to the "remote" endpoint
+  if (ctx.shm_channel) {
+    // std::cout << "[nprpc][D] prepare_zero_copy_buffer called on server-side for endpoint: "
+    //           << ctx.remote_endpoint.to_string() << " with max_size: " << max_size << std::endl;
+    // Server-side: use the existing channel for zero-copy response
+    auto reservation = ctx.shm_channel->reserve_write(max_size);
+    if (!reservation)
       return false;
+
+    buffer.set_view(reservation.data, 0, reservation.max_size,
+                    &ctx.remote_endpoint, reservation.write_idx, true);
+    return true;
+  }
+
+  // Client-side: get/create a connection to the server
+  // std::cout << "[nprpc][D] prepare_zero_copy_buffer called on client-side for endpoint: "
+  //           << ctx.remote_endpoint.to_string() << " with max_size: " << max_size << std::endl;
+
+  try {
+    auto session = get_session(ctx.remote_endpoint);
+
+    if (dynamic_cast<SharedMemoryConnection*>(session.get()) == nullptr) {
+      std::cerr << "prepare_zero_copy_buffer: Session is not a SharedMemoryConnection but "
+                << static_cast<int>(ctx.remote_endpoint.type()) << ", typeid: " << typeid(*session).name() << std::endl;
+      std::abort();
     }
-    
-    return shm_conn->prepare_write_buffer(buffer, max_size);
+
+    auto* shm_conn = static_cast<SharedMemoryConnection*>(session.get());
+    if (!shm_conn)
+      return false;
+
+    return shm_conn->prepare_write_buffer(buffer, max_size, &ctx.remote_endpoint);
   } catch (const std::exception& e) {
+    std::cerr << "Error in prepare_zero_copy_buffer: " << e.what() << std::endl;
     // Connection failed - fall back to normal buffer
     // The actual error will be thrown when call() is made
     return false;
   }
+}
+
+// Helper function called from flat_buffer::grow() when view mode buffer needs to expand
+NPRPC_API bool prepare_zero_copy_buffer_grow(
+  const EndPoint& endpoint,
+  flat_buffer& buffer,
+  size_t new_size,
+  const void* existing_data,
+  size_t existing_size)
+{
+  return false;
+  // if (!RpcImpl::is_shared_memory(endpoint))
+  //   return false;
+
+  // // Check if we're on a server-side shared memory session
+  // auto& ctx = get_context();
+  // if (ctx.shm_channel) {
+  //   // Server-side: use the existing channel
+  //   auto reservation = ctx.shm_channel->reserve_write(new_size);
+  //   if (!reservation)
+  //     return false;
+
+  //   buffer.set_view(reservation.data, 0, reservation.max_size,
+  //                   &endpoint, reservation.write_idx, true);
+
+  //   // Copy existing data to the new buffer
+  //   if (existing_size > 0 && existing_data) {
+  //     std::memcpy(buffer.data_ptr(), existing_data, existing_size);
+  //     buffer.commit(existing_size);
+  //   }
+
+  //   return true;
+  // }
+
+  // // Client-side: get the existing connection
+  // try {
+  //   auto session = g_rpc->get_session(endpoint);
+  //   auto* shm_conn = static_cast<SharedMemoryConnection*>(session.get());
+
+
+  //   if (dynamic_cast<SharedMemoryConnection*>(session.get()) == nullptr) {
+  //     std::cerr << "prepare_zero_copy_buffer_grow: Session is not a SharedMemoryConnection" << std::endl;
+  //     std::abort();
+  //   }
+
+  //   // Request a new larger buffer from the shared memory ring
+  //   // The old reservation will be abandoned (not committed)
+  //   if (!shm_conn->prepare_write_buffer(buffer, new_size, &endpoint))
+  //     return false;
+
+  //   // Copy existing data to the new buffer
+  //   if (existing_size > 0 && existing_data) {
+  //     std::memcpy(buffer.data_ptr(), existing_data, existing_size);
+  //     buffer.commit(existing_size);
+  //   }
+
+  //   return true;
+  // } catch (const std::exception&) {
+  //   return false;
+  // }
 }
 
 NPRPC_API std::optional<ObjectGuard> RpcImpl::get_object(
@@ -615,7 +702,6 @@ NPRPC_API Object* create_object_from_flat(
   } else {
     if (!obj->select_endpoint(remote_endpoint)) {
       // Something is malformed, we cannot select an endpoint
-      // maybe I need to wrap `dispatch` in a try-catch block? I think I've already done it in `handle_request`
       throw nprpc::Exception(
         "Cannot select endpoint for object: " + std::string(oid.class_id) + ", available endpoints: " + obj->urls());
     }

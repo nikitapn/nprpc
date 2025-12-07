@@ -4,18 +4,18 @@
 
 #pragma once
 
-#include <nprpc/buffer.hpp>
-#include <nprpc/common.hpp>
-#include <boost/date_time/posix_time/ptime.hpp>
-#include <nprpc/basic.hpp>
-#include <nprpc/session_context.h>
 #include <boost/asio/deadline_timer.hpp>
+#include <boost/date_time/posix_time/ptime.hpp>
+
+#include <nprpc/basic.hpp>
+#include <nprpc/common.hpp>
+#include <nprpc/flat_buffer.hpp>
+#include <nprpc/session_context.h>
 
 namespace nprpc::impl {
 
 class Session {
 protected:
-  Buffers rx_buffer_;
   SessionContext ctx_;
 
   boost::asio::deadline_timer timeout_timer_;
@@ -79,7 +79,9 @@ public:
   }
   const EndPoint& remote_endpoint() const noexcept { return ctx_.remote_endpoint; }
   SessionContext& ctx() noexcept { return ctx_; }
-  void handle_request();
+  // Handles incoming request in rx_buffer and prepares response in tx_buffer
+  // in some cases rx_buffer and tx_buffer can be the same buffer
+  void handle_request(nprpc::flat_buffer& rx_buffer, nprpc::flat_buffer& tx_buffer);
 
   virtual void shutdown() {
     closed_.store(true);

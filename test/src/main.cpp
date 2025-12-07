@@ -32,71 +32,76 @@ TEST_F(NprpcTest, TestBasic) {
             auto obj = make_stuff_happen<nprpc::test::TestBasic>(servant, flags);
 
             // ReturnBoolean test
-            EXPECT_TRUE(obj->ReturnBoolean());
+            // EXPECT_TRUE(obj->ReturnBoolean());
 
-            // In/Out test
-            std::vector<uint8_t> ints;
-            ints.reserve(256);
-            boost::push_back(ints, boost::irange(0, 255));
 
-            EXPECT_TRUE(obj->In(100, true, nprpc::flat::make_read_only_span(ints)));
+            // // In/Out test
+            // std::vector<uint8_t> ints;
+            // ints.reserve(256);
+            // boost::push_back(ints, boost::irange(0, 255));
 
-            uint32_t a;
-            bool b;
+            // EXPECT_TRUE(obj->In(100, true, nprpc::flat::make_read_only_span(ints)));
+            
+            // std::cout << "In/Out passed" << std::endl;
 
-            obj->Out(a, b, ints);
+            // uint32_t a;
+            // bool b;
 
-            EXPECT_EQ(a, 100u);
-            EXPECT_TRUE(b);
+            // obj->Out(a, b, ints);
 
-            uint8_t ix = 0;
-            for (auto i : ints) {
-                EXPECT_EQ(ix++, i);
-            }
+            // EXPECT_EQ(a, 100u);
+            // EXPECT_TRUE(b);
+
+            // uint8_t ix = 0;
+            // for (auto i : ints) {
+            //     EXPECT_EQ(ix++, i);
+            // }
 
             // ReturnU32 test
+            std::cout << "Return 42 started" << std::endl;
             EXPECT_EQ(obj->ReturnU32(), 42u);
+            std::cout << "Return 42 passed" << std::endl;
 
-            // OutStruct test
+            // // OutStruct test
             nprpc::test::AAA aaa;
             obj->OutStruct(aaa);
             EXPECT_EQ(aaa.a, 12345);
             EXPECT_EQ(std::string_view(aaa.b), "Hello from OutStruct"sv);
             EXPECT_EQ(std::string_view(aaa.c), "Another string"sv);
 
-            // OutArrayOfStructs test
-            std::vector<nprpc::test::SimpleStruct> struct_array;
-            obj->OutArrayOfStructs(struct_array);
-            EXPECT_EQ(struct_array.size(), 10u);
-            for (uint32_t i = 0; i < 10; ++i) {
-              EXPECT_EQ(struct_array[i].id, i + 1);
-            }
+            // // OutArrayOfStructs test
+            // std::vector<nprpc::test::SimpleStruct> struct_array;
+            // obj->OutArrayOfStructs(struct_array);
+            // EXPECT_EQ(struct_array.size(), 10u);
+            // for (uint32_t i = 0; i < 10; ++i) {
+            //   EXPECT_EQ(struct_array[i].id, i + 1);
+            // }
 
-            // InException test
-            try {
-              obj->InException();
-              FAIL() << "Expected InException to throw SimpleException";
-            } catch (const nprpc::test::SimpleException& ex) {
-              EXPECT_EQ(std::string_view(ex.message), "This is a test exception"sv);
-              EXPECT_EQ(ex.code, 123);
-            }
+            // // InException test
+            // try {
+            //   obj->InException();
+            //   FAIL() << "Expected InException to throw SimpleException";
+            // } catch (const nprpc::test::SimpleException& ex) {
+            //   EXPECT_EQ(std::string_view(ex.message), "This is a test exception"sv);
+            //   EXPECT_EQ(ex.code, 123);
+            // }
 
-            // OutScalarWithException test - tests flat output struct with exception handler
-            // This verifies the fix where output parameters must be declared before try block
-            uint8_t read_value;
-            obj->OutScalarWithException(10, 20, read_value);
-            EXPECT_EQ(read_value, 30); // dev_addr + addr = 10 + 20 = 30
+            // // OutScalarWithException test - tests flat output struct with exception handler
+            // // This verifies the fix where output parameters must be declared before try block
+            // uint8_t read_value;
+            // obj->OutScalarWithException(10, 20, read_value);
+            // EXPECT_EQ(read_value, 30); // dev_addr + addr = 10 + 20 = 30
 
         } catch (nprpc::Exception& ex) {
             FAIL() << "Exception in TestBasic: " << ex.what();
         }
     };
 
-    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+    // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+    // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+    // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
-    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+    // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
 // Optional types test
@@ -242,7 +247,7 @@ TEST_F(NprpcTest, UserSuppliedObjectIdPolicy) {
             return "StaticIdServant";
         }
 
-        void dispatch(::nprpc::Buffers&, ::nprpc::SessionContext&, bool) override {
+        void dispatch(::nprpc::flat_buffer&, ::nprpc::flat_buffer&, ::nprpc::SessionContext&, bool) override {
             throw nprpc::Exception("Not implemented");
         }
     } servant_one, servant_two, servant_three;

@@ -32,6 +32,10 @@ class Session_Socket
   tcp::socket socket_;
   uint32_t size_to_read_ = 0;
   std::deque<std::unique_ptr<work>> write_queue_;
+
+  flat_buffer rx_buffer_{flat_buffer::default_initial_size()};
+  flat_buffer tx_buffer_{flat_buffer::default_initial_size()};
+
 public:
   // Simple socket sessions are not duplex, it's assumed that client is also can accept
   // new connetions from the server, so we don't need to handle duplex communication
@@ -76,7 +80,7 @@ public:
       return;
     }
 
-    rx_buffer_().commit(len);
+    rx_buffer_.commit(len);
     size_to_read_ -= static_cast<uint32_t>(len);
 
     if (size_to_read_ != 0) {
@@ -84,20 +88,18 @@ public:
       return;
     }
 
-    // readed the whole message
-
-    handle_request();
+    handle_request(rx_buffer_, tx_buffer_);
 
     write_queue_.push_front({});
 
-    boost::asio::async_write(socket_, rx_buffer_().cdata(),
+    boost::asio::async_write(socket_, tx_buffer_.cdata(),
       std::bind(&Session_Socket::on_write, shared_from_this(),
         std::placeholders::_1, std::placeholders::_2)
     );
   }
 
   void do_read_body() {
-    socket_.async_read_some(rx_buffer_().prepare(size_to_read_),
+    socket_.async_read_some(rx_buffer_.prepare(size_to_read_),
       std::bind(&Session_Socket::on_read_body, shared_from_this(),
         std::placeholders::_1, std::placeholders::_2)
     );
@@ -117,15 +119,15 @@ public:
       return;
     }
 
-    *(uint32_t*)rx_buffer_().data().data() = size_to_read_;
-    rx_buffer_().commit(4);
+    *(uint32_t*)rx_buffer_.data().data() = size_to_read_;
+    rx_buffer_.commit(4);
 
     do_read_body();
   }
 
   void do_read_size() {
-    rx_buffer_().consume(rx_buffer_().size());
-    rx_buffer_().prepare(4);
+    rx_buffer_.consume(rx_buffer_.size());
+    rx_buffer_.prepare(4);
     socket_.async_read_some(net::mutable_buffer(&size_to_read_, 4),
       std::bind(&Session_Socket::on_read_size, shared_from_this(),
         std::placeholders::_1, std::placeholders::_2)

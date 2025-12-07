@@ -73,7 +73,7 @@ SharedMemoryChannel::~SharedMemoryChannel() {
         }
         // Small delay to let the thread check running_ flag
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        
+
         // Check if thread has already exited
         if (!read_thread_ || !read_thread_->joinable()) {
             break;
@@ -94,11 +94,11 @@ bool SharedMemoryChannel::send(const void* data, uint32_t size) {
 
     try {
         bool sent = send_ring_->try_write(data, size);
-        
+
         if (!sent && g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cerr << "SharedMemoryChannel: Ring buffer full, message dropped" << std::endl;
         }
-        
+
         return sent;
 
     } catch (const std::exception& e) {
@@ -115,7 +115,7 @@ LockFreeRingBuffer::WriteReservation SharedMemoryChannel::reserve_write(size_t m
 }
 
 void SharedMemoryChannel::commit_write(
-    const LockFreeRingBuffer::WriteReservation& reservation, 
+    const LockFreeRingBuffer::WriteReservation& reservation,
     size_t actual_size) {
     if (send_ring_) {
         send_ring_->commit_write(reservation, actual_size);
@@ -133,14 +133,15 @@ void SharedMemoryChannel::read_loop() {
         try {
             // Try zero-copy read first if callback is set
             if (on_data_received_view) {
+                // std::cout << "Attempting zero-copy read" << std::endl;
                 // Wait for data with timeout
                 {
                     boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex> 
                         lock(recv_ring_->header()->mutex);
-                    
+
                     auto deadline = boost::posix_time::microsec_clock::universal_time() + 
                                     boost::posix_time::milliseconds(100);
-                    
+
                     while (recv_ring_->is_empty() && running_) {
                         auto now = boost::posix_time::microsec_clock::universal_time();
                         if (now >= deadline) {
@@ -149,9 +150,10 @@ void SharedMemoryChannel::read_loop() {
                         recv_ring_->header()->data_available.timed_wait(lock, deadline);
                     }
                 }
-                
+
                 // Try to get a view into the ring buffer
                 auto view = recv_ring_->try_read_view();
+                // std::cout << "Zero-copy read view attempt returned valid=" << view.valid << std::endl;
                 if (view) {
                     // Zero-copy path: provide view directly to callback
                     // Callback will call commit_read() when done
@@ -161,7 +163,9 @@ void SharedMemoryChannel::read_loop() {
                 }
                 continue;
             }
-            
+
+            // std::cout << "Falling back to copy-based read" << std::endl;
+
             // Fallback to copy-based read
             // Blocking read with timeout (allows checking running_ flag)
             size_t bytes_read = recv_ring_->read_with_timeout(
@@ -179,7 +183,7 @@ void SharedMemoryChannel::read_loop() {
 
                 // Message received, post to io_context
                 std::vector<char> data(recv_buffer_.begin(), recv_buffer_.begin() + bytes_read);
-                
+
                 boost::asio::post(ioc_, [this, data = std::move(data)]() mutable {
                     if (on_data_received) {
                         on_data_received(std::move(data));

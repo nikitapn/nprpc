@@ -14,6 +14,7 @@ class ObjectServant;
 
 namespace impl {
 class ReferenceListImpl;
+class SharedMemoryChannel;
 }
 
 class NPRPC_API ReferenceList {
@@ -30,6 +31,9 @@ public:
 struct SessionContext {
 	EndPoint remote_endpoint;
 	ReferenceList ref_list;
+	// For server-side shared memory sessions, points to the channel for zero-copy responses
+	// nullptr for all other session types (TCP, WebSocket, client-side, etc.)
+	impl::SharedMemoryChannel* shm_channel = nullptr;
 };
 
 NPRPC_API SessionContext& get_context();

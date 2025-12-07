@@ -564,7 +564,7 @@ void CppBuilder::assign_from_cpp_type(
         (bd += 1) << "auto span = " << op1 << "();\n" <<
         bd << "auto it = " << op2 << ".begin();\n" <<
         bd << "for (auto e : span) {\n";
-      
+
         os << (bd += 1) << "auto __ptr = ::nprpc::make_wrapper1(*it);\n"
         ;
 
@@ -666,7 +666,7 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type, std::string op1, std::
 
     os << bd << "{\n"
       << bd + 1 <<"auto span = " << op2 << (is_string ? "_d()();\n" : "();\n");
-    
+
     if (type->id == FieldType::Vector) {
       os << bd + 1 << op1 << ".resize(span.size());\n";
     }
@@ -685,7 +685,7 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type, std::string op1, std::
       os << bd + 2 << "++" << its << ";\n";
       os << bd + 1 << "}\n";
     }
-    
+
     os << bd << "}\n";
     break;
   }
@@ -719,11 +719,11 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type, std::string op1, std::
     os << bd + 1 << "} else { \n";
     os << bd + 2 << op1 << " = std::nullopt;\n";
     os << bd + 1 << "}\n";
-    
+
     os << bd0 << "}\n";
-    
+
     bd = bd0;
-    
+
     break;
   }
 
@@ -785,7 +785,6 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
         emit_type(f->type, os); os << " _" << f->name;
         if (++ix < size) os << ", ";
       });
-    
 
     os << ")\n"
       "    : ::nprpc::Exception(\"" << s->name << "\")\n"
@@ -795,19 +794,19 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
         end(s->fields), [this, &os](auto f) mutable {
           os << "    , " << f->name << "(_" << f->name << ")\n";
         });
-    
+
       os << 
       "  {\n"
       "  }\n"
       ;
     }
-    
+
     os << "};\n\n";
   }
-  
+
   if (target != Target::FunctionArgument)
     os << "namespace flat {\n";
-  
+
   make_struct(std::bind(static_cast<void(CppBuilder::*)(AstTypeDecl*, std::ostream&)>(&CppBuilder::emit_flat_type), this, _1, _2));
 
   auto const accessor_name = s->name + "_Direct";
@@ -900,7 +899,7 @@ void CppBuilder::finalize() {
   // Generate module-specific export macro
   auto module_upper = make_guard(ctx_->current_file());
   export_macro_name_ = module_upper + "_API";
-  
+
   ofs_hpp <<
     "// Module export macro\n"
     "#ifdef NPRPC_EXPORTS\n"
@@ -913,7 +912,7 @@ void CppBuilder::finalize() {
 
   ofs_cpp <<
     "#include \"";
-  
+
   ofs_cpp << ctx_->current_file() << ".hpp\"\n";
 
   ofs_cpp <<
@@ -925,8 +924,6 @@ void CppBuilder::finalize() {
     ofs_hpp << "namespace " << ctx_->nm_root()->to_cpp17_namespace() << " {\n\n";
     ofs_cpp << "namespace " << ctx_->nm_root()->to_cpp17_namespace() << " {\n\n";
   }
-
- 
 
   emit_helpers();
   emit_struct_helpers();
@@ -994,7 +991,7 @@ void CppBuilder::emit_safety_checks_r(AstTypeDecl* type, std::string op, std::os
   switch (type->id) {
   case FieldType::Struct: {
     auto s = cflat(type);
-    
+
     if (top_type) {
       os <<
         "  if (static_cast<std::uint32_t>(buf.size()) < " << op << ".offset() + " << s->size << ") goto check_failed;\n"
@@ -1035,9 +1032,9 @@ void CppBuilder::emit_safety_checks_r(AstTypeDecl* type, std::string op, std::os
 
   case FieldType::Vector: {
     auto wt = cwt(type)->type;
-    
+
     os << bd << "if(!" << op << "._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;\n";
-    
+
     if (is_flat(wt)) break;
 
     os << bd << "{\n"
@@ -1053,7 +1050,7 @@ void CppBuilder::emit_safety_checks_r(AstTypeDecl* type, std::string op, std::os
   case FieldType::Optional: {
     auto wt = cwt(type)->type;
     os << bd << "if(!" << op << "._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;\n";
-    
+
     if (is_flat(wt)) break;
 
     os << bd << "if ( " << op << ".has_value() ) {\n"
@@ -1081,9 +1078,9 @@ void CppBuilder::emit_safety_checks() {
 
     for (auto fn : ifs->fns) {
       auto s = fn->in_s;
-      
+
       if (!s) continue;
-      
+
       auto const name = s->get_function_struct_id();
       if (set.find(name) != set.end()) continue;
       set.emplace(name);
@@ -1091,11 +1088,10 @@ void CppBuilder::emit_safety_checks() {
       ocpp << "bool check_" << name << "(::nprpc::flat_buffer& buf, " << fn->in_s->name << "_Direct& ia" << ") {\n";
 
       emit_safety_checks_r(s, "ia", ocpp, false, true);
-    
+
       ocpp <<
           "  return true;\n"
           "check_failed:\n"
-          "  ::nprpc::impl::make_simple_answer(buf, ::nprpc::impl::MessageId::Error_BadInput);\n"
           "  return false;\n"
           "}\n"
           ;
@@ -1130,7 +1126,7 @@ void CppBuilder::emit_helpers() {
           assign_from_flat_type(f->type, "dest", "src", oh, false, true);
           oh << "}\n";
         }
-      
+
       } else {
         if (f->function_argument_name == "ret_val") continue;
         if (f->type->id == FieldType::Struct) {
@@ -1167,7 +1163,7 @@ void CppBuilder::emit_struct_helpers() {
     emit_parameter_type_for_proxy_call_r(s, oh, false); oh << "& dest) {\n";
     assign_from_flat_type(s, "dest", "src", oh, false, true);
     oh << "}\n";
-      
+
     oh << "inline void assign_from_cpp_" << s->name << "(";
     emit_parameter_type_for_servant_callback_r(s, oh, false);
     oh << "& dest, const ";
@@ -1199,13 +1195,13 @@ void CppBuilder::emit_function_arguments(
 
 void CppBuilder::proxy_call(AstFunctionDecl* fn) {
   oc <<
-    "  ::nprpc::impl::g_rpc->call(this->get_endpoint(), buf, this->get_timeout());\n"
+    "  session->send_receive(buf, this->get_timeout());\n"
     "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n"
     ;
 
   if (fn->ex) 
     oc << "  if (std_reply == 1) " << ctx_->current_file() << "_throw_exception(buf);\n";
-  
+
   if (!fn->out_s) {
     oc <<
       "  if (std_reply != 0) {\n"
@@ -1260,7 +1256,7 @@ void CppBuilder::proxy_udp_reliable_call(AstFunctionDecl* fn) {
 
   if (fn->ex) 
     oc << "  if (std_reply == 1) " << ctx_->current_file() << "_throw_exception(buf);\n";
-  
+
   if (!fn->out_s) {
     oc <<
       "  if (std_reply != 0) {\n"
@@ -1319,15 +1315,15 @@ void CppBuilder::proxy_async_call(AstFunctionDecl* fn) {
       assert(false);
 
       bd = 4;
-  
+
       oc << 
         "    " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n"
         ;
-  
+
       for (auto arg : fn->out_args) {
         oc << bd; emit_parameter_type_for_proxy_call_r(arg->type, oc, false); oc << " " << arg->name << ";\n";
       }
-  
+
       size_t ix = 0;
       for (auto out : fn->out_args) {
         assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), oc, false,
@@ -1357,7 +1353,7 @@ std::string_view CppBuilder::proxy_arguments(AstFunctionDecl* fn) {
       if (--out_args_size) ss << ", ";
     }
     ss << ")>> handler";
-    
+
     size_t in_args_size = fn->in_args.size();
     if (in_args_size) ss << ", ";
     for (auto arg : fn->in_args) {
@@ -1389,7 +1385,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
     "public:\n"
     "  static std::string_view _get_class() noexcept { return \"" << ctx_->current_file() << '/' << ctx_->nm_cur()->to_ts_namespace() << '.' << ifs->name << "\"; }\n"
     "  std::string_view get_class() const noexcept override { return I" << ifs->name << "_Servant::_get_class(); }\n"
-    "  void dispatch(::nprpc::Buffers& bufs, [[maybe_unused]] ::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) override;\n"
+    "  void dispatch(::nprpc::flat_buffer& bin, ::nprpc::flat_buffer& bout, [[maybe_unused]] ::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) override;\n"
     ;
 
   for (auto fn : ifs->fns) {
@@ -1452,7 +1448,6 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 
   oh << "};\n\n";
 
-
   // .CPP file marshall/unmarshall stuff below
   // auto const nm = ctx_->nm_cur()->to_cpp17_namespace();
 
@@ -1467,9 +1462,9 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 
     // Try zero-copy buffer for shared memory transport
     oc <<
-      "  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(this->get_endpoint(), buf, " << capacity << ")) {\n"
+      "  auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n"
+      "  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, " << capacity << "))\n"
       "    buf.prepare(" << capacity << ");\n"
-      "  }\n"
       "  {\n"
       "    buf.commit(" << fixed_size << ");\n"
       "    static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;\n"
@@ -1520,10 +1515,11 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
   }
 
   // Servant dispatch
-  oc << "void " << ns(ctx_->nm_cur()) << 'I' << ifs->name << "_Servant::dispatch(::nprpc::Buffers& bufs, [[maybe_unused]] ::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) {\n"
-    "  ::nprpc::impl::flat::CallHeader_Direct __ch(bufs(), sizeof(::nprpc::impl::Header));\n"
+  oc << "void " << ns(ctx_->nm_cur()) << 'I' << ifs->name << "_Servant::dispatch("
+    "::nprpc::flat_buffer& bin, nprpc::flat_buffer& bout, [[maybe_unused]] ::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) {\n"
+    "  ::nprpc::impl::flat::CallHeader_Direct __ch(bin, sizeof(::nprpc::impl::Header));\n"
     ;
-    
+
   if (ifs->plist.empty()) {
     // ok
   } else {
@@ -1533,20 +1529,20 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
       "      case 0:\n"
       "        break;\n"
       ;
-  
+
     int ix = 1;
     auto select_interface = [&ix, this, ifs](AstInterfaceDecl* i) {
       if (i == ifs) return;
       oc <<
         "      case "<< ix << ":\n"
-        "        I" << i->name << "_Servant::dispatch(bufs, ctx, true);\n"
+        "        I" << i->name << "_Servant::dispatch(bin, bout, ctx, true);\n"
         "        return;\n"
       ;
       ++ix;
     };
-    
+
     dfs_interface(select_interface, ifs);
-    
+
     oc <<
       "      default:\n"
       //"        assert(false);\n"
@@ -1560,18 +1556,20 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
       "  switch(__ch.function_idx()) {\n"
       ;
 
-
   for (auto fn : ifs->fns) {
     oc << "    case " << fn->idx << ": {\n";
 
     if (fn->in_s) {
       oc <<
-        "      " << fn->in_s->name << "_Direct ia(bufs(), " << get_arguments_offset() << ");\n"
+        "      " << fn->in_s->name << "_Direct ia(bin, " << get_arguments_offset() << ");\n"
         ;
       if (ifs->trusted == false) {
         // const auto fixed_size = get_arguments_offset() + fn->in_s->size;
         oc <<
-          "      if ( !check_" << fn->in_s->get_function_struct_id() << "(bufs(), ia) ) break;\n"
+          "      if ( !check_" << fn->in_s->get_function_struct_id() << "(bin, ia) ) {\n"
+          "        ::nprpc::impl::make_simple_answer(ctx, bin, bout, ::nprpc::impl::MessageId::Error_BadInput);\n"
+          "        break;\n"
+          "      }\n"
           ;
       }
     }
@@ -1580,9 +1578,10 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
       const auto offset = size_of_header;
       const auto initial_size = offset + fn->out_s->size;
       oc <<
-        "      auto& obuf = bufs.flip();\n"
-        "      obuf.consume(obuf.size());\n"
-        "      obuf.prepare(" << initial_size + 128 << ");\n"
+        "      auto& obuf = bout;\n"
+        "      obuf.consume(obuf.size());\n" // Clear buffer
+        "      if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, " << initial_size + 128 << "))\n"
+        "         obuf.prepare(" << initial_size + 128 << ");\n"
         "      obuf.commit(" << initial_size << ");\n"
         "      " << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n"
         ;
@@ -1666,7 +1665,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
       if (++idx != fn->args.size()) oc << ", ";
     }
     oc << ");\n";
-    
+
     /*
     out_ix = fn->is_void() ? 0 : 1;
     for (auto arg : fn->args) {
@@ -1687,12 +1686,12 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
     if (fn->ex) {
       const auto offset = size_of_header;
       const auto initial_size = offset + fn->ex->size;
-      
+
       always_full_namespace(true);
       oc <<
         "      }\n"
         "      catch(" << ns(fn->ex->nm) << fn->ex->name << "& e) {\n"
-        "        auto& obuf = bufs();\n"
+        "        auto& obuf = bout;\n"
         "        obuf.consume(obuf.size());\n"
         "        obuf.prepare(" << initial_size << ");\n"
         "        obuf.commit(" << initial_size << ");\n"
@@ -1716,7 +1715,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
     }
 
     if (!fn->out_s) {
-      oc << "      ::nprpc::impl::make_simple_answer(bufs(), nprpc::impl::MessageId::Success);\n";
+      oc << "      ::nprpc::impl::make_simple_answer(ctx, bin, bout, nprpc::impl::MessageId::Success);\n";
     } else {
       if (fn->out_s->flat) { // it means that we are writing output data in the input buffer, 
         // so we must pass stack variables first and then assign result back to the buffer
@@ -1724,13 +1723,13 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
         const auto initial_size = offset + fn->out_s->size;
 
         oc <<
-          "      auto& obuf = bufs();\n"
+          "      auto& obuf = bout;\n"
           "      obuf.consume(obuf.size());\n"
           "      obuf.prepare(" << initial_size << ");\n"
           "      obuf.commit(" << initial_size << ");\n"
           "      " << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n"
           ;
-        
+
         int ix;
         if (!fn->is_void()) {
           assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val", oc);
@@ -1765,7 +1764,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 
   oc <<
     "    default:\n"
-    "      ::nprpc::impl::make_simple_answer(bufs(), ::nprpc::impl::MessageId::Error_UnknownFunctionIdx);\n"
+    "      ::nprpc::impl::make_simple_answer(ctx, bin, bout, ::nprpc::impl::MessageId::Error_UnknownFunctionIdx);\n"
     "  }\n"; // switch block
   ;
 

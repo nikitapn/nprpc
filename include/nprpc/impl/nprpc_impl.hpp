@@ -76,17 +76,18 @@ class CommonConnection {
     return static_cast<T*>(this);
   }
 protected:
-  std::deque<std::unique_ptr<IOWork>> wq_;
+  std::deque<std::shared_ptr<IOWork>> wq_;
 
-  void add_work(std::unique_ptr<IOWork>&& w) {
-    boost::asio::post(derived()->get_executor(), [
-      w{std::move(w)}, this
-    ] () mutable {
+  void add_work(std::shared_ptr<IOWork> w)
+  {
+    boost::asio::post(derived()->get_executor(), [w{std::move(w)}, this] () mutable
+    {
       // work may or may not hold shared_ptr to this:
       // blocking case - it will reference to this,
       // async case - it will hold shared_ptr to this
       wq_.push_back(std::move(w));
-      if (wq_.size() == 1) (*wq_.front())();
+      if (wq_.size() == 1)
+        (*wq_.front())();
     });
   }
 
@@ -99,7 +100,8 @@ protected:
   void pop_and_execute_next_task()
   {
     wq_.pop_front();
-    if (wq_.empty() == false) (*wq_.front())();
+    if (wq_.empty() == false)
+      (*wq_.front())();
   }
 };
 
@@ -280,7 +282,7 @@ class RpcImpl : public Rpc
    * @param max_size Maximum message size to reserve
    * @return true if buffer was set up for zero-copy, false otherwise
    */
-  NPRPC_API bool prepare_zero_copy_buffer(const EndPoint& endpoint,
+  NPRPC_API bool prepare_zero_copy_buffer(SessionContext& ctx,
                                           flat_buffer& buffer,
                                           size_t max_size);
 
@@ -419,7 +421,7 @@ class PoaImpl
 };
 
 inline void make_simple_answer(
-  flat_buffer& buf, MessageId id, uint32_t request_id = 0)
+  SessionContext& ctx, flat_buffer& bin, flat_buffer& bout, MessageId id, uint32_t request_id = 0)
 {
   assert(
     id == MessageId::Success                  ||
@@ -435,22 +437,26 @@ inline void make_simple_answer(
   static_assert(std::is_standard_layout_v<impl::flat::Header>,
     "impl::flat::Header must be a standard layout type");
 
-  if (!request_id && buf.size() >= sizeof(impl::flat::Header)) {
-    auto header = static_cast<const impl::flat::Header*>(buf.cdata().data());
+  constexpr size_t header_size = sizeof(impl::flat::Header);
+
+  if (!request_id && bin.size() >= header_size) {
+    auto header = static_cast<const impl::flat::Header*>(bin.cdata().data());
     request_id = header->request_id;
   }
 
   // clear the read buffer
-  buf.consume(buf.size());
+  bout.consume(bout.size());
+  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, bout, header_size))
+    bout.prepare(header_size);
 
-  auto mb = buf.prepare(sizeof(impl::flat::Header));
+  auto mb = bout.data();
   auto header = static_cast<impl::flat::Header*>(mb.data());
   header->size        = sizeof(impl::flat::Header) - 4;
   header->msg_id      = id;
   header->msg_type    = impl::MessageType::Answer;
   header->request_id  = request_id;
 
-  buf.commit(sizeof(impl::flat::Header));
+  bout.commit(header_size);
 }
 
 inline void dump_message(

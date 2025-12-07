@@ -1,4 +1,10 @@
 {
+  "C_Cpp.loggingLevel": "None",
+  "C_Cpp.files.exclude": {
+    "**/.vscode": true,
+    "**/.vs": true,
+    "/usr/include/boost/**": true
+  },
   "files.associations": {
     ".args": "gn",
     "coroutine": "cpp",

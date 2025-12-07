@@ -76,9 +76,9 @@ private:
   }
 public:
   virtual void emit_constant(const std::string& name, AstNumber* number);
-  virtual void emit_struct(AstStructDecl* s);  
-  virtual void emit_exception(AstStructDecl* s);  
-  virtual void emit_using(AstAliasDecl* u);  
+  virtual void emit_struct(AstStructDecl* s);
+  virtual void emit_exception(AstStructDecl* s);
+  virtual void emit_using(AstAliasDecl* u);
   virtual void emit_enum(AstEnumDecl* e);
   virtual void emit_namespace_begin();
   virtual void emit_namespace_end();
