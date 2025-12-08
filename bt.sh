@@ -8,4 +8,4 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-cmake --build .build_release --target "$1" -j$(nproc)
+cmake --build .build_relwith_debinfo --target "$1" -j$(nproc)

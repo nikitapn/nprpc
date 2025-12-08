@@ -12,16 +12,16 @@ extern void reset_context();
 
 namespace nprpc::impl {
 
-std::optional<ObjectGuard> get_object(SessionContext& ctx, flat_buffer& bin, flat_buffer& bout, uint16_t poa_idx, uint64_t object_id) {
+std::optional<ObjectGuard> get_object(SessionContext& ctx, uint16_t poa_idx, uint64_t object_id) {
 	do {
 		auto poa = g_rpc->get_poa(poa_idx);
 		if (!poa) {
-			make_simple_answer(ctx, bin, bout, MessageId::Error_PoaNotExist);
+			make_simple_answer(ctx, MessageId::Error_PoaNotExist);
 			break;
 		}
 		auto obj = poa->get_object(object_id);
 		if (!obj) {
-			make_simple_answer(ctx, bin, bout, MessageId::Error_ObjectNotExist);
+			make_simple_answer(ctx, MessageId::Error_ObjectNotExist);
 			break;
 		}
 		return obj;
@@ -31,12 +31,12 @@ std::optional<ObjectGuard> get_object(SessionContext& ctx, flat_buffer& bin, fla
 }
 
 void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer) {
-	auto validate = [this, &rx_buffer, &tx_buffer](ObjectServant& obj) {
+	auto validate = [this](ObjectServant& obj) {
 		if (obj.validate_session(this->ctx_))
 			return true;
 
 		std::cerr << "[nprpc] Handle Request: " << remote_endpoint() << " is trying to access secured object: " << obj.get_class() << '\n';
-		make_simple_answer(ctx_, rx_buffer, tx_buffer, nprpc::impl::MessageId::Error_BadAccess);
+		make_simple_answer(ctx_, nprpc::impl::MessageId::Error_BadAccess);
 		return false;
 	};
 
@@ -45,12 +45,16 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer) {
 		dump_message(rx_buffer, true);
 	}
 
+	// Set context buffers
+	ctx_.rx_buffer = &rx_buffer;
+	ctx_.tx_buffer = &tx_buffer;
+
 	auto cb = rx_buffer.cdata();
-	
+
 	// Validate message contains at least a header before accessing it
 	if (cb.size() < sizeof(impl::flat::Header)) {
 		std::cerr << "Message too small for header: " << cb.size() << " bytes\n";
-		make_simple_answer(ctx_, rx_buffer, tx_buffer, nprpc::impl::MessageId::Error_BadInput);
+		make_simple_answer(ctx_, nprpc::impl::MessageId::Error_BadInput);
 		return;
 	}
 	
@@ -69,18 +73,18 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer) {
 		}
 
 		bool not_found = true;
-		if (auto obj = get_object(ctx_, rx_buffer, tx_buffer, ch.poa_idx(), ch.object_id()); obj) {
+		if (auto obj = get_object(ctx_, ch.poa_idx(), ch.object_id()); obj) {
 			if (auto real_obj = (*obj).get(); real_obj) {
 				if (!validate(*real_obj)) return;
 				set_context(*this);
 				// save request ID for later use
 				auto request_id = header->request_id;
 				try { 
-					real_obj->dispatch(rx_buffer, tx_buffer, ctx_, false);
+					real_obj->dispatch(ctx_, false);
 				} catch (const std::exception& e) {
 					std::cerr << "[nprpc] Handle Request: Exception during dispatch: " << e.what() << '\n';
 					// TODO: find out why Web client does not handle Error_BadInput properly
-					make_simple_answer(ctx_, rx_buffer, tx_buffer, MessageId::Error_BadInput, request_id);
+					make_simple_answer(ctx_, MessageId::Error_BadInput, request_id);
 				}
 				reset_context();
 				not_found = false;
@@ -102,7 +106,7 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer) {
 		}
 		
 		bool success = false;
-		if (auto obj = get_object(ctx_, rx_buffer, tx_buffer, msg.poa_idx(), msg.object_id()); obj) {
+		if (auto obj = get_object(ctx_, msg.poa_idx(), msg.object_id()); obj) {
 			if (auto real_obj = (*obj).get(); real_obj) {
 				if (!validate(*real_obj)) return;
 				success = true;
@@ -114,12 +118,12 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer) {
 			if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
 				std::cout << "[nprpc] Handle Request: Refference added." << std::endl;
 			}
-			make_simple_answer(ctx_, rx_buffer, tx_buffer, nprpc::impl::MessageId::Success);
+			make_simple_answer(ctx_, nprpc::impl::MessageId::Success);
 		} else {
 			if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
 				std::cout << "[nprpc] Handle Request: Object not found." << std::endl;
 			}
-			make_simple_answer(ctx_, rx_buffer, tx_buffer, nprpc::impl::MessageId::Error_ObjectNotExist);
+			make_simple_answer(ctx_, nprpc::impl::MessageId::Error_ObjectNotExist);
 		}
 
 		break;
@@ -133,15 +137,16 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer) {
 		}
 
 		if (ctx_.ref_list.remove_ref(msg.poa_idx(), msg.object_id())) {
-			make_simple_answer(ctx_, rx_buffer, tx_buffer, nprpc::impl::MessageId::Success);
+			make_simple_answer(ctx_, nprpc::impl::MessageId::Success);
 		} else {
-			make_simple_answer(ctx_, rx_buffer, tx_buffer, nprpc::impl::MessageId::Error_ObjectNotExist);
+			make_simple_answer(ctx_, nprpc::impl::MessageId::Error_ObjectNotExist);
 		}
 
 		break;
 	}
 	default:
-		make_simple_answer(ctx_, rx_buffer, tx_buffer, nprpc::impl::MessageId::Error_UnknownMessageId);
+		std::cerr << "[nprpc] Handle Request: Unknown message ID: " << static_cast<uint32_t>(header->msg_id) << '\n';
+		make_simple_answer(ctx_, nprpc::impl::MessageId::Error_UnknownMessageId);
 		break;
 	}
 

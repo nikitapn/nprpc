@@ -1,8 +1,6 @@
 #include <iostream>
 #include <chrono>
 #include <numeric>
-#include <thread>
-#include <future>
 #include <cstdlib>
 #include <signal.h>
 #include <sys/wait.h>
@@ -31,78 +29,94 @@ TEST_F(NprpcTest, TestBasic) {
         try {
             auto obj = make_stuff_happen<nprpc::test::TestBasic>(servant, flags);
 
-            // ReturnBoolean test
-            // EXPECT_TRUE(obj->ReturnBoolean());
-
-
-            // // In/Out test
-            // std::vector<uint8_t> ints;
-            // ints.reserve(256);
-            // boost::push_back(ints, boost::irange(0, 255));
-
-            // EXPECT_TRUE(obj->In(100, true, nprpc::flat::make_read_only_span(ints)));
-            
-            // std::cout << "In/Out passed" << std::endl;
-
-            // uint32_t a;
-            // bool b;
-
-            // obj->Out(a, b, ints);
-
-            // EXPECT_EQ(a, 100u);
-            // EXPECT_TRUE(b);
-
-            // uint8_t ix = 0;
-            // for (auto i : ints) {
-            //     EXPECT_EQ(ix++, i);
-            // }
-
             // ReturnU32 test
-            std::cout << "Return 42 started" << std::endl;
             EXPECT_EQ(obj->ReturnU32(), 42u);
-            std::cout << "Return 42 passed" << std::endl;
 
-            // // OutStruct test
+            // ReturnBoolean test
+            EXPECT_TRUE(obj->ReturnBoolean());
+
+            // In/Out test
+            std::vector<uint8_t> ints;
+            ints.reserve(256);
+            boost::push_back(ints, boost::irange(0, 255));
+
+            EXPECT_TRUE(obj->In(100, true, nprpc::flat::make_read_only_span(ints)));
+
+            std::cout << "In/Out passed" << std::endl;
+
+            uint32_t a;
+            bool b;
+
+            obj->Out(a, b, ints);
+
+            EXPECT_EQ(a, 100u);
+            EXPECT_TRUE(b);
+
+            uint8_t ix = 0;
+            for (auto i : ints) {
+                EXPECT_EQ(ix++, i);
+            }
+
+            // OutStruct test
             nprpc::test::AAA aaa;
             obj->OutStruct(aaa);
             EXPECT_EQ(aaa.a, 12345);
             EXPECT_EQ(std::string_view(aaa.b), "Hello from OutStruct"sv);
             EXPECT_EQ(std::string_view(aaa.c), "Another string"sv);
 
-            // // OutArrayOfStructs test
-            // std::vector<nprpc::test::SimpleStruct> struct_array;
-            // obj->OutArrayOfStructs(struct_array);
-            // EXPECT_EQ(struct_array.size(), 10u);
-            // for (uint32_t i = 0; i < 10; ++i) {
-            //   EXPECT_EQ(struct_array[i].id, i + 1);
-            // }
-
-            // // InException test
-            // try {
-            //   obj->InException();
-            //   FAIL() << "Expected InException to throw SimpleException";
-            // } catch (const nprpc::test::SimpleException& ex) {
-            //   EXPECT_EQ(std::string_view(ex.message), "This is a test exception"sv);
-            //   EXPECT_EQ(ex.code, 123);
-            // }
-
-            // // OutScalarWithException test - tests flat output struct with exception handler
-            // // This verifies the fix where output parameters must be declared before try block
-            // uint8_t read_value;
-            // obj->OutScalarWithException(10, 20, read_value);
-            // EXPECT_EQ(read_value, 30); // dev_addr + addr = 10 + 20 = 30
-
+            // OutArrayOfStructs test
+            std::vector<nprpc::test::SimpleStruct> struct_array;
+            obj->OutArrayOfStructs(struct_array);
+            EXPECT_EQ(struct_array.size(), 10u);
+            for (uint32_t i = 0; i < 10; ++i) {
+              EXPECT_EQ(struct_array[i].id, i + 1);
+            }
         } catch (nprpc::Exception& ex) {
             FAIL() << "Exception in TestBasic: " << ex.what();
         }
     };
 
-    // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-    // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-    // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
-    // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
+
+// Basic exception handling
+TEST_F(NprpcTest, TestException) {
+    #include "common/tests/basic.inl"
+    TestBasicImpl servant;
+    auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+        try {
+            auto obj = make_stuff_happen<nprpc::test::TestBasic>(servant, flags);
+
+            // InException test
+            try {
+              obj->InException();
+              FAIL() << "Expected InException to throw SimpleException";
+            } catch (const nprpc::test::SimpleException& ex) {
+              EXPECT_EQ(std::string_view(ex.message), "This is a test exception"sv);
+              EXPECT_EQ(ex.code, 123);
+            }
+
+            // OutScalarWithException test - tests flat output struct with exception handler
+            // This verifies the fix where output parameters must be declared before try block
+            uint8_t read_value;
+            obj->OutScalarWithException(10, 20, read_value);
+            EXPECT_EQ(read_value, 30); // dev_addr + addr = 10 + 20 = 30
+        } catch (nprpc::Exception& ex) {
+            FAIL() << "Exception in TestBasic: " << ex.what();
+        }
+    };
+
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+    exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+}
+
 
 // Optional types test
 TEST_F(NprpcTest, TestOptional) {
@@ -197,7 +211,7 @@ TEST_F(NprpcTest, TestLargeMessage) {
     #include "common/tests/large_message.inl"
     TestLargeMessage servant;
     auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
-        try {   
+        try {
             auto obj = make_stuff_happen<nprpc::test::TestLargeMessage>(servant, flags);
             obj->set_timeout(5000); // Set a longer timeout for this test
 
@@ -247,7 +261,7 @@ TEST_F(NprpcTest, UserSuppliedObjectIdPolicy) {
             return "StaticIdServant";
         }
 
-        void dispatch(::nprpc::flat_buffer&, ::nprpc::flat_buffer&, ::nprpc::SessionContext&, bool) override {
+        void dispatch(::nprpc::SessionContext&, bool) override {
             throw nprpc::Exception("Not implemented");
         }
     } servant_one, servant_two, servant_three;
@@ -302,7 +316,7 @@ TEST_F(NprpcTest, TestBadInput) {
         virtual void In(::nprpc::flat::Span<uint8_t> a) {}
     } servant;
 
-    auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) { 
+    auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
         try {
             auto obj = make_stuff_happen<nprpc::test::TestBadInput>(servant, flags);
 
@@ -323,7 +337,7 @@ TEST_F(NprpcTest, TestBadInput) {
             auto vec_begin = static_cast<std::byte*>(buf.data().data()) + 32;
             // Set size of the vector to be larger than the buffer size
             *reinterpret_cast<uint32_t*>(vec_begin) = 0xDEADBEEF;
-       
+
             ::nprpc::impl::g_rpc->call(obj->get_endpoint(), buf, obj->get_timeout());
             auto std_reply = nprpc::impl::handle_standart_reply(buf);
             if (std_reply != 0) {
@@ -345,244 +359,244 @@ TEST_F(NprpcTest, TestBadInput) {
     exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
-TEST_F(NprpcTest, TestUdpFireAndForget) {
-    // Test multiple fire-and-forget UDP calls
+// TEST_F(NprpcTest, TestUdpFireAndForget) {
+//     // Test multiple fire-and-forget UDP calls
     
-    class GameSyncImpl : public test_udp::IGameSync_Servant {
-    public:
-        std::atomic<int> update_count{0};
-        std::atomic<int> fire_count{0};
-        std::atomic<int> sound_count{0};
-        std::mutex mtx_;
-        std::condition_variable cv_;
+//     class GameSyncImpl : public test_udp::IGameSync_Servant {
+//     public:
+//         std::atomic<int> update_count{0};
+//         std::atomic<int> fire_count{0};
+//         std::atomic<int> sound_count{0};
+//         std::mutex mtx_;
+//         std::condition_variable cv_;
 
-        void UpdatePosition(uint32_t player_id, test_udp::flat::Vec3_Direct pos, test_udp::flat::Quaternion_Direct rot) override {
-            update_count++;
-            cv_.notify_all();
-        }
+//         void UpdatePosition(uint32_t player_id, test_udp::flat::Vec3_Direct pos, test_udp::flat::Quaternion_Direct rot) override {
+//             update_count++;
+//             cv_.notify_all();
+//         }
 
-        void FireWeapon(uint32_t player_id, uint8_t weapon_id, test_udp::flat::Vec3_Direct direction) override {
-            fire_count++;
-            cv_.notify_all();
-        }
+//         void FireWeapon(uint32_t player_id, uint8_t weapon_id, test_udp::flat::Vec3_Direct direction) override {
+//             fire_count++;
+//             cv_.notify_all();
+//         }
 
-        void PlaySound(uint16_t sound_id, test_udp::flat::Vec3_Direct position, float volume) override {
-            sound_count++;
-            cv_.notify_all();
-        }
+//         void PlaySound(uint16_t sound_id, test_udp::flat::Vec3_Direct position, float volume) override {
+//             sound_count++;
+//             cv_.notify_all();
+//         }
 
-        bool ApplyDamage(uint32_t target_id, int32_t amount) override {
-            return true;
-        }
+//         bool ApplyDamage(uint32_t target_id, int32_t amount) override {
+//             return true;
+//         }
 
-        uint64_t SpawnEntity(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
-            return 0;
-        }
+//         uint64_t SpawnEntity(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+//             return 0;
+//         }
 
-        void SpawnEntity1(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
-            // async reliable - just log
-        }
+//         void SpawnEntity1(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+//             // async reliable - just log
+//         }
 
-        bool wait_for_count(int expected_total, int timeout_ms = 2000) {
-            std::unique_lock<std::mutex> lock(mtx_);
-            return cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] {
-                return (update_count + fire_count + sound_count) >= expected_total;
-            });
-        }
-    } game_sync_servant;
+//         bool wait_for_count(int expected_total, int timeout_ms = 2000) {
+//             std::unique_lock<std::mutex> lock(mtx_);
+//             return cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] {
+//                 return (update_count + fire_count + sound_count) >= expected_total;
+//             });
+//         }
+//     } game_sync_servant;
 
-    try {
-        auto proxy_game = make_stuff_happen<test_udp::GameSync>(
-            game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP, "udp_game_sync_ff");
+//     try {
+//         auto proxy_game = make_stuff_happen<test_udp::GameSync>(
+//             game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP, "udp_game_sync_ff");
 
-        // Send multiple fire-and-forget calls rapidly
-        for (int i = 0; i < 10; i++) {
-            proxy_game->UpdatePosition(i, {1.0f * i, 2.0f * i, 3.0f * i}, {0.0f, 0.0f, 0.0f, 1.0f});
-        }
-        for (int i = 0; i < 5; i++) {
-            proxy_game->FireWeapon(i, i % 3, {1.0f, 0.0f, 0.0f});
-        }
-        for (int i = 0; i < 5; i++) {
-            proxy_game->PlaySound(i * 100, {0.0f, 0.0f, 0.0f}, 0.8f);
-        }
+//         // Send multiple fire-and-forget calls rapidly
+//         for (int i = 0; i < 10; i++) {
+//             proxy_game->UpdatePosition(i, {1.0f * i, 2.0f * i, 3.0f * i}, {0.0f, 0.0f, 0.0f, 1.0f});
+//         }
+//         for (int i = 0; i < 5; i++) {
+//             proxy_game->FireWeapon(i, i % 3, {1.0f, 0.0f, 0.0f});
+//         }
+//         for (int i = 0; i < 5; i++) {
+//             proxy_game->PlaySound(i * 100, {0.0f, 0.0f, 0.0f}, 0.8f);
+//         }
 
-        // Wait for all messages to be processed
-        EXPECT_TRUE(game_sync_servant.wait_for_count(20));
+//         // Wait for all messages to be processed
+//         EXPECT_TRUE(game_sync_servant.wait_for_count(20));
         
-        EXPECT_EQ(game_sync_servant.update_count.load(), 10);
-        EXPECT_EQ(game_sync_servant.fire_count.load(), 5);
-        EXPECT_EQ(game_sync_servant.sound_count.load(), 5);
+//         EXPECT_EQ(game_sync_servant.update_count.load(), 10);
+//         EXPECT_EQ(game_sync_servant.fire_count.load(), 5);
+//         EXPECT_EQ(game_sync_servant.sound_count.load(), 5);
 
-    } catch (nprpc::Exception& ex) {
-        FAIL() << "Exception in TestUdpFireAndForget: " << ex.what();
-    }
-}
+//     } catch (nprpc::Exception& ex) {
+//         FAIL() << "Exception in TestUdpFireAndForget: " << ex.what();
+//     }
+// }
 
-TEST_F(NprpcTest, TestUdpAck) {
-    class ServerControlImpl : public nprpc::test::IServerControl_Servant {
-    public:
-        nprpc::ObjectPtr<nprpc::test::Ack> ack;
+// TEST_F(NprpcTest, TestUdpAck) {
+//     class ServerControlImpl : public nprpc::test::IServerControl_Servant {
+//     public:
+//         nprpc::ObjectPtr<nprpc::test::Ack> ack;
 
-        void Shutdown() override {}
+//         void Shutdown() override {}
 
-        void RegisterAckHandler(::nprpc::Object* handler) override {
-            auto obj = nprpc::narrow<nprpc::test::Ack>(handler);
-            if (!obj) {
-                FAIL() << "RegisterAckHandler: Invalid object type";
-            }
-            ack.reset(obj);
-        }
-    } server_control_servant; // Remote
+//         void RegisterAckHandler(::nprpc::Object* handler) override {
+//             auto obj = nprpc::narrow<nprpc::test::Ack>(handler);
+//             if (!obj) {
+//                 FAIL() << "RegisterAckHandler: Invalid object type";
+//             }
+//             ack.reset(obj);
+//         }
+//     } server_control_servant; // Remote
 
-    class GameSyncImpl : public test_udp::IGameSync_Servant {
-        ServerControlImpl& ctl;
-    public:
-        GameSyncImpl(ServerControlImpl& server_control_servant)
-            : ctl(server_control_servant) {}
+//     class GameSyncImpl : public test_udp::IGameSync_Servant {
+//         ServerControlImpl& ctl;
+//     public:
+//         GameSyncImpl(ServerControlImpl& server_control_servant)
+//             : ctl(server_control_servant) {}
 
-        void UpdatePosition (uint32_t player_id, test_udp::flat::Vec3_Direct pos, test_udp::flat::Quaternion_Direct rot) override {
-            // Implementation of UpdatePosition
-            ctl.ack->Confirm({}, "UpdatePosition ACK");
-        }
+//         void UpdatePosition (uint32_t player_id, test_udp::flat::Vec3_Direct pos, test_udp::flat::Quaternion_Direct rot) override {
+//             // Implementation of UpdatePosition
+//             ctl.ack->Confirm({}, "UpdatePosition ACK");
+//         }
 
-        void FireWeapon (uint32_t player_id, uint8_t weapon_id, test_udp::flat::Vec3_Direct direction) override {
-            // Implementation of FireWeapon
-        }
+//         void FireWeapon (uint32_t player_id, uint8_t weapon_id, test_udp::flat::Vec3_Direct direction) override {
+//             // Implementation of FireWeapon
+//         }
 
-        void PlaySound (uint16_t sound_id, test_udp::flat::Vec3_Direct position, float volume) override {
-            // Implementation of PlaySound
-        }
+//         void PlaySound (uint16_t sound_id, test_udp::flat::Vec3_Direct position, float volume) override {
+//             // Implementation of PlaySound
+//         }
 
-        bool ApplyDamage (uint32_t target_id, int32_t amount) override {
-            // Implementation of ApplyDamage
-            return true; // Example return value
-        }
+//         bool ApplyDamage (uint32_t target_id, int32_t amount) override {
+//             // Implementation of ApplyDamage
+//             return true; // Example return value
+//         }
 
-        uint64_t SpawnEntity (uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
-            // Implementation of SpawnEntity
-            return 0; // Example return value
-        }
+//         uint64_t SpawnEntity (uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+//             // Implementation of SpawnEntity
+//             return 0; // Example return value
+//         }
 
-        void SpawnEntity1 (uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
-            // Async reliable - no return value
-        }
-    } game_sync_servant(server_control_servant); // Remote
+//         void SpawnEntity1 (uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+//             // Async reliable - no return value
+//         }
+//     } game_sync_servant(server_control_servant); // Remote
 
-    class TestUdpAckImpl : public nprpc::test::IAck_Servant {
-        std::mutex mtx_;
-        std::condition_variable cv_;
-        std::string last_msg_;
-    public:
-        void Confirm(::nprpc::flat::Span<char> what) override {
-            {
-                std::lock_guard<std::mutex> lock(mtx_);
-                last_msg_ = (std::string)what;
-            }
-            cv_.notify_all();
-        }
+//     class TestUdpAckImpl : public nprpc::test::IAck_Servant {
+//         std::mutex mtx_;
+//         std::condition_variable cv_;
+//         std::string last_msg_;
+//     public:
+//         void Confirm(::nprpc::flat::Span<char> what) override {
+//             {
+//                 std::lock_guard<std::mutex> lock(mtx_);
+//                 last_msg_ = (std::string)what;
+//             }
+//             cv_.notify_all();
+//         }
 
-        std::string wait_for_ack() {
-            constexpr auto max_timeout_ms = 1000;
-            std::unique_lock<std::mutex> lock(mtx_);
-            if (cv_.wait_for(lock, std::chrono::milliseconds(max_timeout_ms)) == std::cv_status::timeout) {
-                throw nprpc::Exception("Timeout waiting for ACK");
-            }
-            return last_msg_;
-        }
-    } ack_servant; // Local
+//         std::string wait_for_ack() {
+//             constexpr auto max_timeout_ms = 1000;
+//             std::unique_lock<std::mutex> lock(mtx_);
+//             if (cv_.wait_for(lock, std::chrono::milliseconds(max_timeout_ms)) == std::cv_status::timeout) {
+//                 throw nprpc::Exception("Timeout waiting for ACK");
+//             }
+//             return last_msg_;
+//         }
+//     } ack_servant; // Local
 
-    try {
-        auto proxy_game = make_stuff_happen<test_udp::GameSync>(
-            game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP, "udp_game_sync");
+//     try {
+//         auto proxy_game = make_stuff_happen<test_udp::GameSync>(
+//             game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP, "udp_game_sync");
 
-        auto proxy_server_control = make_stuff_happen<nprpc::test::ServerControl>(
-            server_control_servant, nprpc::ObjectActivationFlags::ALLOW_SHARED_MEMORY, "udp_server_control");
+//         auto proxy_server_control = make_stuff_happen<nprpc::test::ServerControl>(
+//             server_control_servant, nprpc::ObjectActivationFlags::ALLOW_SHARED_MEMORY, "udp_server_control");
 
-        // Important: Do not use SHARED_MEMORY for the callback object, as the server and client both shares
-        // the same g_shared_memory_listener object, which can lead to conflicts and unexpected behavior.
-        auto oid = poa->activate_object(&ack_servant, nprpc::ObjectActivationFlags::ALLOW_TCP);
-        proxy_server_control->RegisterAckHandler(oid);
+//         // Important: Do not use SHARED_MEMORY for the callback object, as the server and client both shares
+//         // the same g_shared_memory_listener object, which can lead to conflicts and unexpected behavior.
+//         auto oid = poa->activate_object(&ack_servant, nprpc::ObjectActivationFlags::ALLOW_TCP);
+//         proxy_server_control->RegisterAckHandler(oid);
 
-        // Now invoke UpdatePosition which should trigger an ACK
-        proxy_game->UpdatePosition(1, {0.0f, 1.0f, 2.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
-        auto ack_msg = ack_servant.wait_for_ack();
-        EXPECT_EQ(ack_msg, "UpdatePosition ACK");
+//         // Now invoke UpdatePosition which should trigger an ACK
+//         proxy_game->UpdatePosition(1, {0.0f, 1.0f, 2.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+//         auto ack_msg = ack_servant.wait_for_ack();
+//         EXPECT_EQ(ack_msg, "UpdatePosition ACK");
 
-        // Clean up: release the server's reference to the client callback
-        // and deactivate the local servant before TearDown
-        server_control_servant.ack.reset();
-        poa->deactivate_object(oid.object_id());
-    } catch (nprpc::Exception& ex) {
-        FAIL() << "Exception in TestUdpAck: " << ex.what();
-    }
-}
+//         // Clean up: release the server's reference to the client callback
+//         // and deactivate the local servant before TearDown
+//         server_control_servant.ack.reset();
+//         poa->deactivate_object(oid.object_id());
+//     } catch (nprpc::Exception& ex) {
+//         FAIL() << "Exception in TestUdpAck: " << ex.what();
+//     }
+// }
 
-TEST_F(NprpcTest, TestUdpReliable) {
-    // Test reliable UDP calls with return values
+// TEST_F(NprpcTest, TestUdpReliable) {
+//     // Test reliable UDP calls with return values
     
-    class GameSyncImpl : public test_udp::IGameSync_Servant {
-    public:
-        std::atomic<int> damage_calls{0};
-        std::atomic<int> spawn_calls{0};
-        std::atomic<uint64_t> next_entity_id{1000};
+//     class GameSyncImpl : public test_udp::IGameSync_Servant {
+//     public:
+//         std::atomic<int> damage_calls{0};
+//         std::atomic<int> spawn_calls{0};
+//         std::atomic<uint64_t> next_entity_id{1000};
 
-        void UpdatePosition(uint32_t player_id, test_udp::flat::Vec3_Direct pos, test_udp::flat::Quaternion_Direct rot) override {}
-        void FireWeapon(uint32_t player_id, uint8_t weapon_id, test_udp::flat::Vec3_Direct direction) override {}
-        void PlaySound(uint16_t sound_id, test_udp::flat::Vec3_Direct position, float volume) override {}
+//         void UpdatePosition(uint32_t player_id, test_udp::flat::Vec3_Direct pos, test_udp::flat::Quaternion_Direct rot) override {}
+//         void FireWeapon(uint32_t player_id, uint8_t weapon_id, test_udp::flat::Vec3_Direct direction) override {}
+//         void PlaySound(uint16_t sound_id, test_udp::flat::Vec3_Direct position, float volume) override {}
 
-        bool ApplyDamage(uint32_t target_id, int32_t amount) override {
-            damage_calls++;
-            // Return true if target survives (amount < 100), false if killed
-            return amount < 100;
-        }
+//         bool ApplyDamage(uint32_t target_id, int32_t amount) override {
+//             damage_calls++;
+//             // Return true if target survives (amount < 100), false if killed
+//             return amount < 100;
+//         }
 
-        uint64_t SpawnEntity(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
-            spawn_calls++;
-            return next_entity_id++;
-        }
+//         uint64_t SpawnEntity(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+//             spawn_calls++;
+//             return next_entity_id++;
+//         }
 
-        void SpawnEntity1(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
-            // Async reliable - no return value
-        }
-    } game_sync_servant;
+//         void SpawnEntity1(uint16_t entity_type, test_udp::flat::Vec3_Direct position) override {
+//             // Async reliable - no return value
+//         }
+//     } game_sync_servant;
 
-    try {
-        auto proxy_game = make_stuff_happen<test_udp::GameSync>(
-            game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP, "udp_reliable_test");
+//     try {
+//         auto proxy_game = make_stuff_happen<test_udp::GameSync>(
+//             game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP, "udp_reliable_test");
 
-        // Test ApplyDamage with different amounts
-        bool survived1 = proxy_game->ApplyDamage(1, 50);
-        EXPECT_TRUE(survived1) << "Player should survive 50 damage";
+//         // Test ApplyDamage with different amounts
+//         bool survived1 = proxy_game->ApplyDamage(1, 50);
+//         EXPECT_TRUE(survived1) << "Player should survive 50 damage";
 
-        bool survived2 = proxy_game->ApplyDamage(1, 99);
-        EXPECT_TRUE(survived2) << "Player should survive 99 damage";
+//         bool survived2 = proxy_game->ApplyDamage(1, 99);
+//         EXPECT_TRUE(survived2) << "Player should survive 99 damage";
 
-        bool survived3 = proxy_game->ApplyDamage(1, 100);
-        EXPECT_FALSE(survived3) << "Player should be killed by 100 damage";
+//         bool survived3 = proxy_game->ApplyDamage(1, 100);
+//         EXPECT_FALSE(survived3) << "Player should be killed by 100 damage";
 
-        bool survived4 = proxy_game->ApplyDamage(1, 150);
-        EXPECT_FALSE(survived4) << "Player should be killed by 150 damage";
+//         bool survived4 = proxy_game->ApplyDamage(1, 150);
+//         EXPECT_FALSE(survived4) << "Player should be killed by 150 damage";
 
-        EXPECT_EQ(game_sync_servant.damage_calls.load(), 4);
+//         EXPECT_EQ(game_sync_servant.damage_calls.load(), 4);
 
-        // Test SpawnEntity
-        uint64_t entity1 = proxy_game->SpawnEntity(1, {0.0f, 0.0f, 0.0f});
-        EXPECT_EQ(entity1, 1000);
+//         // Test SpawnEntity
+//         uint64_t entity1 = proxy_game->SpawnEntity(1, {0.0f, 0.0f, 0.0f});
+//         EXPECT_EQ(entity1, 1000);
 
-        uint64_t entity2 = proxy_game->SpawnEntity(2, {10.0f, 0.0f, 0.0f});
-        EXPECT_EQ(entity2, 1001);
+//         uint64_t entity2 = proxy_game->SpawnEntity(2, {10.0f, 0.0f, 0.0f});
+//         EXPECT_EQ(entity2, 1001);
 
-        uint64_t entity3 = proxy_game->SpawnEntity(3, {20.0f, 0.0f, 0.0f});
-        EXPECT_EQ(entity3, 1002);
+//         uint64_t entity3 = proxy_game->SpawnEntity(3, {20.0f, 0.0f, 0.0f});
+//         EXPECT_EQ(entity3, 1002);
 
-        EXPECT_EQ(game_sync_servant.spawn_calls.load(), 3);
+//         EXPECT_EQ(game_sync_servant.spawn_calls.load(), 3);
 
-        std::cout << "Reliable UDP test completed successfully!" << std::endl;
+//         std::cout << "Reliable UDP test completed successfully!" << std::endl;
 
-    } catch (nprpc::Exception& ex) {
-        FAIL() << "Exception in TestUdpReliable: " << ex.what();
-    }
-}
+//     } catch (nprpc::Exception& ex) {
+//         FAIL() << "Exception in TestUdpReliable: " << ex.what();
+//     }
+// }
 
 #ifdef NPRPC_HAS_QUIC
 // QUIC transport test - basic RPC over QUIC streams

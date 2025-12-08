@@ -10,10 +10,12 @@
 ## Shared Memory Transport
 * [ ] Optimize shared memory server session to avoid unnecessary copies when receiving messages.
 * [ ] Build on Windows is broken due to missing `sys/mman.h` and `shm_open()`. Need to implement Windows shared memory APIs using `CreateFileMapping` and `MapViewOfFile`.
+* [ ] **Add cross-process atomic tests**: Current tests run client/server in same process. Need separate executables to verify atomics work correctly across true process boundaries (different address spaces). This is critical because the recent race bug was single-process (read thread vs io_context thread), not cross-process.
 
 ## TCP Transport
 * [ ] Encryption support (TLS) for TCP transport.
 * [ ] Deflate or zlib compression for large messages.
+* [ ] Async socket connect with timeout.
 
 ## UDP Transport (Game Networking)
 

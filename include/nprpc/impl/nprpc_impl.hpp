@@ -420,8 +420,9 @@ class PoaImpl
                                SessionContext* ctx);
 };
 
-inline void make_simple_answer(
-  SessionContext& ctx, flat_buffer& bin, flat_buffer& bout, MessageId id, uint32_t request_id = 0)
+inline void make_simple_answer(SessionContext& ctx,
+                               MessageId id,
+                               uint32_t request_id = 0)
 {
   assert(
     id == MessageId::Success                  ||
@@ -439,12 +440,17 @@ inline void make_simple_answer(
 
   constexpr size_t header_size = sizeof(impl::flat::Header);
 
+  assert(ctx.rx_buffer != nullptr);
+  assert(ctx.tx_buffer != nullptr);
+  auto& bin = *ctx.rx_buffer;
+  auto& bout = *ctx.tx_buffer;
+
   if (!request_id && bin.size() >= header_size) {
     auto header = static_cast<const impl::flat::Header*>(bin.cdata().data());
     request_id = header->request_id;
   }
 
-  // clear the read buffer
+  // clear tx buffer
   bout.consume(bout.size());
   if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, bout, header_size))
     bout.prepare(header_size);

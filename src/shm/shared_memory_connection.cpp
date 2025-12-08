@@ -78,13 +78,13 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
         }
 
         void on_executed() noexcept override {
-            std::cout << "SharedMemoryConnection: send_receive completed successfully" << std::endl;
+            // std::cout << "SharedMemoryConnection: send_receive completed successfully" << std::endl;
             {
                 std::lock_guard<std::mutex> lock(mtx);
                 result = boost::system::error_code{};
                 done = true;
             }
-            std::cout << "Notifying waiting thread..." << std::endl;
+            // std::cout << "Notifying waiting thread..." << std::endl;
             cv.notify_one();
         }
 
@@ -114,7 +114,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer, uint32_t timeout_
     add_work(w);
     auto ec = w->wait();
 
-    std::cout << "SharedMemoryConnection: send_receive finished with ec=" << ec.message() << std::endl;
+    // std::cout << "SharedMemoryConnection: send_receive finished with ec=" << ec.message() << std::endl;
 
     if (!ec) {
         if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
@@ -236,16 +236,21 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint, boost::
             return;
         }
 
-        // std::cout << "SharedMemoryConnection: Received data via zero-copy read, size: "
-        //           << read_view.size << std::endl;
-
+        // Zero-copy: create a view directly into the ring buffer
+        // The flat_buffer will track the ReadView and commit_read when done
         auto& current_buffer = current_rx_buffer();
+        // std::cout << "SharedMemoryConnection: Received zero-copy message of size "
+        //           << read_view.size << std::endl;
         current_buffer.consume(current_buffer.size());
-        auto mb = current_buffer.prepare(read_view.size);
-        std::memcpy(mb.data(), read_view.data, read_view.size);
-        current_buffer.commit(read_view.size);
+        current_buffer.set_view_from_read(
+            read_view.data, 
+            read_view.size,
+            channel_->get_recv_ring(),  // Pass ring buffer pointer for commit
+            read_view.read_idx
+        );
 
         // Mark current operation as complete
+        // The proxy will unmarshal from current_buffer, then call commit_read_if_needed()
         (*wq_.front()).on_executed();
         pop_and_execute_next_task();
     };
@@ -286,8 +291,8 @@ bool SharedMemoryConnection::prepare_write_buffer(flat_buffer& buffer, size_t ma
     if (!channel_)
         return false;
 
-    std::cout << "prepare_write_buffer called for channel ID: "
-              << channel_->channel_id() << std::endl;
+    // std::cout << "prepare_write_buffer called for channel ID: "
+    //           << channel_->channel_id() << std::endl;
 
     auto reservation = channel_->reserve_write(max_size);
     if (!reservation) {

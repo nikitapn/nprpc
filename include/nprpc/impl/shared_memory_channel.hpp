@@ -147,6 +147,13 @@ public:
     const std::string& channel_id() const {
         return channel_id_;
     }
+    
+    /**
+     * @brief Get the receive ring buffer (for flat_buffer commit_read tracking)
+     */
+    LockFreeRingBuffer* get_recv_ring() const {
+        return recv_ring_.get();
+    }
 
 private:
     void read_loop();

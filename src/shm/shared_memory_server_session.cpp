@@ -60,27 +60,18 @@ public:
     void on_message_received(const LockFreeRingBuffer::ReadView& read_view)
     {
         try {
-            // Do const_cast for now. TODO: think about a better way
+            // Zero-copy read: create a view directly into the ring buffer
             flat_buffer rx_buffer(const_cast<std::uint8_t*>(read_view.data), read_view.size, read_view.size);
             
-            // Pre-allocate response buffer in shared memory for zero-copy
-            // Use a reasonable initial size - most responses are small
-            // If the response grows beyond this, flat_buffer will automatically
-            // request a larger buffer or fall back to owned mode
-            // constexpr size_t initial_response_size = 4096;
-            // auto write_reservation = channel_->reserve_write(initial_response_size);
-            
             flat_buffer tx_buffer;
-            // if (write_reservation) {
-            //     // Set up tx_buffer as a view into the shared memory ring buffer
-            //     // Pass nullptr for endpoint since server doesn't need to grow via RPC
-            //     tx_buffer.set_view(write_reservation.data, 0, write_reservation.max_size,
-            //                        nullptr, write_reservation.write_idx, true);
-            // }
-            // If reservation failed, tx_buffer stays as owned buffer - fallback to copy
 
             // Dispatch the RPC request (calls servant methods)
+            // This synchronously deserializes rx_buffer and calls the servant
             handle_request(rx_buffer, tx_buffer);
+
+            // Now that handle_request is done reading rx_buffer,
+            // we can commit the read and free the ring buffer space
+            channel_->commit_read(read_view);
 
             // Send response back through the channel
             if (tx_buffer.has_write_reservation() && tx_buffer.is_view_mode()) {
@@ -90,8 +81,22 @@ public:
                 reservation.max_size = tx_buffer.max_size();
                 reservation.write_idx = tx_buffer.reservation_write_idx();
                 reservation.valid = true;
+                
+                // std::cout << "[nprpc][D] SERVER committing zero-copy response: size=" << tx_buffer.size()
+                //           << " write_idx=" << reservation.write_idx << " data=" << (void*)reservation.data << std::endl;
+                
+                // Dump first 32 bytes for debugging
+                // std::cout << "[nprpc][D] SERVER response first 32 bytes: ";
+                // for (size_t i = 0; i < std::min(tx_buffer.size(), size_t(32)); ++i) {
+                //     printf("%02x ", (unsigned char)tx_buffer.data_ptr()[i]);
+                // }
+                // std::cout << std::endl;
+                
                 channel_->commit_write(reservation, tx_buffer.size());
             } else {
+                // Should not happen for now...
+                std::cerr << "SharedMemoryServerSession: Unexpected non-zero-copy response path" << std::endl;
+                // std::abort();
                 // Fallback path: buffer was converted to owned mode or didn't have reservation
                 // Need to get a new reservation and copy the data
                 auto new_reservation = channel_->reserve_write(tx_buffer.size());

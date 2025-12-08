@@ -168,10 +168,12 @@ void UdpListener::handle_datagram(
     uint32_t request_id = header->request_id;
 
     SessionContext ctx;  // Empty context for UDP (no session)
+    ctx.rx_buffer = &bin;
+    ctx.tx_buffer = &bout;
 
     // Dispatch to servant
     try {
-        servant->dispatch(bin, bout, ctx, false);
+        servant->dispatch(ctx, false);
 
         // For reliable UDP calls (request_id != 0), send the response back
         if (request_id != 0) {

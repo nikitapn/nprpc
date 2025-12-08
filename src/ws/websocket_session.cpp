@@ -65,7 +65,9 @@ void WebSocketSession<Derived>::on_read(beast::error_code ec, [[maybe_unused]] s
 
   if (ec) {
     close();
-    return fail(ec, "read");
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall)
+      fail(ec, "read");
+    return;
   }
 
   // Additional safety check: verify message size
@@ -153,7 +155,9 @@ void WebSocketSession<Derived>::on_write(beast::error_code ec, std::size_t bytes
 
   if (ec) {
     close();
-    return fail(ec, "write");
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall)
+      fail(ec, "write");
+    return;
   }
 
   // Call completion handler for the sent message

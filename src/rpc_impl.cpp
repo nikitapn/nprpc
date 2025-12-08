@@ -452,12 +452,16 @@ NPRPC_API bool RpcImpl::prepare_zero_copy_buffer(
   // In that case, ctx.shm_channel is set and we should use it directly
   // instead of trying to create a client connection to the "remote" endpoint
   if (ctx.shm_channel) {
-    // std::cout << "[nprpc][D] prepare_zero_copy_buffer called on server-side for endpoint: "
-    //           << ctx.remote_endpoint.to_string() << " with max_size: " << max_size << std::endl;
+    // std::cout << "[nprpc][D] SERVER prepare_zero_copy_buffer for max_size: " << max_size << std::endl;
     // Server-side: use the existing channel for zero-copy response
     auto reservation = ctx.shm_channel->reserve_write(max_size);
-    if (!reservation)
+    if (!reservation) {
+      // std::cout << "[nprpc][D] SERVER reserve_write FAILED" << std::endl;
       return false;
+    }
+
+    // std::cout << "[nprpc][D] SERVER got reservation: data=" << (void*)reservation.data 
+    //           << " write_idx=" << reservation.write_idx << " max_size=" << reservation.max_size << std::endl;
 
     buffer.set_view(reservation.data, 0, reservation.max_size,
                     &ctx.remote_endpoint, reservation.write_idx, true);

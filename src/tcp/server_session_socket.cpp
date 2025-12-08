@@ -59,7 +59,11 @@ public:
 	}
 
   void on_write(boost::system::error_code ec, [[maybe_unused]] std::size_t bytes_transferred) {
-    if (ec) return fail(ec, "write");
+    if (ec) {
+      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall)
+        fail(ec, "write");
+      return;
+    }
 
     // std::cout << "server_session_socket: on_write: bytes_transferred = "
     //           << bytes_transferred << std::endl;
@@ -76,7 +80,8 @@ public:
 
   void on_read_body(const boost::system::error_code& ec, size_t len) {
     if (ec) {
-      fail(ec, "server_session_socket: on_read_body");
+      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall)
+        fail(ec, "server_session_socket: on_read_body");
       return;
     }
 
@@ -107,7 +112,8 @@ public:
 
   void on_read_size(const boost::system::error_code& ec, size_t len) {
     if (ec) {
-      fail(ec, "server_session_socket: on_read_size");
+      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall)
+        fail(ec, "server_session_socket: on_read_size");
       return;
     }
 
@@ -158,9 +164,8 @@ class Acceptor : public std::enable_shared_from_this<Acceptor> {
 public:
   void on_accept(const boost::system::error_code& ec, tcp::socket socket) {
     if (ec) {
-      if (ec != boost::asio::error::operation_aborted) {
+      if (ec != boost::asio::error::operation_aborted)
         fail(ec, "accept");
-      }
       return;
     }
     if (!running_) return;

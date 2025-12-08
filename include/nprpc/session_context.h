@@ -34,6 +34,7 @@ struct SessionContext {
 	// For server-side shared memory sessions, points to the channel for zero-copy responses
 	// nullptr for all other session types (TCP, WebSocket, client-side, etc.)
 	impl::SharedMemoryChannel* shm_channel = nullptr;
+	flat_buffer *rx_buffer = nullptr, *tx_buffer = nullptr;
 };
 
 NPRPC_API SessionContext& get_context();

@@ -111,6 +111,7 @@ LockFreeRingBuffer::WriteReservation SharedMemoryChannel::reserve_write(size_t m
     if (!send_ring_) {
         return LockFreeRingBuffer::WriteReservation{nullptr, 0, 0, false};
     }
+    // std::cout << "[nprpc][D] reserve_write on ring: " << send_ring_name_ << std::endl;
     return send_ring_->try_reserve_write(max_size);
 }
 
@@ -118,17 +119,23 @@ void SharedMemoryChannel::commit_write(
     const LockFreeRingBuffer::WriteReservation& reservation,
     size_t actual_size) {
     if (send_ring_) {
+        // std::cout << "[nprpc][D] commit_write on ring: " << send_ring_name_ 
+        //           << " size=" << actual_size << std::endl;
         send_ring_->commit_write(reservation, actual_size);
     }
 }
 
 void SharedMemoryChannel::commit_read(const LockFreeRingBuffer::ReadView& view) {
     if (recv_ring_) {
+        // std::string side = is_server_ ? "SERVER" : "CLIENT";
+        // std::cout << "[nprpc][D] " << side << " commit_read on ring: " << recv_ring_name_ << std::endl;
         recv_ring_->commit_read(view);
     }
 }
 
 void SharedMemoryChannel::read_loop() {
+    // std::string side = is_server_ ? "SERVER" : "CLIENT";
+    // std::cout << "[nprpc][D] " << side << " read_loop starting for recv_ring: " << recv_ring_name_ << std::endl;
     while (running_) {
         try {
             // Try zero-copy read first if callback is set
@@ -155,11 +162,17 @@ void SharedMemoryChannel::read_loop() {
                 auto view = recv_ring_->try_read_view();
                 // std::cout << "Zero-copy read view attempt returned valid=" << view.valid << std::endl;
                 if (view) {
+                    // std::cout << "[nprpc][D] " << side << " read_loop got view from " << recv_ring_name_ 
+                    //           << " size=" << view.size << std::endl;
                     // Zero-copy path: provide view directly to callback
-                    // Callback will call commit_read() when done
-                    boost::asio::post(ioc_, [this, view]() {
-                        on_data_received_view(view);
-                    });
+                    // Call synchronously in read thread to ensure commit_read() completes before next iteration
+                    on_data_received_view(view);
+                    // this->commit_read(view);
+                    // boost::asio::post(ioc_, [this, view]() mutable {
+                    //     if (on_data_received_view) {
+                    //         on_data_received_view(view);
+                    // }
+                    // });
                 }
                 continue;
             }

@@ -223,10 +223,8 @@ class ObjectServant
 
  public:
   virtual std::string_view get_class() const noexcept = 0;
-  virtual void             dispatch(::nprpc::flat_buffer&    bin,
-                                    ::nprpc::flat_buffer&    bout,
-                                    ::nprpc::SessionContext& ctx,
-                                    bool                   from_parent) = 0;
+  virtual void             dispatch(::nprpc::SessionContext& ctx,
+                                    bool from_parent) = 0;
   virtual void             destroy() noexcept { delete this; }
 
   Poa*               poa() const noexcept { return poa_.get(); }

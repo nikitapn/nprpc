@@ -40,8 +40,8 @@ namespace nprpc::impl {
 
 struct alignas(64) RingBufferHeader {
     // Atomic byte-level indices for lock-free operations
-    std::atomic<size_t> write_idx{0};  // Next byte position to write
-    std::atomic<size_t> read_idx{0};   // Next byte position to read
+    alignas(64) std::atomic<size_t> write_idx{0};  // Next byte position to write
+    alignas(64) std::atomic<size_t> read_idx{0};   // Next byte position to read
     
     // Fixed at creation
     size_t buffer_size;         // Total buffer size in bytes
@@ -60,7 +60,7 @@ struct alignas(64) RingBufferHeader {
 class LockFreeRingBuffer {
 public:
     // Configuration for continuous circular buffer (variable-sized messages)
-    static constexpr size_t DEFAULT_BUFFER_SIZE = 16 * 1024 * 1024; // 16MB total (reduced from 128MB)
+    static constexpr size_t DEFAULT_BUFFER_SIZE = 16 * 1024 * 1024; // 16MB total
     static constexpr uint32_t MAX_MESSAGE_SIZE = 32 * 1024 * 1024;  // 32MB max message
     
     // Create new ring buffer in shared memory

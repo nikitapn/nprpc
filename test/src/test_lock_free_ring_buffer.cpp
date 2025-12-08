@@ -4,7 +4,7 @@
 
 #include <nprpc/impl/lock_free_ring_buffer.hpp>
 // visibility is hidden, so include the cpp directly
-#include "../../nprpc/src/lock_free_ring_buffer.cpp"
+#include "../../nprpc/src/shm/lock_free_ring_buffer.cpp"
 
 using namespace nprpc::impl;
 

@@ -4,3 +4,5 @@ Index:
   StandardLibrary: false
 If:
   PathExclude: third_party/.*
+InlayHints:
+  Enabled: false

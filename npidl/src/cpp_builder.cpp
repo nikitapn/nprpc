@@ -1,16 +1,18 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
 
-#include "cpp_builder.hpp"
-#include <cassert>
-#include <ios>
-#include <string_view>
-#include <algorithm>
-#include <sstream>
-#include "utils.hpp"
 #include <iostream>
+#include <sstream>
+#include <string_view>
+#include <cassert>
+#include <algorithm>
 #include <set>
+#include <ios>
+
 #include <boost/container/small_vector.hpp>
+
+#include "utils.hpp"
+#include "cpp_builder.hpp"
 
 namespace npidl::builders {
 
@@ -1385,7 +1387,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
     "public:\n"
     "  static std::string_view _get_class() noexcept { return \"" << ctx_->current_file() << '/' << ctx_->nm_cur()->to_ts_namespace() << '.' << ifs->name << "\"; }\n"
     "  std::string_view get_class() const noexcept override { return I" << ifs->name << "_Servant::_get_class(); }\n"
-    "  void dispatch(::nprpc::flat_buffer& bin, ::nprpc::flat_buffer& bout, [[maybe_unused]] ::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) override;\n"
+    "  void dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) override;\n"
     ;
 
   for (auto fn : ifs->fns) {
@@ -1515,9 +1517,9 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
   }
 
   // Servant dispatch
-  oc << "void " << ns(ctx_->nm_cur()) << 'I' << ifs->name << "_Servant::dispatch("
-    "::nprpc::flat_buffer& bin, nprpc::flat_buffer& bout, [[maybe_unused]] ::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) {\n"
-    "  ::nprpc::impl::flat::CallHeader_Direct __ch(bin, sizeof(::nprpc::impl::Header));\n"
+  oc << "void " << ns(ctx_->nm_cur()) << 'I' << ifs->name << "_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) {\n"
+    "  assert(ctx.rx_buffer != nullptr);\n"
+    "  ::nprpc::impl::flat::CallHeader_Direct __ch(*ctx.rx_buffer, sizeof(::nprpc::impl::Header));\n"
     ;
 
   if (ifs->plist.empty()) {
@@ -1535,7 +1537,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
       if (i == ifs) return;
       oc <<
         "      case "<< ix << ":\n"
-        "        I" << i->name << "_Servant::dispatch(bin, bout, ctx, true);\n"
+        "        I" << i->name << "_Servant::dispatch(ctx, true);\n"
         "        return;\n"
       ;
       ++ix;
@@ -1561,13 +1563,14 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 
     if (fn->in_s) {
       oc <<
-        "      " << fn->in_s->name << "_Direct ia(bin, " << get_arguments_offset() << ");\n"
+        "      assert(ctx.rx_buffer != nullptr);\n"
+        "      " << fn->in_s->name << "_Direct ia(*ctx.rx_buffer, " << get_arguments_offset() << ");\n"
         ;
       if (ifs->trusted == false) {
         // const auto fixed_size = get_arguments_offset() + fn->in_s->size;
         oc <<
-          "      if ( !check_" << fn->in_s->get_function_struct_id() << "(bin, ia) ) {\n"
-          "        ::nprpc::impl::make_simple_answer(ctx, bin, bout, ::nprpc::impl::MessageId::Error_BadInput);\n"
+          "      if ( !check_" << fn->in_s->get_function_struct_id() << "(*ctx.rx_buffer, ia) ) {\n"
+          "        ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_BadInput);\n"
           "        break;\n"
           "      }\n"
           ;
@@ -1578,7 +1581,8 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
       const auto offset = size_of_header;
       const auto initial_size = offset + fn->out_s->size;
       oc <<
-        "      auto& obuf = bout;\n"
+        "      assert(ctx.tx_buffer != nullptr);\n"
+        "      auto& obuf = *ctx.tx_buffer;\n"
         "      obuf.consume(obuf.size());\n" // Clear buffer
         "      if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, " << initial_size + 128 << "))\n"
         "         obuf.prepare(" << initial_size + 128 << ");\n"
@@ -1691,9 +1695,11 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
       oc <<
         "      }\n"
         "      catch(" << ns(fn->ex->nm) << fn->ex->name << "& e) {\n"
-        "        auto& obuf = bout;\n"
+        "        assert(ctx.tx_buffer != nullptr);\n"
+        "        auto& obuf = *ctx.tx_buffer;\n"
         "        obuf.consume(obuf.size());\n"
-        "        obuf.prepare(" << initial_size << ");\n"
+        "        if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, " << initial_size << "))\n"
+        "          obuf.prepare(" << initial_size << ");\n"
         "        obuf.commit(" << initial_size << ");\n"
         "        "<< ns(fn->ex->nm) << "flat::" <<fn->ex->name << "_Direct oa(obuf," << offset << ");\n"
         "        oa.__ex_id() = " << fn->ex->exception_id << ";\n"
@@ -1715,7 +1721,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
     }
 
     if (!fn->out_s) {
-      oc << "      ::nprpc::impl::make_simple_answer(ctx, bin, bout, nprpc::impl::MessageId::Success);\n";
+      oc << "      ::nprpc::impl::make_simple_answer(ctx, nprpc::impl::MessageId::Success);\n";
     } else {
       if (fn->out_s->flat) { // it means that we are writing output data in the input buffer, 
         // so we must pass stack variables first and then assign result back to the buffer
@@ -1723,9 +1729,11 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
         const auto initial_size = offset + fn->out_s->size;
 
         oc <<
-          "      auto& obuf = bout;\n"
+          "      assert(ctx.tx_buffer != nullptr);\n"
+          "      auto& obuf = *ctx.tx_buffer;\n"
           "      obuf.consume(obuf.size());\n"
-          "      obuf.prepare(" << initial_size << ");\n"
+          "      if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, " << initial_size << "))\n"
+          "        obuf.prepare(" << initial_size << ");\n"
           "      obuf.commit(" << initial_size << ");\n"
           "      " << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n"
           ;
@@ -1764,7 +1772,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs) {
 
   oc <<
     "    default:\n"
-    "      ::nprpc::impl::make_simple_answer(ctx, bin, bout, ::nprpc::impl::MessageId::Error_UnknownFunctionIdx);\n"
+    "      ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_UnknownFunctionIdx);\n"
     "  }\n"; // switch block
   ;
 

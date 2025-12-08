@@ -9,7 +9,7 @@
                 "src/addon.cpp",
                 "src/shm_channel_wrapper.cpp",
                 "src/nprpc_stub.cpp",
-                "../src/lock_free_ring_buffer.cpp"
+                "../src/shm/lock_free_ring_buffer.cpp"
             ],
             "include_dirs": [
                 "<!@(node -p \"require('node-addon-api').include\")",

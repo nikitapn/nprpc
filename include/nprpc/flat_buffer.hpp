@@ -14,6 +14,8 @@
 
 #include <boost/asio/buffer.hpp>
 
+#include <nprpc/export.hpp>
+
 namespace nprpc {
 
 // Forward declaration - actual EndPoint is in endpoint.hpp
@@ -84,10 +86,16 @@ private:
     // Optional endpoint for shared memory buffer growth/fallback
     const EndPoint* endpoint_ = nullptr;
     
-    // For shared memory zero-copy: stores the write_idx from WriteReservation
+    // For shared memory zero-copy writes: stores the write_idx from WriteReservation
     // Used to reconstruct the reservation for commit_write()
     std::size_t reservation_write_idx_ = 0;
     bool has_reservation_ = false;
+    
+    // For shared memory zero-copy reads: stores the ReadView for commit_read()
+    // When set, flat_buffer will automatically commit the read when needed
+    void* ring_buffer_ = nullptr;  // LockFreeRingBuffer* (opaque to avoid circular dependency)
+    std::size_t read_view_read_idx_ = 0;
+    bool has_read_view_ = false;
 
     static constexpr std::size_t default_growth_factor = 2;
     static constexpr std::size_t min_allocation = 512;
@@ -276,6 +284,7 @@ public:
 
     /// Destructor
     ~flat_buffer() {
+        commit_read_if_needed();
         delete[] buffer_;  // Safe even if nullptr
         // view_base_ is not owned, don't delete
     }
@@ -427,6 +436,39 @@ public:
         reservation_write_idx_ = write_idx;
         has_reservation_ = has_reservation;
     }
+    
+    /// Create a view from a ReadView (for zero-copy response reading)
+    /// @param read_view The ReadView from ring buffer
+    /// @param ring_buffer Pointer to the LockFreeRingBuffer (for commit_read)
+    void set_view_from_read(const void* data, std::size_t size, 
+                            void* ring_buffer, std::size_t read_idx) {
+        // Release owned memory if any
+        delete[] buffer_;
+        buffer_ = nullptr;
+        in_ = 0;
+        out_ = 0;
+        capacity_ = 0;
+
+        // Set view (read-only, so size == max_size)
+        view_base_ = const_cast<std::uint8_t*>(static_cast<const std::uint8_t*>(data));
+        view_size_ = size;
+        view_max_size_ = size;  // Can't extend a read view
+        endpoint_ = nullptr;
+        reservation_write_idx_ = 0;
+        has_reservation_ = false;
+        
+        // Track ReadView for commit_read
+        ring_buffer_ = ring_buffer;
+        read_view_read_idx_ = read_idx;
+        has_read_view_ = true;
+    }
+    
+    /// Commit the read if this buffer is a view from a ReadView
+    /// Call this after unmarshaling is complete to free ring buffer space
+    NPRPC_API void commit_read_if_needed();
+    
+    /// Check if this buffer has a pending read to commit
+    bool has_pending_read() const noexcept { return has_read_view_; }
 
     /// Convert from view mode to owned mode (makes a copy)
     void detach_view() {
@@ -502,6 +544,9 @@ public:
         swap(a.endpoint_, b.endpoint_);
         swap(a.reservation_write_idx_, b.reservation_write_idx_);
         swap(a.has_reservation_, b.has_reservation_);
+        swap(a.ring_buffer_, b.ring_buffer_);
+        swap(a.read_view_read_idx_, b.read_view_read_idx_);
+        swap(a.has_read_view_, b.has_read_view_);
     }
 
     static constexpr std::size_t default_initial_size() noexcept {

@@ -169,34 +169,41 @@ add_subdirectory(npidl_post_build_check)
 # Main library target
 add_library(nprpc
   ${nprpc_stub_GENERATED_SOURCES}
-  src/framework.h
+  # Shared Memory transport
+  src/shm/lock_free_ring_buffer.cpp
+  src/shm/shared_memory_channel.cpp
+  src/shm/shared_memory_connection.cpp
+  src/shm/shared_memory_listener.cpp
+  src/shm/shared_memory_server_session.cpp
+  src/shm/shared_memory_init.cpp
+  # TCP transport
+  src/tcp/client_socket_connection.cpp
+  src/tcp/server_session_socket.cpp
+  # HTTP transport
+  src/http/http_server.cpp
+  src/http/http_utils.cpp
+  src/http/http_file_cache.cpp
+  src/http/http3_server_msh3.cpp
+  src/http/http3_server_nghttp3.cpp
+  # WebSocket transport
+  src/ws/async_connect.cpp
+  src/ws/client_websocket_connection.cpp
+  src/ws/server_session_websocket.cpp
+  src/ws/websocket_session.cpp
+  # QUIC transport
+  src/quic/quic_transport.cpp
+  # UDP transport
+  src/udp/udp_connection.cpp
+  src/udp/udp_listener.cpp
+  # Core framework files
   src/nprpc.cpp
   src/rpc_impl.cpp
-  src/lock_free_ring_buffer.cpp
-  src/shared_memory_channel.cpp
-  src/shared_memory_connection.cpp
-  src/shared_memory_listener.cpp
-  src/shared_memory_server_session.cpp
-  src/shared_memory_init.cpp
-  src/async_connect.cpp
-  src/server_session_socket.cpp
-  src/server_session_websocket.cpp
-  src/client_websocket_connection.cpp
-  src/websocket_session.cpp
-  src/client_socket_connection.cpp
   src/session_context.cpp
   src/session.cpp
-  src/udp_connection.cpp
-  src/udp_listener.cpp
-  src/quic_transport.cpp
-  src/http_server.cpp
-  src/http_utils.cpp
-  src/http_file_cache.cpp
-  src/http3_server_msh3.cpp
-  src/http3_server_nghttp3.cpp
-  src/uuid.cpp
   src/helper.hpp
   src/helper.cpp
+  src/uuid.cpp
+  src/framework.h
   # Public headers
   include/nprpc_base.hpp
   include/nprpc_nameserver.hpp
@@ -229,8 +236,8 @@ add_library(nprpc
 # SSR support (Node.js worker)
 if(NPRPC_ENABLE_SSR)
   target_sources(nprpc PRIVATE
-    src/node_worker_manager.cpp
-    src/ssr_manager.cpp
+    src/ssr/node_worker_manager.cpp
+    src/ssr/ssr_manager.cpp
     include/nprpc/impl/node_worker_manager.hpp
     include/nprpc/impl/ssr_manager.hpp
   )

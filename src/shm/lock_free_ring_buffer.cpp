@@ -1,14 +1,16 @@
-#include <nprpc/impl/lock_free_ring_buffer.hpp>
-#include <nprpc/impl/nprpc_impl.hpp>
-#include <nprpc/common.hpp>
-#include <boost/interprocess/shared_memory_object.hpp>
-#include <boost/interprocess/mapped_region.hpp>
-#include <boost/date_time/posix_time/posix_time_types.hpp>
 #include <iostream>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+
+#include <boost/interprocess/shared_memory_object.hpp>
+#include <boost/interprocess/mapped_region.hpp>
+#include <boost/date_time/posix_time/posix_time_types.hpp>
+
+#include <nprpc/impl/lock_free_ring_buffer.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/common.hpp>
 
 namespace nprpc::impl {
 
@@ -191,11 +193,11 @@ std::unique_ptr<LockFreeRingBuffer> LockFreeRingBuffer::open(const std::string& 
         // Mirrored data region pointer - points to start of reserved area
         uint8_t* mirrored_data_region = static_cast<uint8_t*>(reserved);
 
-        // if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+        if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
             std::cout << "Opened ring buffer '" << name << "': "
                       << buffer_size << " bytes with mirrored mapping at "
                       << static_cast<void*>(mirrored_data_region) << " (ring_window=" << ring_window << ")\n";
-        // }
+        }
 
         return std::unique_ptr<LockFreeRingBuffer>(
             new LockFreeRingBuffer(name, std::move(shm), header, mirrored_data_region, reserved, ring_window, false)
@@ -487,6 +489,8 @@ LockFreeRingBuffer::ReadView LockFreeRingBuffer::try_read_view() {
         return result; // Empty
     }
 
+    // std::cout << "[D] try_read_view: r=" << read_idx << " w=" << write_idx << std::endl;
+
     // Read size header - with mirrored mapping, no wrap-around needed!
     uint32_t message_size = 0;
     std::memcpy(&message_size, data_region_ + read_idx, sizeof(uint32_t));
@@ -513,6 +517,12 @@ void LockFreeRingBuffer::commit_read(const ReadView& view) {
         std::cerr << "LockFreeRingBuffer::commit_read: invalid view" << std::endl;
         return;
     }
+
+    // size_t old_read = header_->read_idx.load(std::memory_order_acquire);
+    // size_t write = header_->write_idx.load(std::memory_order_acquire);
+
+    // std::cout << "[D] commit_read: old=" << old_read << " new=" << view.read_idx 
+    //           << " write=" << write << std::endl;
 
     // Update read index with release semantics
     header_->read_idx.store(view.read_idx, std::memory_order_release);
