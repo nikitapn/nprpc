@@ -1,3 +1,6 @@
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MIT
+
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/shared_memory_channel.hpp>
 #include <nprpc/impl/shared_memory_connection.hpp>
@@ -15,7 +18,6 @@
 #include <cassert>
 #include <fstream>
 #include <functional>
-#include <future>
 
 #ifdef _WIN32
 #include <boost/asio/ssl/context.hpp>

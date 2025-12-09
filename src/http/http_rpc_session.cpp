@@ -1,3 +1,6 @@
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MIT
+
 #include "../logging.hpp"
 #include <cstring>
 #include <nprpc/impl/http_rpc_session.hpp>

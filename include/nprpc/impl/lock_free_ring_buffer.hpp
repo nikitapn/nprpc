@@ -1,5 +1,7 @@
-#ifndef NPRPC_IMPL_LOCK_FREE_RING_BUFFER_HPP_
-#define NPRPC_IMPL_LOCK_FREE_RING_BUFFER_HPP_
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MIT
+
+#pragma once
 
 #include <atomic>
 #include <boost/interprocess/managed_shared_memory.hpp>
@@ -173,5 +175,3 @@ inline std::string make_shm_name(const std::string& channel_id,
 }
 
 } // namespace nprpc::impl
-
-#endif // NPRPC_IMPL_LOCK_FREE_RING_BUFFER_HPP_

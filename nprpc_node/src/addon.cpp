@@ -1,6 +1,7 @@
-// nprpc_node - Native Node.js addon entry point
-// Copyright (c) 2025 nikitapnn1@gmail.com
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
+
+// nprpc_node - Native Node.js addon entry point
 
 #include "shm_channel_wrapper.hpp"
 #include <napi.h>

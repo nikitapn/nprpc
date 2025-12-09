@@ -1,9 +1,5 @@
-// Copyright (c) 2021-2025 nikitapnn1@gmail.com
-// This file is a part of npsystem (Distributed Control System) and covered by
-// LICENSING file in the topmost directory
-
-#ifndef NPRPC_HTTP_FILE_CACHE_HPP
-#define NPRPC_HTTP_FILE_CACHE_HPP
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MIT
 
 #include <atomic>
 #include <chrono>
@@ -233,5 +229,3 @@ HttpFileCache& get_file_cache();
 void init_file_cache(HttpFileCacheConfig config = {});
 
 } // namespace nprpc::impl
-
-#endif // NPRPC_HTTP_FILE_CACHE_HPP

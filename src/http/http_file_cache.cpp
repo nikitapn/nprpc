@@ -1,6 +1,5 @@
-// Copyright (c) 2021-2025 nikitapnn1@gmail.com
-// This file is a part of npsystem (Distributed Control System) and covered by
-// LICENSING file in the topmost directory
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MIT
 
 #include <nprpc/impl/http_file_cache.hpp>
 #include <nprpc/impl/http_utils.hpp>

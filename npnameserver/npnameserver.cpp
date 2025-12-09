@@ -76,8 +76,6 @@ int main()
         nprpc::ObjectActivationFlags::ALLOW_TCP |
             nprpc::ObjectActivationFlags::ALLOW_WEBSOCKET);
 
-    //   spdlog::info("Nameserver started with object ID: {}",
-    //   oid.object_id());
     boost::asio::signal_set signals(ioc, SIGINT, SIGTERM);
     signals.async_wait(
         [&](boost::beast::error_code const&, int) { ioc.stop(); });

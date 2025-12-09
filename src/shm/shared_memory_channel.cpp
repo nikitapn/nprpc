@@ -1,3 +1,6 @@
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MIT
+
 #include <iostream>
 #include <nprpc/common.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>

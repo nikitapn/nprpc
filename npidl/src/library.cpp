@@ -1,4 +1,6 @@
-#include <algorithm>
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MITinclude <algorithm>
+
 #include <cassert>
 #include <charconv>
 #include <cstdint>

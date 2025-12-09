@@ -1,6 +1,5 @@
-// Copyright (c) 2021 nikitapnn1@gmail.com
-// This file is a part of npsystem (Distributed Control System) and covered by
-// LICENSING file in the topmost directory
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MIT
 
 #pragma once
 
@@ -11,8 +10,6 @@
 #include <boost/core/exchange.hpp>
 #include <cassert>
 #include <deque>
-#include <iomanip>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <optional>
