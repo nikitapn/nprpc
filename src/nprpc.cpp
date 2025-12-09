@@ -3,9 +3,10 @@
 // LICENSING file in the topmost directory
 
 #include <boost/uuid/uuid_io.hpp>
+#include <iomanip>
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/uuid.hpp>
-#include <spdlog/fmt/bin_to_hex.h>
+#include <sstream>
 
 #include "logging.hpp"
 
@@ -254,17 +255,30 @@ Poa* PoaBuilder::build()
 
 namespace nprpc::impl {
 
+// Simple hex dump helper
+static std::string to_hex(const std::vector<unsigned char>& data)
+{
+  std::ostringstream oss;
+  oss << std::hex << std::setfill('0');
+  for (size_t i = 0; i < data.size(); ++i) {
+    if (i > 0 && i % 16 == 0)
+      oss << '\n';
+    oss << std::setw(2) << static_cast<int>(data[i]) << ' ';
+  }
+  return oss.str();
+}
+
 void dump_message(flat_buffer& buffer, bool rx)
 {
   auto cb = buffer.cdata();
   auto size = cb.size();
   auto data = (unsigned char*)cb.data();
 
-  // Create a span-like view for spdlog (vector copy is safest/easiest)
+  // Create a vector for hex dump
   std::vector<unsigned char> vec(data, data + size);
 
   NPRPC_LOG_DEBUG("[nprpc] Message HEX16: {} size: {}\n{}",
-                  (rx ? "rx." : "tx."), size, spdlog::to_hex(vec));
+                  (rx ? "rx." : "tx."), size, to_hex(vec).c_str());
 }
 
 } // namespace nprpc::impl

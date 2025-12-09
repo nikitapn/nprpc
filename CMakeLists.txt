@@ -57,30 +57,6 @@ endif()
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
-
-# Spdlog integration
-# Build as static library to prevent symbol leakage
-set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-set(SPDLOG_FMT_EXTERNAL OFF CACHE BOOL "" FORCE)
-set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
-set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-
-# Force spdlog to be static regardless of global BUILD_SHARED_LIBS
-set(BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
-set(BUILD_SHARED_LIBS OFF)
-# Ensure static library is compiled with -fPIC so it can be linked into shared nprpc lib
-set(CMAKE_POSITION_INDEPENDENT_CODE_SAVED ${CMAKE_POSITION_INDEPENDENT_CODE})
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-set(CMAKE_CXX_VISIBILITY_PRESET_SAVED ${CMAKE_CXX_VISIBILITY_PRESET})
-set(CMAKE_CXX_VISIBILITY_PRESET hidden)
-set(CMAKE_VISIBILITY_INLINES_HIDDEN_SAVED ${CMAKE_VISIBILITY_INLINES_HIDDEN})
-set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
-add_subdirectory(third_party/spdlog)
-set(CMAKE_VISIBILITY_INLINES_HIDDEN ${CMAKE_VISIBILITY_INLINES_HIDDEN_SAVED})
-set(CMAKE_CXX_VISIBILITY_PRESET ${CMAKE_CXX_VISIBILITY_PRESET_SAVED})
-set(CMAKE_POSITION_INDEPENDENT_CODE ${CMAKE_POSITION_INDEPENDENT_CODE_SAVED})
-set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED})
-
 # MsQuic integration
 if(NPRPC_ENABLE_QUIC)
   message(STATUS "QUIC transport enabled - building MsQuic")
@@ -296,8 +272,6 @@ target_link_libraries(nprpc
     Threads::Threads
     OpenSSL::SSL
     OpenSSL::Crypto
-  PRIVATE
-    $<BUILD_INTERFACE:spdlog::spdlog>
 )
 
 # MsQuic linking
@@ -382,8 +356,6 @@ if(NPRPC_BUILD_TOOLS)
   target_link_libraries(npnameserver
     PRIVATE
       nprpc::nprpc
-      # ~512 KB in size increase when spdlog::spdlog statically linked
-      $<BUILD_INTERFACE:spdlog::spdlog>
     )
 
   if(TARGET npidl)

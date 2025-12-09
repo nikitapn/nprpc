@@ -645,10 +645,7 @@ RpcImpl::get_nameserver(std::string_view nameserver_ip)
   oid.flags = static_cast<nprpc::oflags_t>(detail::ObjectFlag::Persistent);
   oid.origin.fill(0);
   oid.class_id = common::INameserver_Servant::_get_class();
-  oid.urls.assign("tcp://" + ip +
-                  ":15000;"
-                  "ws://" +
-                  ip + ":15001;");
+  oid.urls.assign("tcp://" + ip + ":15000;ws://" + ip + ":15001;");
 
   [[maybe_unused]] bool res = obj->select_endpoint();
   assert(res && "Nameserver must have a valid endpoint");

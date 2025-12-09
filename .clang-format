@@ -5,6 +5,9 @@ Language: Cpp
 PointerAlignment: Left
 BinPackParameters: OnePerLine
 BreakBeforeBraces: Custom
+BreakBeforeBinaryOperators: None
+BreakBinaryOperations: Never
+AlwaysBreakBeforeMultilineStrings: false
 BraceWrapping:
   AfterCaseLabel:  false
   AfterClass:      true
@@ -24,6 +27,7 @@ BraceWrapping:
   SplitEmptyFunction: true
   SplitEmptyRecord: true
   SplitEmptyNamespace: true
+# AlignOperands: DontAlign
 ...
 
 # AccessModifierOffset: -1
