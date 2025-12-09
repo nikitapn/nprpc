@@ -2,7 +2,8 @@
 
 namespace npidl {
 
-void Context::set_module_name(std::vector<std::string>&& name_parts) {
+void Context::set_module_name(std::vector<std::string>&& name_parts)
+{
   // When parse sees module declaration, it changes module name
   // and also root namespace name. Module name is optional,
   // so it can be empty.

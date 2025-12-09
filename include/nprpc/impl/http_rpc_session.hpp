@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <nprpc/impl/session.hpp>
-#include <nprpc/common.hpp>
 #include <boost/asio.hpp>
 #include <memory>
+#include <nprpc/common.hpp>
+#include <nprpc/impl/session.hpp>
 
 namespace nprpc::impl {
 
@@ -31,13 +31,11 @@ namespace nprpc::impl {
 class HttpRpcSession : public Session,
                        public std::enable_shared_from_this<HttpRpcSession>
 {
-  flat_buffer rx_buffer_ {flat_buffer::default_initial_size()};
-  flat_buffer tx_buffer_ {flat_buffer::default_initial_size()};
+  flat_buffer rx_buffer_{flat_buffer::default_initial_size()};
+  flat_buffer tx_buffer_{flat_buffer::default_initial_size()};
 
- public:
-  HttpRpcSession(
-    boost::asio::io_context& ioc)
-      : Session(ioc.get_executor())
+public:
+  HttpRpcSession(boost::asio::io_context& ioc) : Session(ioc.get_executor())
   {
     // HTTP sessions are "tethered" (ephemeral) - use TcpTethered type
     ctx_.remote_endpoint = EndPoint(EndPointType::TcpTethered, "", 0);
@@ -51,26 +49,26 @@ class HttpRpcSession : public Session,
    * @return true if processed successfully, false on error
    */
   bool process_rpc_request(const std::string& request_data,
-                           std::string&       response_data);
+                           std::string& response_data);
 
-  // HTTP sessions don't support async operations - these should never be called
+  // HTTP sessions don't support async operations - these should never be
+  // called
   virtual void timeout_action() final
   {
     // No-op for HTTP sessions
   }
 
-  virtual void send_receive(
-    flat_buffer&, uint32_t) override
+  virtual void send_receive(flat_buffer&, uint32_t) override
   {
     // HTTP sessions don't make outbound calls
     assert(false && "send_receive not supported on HTTP sessions");
   }
 
   virtual void send_receive_async(
-    flat_buffer&&,
-    std::optional<
-      std::function<void(const boost::system::error_code&, flat_buffer&)>>&&,
-    uint32_t) override
+      flat_buffer&&,
+      std::optional<std::function<void(const boost::system::error_code&,
+                                       flat_buffer&)>>&&,
+      uint32_t) override
   {
     // HTTP sessions don't make outbound calls
     assert(false && "send_receive_async not supported on HTTP sessions");
@@ -87,13 +85,12 @@ class HttpRpcSession : public Session,
  * @param response_body Output for NPRPC response
  * @return true if successful, false on error
  */
-inline bool process_http_rpc(
-  boost::asio::io_context& ioc,
-  const std::string&       request_body,
-  std::string&             response_body)
+inline bool process_http_rpc(boost::asio::io_context& ioc,
+                             const std::string& request_body,
+                             std::string& response_body)
 {
   auto session = std::make_shared<HttpRpcSession>(ioc);
   return session->process_rpc_request(request_body, response_body);
 }
 
-}  // namespace nprpc::impl
+} // namespace nprpc::impl

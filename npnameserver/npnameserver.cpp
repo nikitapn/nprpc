@@ -18,24 +18,22 @@ class NameserverImpl : public nprpc::common::INameserver_Servant
 {
   std::unordered_map<std::string, std::unique_ptr<nprpc::Object>> objects_;
 
- public:
-  void Bind(
-    nprpc::Object* obj, nprpc::flat::Span<char> name) override
+public:
+  void Bind(nprpc::Object* obj, nprpc::flat::Span<char> name) override
   {
     if constexpr (NPRPC_NAMESERVER_LOG) {
       spdlog::info("Binding object: {}", obj->object_id());
       spdlog::info("  Object is binded as: {}", (std::string_view)name);
     }
     auto const str = std::string((std::string_view)name);
-    objects_[str]  = std::move(std::unique_ptr<nprpc::Object>(obj));
+    objects_[str] = std::move(std::unique_ptr<nprpc::Object>(obj));
   }
 
-  bool Resolve(
-    nprpc::flat::Span<char>              name,
-    nprpc::detail::flat::ObjectId_Direct obj) override
+  bool Resolve(nprpc::flat::Span<char> name,
+               nprpc::detail::flat::ObjectId_Direct obj) override
   {
-    auto const str   = std::string((std::string_view)name);
-    auto       found = objects_.find(str);
+    auto const str = std::string((std::string_view)name);
+    auto found = objects_.find(str);
 
     if (found == objects_.end()) {
       obj.object_id() = nprpc::invalid_object_id;
@@ -56,33 +54,33 @@ class NameserverImpl : public nprpc::common::INameserver_Servant
 
 int main()
 {
-  NameserverImpl          server;
+  NameserverImpl server;
   boost::asio::io_context ioc;
 
   try {
     auto rpc = nprpc::RpcBuilder()
-                 .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
-                 .with_tcp(15000)
-                 .with_http(15001)
-                 .build(ioc);
+                   .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
+                   .with_tcp(15000)
+                   .with_http(15001)
+                   .build(ioc);
 
-    auto poa =
-      nprpc::PoaBuilder(rpc)
-        .with_max_objects(1)
-        .with_object_id_policy(nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied)
-        .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
-        .build();
+    auto poa = nprpc::PoaBuilder(rpc)
+                   .with_max_objects(1)
+                   .with_object_id_policy(
+                       nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied)
+                   .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                   .build();
 
     auto oid = poa->activate_object_with_id(
-      0,
-      &server,
-      nprpc::ObjectActivationFlags::ALLOW_TCP |
-        nprpc::ObjectActivationFlags::ALLOW_WEBSOCKET);
+        0, &server,
+        nprpc::ObjectActivationFlags::ALLOW_TCP |
+            nprpc::ObjectActivationFlags::ALLOW_WEBSOCKET);
 
-    //   spdlog::info("Nameserver started with object ID: {}", oid.object_id());
+    //   spdlog::info("Nameserver started with object ID: {}",
+    //   oid.object_id());
     boost::asio::signal_set signals(ioc, SIGINT, SIGTERM);
     signals.async_wait(
-      [&](boost::beast::error_code const&, int) { ioc.stop(); });
+        [&](boost::beast::error_code const&, int) { ioc.stop(); });
 
     ioc.run();
     rpc->destroy();

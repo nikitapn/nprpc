@@ -2,13 +2,14 @@
 // This file is a part of npsystem (Distributed Control System) and covered by
 // LICENSING file in the topmost directory
 
-#include <nprpc/impl/websocket_session.hpp>
-#include <nprpc/impl/nprpc_impl.hpp>
 #include <future>
+#include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/websocket_session.hpp>
 
 namespace nprpc::impl {
 
-void fail(beast::error_code ec, char const *what) {
+void fail(beast::error_code ec, char const* what)
+{
   // ssl::error::stream_truncated, also known as an SSL "short read",
   // indicates the peer closed the connection without performing the
   // required closing handshake (for example, Google does this to
@@ -33,12 +34,14 @@ void fail(beast::error_code ec, char const *what) {
   if (ec == beast::error::timeout)
     return;
 
-  std::cerr << "[nprpc] WebSocketSession: "<< what << ": " << ec.message() << '\n';
+  std::cerr << "[nprpc] WebSocketSession: " << what << ": " << ec.message()
+            << '\n';
 }
 
-template <class Derived>
-void WebSocketSession<Derived>::do_read() {
-  if (closed_.load()) return;
+template <class Derived> void WebSocketSession<Derived>::do_read()
+{
+  if (closed_.load())
+    return;
 
   bool expected = false;
   if (!reading_.compare_exchange_strong(expected, true)) {
@@ -48,14 +51,14 @@ void WebSocketSession<Derived>::do_read() {
   rx_buffer_.consume(rx_buffer_.size()); // Clear the buffer before reading
 
   derived().ws().async_read(
-      rx_buffer_,
-      beast::bind_front_handler(
-          &WebSocketSession::on_read,
-          derived().shared_from_this()));
+      rx_buffer_, beast::bind_front_handler(&WebSocketSession::on_read,
+                                            derived().shared_from_this()));
 }
 
 template <class Derived>
-void WebSocketSession<Derived>::on_read(beast::error_code ec, [[maybe_unused]] std::size_t bytes_transferred) {
+void WebSocketSession<Derived>::on_read(
+    beast::error_code ec, [[maybe_unused]] std::size_t bytes_transferred)
+{
   reading_.store(false);
 
   if (ec == websocket::error::closed) {
@@ -86,12 +89,13 @@ void WebSocketSession<Derived>::on_read(beast::error_code ec, [[maybe_unused]] s
     handle_request(rx_buffer_, tx_buffer_);
 
     // Queue response for sending
-    std::function<void(const boost::system::error_code&)> completion_handler = 
-      [](const boost::system::error_code&) {};
+    std::function<void(const boost::system::error_code&)> completion_handler =
+        [](const boost::system::error_code&) {};
 
     // Inject request ID into the response header
     inject_request_id(tx_buffer_, request_id);
-    write_queue_.emplace_back(std::move(tx_buffer_), std::move(completion_handler));
+    write_queue_.emplace_back(std::move(tx_buffer_),
+                              std::move(completion_handler));
     do_write();
   } else { // received an answer
     auto it = pending_requests_.find(request_id);
@@ -102,7 +106,9 @@ void WebSocketSession<Derived>::on_read(beast::error_code ec, [[maybe_unused]] s
       pending_requests_.erase(it);
     } else {
       // Received response for unknown request - possible attack or bug
-      std::cerr << "[nprcp] WebSocketSession: Received response for unknown request ID: " << request_id << '\n';
+      std::cerr << "[nprcp] WebSocketSession: Received response for unknown "
+                   "request ID: "
+                << request_id << '\n';
     }
   }
 
@@ -110,9 +116,10 @@ void WebSocketSession<Derived>::on_read(beast::error_code ec, [[maybe_unused]] s
   do_read();
 }
 
-template <class Derived>
-void WebSocketSession<Derived>::do_write() {
-  if (closed_.load()) return;
+template <class Derived> void WebSocketSession<Derived>::do_write()
+{
+  if (closed_.load())
+    return;
 
   bool expected = false;
   if (!writing_.compare_exchange_strong(expected, true)) {
@@ -125,10 +132,12 @@ void WebSocketSession<Derived>::do_write() {
   }
 
   // NOTE: commented out code for write queue size check
-  // It was causing issues with legitimate high-throughput scenarios in proxy server setups
-  // Check write queue size - if too large, client is too slow
+  // It was causing issues with legitimate high-throughput scenarios in proxy
+  // server setups Check write queue size - if too large, client is too slow
   // if (write_queue_.size() > max_write_queue_size) {
-  //   std::cerr << "[nprpc] WebSocketSession: Write queue exceeded maximum size (" << max_write_queue_size 
+  //   std::cerr << "[nprpc] WebSocketSession: Write queue exceeded maximum
+  //   size
+  //   (" << max_write_queue_size
   //             << "), closing slow connection\n";
   //   writing_.store(false);
   //   close();
@@ -139,13 +148,14 @@ void WebSocketSession<Derived>::do_write() {
   derived().ws().text(false); // binary mode
   derived().ws().async_write(
       msg.buffer.data(),
-      beast::bind_front_handler(
-          &WebSocketSession::on_write,
-          derived().shared_from_this()));
+      beast::bind_front_handler(&WebSocketSession::on_write,
+                                derived().shared_from_this()));
 }
 
 template <class Derived>
-void WebSocketSession<Derived>::on_write(beast::error_code ec, std::size_t bytes_transferred) {
+void WebSocketSession<Derived>::on_write(beast::error_code ec,
+                                         std::size_t bytes_transferred)
+{
   boost::ignore_unused(bytes_transferred);
 
   if (ec == websocket::error::closed) {
@@ -177,8 +187,8 @@ void WebSocketSession<Derived>::on_write(beast::error_code ec, std::size_t bytes
   }
 }
 
-template <class Derived>
-void WebSocketSession<Derived>::close() {
+template <class Derived> void WebSocketSession<Derived>::close()
+{
   closed_.store(true);
 
   const boost::system::error_code ec{boost::asio::error::connection_aborted};
@@ -200,8 +210,8 @@ void WebSocketSession<Derived>::close() {
   Session::close();
 }
 
-template <class Derived>
-void WebSocketSession<Derived>::timeout_action() {
+template <class Derived> void WebSocketSession<Derived>::timeout_action()
+{
   // Handle timeouts for pending requests
   auto now = std::chrono::steady_clock::now();
   auto it = pending_requests_.begin();
@@ -209,8 +219,10 @@ void WebSocketSession<Derived>::timeout_action() {
   while (it != pending_requests_.end()) {
     if (now > it->second.timeout_point) {
       flat_buffer empty_response{};
-      it->second.completion_handler(boost::asio::error::timed_out, empty_response);
-      std::cout << "[nprpc] WebSocketSession: Timing out request ID: " << it->first << '\n';
+      it->second.completion_handler(boost::asio::error::timed_out,
+                                    empty_response);
+      std::cout << "[nprpc] WebSocketSession: Timing out request ID: "
+                << it->first << '\n';
       it = pending_requests_.erase(it);
     } else {
       ++it;
@@ -219,9 +231,10 @@ void WebSocketSession<Derived>::timeout_action() {
 }
 
 template <class Derived>
-void WebSocketSession<Derived>::send_receive(flat_buffer &buffer, uint32_t timeout_ms) 
+void WebSocketSession<Derived>::send_receive(flat_buffer& buffer,
+                                             uint32_t timeout_ms)
 {
-  assert(*(uint32_t *)buffer.data().data() == buffer.size() - 4);
+  assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
   if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent)
     dump_message(buffer, false);
@@ -230,12 +243,11 @@ void WebSocketSession<Derived>::send_receive(flat_buffer &buffer, uint32_t timeo
   auto future = promise.get_future();
 
   send_receive_async(
-    std::move(buffer),
-    [&promise](const boost::system::error_code& ec, flat_buffer& response) {
-      promise.set_value({ec, std::move(response)});
-    },
-    timeout_ms
-  );
+      std::move(buffer),
+      [&promise](const boost::system::error_code& ec, flat_buffer& response) {
+        promise.set_value({ec, std::move(response)});
+      },
+      timeout_ms);
 
   auto [ec, response] = future.get();
 
@@ -251,11 +263,12 @@ void WebSocketSession<Derived>::send_receive(flat_buffer &buffer, uint32_t timeo
 // Called outside of strand context, so we need to ensure thread safety
 template <class Derived>
 void WebSocketSession<Derived>::send_receive_async(
-    flat_buffer &&buffer,
-    std::optional<std::function<void(const boost::system::error_code&, flat_buffer &)>> &&completion_handler,
+    flat_buffer&& buffer,
+    std::optional<std::function<void(const boost::system::error_code&,
+                                     flat_buffer&)>>&& completion_handler,
     uint32_t timeout_ms)
 {
-  assert(*(uint32_t *)buffer.data().data() == buffer.size() - 4);
+  assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
   uint32_t request_id = generate_request_id();
 
@@ -264,54 +277,65 @@ void WebSocketSession<Derived>::send_receive_async(
 
   if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
     nprpc::impl::flat::Header_Direct header(buffer, 0);
-    std::cout << "[nprpc] WebSocketSession: send_receive_async called. size: " << buffer.size() << 
-     ", msg_id: " << static_cast<uint32_t>(header.msg_id()) <<
-     ", request_id: " << header.request_id() << std::endl;
+    std::cout << "[nprpc] WebSocketSession: send_receive_async called. size: "
+              << buffer.size()
+              << ", msg_id: " << static_cast<uint32_t>(header.msg_id())
+              << ", request_id: " << header.request_id() << std::endl;
   }
 
   // Queue the request for sending
-  boost::asio::post(derived().ws().get_executor(), [this, buffer = std::move(buffer), request_id,
-    completion_handler = std::move(completion_handler), timeout_ms]() mutable {
-    // Store the pending request
-    // This is not really necessary if completion_handler is not provided,
-    // but we do it anyway to keep track of all pending requests.
-    pending_requests_.emplace(request_id, pending_request{
-      completion_handler ? std::move(*completion_handler) : pending_request::empty_handler(),
-      std::chrono::milliseconds(timeout_ms)
-    });
+  boost::asio::post(
+      derived().ws().get_executor(),
+      [this, buffer = std::move(buffer), request_id,
+       completion_handler = std::move(completion_handler),
+       timeout_ms]() mutable {
+        // Store the pending request
+        // This is not really necessary if completion_handler is not
+        // provided, but we do it anyway to keep track of all pending
+        // requests.
+        pending_requests_.emplace(
+            request_id, pending_request{completion_handler
+                                            ? std::move(*completion_handler)
+                                            : pending_request::empty_handler(),
+                                        std::chrono::milliseconds(timeout_ms)});
 
-    std::function<void(const boost::system::error_code&)> write_completion = 
-      [this, request_id](const boost::system::error_code& ec) {
-        if (ec) {
-          // Writing failed, remove pending request and notify
-          auto it = pending_requests_.find(request_id);
-          if (it != pending_requests_.end()) {
-            std::cerr << "[nprpc] WebSocketSession: Write failed for request ID: " << request_id << 
-              ", error: " << ec.message() << '\n';
-            flat_buffer empty_response{};
-            it->second.completion_handler(ec, empty_response);
-            pending_requests_.erase(it);
-          }
-        }
-        // If write succeeded, we wait for the response in on_read
-      };
-    write_queue_.emplace_back(std::move(buffer), std::move(write_completion));
-    do_write();
-  });
+        std::function<void(const boost::system::error_code&)> write_completion =
+            [this, request_id](const boost::system::error_code& ec) {
+              if (ec) {
+                // Writing failed, remove pending request and notify
+                auto it = pending_requests_.find(request_id);
+                if (it != pending_requests_.end()) {
+                  std::cerr << "[nprpc] WebSocketSession: Write "
+                               "failed for request ID: "
+                            << request_id << ", error: " << ec.message()
+                            << '\n';
+                  flat_buffer empty_response{};
+                  it->second.completion_handler(ec, empty_response);
+                  pending_requests_.erase(it);
+                }
+              }
+              // If write succeeded, we wait for the response in on_read
+            };
+        write_queue_.emplace_back(std::move(buffer),
+                                  std::move(write_completion));
+        do_write();
+      });
 }
 
-template <class Derived>
-void WebSocketSession<Derived>::start_read_loop() {
+template <class Derived> void WebSocketSession<Derived>::start_read_loop()
+{
   do_read();
 }
 
-template <class Derived>
-void WebSocketSession<Derived>::start_write_loop() {
+template <class Derived> void WebSocketSession<Derived>::start_write_loop()
+{
   // Write loop is driven by incoming requests, no need for separate start
 }
 
 template <class Derived>
-void WebSocketSession<Derived>::inject_request_id(flat_buffer& buffer, uint32_t request_id) {
+void WebSocketSession<Derived>::inject_request_id(flat_buffer& buffer,
+                                                  uint32_t request_id)
+{
   if (buffer.size() >= sizeof(impl::Header)) {
     impl::flat::Header_Direct header(buffer, 0);
     header.request_id() = request_id;
@@ -319,7 +343,9 @@ void WebSocketSession<Derived>::inject_request_id(flat_buffer& buffer, uint32_t 
 }
 
 template <class Derived>
-uint32_t WebSocketSession<Derived>::extract_request_id(const flat_buffer& buffer) {
+uint32_t
+WebSocketSession<Derived>::extract_request_id(const flat_buffer& buffer)
+{
   if (buffer.size() >= sizeof(impl::Header)) {
     const impl::flat::Header_Direct header(const_cast<flat_buffer&>(buffer), 0);
     return header.request_id();

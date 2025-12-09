@@ -5,13 +5,13 @@
 
 #include <benchmark/benchmark.h>
 
-#include <iostream>
-#include <thread>
 #include <chrono>
-#include <sys/wait.h>
-#include <unistd.h>
-#include <signal.h>
 #include <filesystem>
+#include <iostream>
+#include <signal.h>
+#include <sys/wait.h>
+#include <thread>
+#include <unistd.h>
 
 #include "common.hpp"
 
@@ -24,17 +24,20 @@ namespace fs = std::filesystem;
 namespace nprpc::benchmark {
 
 // Server process manager
-class BenchmarkServerManager {
+class BenchmarkServerManager
+{
   pid_t nprpc_server_pid_ = -1;
   pid_t grpc_server_pid_ = -1;
   pid_t capnp_server_pid_ = -1;
 
 public:
-  bool start_nprpc_server(fs::path server_path) {
+  bool start_nprpc_server(fs::path server_path)
+  {
     std::cout << "Starting NPRPC benchmark server...\n";
 
     if (!fs::exists(server_path)) {
-      std::cerr << "ERROR: benchmark_server executable not found at: " << server_path << "\n";
+      std::cerr << "ERROR: benchmark_server executable not found at: "
+                << server_path << "\n";
       std::cerr << "Current path: " << fs::current_path() << "\n";
       return false;
     }
@@ -54,7 +57,8 @@ public:
       _exit(1);
     } else {
       // Parent process - wait for server to be ready
-      std::cout << "NPRPC benchmark server started with PID: " << nprpc_server_pid_ << "\n";
+      std::cout << "NPRPC benchmark server started with PID: "
+                << nprpc_server_pid_ << "\n";
       std::cout << "Waiting for server to initialize...\n";
       std::this_thread::sleep_for(std::chrono::seconds(2));
 
@@ -72,11 +76,13 @@ public:
     }
   }
 
-  bool start_grpc_server(fs::path server_path) {
+  bool start_grpc_server(fs::path server_path)
+  {
     std::cout << "Starting gRPC benchmark server...\n";
 
     if (!fs::exists(server_path)) {
-      std::cout << "WARNING: grpc_benchmark_server not found, gRPC benchmarks will be skipped\n";
+      std::cout << "WARNING: grpc_benchmark_server not found, gRPC benchmarks "
+                   "will be skipped\n";
       return false;
     }
 
@@ -94,7 +100,8 @@ public:
       execl(server_path.c_str(), "grpc_benchmark_server", nullptr);
       _exit(1);
     } else {
-      std::cout << "gRPC benchmark server started with PID: " << grpc_server_pid_ << "\n";
+      std::cout << "gRPC benchmark server started with PID: "
+                << grpc_server_pid_ << "\n";
       std::this_thread::sleep_for(std::chrono::seconds(1));
 
       // Check if still alive
@@ -111,13 +118,16 @@ public:
     }
   }
 
-  void stop_nprpc_server() {
-    if (nprpc_server_pid_ <= 0) return;
+  void stop_nprpc_server()
+  {
+    if (nprpc_server_pid_ <= 0)
+      return;
 
     std::cout << "\nShutting down NPRPC benchmark server...\n";
 
     try {
-      auto control = get_object<nprpc::benchmark::ServerControl>("nprpc_server_control");
+      auto control =
+          get_object<nprpc::benchmark::ServerControl>("nprpc_server_control");
       control->Shutdown();
       std::cout << "Graceful shutdown signal sent\n";
 
@@ -146,8 +156,10 @@ public:
     std::cout << "NPRPC server stopped\n";
   }
 
-  void stop_grpc_server() {
-    if (grpc_server_pid_ <= 0) return;
+  void stop_grpc_server()
+  {
+    if (grpc_server_pid_ <= 0)
+      return;
 
     std::cout << "Shutting down gRPC benchmark server...\n";
     kill(grpc_server_pid_, SIGTERM);
@@ -158,11 +170,13 @@ public:
     std::cout << "gRPC server stopped\n";
   }
 
-  bool start_capnp_server(fs::path server_path) {
+  bool start_capnp_server(fs::path server_path)
+  {
     std::cout << "Starting Cap'n Proto benchmark server...\n";
 
     if (!fs::exists(server_path)) {
-      std::cout << "WARNING: capnp_benchmark_server not found, Cap'n Proto benchmarks will be skipped\n";
+      std::cout << "WARNING: capnp_benchmark_server not found, Cap'n Proto "
+                   "benchmarks will be skipped\n";
       return false;
     }
 
@@ -176,10 +190,12 @@ public:
       // Child process - run the server
       freopen("/dev/null", "w", stdout);
       freopen("/dev/null", "w", stderr);
-      execl(server_path.c_str(), "capnp_benchmark_server", "localhost:50052", nullptr);
+      execl(server_path.c_str(), "capnp_benchmark_server", "localhost:50052",
+            nullptr);
       _exit(1);
     } else {
-      std::cout << "Cap'n Proto benchmark server started with PID: " << capnp_server_pid_ << "\n";
+      std::cout << "Cap'n Proto benchmark server started with PID: "
+                << capnp_server_pid_ << "\n";
       std::this_thread::sleep_for(std::chrono::seconds(1));
 
       // Check if still alive
@@ -196,8 +212,10 @@ public:
     }
   }
 
-  void stop_capnp_server() {
-    if (capnp_server_pid_ <= 0) return;
+  void stop_capnp_server()
+  {
+    if (capnp_server_pid_ <= 0)
+      return;
 
     std::cout << "Shutting down Cap'n Proto benchmark server...\n";
     kill(capnp_server_pid_, SIGTERM);
@@ -208,7 +226,8 @@ public:
     std::cout << "Cap'n Proto server stopped\n";
   }
 
-  ~BenchmarkServerManager() {
+  ~BenchmarkServerManager()
+  {
     stop_nprpc_server();
     stop_grpc_server();
     stop_capnp_server();
@@ -217,7 +236,8 @@ public:
 
 } // namespace nprpc::benchmark
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv)
+{
   if (argc == 0 || argv[0] == nullptr)
     return 1;
 
@@ -246,7 +266,8 @@ int main(int argc, char** argv) {
   // Start gRPC server (optional - will skip gRPC benchmarks if not available)
   server.start_grpc_server(exe_directory / "grpc_benchmark_server");
 
-  // Start Cap'n Proto server (optional - will skip Cap'n Proto benchmarks if not available)
+  // Start Cap'n Proto server (optional - will skip Cap'n Proto benchmarks if
+  // not available)
   server.start_capnp_server(exe_directory / "capnp_benchmark_server");
 
   std::cout << "=== Setup Complete ===\n\n";

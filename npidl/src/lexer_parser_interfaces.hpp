@@ -1,5 +1,6 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
-// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// This file is a part of npsystem (Distributed Control System) and covered by
+// LICENSING file in the topmost directory
 
 #pragma once
 
@@ -13,7 +14,8 @@ class Context;
 class ISourceProvider;
 
 // Interface for Lexer - tokenization
-class ILexer {
+class ILexer
+{
 public:
   virtual ~ILexer() = default;
 
@@ -29,7 +31,8 @@ public:
 };
 
 // Interface for Parser - syntax analysis
-class IParser {
+class IParser
+{
 public:
   virtual ~IParser() = default;
 

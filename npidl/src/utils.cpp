@@ -1,135 +1,190 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
-// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// This file is a part of npsystem (Distributed Control System) and covered by
+// LICENSING file in the topmost directory
 
 #include "utils.hpp"
+#include <boost/container/small_vector.hpp>
 #include <cassert>
 #include <stack>
-#include <boost/container/small_vector.hpp>
 namespace npidl {
 
-int get_fundamental_size(TokenId token_id) {
+int get_fundamental_size(TokenId token_id)
+{
   switch (token_id) {
-  case TokenId::Boolean: case TokenId::Int8: case TokenId::UInt8:      return 1;
-  case TokenId::Int16:  case TokenId::UInt16:                          return 2;
-  case TokenId::Int32:  case TokenId::UInt32: case TokenId::Float32:  return 4;
-  case TokenId::Int64:  case TokenId::UInt64: case TokenId::Float64:  return 8;
-  default: assert(false); return 0;
+  case TokenId::Boolean:
+  case TokenId::Int8:
+  case TokenId::UInt8:
+    return 1;
+  case TokenId::Int16:
+  case TokenId::UInt16:
+    return 2;
+  case TokenId::Int32:
+  case TokenId::UInt32:
+  case TokenId::Float32:
+    return 4;
+  case TokenId::Int64:
+  case TokenId::UInt64:
+  case TokenId::Float64:
+    return 8;
+  default:
+    assert(false);
+    return 0;
   }
 }
 
-int align_offset(int align_of, int& last_field_ended, int size, int elements_size) {
+int align_offset(int align_of,
+                 int& last_field_ended,
+                 int size,
+                 int elements_size)
+{
   int unalign = last_field_ended % align_of;
   int offset = last_field_ended + (unalign ? align_of - unalign : 0);
   last_field_ended = offset + (size * elements_size);
   return offset;
 }
 
-void calc_struct_size_align(AstStructDecl* s, AstTypeDecl* t, int& offset, int elements_size) {
+void calc_struct_size_align(AstStructDecl* s,
+                            AstTypeDecl* t,
+                            int& offset,
+                            int elements_size)
+{
   switch (t->id) {
-    case FieldType::Fundamental: {
-      int size = get_fundamental_size(cft(t)->token_id);
-      if (s->align < size) s->align = size;
-      align_offset(size, offset, size, elements_size);
-      break;
-    }
-    case FieldType::Struct:
-    {
-      auto member_s = cflat(t);
-      assert(member_s->align != -1 && member_s->size != -1);
-      if (s->align < member_s->align) s->align = member_s->align;
-      align_offset(member_s->align, offset, member_s->size, elements_size);
-      break;
-    }
-    case FieldType::Array:
-      calc_struct_size_align(s, car(t)->type, offset, car(t)->length);
-      break;
-    case FieldType::Alias:
-      calc_struct_size_align(s, calias(t)->type, offset, 1);
-      break;
-    case FieldType::Enum: {
-      int size = get_fundamental_size(cenum(t)->token_id);
-      if (s->align < size) s->align = size;
-      align_offset(size, offset, size, elements_size);
-      break;
-    }
-    case FieldType::Vector:
-    case FieldType::String:
-      if (s->align < 4) s->align = 4;
-      align_offset(4, offset, 8, elements_size);
-      break;
-    case FieldType::Optional:
-      if (s->align < 4) s->align = 4;
-      align_offset(4, offset, 4, elements_size);
-      break;
-    case FieldType::Object: // nprpc::detail::flat::ObjectId
-      if (s->align < static_cast<int>(align_of_object)) s->align = align_of_object;
-      align_offset(align_of_object, offset, size_of_object, elements_size);
-      break;
-    default:
-      assert(false);
-      break;
-    }
+  case FieldType::Fundamental: {
+    int size = get_fundamental_size(cft(t)->token_id);
+    if (s->align < size)
+      s->align = size;
+    align_offset(size, offset, size, elements_size);
+    break;
+  }
+  case FieldType::Struct: {
+    auto member_s = cflat(t);
+    assert(member_s->align != -1 && member_s->size != -1);
+    if (s->align < member_s->align)
+      s->align = member_s->align;
+    align_offset(member_s->align, offset, member_s->size, elements_size);
+    break;
+  }
+  case FieldType::Array:
+    calc_struct_size_align(s, car(t)->type, offset, car(t)->length);
+    break;
+  case FieldType::Alias:
+    calc_struct_size_align(s, calias(t)->type, offset, 1);
+    break;
+  case FieldType::Enum: {
+    int size = get_fundamental_size(cenum(t)->token_id);
+    if (s->align < size)
+      s->align = size;
+    align_offset(size, offset, size, elements_size);
+    break;
+  }
+  case FieldType::Vector:
+  case FieldType::String:
+    if (s->align < 4)
+      s->align = 4;
+    align_offset(4, offset, 8, elements_size);
+    break;
+  case FieldType::Optional:
+    if (s->align < 4)
+      s->align = 4;
+    align_offset(4, offset, 4, elements_size);
+    break;
+  case FieldType::Object: // nprpc::detail::flat::ObjectId
+    if (s->align < static_cast<int>(align_of_object))
+      s->align = align_of_object;
+    align_offset(align_of_object, offset, size_of_object, elements_size);
+    break;
+  default:
+    assert(false);
+    break;
+  }
 }
 
-void calc_struct_size_align(AstStructDecl* s) {
+void calc_struct_size_align(AstStructDecl* s)
+{
   s->align = 1;
   int offset = 0;
-  
+
   for (auto f : s->fields) {
     calc_struct_size_align(s, f->type, offset, 1);
   }
-  
+
   s->size = align_offset(s->align, offset, 0);
-  
+
   // std::cout << s->name << ": s. " << s->size << " a. " << s->align <<"\n";
 }
 
-std::tuple<int, int> get_type_size_align(AstTypeDecl* type) {
+std::tuple<int, int> get_type_size_align(AstTypeDecl* type)
+{
   switch (type->id) {
-    case FieldType::Fundamental: {
-      int size = get_fundamental_size(cft(type)->token_id);
-      return { size, size };
-    }
-    case FieldType::Struct:
-      return { cflat(type)->size, cflat(type)->align };
-    case FieldType::Array: {
-      auto const [size, align] = get_type_size_align(car(type)->type);
-      return { size * car(type)->length, align };
-    }
-    case FieldType::Vector:
-    case FieldType::String:
-      return { 8, 4 };
-    case FieldType::Optional:
-      return { 4, 4 };
-    case FieldType::Enum: {
-      const auto size = get_fundamental_size(cenum(type)->token_id);
-      return { size, size };
-    }
-    case FieldType::Alias:
-      return get_type_size_align(calias(type)->get_real_type());
-    default:
-      assert(false);
-      break;
-    }
+  case FieldType::Fundamental: {
+    int size = get_fundamental_size(cft(type)->token_id);
+    return {size, size};
+  }
+  case FieldType::Struct:
+    return {cflat(type)->size, cflat(type)->align};
+  case FieldType::Array: {
+    auto const [size, align] = get_type_size_align(car(type)->type);
+    return {size * car(type)->length, align};
+  }
+  case FieldType::Vector:
+  case FieldType::String:
+    return {8, 4};
+  case FieldType::Optional:
+    return {4, 4};
+  case FieldType::Enum: {
+    const auto size = get_fundamental_size(cenum(type)->token_id);
+    return {size, size};
+  }
+  case FieldType::Alias:
+    return get_type_size_align(calias(type)->get_real_type());
+  default:
+    assert(false);
+    break;
+  }
 
   return {};
 }
 
-void get_type_id(const AstTypeDecl* type, struct_id_t& id, std::string* field_name) {
+void get_type_id(const AstTypeDecl* type,
+                 struct_id_t& id,
+                 std::string* field_name)
+{
   switch (type->id) {
   case FieldType::Fundamental:
     switch (cft(type)->token_id) {
-    case TokenId::Boolean: id += "Fb"; break;
-    case TokenId::Int8: id += "Fi8"; break;
-    case TokenId::UInt8: id += "Fu8"; break;
-    case TokenId::Int16: id += "Fi16"; break;
-    case TokenId::UInt16: id += "Fu16"; break;
-    case TokenId::Int32: id += "Fi32"; break;
-    case TokenId::UInt32: id += "Fu32"; break;
-    case TokenId::Int64: id += "Fi64"; break;
-    case TokenId::UInt64: id += "Fu64"; break;
-    case TokenId::Float32: id += "Ff32"; break;
-    case TokenId::Float64: id += "Ff64"; break;
+    case TokenId::Boolean:
+      id += "Fb";
+      break;
+    case TokenId::Int8:
+      id += "Fi8";
+      break;
+    case TokenId::UInt8:
+      id += "Fu8";
+      break;
+    case TokenId::Int16:
+      id += "Fi16";
+      break;
+    case TokenId::UInt16:
+      id += "Fu16";
+      break;
+    case TokenId::Int32:
+      id += "Fi32";
+      break;
+    case TokenId::UInt32:
+      id += "Fu32";
+      break;
+    case TokenId::Int64:
+      id += "Fi64";
+      break;
+    case TokenId::UInt64:
+      id += "Fu64";
+      break;
+    case TokenId::Float32:
+      id += "Ff32";
+      break;
+    case TokenId::Float64:
+      id += "Ff64";
+      break;
     default:
       assert(false);
       break;
@@ -137,7 +192,8 @@ void get_type_id(const AstTypeDecl* type, struct_id_t& id, std::string* field_na
     break;
   case FieldType::Struct:
     id += static_cast<const AstStructDecl*>(type)->name;
-    if (field_name) id += *field_name;
+    if (field_name)
+      id += *field_name;
     break;
   case FieldType::Array:
     id += 'A';
@@ -169,9 +225,11 @@ void get_type_id(const AstTypeDecl* type, struct_id_t& id, std::string* field_na
   }
 }
 
-const struct_id_t& AstStructDecl::get_function_struct_id() {
-  if (unique_id.length() > 0) return unique_id;
-  
+const struct_id_t& AstStructDecl::get_function_struct_id()
+{
+  if (unique_id.length() > 0)
+    return unique_id;
+
   int param_n = 0;
   for (auto f : fields) {
     unique_id += std::to_string(++param_n);
@@ -181,7 +239,8 @@ const struct_id_t& AstStructDecl::get_function_struct_id() {
   return unique_id;
 }
 
-bool is_flat(AstTypeDecl* type) {
+bool is_flat(AstTypeDecl* type)
+{
   switch (type->id) {
   case FieldType::Fundamental:
   case FieldType::Enum:
@@ -204,7 +263,8 @@ bool is_flat(AstTypeDecl* type) {
   }
 }
 
-bool is_fundamental(AstTypeDecl* type) {
+bool is_fundamental(AstTypeDecl* type)
+{
   switch (type->id) {
   case FieldType::Fundamental:
   case FieldType::Enum:
@@ -216,14 +276,16 @@ bool is_fundamental(AstTypeDecl* type) {
   }
 }
 
-bool contains_object(AstTypeDecl* type) {
+bool contains_object(AstTypeDecl* type)
+{
   switch (type->id) {
   case FieldType::Object:
     return true;
   case FieldType::Struct: {
     auto s = cflat(type);
     for (auto f : s->fields) {
-      if (contains_object(f->type)) return true;
+      if (contains_object(f->type))
+        return true;
     }
     return false;
   }
@@ -239,10 +301,9 @@ bool contains_object(AstTypeDecl* type) {
   }
 }
 
-void dfs_interface(
-  std::function<void(AstInterfaceDecl*)> fn, 
-  AstInterfaceDecl* start
-) {
+void dfs_interface(std::function<void(AstInterfaceDecl*)> fn,
+                   AstInterfaceDecl* start)
+{
   using T = std::pair<size_t, std::vector<AstInterfaceDecl*>*>;
   std::stack<T, boost::container::small_vector<T, 8>> stack;
   stack.push({0, &start->plist});

@@ -1,11 +1,11 @@
-#include <nprpc/impl/http_rpc_session.hpp>
 #include "../logging.hpp"
 #include <cstring>
+#include <nprpc/impl/http_rpc_session.hpp>
 
 namespace nprpc::impl {
 
-bool HttpRpcSession::process_rpc_request(
-  const std::string& request_data, std::string& response_data)
+bool HttpRpcSession::process_rpc_request(const std::string& request_data,
+                                         std::string& response_data)
 {
   try {
     // FIXME: Avoid copy
@@ -33,4 +33,4 @@ bool HttpRpcSession::process_rpc_request(
   }
 }
 
-}  // namespace nprpc::impl
+} // namespace nprpc::impl

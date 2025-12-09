@@ -1,18 +1,15 @@
-#include <nprpc/impl/shared_memory_listener.hpp>
-#include <nprpc/impl/shared_memory_channel.hpp>
-#include <nprpc/impl/nprpc_impl.hpp>
-#include <nprpc/impl/nprpc_impl.hpp>
-#include <nprpc/common.hpp>
 #include "../logging.hpp"
+#include <nprpc/common.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/shared_memory_channel.hpp>
+#include <nprpc/impl/shared_memory_listener.hpp>
 
 namespace nprpc::impl {
 
-SharedMemoryListener::SharedMemoryListener(
-  boost::asio::io_context& ioc,
-  const std::string&       listener_name,
-  AcceptHandler            accept_handler)
-    : listener_name_(listener_name),
-      ioc_(ioc),
+SharedMemoryListener::SharedMemoryListener(boost::asio::io_context& ioc,
+                                           const std::string& listener_name,
+                                           AcceptHandler accept_handler)
+    : listener_name_(listener_name), ioc_(ioc),
       accept_handler_(std::move(accept_handler))
 {
   if (listener_name_.empty()) {
@@ -29,10 +26,10 @@ SharedMemoryListener::SharedMemoryListener(
   LockFreeRingBuffer::remove(accept_ring_name);
 
   try {
-    // Small ring buffer for handshakes (10KB total - enough for ~10 handshakes)
-    // With variable-sized messages, this is much more efficient
+    // Small ring buffer for handshakes (10KB total - enough for ~10
+    // handshakes) With variable-sized messages, this is much more efficient
     accept_ring_ = LockFreeRingBuffer::create(accept_ring_name,
-                                              10 * 1024);  // 10KB total buffer
+                                              10 * 1024); // 10KB total buffer
 
     if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
       NPRPC_LOG_INFO("SharedMemoryListener created: {}", listener_name_);
@@ -40,7 +37,7 @@ SharedMemoryListener::SharedMemoryListener(
   } catch (const std::exception& e) {
     NPRPC_LOG_ERROR("Failed to create listener ring: {}", e.what());
     throw std::runtime_error(
-      std::string("SharedMemoryListener creation failed: ") + e.what());
+        std::string("SharedMemoryListener creation failed: ") + e.what());
   }
 }
 
@@ -68,7 +65,7 @@ void SharedMemoryListener::start()
     return;
   }
 
-  running_       = true;
+  running_ = true;
   accept_thread_ = std::make_unique<std::thread>([this]() { accept_loop(); });
 
   if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
@@ -95,13 +92,13 @@ void SharedMemoryListener::stop()
 
 void SharedMemoryListener::accept_loop()
 {
-  char buffer[1024];  // Buffer for handshake
+  char buffer[1024]; // Buffer for handshake
 
   while (running_) {
     try {
       // Wait for connection request with timeout
       size_t bytes_read = accept_ring_->read_with_timeout(
-        buffer, sizeof(buffer), std::chrono::milliseconds(100));
+          buffer, sizeof(buffer), std::chrono::milliseconds(100));
 
       if (bytes_read > 0) {
         // Validate handshake size
@@ -116,8 +113,8 @@ void SharedMemoryListener::accept_loop()
         std::memcpy(&handshake, buffer, sizeof(SharedMemoryHandshake));
 
         if (!handshake.is_valid()) {
-          NPRPC_LOG_ERROR(
-            "SharedMemoryListener: Invalid handshake magic/version");
+          NPRPC_LOG_ERROR("SharedMemoryListener: Invalid handshake "
+                          "magic/version");
           continue;
         }
 
@@ -138,7 +135,7 @@ void SharedMemoryListener::accept_loop()
 }
 
 void SharedMemoryListener::handle_connection_request(
-  const SharedMemoryHandshake& handshake)
+    const SharedMemoryHandshake& handshake)
 {
   std::string channel_id(handshake.channel_id);
 
@@ -149,8 +146,7 @@ void SharedMemoryListener::handle_connection_request(
 
   try {
     // Create dedicated channel for this client (server creates the rings)
-    auto channel = std::make_unique<SharedMemoryChannel>(ioc_,
-                                                         channel_id,
+    auto channel = std::make_unique<SharedMemoryChannel>(ioc_, channel_id,
                                                          /*is_server=*/true,
                                                          /*create_rings=*/true);
 
@@ -172,8 +168,9 @@ void SharedMemoryListener::handle_connection_request(
 }
 
 // Client-side connection establishment
-std::unique_ptr<SharedMemoryChannel> connect_to_shared_memory_listener(
-  boost::asio::io_context& ioc, const std::string& listener_name)
+std::unique_ptr<SharedMemoryChannel>
+connect_to_shared_memory_listener(boost::asio::io_context& ioc,
+                                  const std::string& listener_name)
 {
   if (listener_name.empty()) {
     throw std::invalid_argument("Listener name cannot be empty");
@@ -183,8 +180,8 @@ std::unique_ptr<SharedMemoryChannel> connect_to_shared_memory_listener(
   std::string channel_id = SharedMemoryChannel::generate_channel_id();
 
   if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO(
-      "Connecting to listener: {} with channel: {}", listener_name, channel_id);
+    NPRPC_LOG_INFO("Connecting to listener: {} with channel: {}", listener_name,
+                   channel_id);
   }
 
   // Create our side of the channel first (client doesn't create queues yet)
@@ -192,25 +189,25 @@ std::unique_ptr<SharedMemoryChannel> connect_to_shared_memory_listener(
 
   // Prepare handshake
   SharedMemoryHandshake handshake;
-  std::strncpy(
-    handshake.channel_id, channel_id.c_str(), sizeof(handshake.channel_id) - 1);
+  std::strncpy(handshake.channel_id, channel_id.c_str(),
+               sizeof(handshake.channel_id) - 1);
   handshake.channel_id[sizeof(handshake.channel_id) - 1] = '\0';
 
   try {
     // Open the listener's accept ring
     std::string accept_ring_name = make_shm_name(listener_name, "accept");
-    auto        accept_ring      = LockFreeRingBuffer::open(accept_ring_name);
+    auto accept_ring = LockFreeRingBuffer::open(accept_ring_name);
 
     // Send connection request
     if (!accept_ring->try_write(&handshake, sizeof(handshake))) {
-      throw std::runtime_error(
-        "Failed to send connection request to listener (ring buffer full)");
+      throw std::runtime_error("Failed to send connection request to "
+                               "listener (ring buffer full)");
     }
 
     if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
       NPRPC_LOG_INFO(
-        "Sent connection request, waiting for server to create ring "
-        "buffers...");
+          "Sent connection request, waiting for server to create ring "
+          "buffers...");
     }
 
     // Poll for ring buffer existence (wait for server to create them)
@@ -219,8 +216,7 @@ std::unique_ptr<SharedMemoryChannel> connect_to_shared_memory_listener(
 
     while (!channel) {
       try {
-        channel = std::make_unique<SharedMemoryChannel>(ioc,
-                                                        channel_id,
+        channel = std::make_unique<SharedMemoryChannel>(ioc, channel_id,
                                                         /*is_server=*/false,
                                                         /*create_rings=*/false);
         break;
@@ -231,7 +227,7 @@ std::unique_ptr<SharedMemoryChannel> connect_to_shared_memory_listener(
         auto elapsed = std::chrono::steady_clock::now() - start;
         if (elapsed > std::chrono::seconds(5)) {
           throw std::runtime_error(
-            "Timeout waiting for server to create ring buffers");
+              "Timeout waiting for server to create ring buffers");
         }
       }
     }
@@ -249,4 +245,4 @@ std::unique_ptr<SharedMemoryChannel> connect_to_shared_memory_listener(
   }
 }
 
-}  // namespace nprpc::impl
+} // namespace nprpc::impl

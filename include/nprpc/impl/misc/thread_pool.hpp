@@ -6,14 +6,14 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
-#include <boost/asio/use_future.hpp>
-#include <boost/asio/thread_pool.hpp>
 #include <boost/asio/strand.hpp>
+#include <boost/asio/thread_pool.hpp>
+#include <boost/asio/use_future.hpp>
 #include <future>
-#include <mutex>
-#include <thread>
 #include <iostream>
+#include <mutex>
 #include <string_view>
+#include <thread>
 
 namespace nprpc {
 
@@ -24,12 +24,12 @@ class thread_pool
 {
   boost::asio::io_context ioc_;
   boost::asio::executor_work_guard<boost::asio::io_context::executor_type>
-                          work_guard_;
+      work_guard_;
   boost::asio::io_context ioc1_;
   boost::asio::executor_work_guard<boost::asio::io_context::executor_type>
-                           work_guard1_;
-  boost::asio::thread_pool pool_ {NUMBER_OF_THREADS + NUMBER_OF_IOC_THREADS +
-                                  NUMBER_OF_IOC1_THREADS};
+      work_guard1_;
+  boost::asio::thread_pool pool_{NUMBER_OF_THREADS + NUMBER_OF_IOC_THREADS +
+                                 NUMBER_OF_IOC1_THREADS};
 
   std::mutex mtx_;
 
@@ -41,21 +41,21 @@ class thread_pool
       boost::asio::post(pool_, [this] {
         ioc_.run();
         // std::lock_guard lk(mtx_);
-        // std::cout << "ioc thread exited: " << std::this_thread::get_id() <<
-        // std::endl;
+        // std::cout << "ioc thread exited: " <<
+        // std::this_thread::get_id() << std::endl;
       });
     }
     for (size_t i = 0; i < NUMBER_OF_IOC1_THREADS; ++i) {
       boost::asio::post(pool_, [this] {
         ioc1_.run();
         // std::lock_guard lk(mtx_);
-        // std::cout << "ioc1 thread exited: " << std::this_thread::get_id() <<
-        // std::endl;
+        // std::cout << "ioc1 thread exited: " <<
+        // std::this_thread::get_id() << std::endl;
       });
     }
   }
 
- public:
+public:
   static thread_pool& get_instance()
   {
     static thread_pool tp;
@@ -93,17 +93,16 @@ using thread_pool_7 = thread_pool<3, 7, 2>;
 using thread_pool_8 = thread_pool<4, 8, 2>;
 
 template <bool UseFuture, typename Executor, typename Func, typename... Args>
-std::enable_if_t<!UseFuture, void> async(
-  Executor& ctx, Func&& job, Args&&... args)
+std::enable_if_t<!UseFuture, void>
+async(Executor& ctx, Func&& job, Args&&... args)
 {
   boost::asio::post(
-    ctx, std::bind(std::forward<Func>(job), std::forward<Args>(args)...));
+      ctx, std::bind(std::forward<Func>(job), std::forward<Args>(args)...));
 }
 
 template <bool UseFuture, typename Executor, typename Func, typename... Args>
 std::enable_if_t<UseFuture, std::future<std::invoke_result_t<Func, Args...>>>
-async(
-  Executor& ctx, Func&& job, Args&&... args)
+async(Executor& ctx, Func&& job, Args&&... args)
 {
   using boost::asio::use_future;
   return boost::asio::post(ctx,
@@ -111,4 +110,4 @@ async(
                                                 std::forward<Args>(args)...)));
 }
 
-}  // namespace nprpc
+} // namespace nprpc

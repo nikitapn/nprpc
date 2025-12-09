@@ -1,18 +1,20 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
-// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// This file is a part of npsystem (Distributed Control System) and covered by
+// LICENSING file in the topmost directory
 
-#include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/common.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
 
-#include <iostream>
-#include <future>
 #include <boost/asio/write.hpp>
+#include <future>
+#include <iostream>
 
 #include "helper.hpp"
 
 namespace nprpc::impl {
 
-void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
+void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
+{
   assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
   if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
@@ -29,9 +31,11 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
     bool done = false;
     boost::system::error_code result;
 
-    void operator()() noexcept override {
+    void operator()() noexcept override
+    {
       this_.set_timeout(timeout_ms);
-      this_.write_async(buf, [&](const boost::system::error_code& ec, size_t bytes_transferred) {
+      this_.write_async(buf, [&](const boost::system::error_code& ec,
+                                 size_t bytes_transferred) {
         boost::ignore_unused(bytes_transferred);
         if (ec) {
           on_failed(ec);
@@ -39,10 +43,11 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
           return;
         }
         this_.do_read_size();
-        });
+      });
     }
 
-    void on_failed(const boost::system::error_code& ec) noexcept override {
+    void on_failed(const boost::system::error_code& ec) noexcept override
+    {
       {
         std::lock_guard<std::mutex> lock(mtx);
         result = ec;
@@ -51,7 +56,8 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
       cv.notify_one();
     }
 
-    void on_executed() noexcept override {
+    void on_executed() noexcept override
+    {
       {
         std::lock_guard<std::mutex> lock(mtx);
         result = boost::system::error_code{};
@@ -61,17 +67,16 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
     }
 
     flat_buffer& buffer() noexcept override { return buf; };
-    
-    boost::system::error_code wait() {
+
+    boost::system::error_code wait()
+    {
       std::unique_lock<std::mutex> lock(mtx);
-      cv.wait(lock, [this]{ return done; });
+      cv.wait(lock, [this] { return done; });
       return result;
     }
 
     WorkImpl(flat_buffer& _buf, SocketConnection& _this_, uint32_t _timeout_ms)
-      : buf(_buf)
-      , this_(_this_)
-      , timeout_ms(_timeout_ms)
+        : buf(_buf), this_(_this_), timeout_ms(_timeout_ms)
     {
     }
   };
@@ -88,12 +93,14 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
     return;
   }
 
-  if (ec == boost::asio::error::connection_reset || ec == boost::asio::error::broken_pipe) {
+  if (ec == boost::asio::error::connection_reset ||
+      ec == boost::asio::error::broken_pipe) {
     reconnect();
     auto w = std::make_shared<WorkImpl>(buffer, *this, timeout_ms);
     add_work(w);
     auto ec = w->wait();
-    if (ec) close();
+    if (ec)
+      close();
   } else {
     fail(ec, "send_receive");
     close();
@@ -102,21 +109,26 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms) {
 }
 
 void SocketConnection::send_receive_async(
-  flat_buffer&& buffer,
-  std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&& completion_handler,
-  uint32_t timeout_ms
-) {
+    flat_buffer&& buffer,
+    std::optional<std::function<void(const boost::system::error_code&,
+                                     flat_buffer&)>>&& completion_handler,
+    uint32_t timeout_ms)
+{
   assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
   struct WorkImpl : IOWork {
     flat_buffer buf;
     std::shared_ptr<SocketConnection> this_;
     uint32_t timeout_ms;
-    std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>> handler;
-    
-    void operator()() noexcept override {
+    std::optional<
+        std::function<void(const boost::system::error_code&, flat_buffer&)>>
+        handler;
+
+    void operator()() noexcept override
+    {
       this_->set_timeout(timeout_ms);
-      this_->write_async(buf, [&](const boost::system::error_code& ec, size_t bytes_transferred) {
+      this_->write_async(buf, [&](const boost::system::error_code& ec,
+                                  size_t bytes_transferred) {
         boost::ignore_unused(bytes_transferred);
         if (ec) {
           on_failed(ec);
@@ -127,38 +139,38 @@ void SocketConnection::send_receive_async(
       });
     }
 
-    void on_failed(const boost::system::error_code& ec) noexcept override {
-      if (handler) handler.value()(ec, buf);
+    void on_failed(const boost::system::error_code& ec) noexcept override
+    {
+      if (handler)
+        handler.value()(ec, buf);
     }
 
-    void on_executed() noexcept override {
-      if (handler) handler.value()(boost::system::error_code{}, buf);
+    void on_executed() noexcept override
+    {
+      if (handler)
+        handler.value()(boost::system::error_code{}, buf);
     }
 
     flat_buffer& buffer() noexcept override { return buf; };
 
-    WorkImpl(flat_buffer&& _buf, 
-      std::shared_ptr<SocketConnection> _this_, 
-      std::optional<
-        std::function<
-          void(const boost::system::error_code&, flat_buffer&)>
-      >&& _handler,
-      uint32_t _timeout_ms)
-      : buf(std::move(_buf))
-      , this_(_this_)
-      , timeout_ms(_timeout_ms)
-      , handler(std::move(_handler))
+    WorkImpl(flat_buffer&& _buf,
+             std::shared_ptr<SocketConnection> _this_,
+             std::optional<std::function<void(const boost::system::error_code&,
+                                              flat_buffer&)>>&& _handler,
+             uint32_t _timeout_ms)
+        : buf(std::move(_buf)), this_(_this_), timeout_ms(_timeout_ms),
+          handler(std::move(_handler))
     {
     }
   };
 
-  add_work(
-    std::make_shared<WorkImpl>(std::move(buffer),
-    shared_from_this(),
-    std::move(completion_handler), timeout_ms));
+  add_work(std::make_shared<WorkImpl>(std::move(buffer), shared_from_this(),
+                                      std::move(completion_handler),
+                                      timeout_ms));
 }
 
-void SocketConnection::reconnect() {
+void SocketConnection::reconnect()
+{
   socket_ = std::move(net::ip::tcp::socket(socket_.get_executor()));
 
   boost::system::error_code ec;
@@ -170,32 +182,33 @@ void SocketConnection::reconnect() {
   }
 }
 
-void SocketConnection::do_read_size() {
+void SocketConnection::do_read_size()
+{
   auto& buf = current_rx_buffer();
   buf.consume(buf.size());
   buf.prepare(4);
 
   timeout_timer_.expires_from_now(timeout_);
-  socket_.async_read_some(
-    net::mutable_buffer(&rx_size_, 4),
-    std::bind(&SocketConnection::on_read_size, 
-      shared_from_this(),
-      std::placeholders::_1, std::placeholders::_2));
+  socket_.async_read_some(net::mutable_buffer(&rx_size_, 4),
+                          std::bind(&SocketConnection::on_read_size,
+                                    shared_from_this(), std::placeholders::_1,
+                                    std::placeholders::_2));
 }
 
-void SocketConnection::do_read_body() {
+void SocketConnection::do_read_body()
+{
   timeout_timer_.expires_from_now(timeout_);
-  socket_.async_read_some(
-    current_rx_buffer().prepare(rx_size_),
-    std::bind(&SocketConnection::on_read_body,
-      shared_from_this(),
-      std::placeholders::_1, std::placeholders::_2)
-  );
+  socket_.async_read_some(current_rx_buffer().prepare(rx_size_),
+                          std::bind(&SocketConnection::on_read_body,
+                                    shared_from_this(), std::placeholders::_1,
+                                    std::placeholders::_2));
 }
 
-void SocketConnection::on_read_size(const boost::system::error_code& ec, size_t len) {
+void SocketConnection::on_read_size(const boost::system::error_code& ec,
+                                    size_t len)
+{
   timeout_timer_.expires_at(boost::posix_time::pos_infin);
-  
+
   if (ec) {
     fail(ec, "client_socket_session: on_read_size");
     (*wq_.front()).on_failed(ec);
@@ -219,7 +232,9 @@ void SocketConnection::on_read_size(const boost::system::error_code& ec, size_t 
   do_read_body();
 }
 
-void SocketConnection::on_read_body(const boost::system::error_code& ec, size_t len) {
+void SocketConnection::on_read_body(const boost::system::error_code& ec,
+                                    size_t len)
+{
   timeout_timer_.expires_at(boost::posix_time::pos_infin);
 
   if (ec) {
@@ -242,18 +257,14 @@ void SocketConnection::on_read_body(const boost::system::error_code& ec, size_t 
   }
 }
 
-
-
-SocketConnection::SocketConnection(
-  const EndPoint& endpoint, 
-  boost::asio::ip::tcp::socket&& socket)
-  : Session(socket.get_executor())
-  , socket_{std::move(socket)}
+SocketConnection::SocketConnection(const EndPoint& endpoint,
+                                   boost::asio::ip::tcp::socket&& socket)
+    : Session(socket.get_executor()), socket_{std::move(socket)}
 {
   ctx_.remote_endpoint = endpoint;
   timeout_timer_.expires_at(boost::posix_time::pos_infin);
   endpoint_ = sync_socket_connect(endpoint, socket_);
-  
+
   start_timeout_timer();
 }
 

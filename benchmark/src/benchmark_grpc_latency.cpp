@@ -1,7 +1,7 @@
 // gRPC Latency Benchmarks - for comparison with NPRPC
 
-#include <grpcpp/grpcpp.h>
 #include "benchmark.grpc.pb.h"
+#include <grpcpp/grpcpp.h>
 
 #include <benchmark/benchmark.h>
 #include <memory>
@@ -12,21 +12,21 @@ using grpc::Status;
 
 namespace {
 
-class GrpcLatencyFixture : public ::benchmark::Fixture {
+class GrpcLatencyFixture : public ::benchmark::Fixture
+{
 protected:
   std::shared_ptr<Channel> channel_;
   std::unique_ptr<grpc::benchmark::Benchmark::Stub> stub_;
 
 public:
-  void SetUp(const ::benchmark::State& state) override {
+  void SetUp(const ::benchmark::State& state) override
+  {
     // Connect to gRPC server with increased message size limits
     grpc::ChannelArguments args;
-    args.SetMaxReceiveMessageSize(32 * 1024 * 1024);  // 32 MB
-    args.SetMaxSendMessageSize(32 * 1024 * 1024);     // 32 MB
+    args.SetMaxReceiveMessageSize(32 * 1024 * 1024); // 32 MB
+    args.SetMaxSendMessageSize(32 * 1024 * 1024);    // 32 MB
     channel_ = grpc::CreateCustomChannel(
-      "localhost:50051", 
-      grpc::InsecureChannelCredentials(),
-      args);
+        "localhost:50051", grpc::InsecureChannelCredentials(), args);
     stub_ = grpc::benchmark::Benchmark::NewStub(channel_);
   }
 
@@ -36,10 +36,11 @@ public:
 } // anonymous namespace
 
 // Benchmark: Simple function call latency (no payload)
-BENCHMARK_DEFINE_F(GrpcLatencyFixture, EmptyCall)(benchmark::State& state) {
+BENCHMARK_DEFINE_F(GrpcLatencyFixture, EmptyCall)(benchmark::State& state)
+{
   grpc::benchmark::PingRequest request;
   grpc::benchmark::PingResponse response;
-  
+
   for (auto _ : state) {
     ClientContext context;
     Status status = stub_->Ping(&context, request, &response);
@@ -50,19 +51,18 @@ BENCHMARK_DEFINE_F(GrpcLatencyFixture, EmptyCall)(benchmark::State& state) {
   }
 
   state.SetLabel("gRPC");
-  state.counters["calls/sec"] = benchmark::Counter(
-    state.iterations(), 
-    benchmark::Counter::kIsRate
-  );
+  state.counters["calls/sec"] =
+      benchmark::Counter(state.iterations(), benchmark::Counter::kIsRate);
 }
 
 // Benchmark: Function call with return value
-BENCHMARK_DEFINE_F(GrpcLatencyFixture, CallWithReturn)(benchmark::State& state) {
+BENCHMARK_DEFINE_F(GrpcLatencyFixture, CallWithReturn)(benchmark::State& state)
+{
   grpc::benchmark::Func1Request request;
   request.set_a(42);
   request.set_b(24);
   grpc::benchmark::Func1Response response;
-  
+
   for (auto _ : state) {
     ClientContext context;
     Status status = stub_->Func1(&context, request, &response);
@@ -74,18 +74,17 @@ BENCHMARK_DEFINE_F(GrpcLatencyFixture, CallWithReturn)(benchmark::State& state) 
   }
 
   state.SetLabel("gRPC");
-  state.counters["calls/sec"] = benchmark::Counter(
-    state.iterations(), 
-    benchmark::Counter::kIsRate
-  );
+  state.counters["calls/sec"] =
+      benchmark::Counter(state.iterations(), benchmark::Counter::kIsRate);
 }
 
 // Benchmark: Small string payload
-BENCHMARK_DEFINE_F(GrpcLatencyFixture, SmallStringCall)(benchmark::State& state) {
+BENCHMARK_DEFINE_F(GrpcLatencyFixture, SmallStringCall)(benchmark::State& state)
+{
   grpc::benchmark::Func2Request request;
   request.set_data(std::string(100, 'x'));
   grpc::benchmark::Func2Response response;
-  
+
   for (auto _ : state) {
     ClientContext context;
     Status status = stub_->Func2(&context, request, &response);
@@ -97,14 +96,13 @@ BENCHMARK_DEFINE_F(GrpcLatencyFixture, SmallStringCall)(benchmark::State& state)
 
   state.SetLabel("gRPC");
   state.SetBytesProcessed(state.iterations() * 100);
-  state.counters["calls/sec"] = benchmark::Counter(
-    state.iterations(), 
-    benchmark::Counter::kIsRate
-  );
+  state.counters["calls/sec"] =
+      benchmark::Counter(state.iterations(), benchmark::Counter::kIsRate);
 }
 
 // Benchmark: Complex nested data structure
-BENCHMARK_DEFINE_F(GrpcLatencyFixture, NestedDataCall)(benchmark::State& state) {
+BENCHMARK_DEFINE_F(GrpcLatencyFixture, NestedDataCall)(benchmark::State& state)
+{
   grpc::benchmark::ProcessEmployeeRequest request;
   auto* employee = request.mutable_employee();
   employee->mutable_person()->set_name("John Doe");
@@ -121,9 +119,9 @@ BENCHMARK_DEFINE_F(GrpcLatencyFixture, NestedDataCall)(benchmark::State& state) 
   employee->add_skills("JavaScript");
   employee->add_skills("TypeScript");
   employee->add_skills("Rust");
-  
+
   grpc::benchmark::ProcessEmployeeResponse response;
-  
+
   for (auto _ : state) {
     ClientContext context;
     Status status = stub_->ProcessEmployee(&context, request, &response);
@@ -135,20 +133,19 @@ BENCHMARK_DEFINE_F(GrpcLatencyFixture, NestedDataCall)(benchmark::State& state) 
   }
 
   state.SetLabel("gRPC");
-  state.counters["calls/sec"] = benchmark::Counter(
-    state.iterations(), 
-    benchmark::Counter::kIsRate
-  );
+  state.counters["calls/sec"] =
+      benchmark::Counter(state.iterations(), benchmark::Counter::kIsRate);
 }
 
 // Benchmark: Large data payload (1 MB)
-BENCHMARK_DEFINE_F(GrpcLatencyFixture, LargeData1MB)(benchmark::State& state) {
+BENCHMARK_DEFINE_F(GrpcLatencyFixture, LargeData1MB)(benchmark::State& state)
+{
   grpc::benchmark::ProcessLargeDataRequest request;
   std::string data(1024 * 1024, 0x42); // 1 MB
   request.set_data(data);
-  
+
   grpc::benchmark::ProcessLargeDataResponse response;
-  
+
   for (auto _ : state) {
     ClientContext context;
     Status status = stub_->ProcessLargeData(&context, request, &response);
@@ -161,20 +158,19 @@ BENCHMARK_DEFINE_F(GrpcLatencyFixture, LargeData1MB)(benchmark::State& state) {
 
   state.SetLabel("gRPC");
   state.SetBytesProcessed(state.iterations() * data.size());
-  state.counters["calls/sec"] = benchmark::Counter(
-    state.iterations(), 
-    benchmark::Counter::kIsRate
-  );
+  state.counters["calls/sec"] =
+      benchmark::Counter(state.iterations(), benchmark::Counter::kIsRate);
 }
 
 // Benchmark: Very large data payload (10 MB)
-BENCHMARK_DEFINE_F(GrpcLatencyFixture, LargeData10MB)(benchmark::State& state) {
+BENCHMARK_DEFINE_F(GrpcLatencyFixture, LargeData10MB)(benchmark::State& state)
+{
   grpc::benchmark::ProcessLargeDataRequest request;
   std::string data(10 * 1024 * 1024, 0x42); // 10 MB
   request.set_data(data);
-  
+
   grpc::benchmark::ProcessLargeDataResponse response;
-  
+
   for (auto _ : state) {
     ClientContext context;
     Status status = stub_->ProcessLargeData(&context, request, &response);
@@ -187,27 +183,25 @@ BENCHMARK_DEFINE_F(GrpcLatencyFixture, LargeData10MB)(benchmark::State& state) {
 
   state.SetLabel("gRPC");
   state.SetBytesProcessed(state.iterations() * data.size());
-  state.counters["calls/sec"] = benchmark::Counter(
-    state.iterations(), 
-    benchmark::Counter::kIsRate
-  );
+  state.counters["calls/sec"] =
+      benchmark::Counter(state.iterations(), benchmark::Counter::kIsRate);
 }
 
 // Register benchmarks
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, EmptyCall)
-  ->Unit(benchmark::kMicrosecond);
+    ->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, CallWithReturn)
-  ->Unit(benchmark::kMicrosecond);
+    ->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, SmallStringCall)
-  ->Unit(benchmark::kMicrosecond);
+    ->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, NestedDataCall)
-  ->Unit(benchmark::kMicrosecond);
+    ->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, LargeData1MB)
-  ->Unit(benchmark::kMillisecond);
+    ->Unit(benchmark::kMillisecond);
 
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, LargeData10MB)
-  ->Unit(benchmark::kMillisecond);
+    ->Unit(benchmark::kMillisecond);

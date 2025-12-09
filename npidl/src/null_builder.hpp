@@ -1,5 +1,6 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
-// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// This file is a part of npsystem (Distributed Control System) and covered by
+// LICENSING file in the topmost directory
 
 #pragma once
 
@@ -8,7 +9,8 @@
 namespace npidl::builders {
 // Null builder that doesn't generate any output (for LSP parsing)
 // May be not used at all in the end, but kept for completeness
-class NullBuilder : public Builder {
+class NullBuilder : public Builder
+{
 public:
   NullBuilder(Context* ctx) : Builder(ctx) {}
 
@@ -22,8 +24,6 @@ public:
   void emit_constant(const std::string&, AstNumber*) override {}
   void emit_using(AstAliasDecl*) override {}
 
-  Builder* clone(Context* ctx) const {
-    return new NullBuilder(ctx);
-  }
+  Builder* clone(Context* ctx) const { return new NullBuilder(ctx); }
 };
 } // namespace npidl::builders

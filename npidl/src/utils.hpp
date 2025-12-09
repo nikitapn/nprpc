@@ -1,5 +1,6 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
-// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// This file is a part of npsystem (Distributed Control System) and covered by
+// LICENSING file in the topmost directory
 
 #pragma once
 
@@ -9,25 +10,30 @@
 namespace npidl {
 
 int get_fundamental_size(TokenId token_id);
-int align_offset(int align_of, int& last_field_ended, int size, int elements_size = 1);
+int align_offset(int align_of,
+                 int& last_field_ended,
+                 int size,
+                 int elements_size = 1);
 void calc_struct_size_align(AstStructDecl* s);
 std::tuple<int, int> get_type_size_align(AstTypeDecl* type);
 bool is_flat(AstTypeDecl* type);
 bool is_fundamental(AstTypeDecl* type);
 bool contains_object(AstTypeDecl* type);
 
-constexpr uint32_t size_of_header       = 16;
-constexpr uint32_t size_of_call_header  = 16;
+constexpr uint32_t size_of_header = 16;
+constexpr uint32_t size_of_call_header = 16;
 constexpr uint32_t align_of_call_header = 8;
 
-constexpr size_t size_of_object  = 48;
+constexpr size_t size_of_object = 48;
 constexpr size_t align_of_object = 8;
 
-inline constexpr uint32_t  get_arguments_offset() {
-  static_assert(( size_of_header + align_of_call_header ) % 8 == 0);
+inline constexpr uint32_t get_arguments_offset()
+{
+  static_assert((size_of_header + align_of_call_header) % 8 == 0);
   return size_of_header + size_of_call_header;
 }
 
-void dfs_interface(std::function<void(AstInterfaceDecl*)> fn, AstInterfaceDecl* start);
+void dfs_interface(std::function<void(AstInterfaceDecl*)> fn,
+                   AstInterfaceDecl* start);
 
 } // namespace npidl

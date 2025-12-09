@@ -6,21 +6,21 @@
 // This file implements HTTP/3 using msh3 (MsQuic) backend
 #if defined(NPRPC_HTTP3_ENABLED) && defined(NPRPC_HTTP3_BACKEND_MSH3)
 
-#include <nprpc/impl/nprpc_impl.hpp>
-#include <nprpc/impl/http_rpc_session.hpp>
 #include <nprpc/common.hpp>
+#include <nprpc/impl/http_rpc_session.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
 
 #include <msh3.h>
 
 #include "../logging.hpp"
-#include <fstream>
-#include <sstream>
-#include <unordered_map>
-#include <mutex>
-#include <memory>
-#include <vector>
 #include <cstring>
 #include <format>
+#include <fstream>
+#include <memory>
+#include <mutex>
+#include <sstream>
+#include <unordered_map>
+#include <vector>
 
 #include "debug.hpp"
 
@@ -35,15 +35,15 @@ extern std::string path_cat(beast::string_view base, beast::string_view path);
 //==============================================================================
 
 struct Http3Request {
-  MSH3_REQUEST*        handle = nullptr;
-  std::string          method;
-  std::string          path;
-  std::string          content_type;
-  uint32_t             content_length = 0;
+  MSH3_REQUEST* handle = nullptr;
+  std::string method;
+  std::string path;
+  std::string content_type;
+  uint32_t content_length = 0;
   std::vector<uint8_t> body;
-  bool                 headers_complete = false;
-  bool                 body_complete    = false;
-  bool processed = false;  // Track if request has been processed
+  bool headers_complete = false;
+  bool body_complete = false;
+  bool processed = false; // Track if request has been processed
 
   // Response data - must be kept alive until SEND_COMPLETE
   std::string response_body;
@@ -59,8 +59,8 @@ struct Http3Request {
     content_length = 0;
     body.clear();
     headers_complete = false;
-    body_complete    = false;
-    processed        = false;
+    body_complete = false;
+    processed = false;
   }
 };
 
@@ -70,61 +70,60 @@ struct Http3Request {
 
 class Http3Server
 {
- public:
+public:
   Http3Server(boost::asio::io_context& ioc,
-              const std::string&       cert_file,
-              const std::string&       key_file,
-              uint16_t                 port);
+              const std::string& cert_file,
+              const std::string& key_file,
+              uint16_t port);
   ~Http3Server();
 
   bool start();
   void stop();
 
- private:
+private:
   // msh3 callbacks
-  static MSH3_STATUS MSH3_CALL listener_callback(MSH3_LISTENER*       listener,
-                                                 void*                context,
+  static MSH3_STATUS MSH3_CALL listener_callback(MSH3_LISTENER* listener,
+                                                 void* context,
                                                  MSH3_LISTENER_EVENT* event);
 
   static MSH3_STATUS MSH3_CALL connection_callback(
-    MSH3_CONNECTION* connection, void* context, MSH3_CONNECTION_EVENT* event);
+      MSH3_CONNECTION* connection, void* context, MSH3_CONNECTION_EVENT* event);
 
-  static MSH3_STATUS MSH3_CALL request_callback(MSH3_REQUEST*       request,
-                                                void*               context,
+  static MSH3_STATUS MSH3_CALL request_callback(MSH3_REQUEST* request,
+                                                void* context,
                                                 MSH3_REQUEST_EVENT* event);
 
   // Request handling
   void handle_new_connection(MSH3_CONNECTION* connection,
-                             const char*      server_name);
+                             const char* server_name);
   void handle_new_request(MSH3_REQUEST* request);
   void handle_header(Http3Request* req, const MSH3_HEADER* header);
   void handle_data(Http3Request* req, const uint8_t* data, uint32_t length);
   void handle_request_complete(Http3Request* req);
 
   // Response helpers
-  void send_response(Http3Request*      req,
-                     int                status_code,
+  void send_response(Http3Request* req,
+                     int status_code,
                      const std::string& content_type,
                      const std::string& body);
   void send_file_response(Http3Request* req, const std::string& path);
-  void send_error(Http3Request*      req,
-                  int                status_code,
-                  const std::string& message);
+  void
+  send_error(Http3Request* req, int status_code, const std::string& message);
   void send_cors_preflight(Http3Request* req);
 
   // RPC handling
   void handle_rpc_request(Http3Request* req);
 
   boost::asio::io_context& ioc_;
-  std::string              cert_file_;
-  std::string              key_file_;
-  uint16_t                 port_;
+  std::string cert_file_;
+  std::string key_file_;
+  uint16_t port_;
 
-  MSH3_API*           api_      = nullptr;
-  MSH3_CONFIGURATION* config_   = nullptr;
-  MSH3_LISTENER*      listener_ = nullptr;
+  MSH3_API* api_ = nullptr;
+  MSH3_CONFIGURATION* config_ = nullptr;
+  MSH3_LISTENER* listener_ = nullptr;
 
-  std::mutex                                                       mutex_;
+  std::mutex mutex_;
   std::unordered_map<MSH3_REQUEST*, std::unique_ptr<Http3Request>> requests_;
 };
 
@@ -132,11 +131,10 @@ class Http3Server
 // Implementation
 //==============================================================================
 
-Http3Server::Http3Server(
-  boost::asio::io_context& ioc,
-  const std::string&       cert_file,
-  const std::string&       key_file,
-  uint16_t                 port)
+Http3Server::Http3Server(boost::asio::io_context& ioc,
+                         const std::string& cert_file,
+                         const std::string& key_file,
+                         uint16_t port)
     : ioc_(ioc), cert_file_(cert_file), key_file_(key_file), port_(port)
 {
 }
@@ -153,11 +151,11 @@ bool Http3Server::start()
   }
 
   // Configure settings
-  MSH3_SETTINGS settings          = {};
-  settings.IsSet.IdleTimeoutMs    = 1;
-  settings.IdleTimeoutMs          = 30000;  // 30 seconds
+  MSH3_SETTINGS settings = {};
+  settings.IsSet.IdleTimeoutMs = 1;
+  settings.IdleTimeoutMs = 30000; // 30 seconds
   settings.IsSet.PeerRequestCount = 1;
-  settings.PeerRequestCount       = 100;  // Allow up to 100 concurrent requests
+  settings.PeerRequestCount = 100; // Allow up to 100 concurrent requests
 
   config_ = MsH3ConfigurationOpen(api_, &settings, sizeof(settings));
   if (!config_) {
@@ -168,13 +166,13 @@ bool Http3Server::start()
   }
 
   // Load certificate
-  MSH3_CERTIFICATE_FILE cert_file = {.PrivateKeyFile  = key_file_.c_str(),
+  MSH3_CERTIFICATE_FILE cert_file = {.PrivateKeyFile = key_file_.c_str(),
                                      .CertificateFile = cert_file_.c_str()};
 
   MSH3_CREDENTIAL_CONFIG cred_config = {
-    .Type            = MSH3_CREDENTIAL_TYPE_CERTIFICATE_FILE,
-    .Flags           = MSH3_CREDENTIAL_FLAG_NONE,  // Server mode
-    .CertificateFile = &cert_file};
+      .Type = MSH3_CREDENTIAL_TYPE_CERTIFICATE_FILE,
+      .Flags = MSH3_CREDENTIAL_FLAG_NONE, // Server mode
+      .CertificateFile = &cert_file};
 
   MSH3_STATUS status = MsH3ConfigurationLoadCredential(config_, &cred_config);
   if (MSH3_FAILED(status)) {
@@ -183,12 +181,12 @@ bool Http3Server::start()
     MsH3ConfigurationClose(config_);
     MsH3ApiClose(api_);
     config_ = nullptr;
-    api_    = nullptr;
+    api_ = nullptr;
     return false;
   }
 
-  MSH3_ADDR local_addr            = {0};
-  local_addr.Ipv4.sin_family      = AF_INET;
+  MSH3_ADDR local_addr = {0};
+  local_addr.Ipv4.sin_family = AF_INET;
   local_addr.Ipv4.sin_addr.s_addr = INADDR_ANY;
   MSH3_SET_PORT(&local_addr, port_);
 
@@ -199,7 +197,7 @@ bool Http3Server::start()
     MsH3ConfigurationClose(config_);
     MsH3ApiClose(api_);
     config_ = nullptr;
-    api_    = nullptr;
+    api_ = nullptr;
     return false;
   }
 
@@ -241,70 +239,72 @@ void Http3Server::stop()
 // msh3 Callbacks
 //==============================================================================
 
-MSH3_STATUS MSH3_CALL Http3Server::listener_callback(
-  MSH3_LISTENER* listener, void* context, MSH3_LISTENER_EVENT* event)
+MSH3_STATUS MSH3_CALL Http3Server::listener_callback(MSH3_LISTENER* listener,
+                                                     void* context,
+                                                     MSH3_LISTENER_EVENT* event)
 {
   auto* self = static_cast<Http3Server*>(context);
 
   switch (event->Type) {
-    case MSH3_LISTENER_EVENT_NEW_CONNECTION:
-      NPRPC_HTTP3_TRACE("Listener New connection");
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        NPRPC_LOG_INFO("[HTTP/3] New connection");
-      }
-      self->handle_new_connection(event->NEW_CONNECTION.Connection,
-                                  event->NEW_CONNECTION.ServerName);
-      break;
+  case MSH3_LISTENER_EVENT_NEW_CONNECTION:
+    NPRPC_HTTP3_TRACE("Listener New connection");
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+      NPRPC_LOG_INFO("[HTTP/3] New connection");
+    }
+    self->handle_new_connection(event->NEW_CONNECTION.Connection,
+                                event->NEW_CONNECTION.ServerName);
+    break;
 
-    case MSH3_LISTENER_EVENT_SHUTDOWN_COMPLETE:
-      NPRPC_HTTP3_TRACE("Listener shutdown complete");
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        NPRPC_LOG_INFO("[HTTP/3] Listener shutdown complete");
-      }
-      break;
+  case MSH3_LISTENER_EVENT_SHUTDOWN_COMPLETE:
+    NPRPC_HTTP3_TRACE("Listener shutdown complete");
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+      NPRPC_LOG_INFO("[HTTP/3] Listener shutdown complete");
+    }
+    break;
   }
 
   return MSH3_STATUS_SUCCESS;
 }
 
 MSH3_STATUS MSH3_CALL Http3Server::connection_callback(
-  MSH3_CONNECTION* connection, void* context, MSH3_CONNECTION_EVENT* event)
+    MSH3_CONNECTION* connection, void* context, MSH3_CONNECTION_EVENT* event)
 {
   auto* self = static_cast<Http3Server*>(context);
 
   switch (event->Type) {
-    case MSH3_CONNECTION_EVENT_NEW_REQUEST:
-      self->handle_new_request(event->NEW_REQUEST.Request);
-      break;
+  case MSH3_CONNECTION_EVENT_NEW_REQUEST:
+    self->handle_new_request(event->NEW_REQUEST.Request);
+    break;
 
-    case MSH3_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        NPRPC_LOG_INFO("[HTTP/3] Connection shutdown by transport");
-      }
-      break;
+  case MSH3_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+      NPRPC_LOG_INFO("[HTTP/3] Connection shutdown by transport");
+    }
+    break;
 
-    case MSH3_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        NPRPC_LOG_INFO("[HTTP/3] Connection shutdown by peer");
-      }
-      break;
+  case MSH3_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+      NPRPC_LOG_INFO("[HTTP/3] Connection shutdown by peer");
+    }
+    break;
 
-    case MSH3_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
-      break;
+  case MSH3_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
+    break;
   }
 
   return MSH3_STATUS_SUCCESS;
 }
 
-MSH3_STATUS MSH3_CALL Http3Server::request_callback(
-  MSH3_REQUEST* request, void* context, MSH3_REQUEST_EVENT* event)
+MSH3_STATUS MSH3_CALL Http3Server::request_callback(MSH3_REQUEST* request,
+                                                    void* context,
+                                                    MSH3_REQUEST_EVENT* event)
 {
   auto* self = static_cast<Http3Server*>(context);
 
   Http3Request* req = nullptr;
   {
     std::lock_guard lock(self->mutex_);
-    auto            it = self->requests_.find(request);
+    auto it = self->requests_.find(request);
     if (it != self->requests_.end()) {
       req = it->second.get();
     }
@@ -315,71 +315,70 @@ MSH3_STATUS MSH3_CALL Http3Server::request_callback(
   }
 
   switch (event->Type) {
-    case MSH3_REQUEST_EVENT_HEADER_RECEIVED:
-      self->handle_header(req, event->HEADER_RECEIVED.Header);
-      break;
+  case MSH3_REQUEST_EVENT_HEADER_RECEIVED:
+    self->handle_header(req, event->HEADER_RECEIVED.Header);
+    break;
 
-    case MSH3_REQUEST_EVENT_DATA_RECEIVED:
-      // Skip if already processed
-      if (req->processed) {
-        if (event->DATA_RECEIVED.Length > 0 &&
-            event->DATA_RECEIVED.Length < 100 * 1024 * 1024) {
-          MsH3RequestCompleteReceive(request, event->DATA_RECEIVED.Length);
-        }
-        break;
-      }
-
-      // Validate length - msh3 sometimes sends bogus large values
+  case MSH3_REQUEST_EVENT_DATA_RECEIVED:
+    // Skip if already processed
+    if (req->processed) {
       if (event->DATA_RECEIVED.Length > 0 &&
           event->DATA_RECEIVED.Length < 100 * 1024 * 1024) {
-        self->handle_data(
-          req, event->DATA_RECEIVED.Data, event->DATA_RECEIVED.Length);
         MsH3RequestCompleteReceive(request, event->DATA_RECEIVED.Length);
-
-        // Check if we've received all expected data
-        if (req->content_length > 0 &&
-            req->body.size() >= req->content_length) {
-          req->body_complete = true;
-          req->processed     = true;
-          self->handle_request_complete(req);
-        }
-      } else if (event->DATA_RECEIVED.Length == 0) {
-        // Zero-length receive, just acknowledge
-        MsH3RequestCompleteReceive(request, 0);
-      } else if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        NPRPC_LOG_WARN("[HTTP/3] Ignoring bogus data length: {}",
-                       event->DATA_RECEIVED.Length);
       }
       break;
+    }
 
-    case MSH3_REQUEST_EVENT_PEER_SEND_SHUTDOWN:
-      // Client finished sending, process the request if not already done
-      if (!req->processed) {
+    // Validate length - msh3 sometimes sends bogus large values
+    if (event->DATA_RECEIVED.Length > 0 &&
+        event->DATA_RECEIVED.Length < 100 * 1024 * 1024) {
+      self->handle_data(req, event->DATA_RECEIVED.Data,
+                        event->DATA_RECEIVED.Length);
+      MsH3RequestCompleteReceive(request, event->DATA_RECEIVED.Length);
+
+      // Check if we've received all expected data
+      if (req->content_length > 0 && req->body.size() >= req->content_length) {
         req->body_complete = true;
-        req->processed     = true;
+        req->processed = true;
         self->handle_request_complete(req);
       }
-      break;
+    } else if (event->DATA_RECEIVED.Length == 0) {
+      // Zero-length receive, just acknowledge
+      MsH3RequestCompleteReceive(request, 0);
+    } else if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+      NPRPC_LOG_WARN("[HTTP/3] Ignoring bogus data length: {}",
+                     event->DATA_RECEIVED.Length);
+    }
+    break;
 
-    case MSH3_REQUEST_EVENT_SHUTDOWN_COMPLETE:
-      // Clean up the request
-      {
-        std::lock_guard lock(self->mutex_);
-        self->requests_.erase(request);
-      }
-      break;
+  case MSH3_REQUEST_EVENT_PEER_SEND_SHUTDOWN:
+    // Client finished sending, process the request if not already done
+    if (!req->processed) {
+      req->body_complete = true;
+      req->processed = true;
+      self->handle_request_complete(req);
+    }
+    break;
 
-    case MSH3_REQUEST_EVENT_SEND_COMPLETE:
-    case MSH3_REQUEST_EVENT_SEND_SHUTDOWN_COMPLETE:
-      // These are informational only
-      break;
+  case MSH3_REQUEST_EVENT_SHUTDOWN_COMPLETE:
+    // Clean up the request
+    {
+      std::lock_guard lock(self->mutex_);
+      self->requests_.erase(request);
+    }
+    break;
 
-    default:
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        NPRPC_LOG_WARN("[HTTP/3] Unknown request event type: {}",
-                       (int)event->Type);
-      }
-      break;
+  case MSH3_REQUEST_EVENT_SEND_COMPLETE:
+  case MSH3_REQUEST_EVENT_SEND_SHUTDOWN_COMPLETE:
+    // These are informational only
+    break;
+
+  default:
+    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+      NPRPC_LOG_WARN("[HTTP/3] Unknown request event type: {}",
+                     (int)event->Type);
+    }
+    break;
   }
 
   return MSH3_STATUS_SUCCESS;
@@ -389,8 +388,8 @@ MSH3_STATUS MSH3_CALL Http3Server::request_callback(
 // Request Handling
 //==============================================================================
 
-void Http3Server::handle_new_connection(
-  MSH3_CONNECTION* connection, const char* server_name)
+void Http3Server::handle_new_connection(MSH3_CONNECTION* connection,
+                                        const char* server_name)
 {
   if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
     NPRPC_LOG_INFO("[HTTP/3] New connection from: {}",
@@ -408,10 +407,9 @@ void Http3Server::handle_new_connection(
   }
 }
 
-void Http3Server::handle_new_request(
-  MSH3_REQUEST* request)
+void Http3Server::handle_new_request(MSH3_REQUEST* request)
 {
-  auto req    = std::make_unique<Http3Request>();
+  auto req = std::make_unique<Http3Request>();
   req->handle = request;
 
   {
@@ -426,8 +424,7 @@ void Http3Server::handle_new_request(
   MsH3RequestSetReceiveEnabled(request, true);
 }
 
-void Http3Server::handle_header(
-  Http3Request* req, const MSH3_HEADER* header)
+void Http3Server::handle_header(Http3Request* req, const MSH3_HEADER* header)
 {
   std::string name(header->Name, header->NameLength);
   std::string value(header->Value, header->ValueLength);
@@ -447,26 +444,22 @@ void Http3Server::handle_header(
   }
 }
 
-void Http3Server::handle_data(
-  Http3Request* req, const uint8_t* data, uint32_t length)
+void Http3Server::handle_data(Http3Request* req,
+                              const uint8_t* data,
+                              uint32_t length)
 {
   if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[HTTP/3] Data received: {} bytes (total: {}/{})",
-                   length,
-                   req->body.size() + length,
-                   req->content_length);
+    NPRPC_LOG_INFO("[HTTP/3] Data received: {} bytes (total: {}/{})", length,
+                   req->body.size() + length, req->content_length);
   }
   req->body.insert(req->body.end(), data, data + length);
 }
 
-void Http3Server::handle_request_complete(
-  Http3Request* req)
+void Http3Server::handle_request_complete(Http3Request* req)
 {
   if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[HTTP/3] Request: {} {} (body: {} bytes)",
-                   req->method,
-                   req->path,
-                   req->body.size());
+    NPRPC_LOG_INFO("[HTTP/3] Request: {} {} (body: {} bytes)", req->method,
+                   req->path, req->body.size());
   }
 
   // Handle OPTIONS preflight for CORS
@@ -514,8 +507,7 @@ void Http3Server::handle_request_complete(
 // RPC Handling
 //==============================================================================
 
-void Http3Server::handle_rpc_request(
-  Http3Request* req)
+void Http3Server::handle_rpc_request(Http3Request* req)
 {
   if (req->body.empty()) {
     send_error(req, 400, "Empty request body");
@@ -548,51 +540,41 @@ void Http3Server::handle_rpc_request(
 // Response Helpers
 //==============================================================================
 
-void Http3Server::send_response(
-  Http3Request*      req,
-  int                status_code,
-  const std::string& content_type,
-  const std::string& body)
+void Http3Server::send_response(Http3Request* req,
+                                int status_code,
+                                const std::string& content_type,
+                                const std::string& body)
 {
-  // Store response data in request object to keep it alive until SEND_COMPLETE
-  // MsQuic/msh3 takes ownership of buffers until send is complete!
-  req->response_body           = body;
-  req->response_status         = std::to_string(status_code);
-  req->response_content_type   = content_type;
+  // Store response data in request object to keep it alive until
+  // SEND_COMPLETE MsQuic/msh3 takes ownership of buffers until send is
+  // complete!
+  req->response_body = body;
+  req->response_status = std::to_string(status_code);
+  req->response_content_type = content_type;
   req->response_content_length = std::to_string(req->response_body.size());
 
   if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO(
-      "[HTTP/3] Sending response: status={}, content-type={}, body size={}",
-      status_code,
-      content_type,
-      req->response_body.size());
+    NPRPC_LOG_INFO("[HTTP/3] Sending response: status={}, content-type={}, "
+                   "body size={}",
+                   status_code, content_type, req->response_body.size());
   }
 
   MSH3_HEADER headers[] = {
-    {":status", 7, req->response_status.c_str(), req->response_status.size()},
-    {"content-type",
-     12,
-     req->response_content_type.c_str(),
-     req->response_content_type.size()},
-    {"content-length",
-     14,
-     req->response_content_length.c_str(),
-     req->response_content_length.size()},
-    {"access-control-allow-origin", 27, "*", 1},
+      {":status", 7, req->response_status.c_str(), req->response_status.size()},
+      {"content-type", 12, req->response_content_type.c_str(),
+       req->response_content_type.size()},
+      {"content-length", 14, req->response_content_length.c_str(),
+       req->response_content_length.size()},
+      {"access-control-allow-origin", 27, "*", 1},
   };
 
-  MsH3RequestSend(req->handle,
-                  MSH3_REQUEST_SEND_FLAG_FIN,
-                  headers,
+  MsH3RequestSend(req->handle, MSH3_REQUEST_SEND_FLAG_FIN, headers,
                   sizeof(headers) / sizeof(headers[0]),
                   req->response_body.data(),
-                  static_cast<uint32_t>(req->response_body.size()),
-                  nullptr);
+                  static_cast<uint32_t>(req->response_body.size()), nullptr);
 }
 
-void Http3Server::send_file_response(
-  Http3Request* req, const std::string& path)
+void Http3Server::send_file_response(Http3Request* req, const std::string& path)
 {
   std::ifstream file(path, std::ios::binary);
   if (!file) {
@@ -608,31 +590,26 @@ void Http3Server::send_file_response(
   send_response(req, 200, mime, content);
 }
 
-void Http3Server::send_error(
-  Http3Request* req, int status_code, const std::string& message)
+void Http3Server::send_error(Http3Request* req,
+                             int status_code,
+                             const std::string& message)
 {
   std::string body = "Error " + std::to_string(status_code) + ": " + message;
   send_response(req, status_code, "text/plain", body);
 }
 
-void Http3Server::send_cors_preflight(
-  Http3Request* req)
+void Http3Server::send_cors_preflight(Http3Request* req)
 {
   MSH3_HEADER headers[] = {
-    {":status", 7, "204", 3},
-    {"access-control-allow-origin", 27, "*", 1},
-    {"access-control-allow-methods", 28, "GET, POST, OPTIONS", 18},
-    {"access-control-allow-headers", 28, "Content-Type", 12},
-    {"access-control-max-age", 22, "86400", 5},
+      {":status", 7, "204", 3},
+      {"access-control-allow-origin", 27, "*", 1},
+      {"access-control-allow-methods", 28, "GET, POST, OPTIONS", 18},
+      {"access-control-allow-headers", 28, "Content-Type", 12},
+      {"access-control-max-age", 22, "86400", 5},
   };
 
-  MsH3RequestSend(req->handle,
-                  MSH3_REQUEST_SEND_FLAG_FIN,
-                  headers,
-                  sizeof(headers) / sizeof(headers[0]),
-                  nullptr,
-                  0,
-                  nullptr);
+  MsH3RequestSend(req->handle, MSH3_REQUEST_SEND_FLAG_FIN, headers,
+                  sizeof(headers) / sizeof(headers[0]), nullptr, 0, nullptr);
 }
 
 //==============================================================================
@@ -641,17 +618,15 @@ void Http3Server::send_cors_preflight(
 
 static std::unique_ptr<Http3Server> g_http3_server;
 
-NPRPC_API void init_http3_server(
-  boost::asio::io_context& ioc)
+NPRPC_API void init_http3_server(boost::asio::io_context& ioc)
 {
   // HTTP/3 is enabled when http3_enabled flag is set and we have an HTTP port
-  if (!g_cfg.http3_enabled) return;
+  if (!g_cfg.http3_enabled)
+    return;
 
   g_http3_server = std::make_unique<Http3Server>(
-    ioc,
-    g_cfg.http_cert_file,
-    g_cfg.http_key_file,
-    g_cfg.listen_http_port);  // Use same port as HTTP/1.1
+      ioc, g_cfg.http_cert_file, g_cfg.http_key_file,
+      g_cfg.listen_http_port); // Use same port as HTTP/1.1
 
   if (!g_http3_server->start()) {
     NPRPC_LOG_ERROR("[HTTP/3] Failed to start server");
@@ -670,6 +645,6 @@ NPRPC_API void stop_http3_server()
   }
 }
 
-}  // namespace nprpc::impl
+} // namespace nprpc::impl
 
-#endif  // NPRPC_HTTP3_ENABLED && NPRPC_HTTP3_BACKEND_MSH3
+#endif // NPRPC_HTTP3_ENABLED && NPRPC_HTTP3_BACKEND_MSH3

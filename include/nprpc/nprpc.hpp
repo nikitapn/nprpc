@@ -7,24 +7,24 @@
 #include "export.hpp"
 
 #include <array>
-#include <string_view>
-#include <initializer_list>
-#include <stdexcept>
 #include <atomic>
 #include <chrono>
+#include <initializer_list>
 #include <optional>
+#include <stdexcept>
+#include <string_view>
 
 #include <boost/asio/io_context.hpp>
 
-#include <nprpc/flat_buffer.hpp>
-#include <nprpc/common.hpp>
-#include <nprpc_base.hpp>
 #include <nprpc/basic.hpp>
-#include <nprpc/object_ptr.hpp>
-#include <nprpc/utils.hpp>
+#include <nprpc/common.hpp>
 #include <nprpc/endpoint.hpp>
-#include <nprpc/session_context.h>
+#include <nprpc/flat_buffer.hpp>
+#include <nprpc/object_ptr.hpp>
 #include <nprpc/serialization/serialization.h>
+#include <nprpc/session_context.h>
+#include <nprpc/utils.hpp>
+#include <nprpc_base.hpp>
 
 namespace nprpc {
 
@@ -46,33 +46,34 @@ class ObjectGuard;
 
 NPRPC_API Object* create_object_from_flat(detail::flat::ObjectId_Direct oid,
                                           EndPoint remote_endpoint);
-}  // namespace impl
+} // namespace impl
 
 class ObjectId
 {
   friend impl::PoaImpl;
- protected:
+
+protected:
   ::nprpc::detail::ObjectId data_;
- public:
-  template <typename Archive>
-  void serialize(Archive& ar)
+
+public:
+  template <typename Archive> void serialize(Archive& ar)
   {
-    ar & NVP2("object_id", data_.object_id);
-    ar & NVP2("poa_idx", data_.poa_idx);
-    ar & NVP2("flags", data_.flags);
-    ar & NVP2("origin", data_.origin);
-    ar & NVP2("class_id", data_.class_id);
-    ar & NVP2("urls", data_.urls);
+    ar& NVP2("object_id", data_.object_id);
+    ar& NVP2("poa_idx", data_.poa_idx);
+    ar& NVP2("flags", data_.flags);
+    ar& NVP2("origin", data_.origin);
+    ar& NVP2("class_id", data_.class_id);
+    ar& NVP2("urls", data_.urls);
   }
 
   void assign_from_direct(const detail::flat::ObjectId_Direct& other)
   {
-    nprpc::detail::helpers::assign_from_flat_ObjectId(const_cast<detail::flat::ObjectId_Direct&>(other), data_);
+    nprpc::detail::helpers::assign_from_flat_ObjectId(
+        const_cast<detail::flat::ObjectId_Direct&>(other), data_);
   }
-  
-  static void assign_to_direct(
-    const ::nprpc::ObjectId& oid, 
-    detail::flat::ObjectId_Direct& direct)
+
+  static void assign_to_direct(const ::nprpc::ObjectId& oid,
+                               detail::flat::ObjectId_Direct& direct)
   {
     nprpc::detail::helpers::assign_from_cpp_ObjectId(direct, oid.data_);
   }
@@ -93,70 +94,69 @@ class ObjectId
   const auto& get_data() const noexcept { return data_; }
 };
 
-
 namespace PoaPolicy {
-enum class Lifespan {
-  Transient  = 0,
-  Persistent = 1
-};
+enum class Lifespan { Transient = 0, Persistent = 1 };
 
-enum class ObjectIdPolicy {
-  SystemGenerated = 0,
-  UserSupplied    = 1
-};
+enum class ObjectIdPolicy { SystemGenerated = 0, UserSupplied = 1 };
 } // namespace PoaPolicy
 
 namespace ObjectActivationFlags {
 enum Enum : uint32_t {
   // For default, no flags are set
-  NONE                     = 0,
-  // Make this object session-specific (unaccessible outside of the session it was created in)
-  SESSION_SPECIFIC         = 1 << 0,
+  NONE = 0,
+  // Make this object session-specific (unaccessible outside of the session it
+  // was created in)
+  SESSION_SPECIFIC = 1 << 0,
   // Allow TCP connections to this object
-  ALLOW_TCP                = 1 << 1,
+  ALLOW_TCP = 1 << 1,
   // Allow WebSocket connections to this object
-  ALLOW_WEBSOCKET          = 1 << 2,
+  ALLOW_WEBSOCKET = 1 << 2,
   // Allow SSL WebSocket connections to this object
-  ALLOW_SSL_WEBSOCKET      = 1 << 3,
+  ALLOW_SSL_WEBSOCKET = 1 << 3,
   // Allow HTTP connections to this object
-  ALLOW_HTTP               = 1 << 4,
+  ALLOW_HTTP = 1 << 4,
   // Allow secured HTTP connections to this object
-  ALLOW_SECURED_HTTP       = 1 << 5,
+  ALLOW_SECURED_HTTP = 1 << 5,
   // Allow shared memory connections to this object
-  ALLOW_SHARED_MEMORY      = 1 << 6,
+  ALLOW_SHARED_MEMORY = 1 << 6,
   // Allow udp connections to this object
-  ALLOW_UDP                = 1 << 7,
+  ALLOW_UDP = 1 << 7,
   // Allow QUIC connections to this object
-  ALLOW_QUIC               = 1 << 8,
+  ALLOW_QUIC = 1 << 8,
   // Allow all connection types
-  ALLOW_ALL =
-    ALLOW_TCP | ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET | ALLOW_HTTP | ALLOW_SECURED_HTTP | ALLOW_SHARED_MEMORY | ALLOW_QUIC
+  ALLOW_ALL = ALLOW_TCP | ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET | ALLOW_HTTP |
+              ALLOW_SECURED_HTTP | ALLOW_SHARED_MEMORY | ALLOW_QUIC
 };
 }
 
-class NPRPC_API PoaBuilder {
+class NPRPC_API PoaBuilder
+{
   uint32_t objects_max_ = 32;
   PoaPolicy::Lifespan lifespan_policy_ = PoaPolicy::Lifespan::Transient;
-  PoaPolicy::ObjectIdPolicy object_id_policy_ = PoaPolicy::ObjectIdPolicy::SystemGenerated;
+  PoaPolicy::ObjectIdPolicy object_id_policy_ =
+      PoaPolicy::ObjectIdPolicy::SystemGenerated;
   Rpc* rpc_ = nullptr;
 
 public:
   explicit PoaBuilder(Rpc* rpc) : rpc_(rpc) {}
 
   // Set maximum number of objects this POA can handle
-  PoaBuilder& with_max_objects(uint32_t max) {
+  PoaBuilder& with_max_objects(uint32_t max)
+  {
     objects_max_ = max;
     return *this;
   }
 
   // Set lifespan policy
-  PoaBuilder& with_lifespan(PoaPolicy::Lifespan policy) {
+  PoaBuilder& with_lifespan(PoaPolicy::Lifespan policy)
+  {
     lifespan_policy_ = policy;
     return *this;
   }
 
   // Set object id policy (system-generated vs user-supplied)
-  PoaBuilder& with_object_id_policy(PoaPolicy::ObjectIdPolicy policy) {
+  PoaBuilder& with_object_id_policy(PoaPolicy::ObjectIdPolicy policy)
+  {
     object_id_policy_ = policy;
     return *this;
   }
@@ -169,7 +169,7 @@ class NPRPC_API Poa
 {
   poa_idx_t idx_;
 
- public:
+public:
   /**
    * @brief Activate an object servant in this POA.
    * @param obj The object servant to activate.
@@ -177,21 +177,19 @@ class NPRPC_API Poa
    * @param ctx Optional session context for session-specific activation.
    * @return The object ID of the activated object.
    * @throws std::runtime_error if the object cannot be activated.
-   */ 
-  virtual ObjectId activate_object(
-    ObjectServant*  obj,
-    uint32_t        activation_flags,
-    SessionContext* ctx = nullptr) = 0;
+   */
+  virtual ObjectId activate_object(ObjectServant* obj,
+                                   uint32_t activation_flags,
+                                   SessionContext* ctx = nullptr) = 0;
 
   /**
    * @brief Activate an object servant with a user-supplied object ID.
    * Available only when POA is configured with ObjectIdPolicy::UserSupplied.
    */
-  virtual ObjectId activate_object_with_id(
-    oid_t           object_id,
-    ObjectServant*  obj,
-    uint32_t        activation_flags,
-    SessionContext* ctx = nullptr) = 0;
+  virtual ObjectId activate_object_with_id(oid_t object_id,
+                                           ObjectServant* obj,
+                                           uint32_t activation_flags,
+                                           SessionContext* ctx = nullptr) = 0;
 
   /**
    * @brief Deactivate an object servant in this POA.
@@ -202,9 +200,10 @@ class NPRPC_API Poa
 
   poa_idx_t get_index() const noexcept { return idx_; }
 
-  Poa(poa_idx_t idx) : idx_ {idx} {}
+  Poa(poa_idx_t idx) : idx_{idx} {}
 
-  // Poa lifetime is managed by RpcImpl, so no need to delete it manually via delete or wrap Poa in a smart pointer.
+  // Poa lifetime is managed by RpcImpl, so no need to delete it manually via
+  // delete or wrap Poa in a smart pointer.
   virtual ~Poa() = default;
 };
 
@@ -213,23 +212,22 @@ class ObjectServant
   friend impl::PoaImpl;
   friend impl::ObjectGuard;
 
-  std::shared_ptr<Poa>                  poa_;
-  oid_t                                 object_id_;
-  std::atomic_uint32_t                  ref_cnt_ {0};
-  std::atomic_uint32_t                  in_use_cnt_ {0};
-  std::atomic_bool                      to_delete_ {false};
+  std::shared_ptr<Poa> poa_;
+  oid_t object_id_;
+  std::atomic_uint32_t ref_cnt_{0};
+  std::atomic_uint32_t in_use_cnt_{0};
+  std::atomic_bool to_delete_{false};
   std::chrono::system_clock::time_point activation_time_;
-  SessionContext*                       session_ctx_ = nullptr;
+  SessionContext* session_ctx_ = nullptr;
 
- public:
+public:
   virtual std::string_view get_class() const noexcept = 0;
-  virtual void             dispatch(::nprpc::SessionContext& ctx,
-                                    bool from_parent) = 0;
-  virtual void             destroy() noexcept { delete this; }
+  virtual void dispatch(::nprpc::SessionContext& ctx, bool from_parent) = 0;
+  virtual void destroy() noexcept { delete this; }
 
-  Poa*               poa() const noexcept { return poa_.get(); }
-  oid_t              oid() const noexcept { return object_id_; }
-  poa_idx_t          poa_index() const noexcept { return poa_->get_index(); }
+  Poa* poa() const noexcept { return poa_.get(); }
+  oid_t oid() const noexcept { return object_id_; }
+  poa_idx_t poa_index() const noexcept { return poa_->get_index(); }
   NPRPC_API uint32_t add_ref() noexcept;
   NPRPC_API uint32_t release() noexcept;
   auto activation_time() const noexcept { return activation_time_; }
@@ -245,30 +243,32 @@ class ObjectServant
 class Object : public ObjectId
 {
   friend impl::RpcImpl;
-  template <typename T>
-  friend T* narrow(Object*&) noexcept;
-  friend NPRPC_API Object* impl::create_object_from_flat(
-    detail::flat::ObjectId_Direct oid, EndPoint remote_endpoint);
+  template <typename T> friend T* narrow(Object*&) noexcept;
+  friend NPRPC_API Object*
+  impl::create_object_from_flat(detail::flat::ObjectId_Direct oid,
+                                EndPoint remote_endpoint);
 
   std::atomic_uint32_t local_ref_cnt_ = 0;
-  uint32_t             timeout_ms_    = 1000;
-  EndPoint             endpoint_;
- public:
+  uint32_t timeout_ms_ = 1000;
+  EndPoint endpoint_;
+
+public:
   std::string_view get_class() const noexcept { return class_id(); };
 
   PoaPolicy::Lifespan policy_lifespan() const noexcept
   {
     return static_cast<PoaPolicy::Lifespan>(
-      flags() & std::underlying_type_t<detail::ObjectFlag>(detail::ObjectFlag::Persistent)
-    );
+        flags() & std::underlying_type_t<detail::ObjectFlag>(
+                      detail::ObjectFlag::Persistent));
   }
 
   NPRPC_API uint32_t add_ref();
   NPRPC_API uint32_t release();
   // Returns true if the endpoint was selected, false otherwise
   // and will indicate that something is wrong
-  NPRPC_API bool     select_endpoint(std::optional<EndPoint> remote_endpoint = std::nullopt) noexcept;
-  
+  NPRPC_API bool select_endpoint(
+      std::optional<EndPoint> remote_endpoint = std::nullopt) noexcept;
+
   uint32_t set_timeout(uint32_t timeout_ms) noexcept
   {
     return boost::exchange(timeout_ms_, timeout_ms);
@@ -280,60 +280,63 @@ class Object : public ObjectId
 
   NPRPC_API virtual ~Object() = default;
 
-  Object(const Object&)            = delete;
+  Object(const Object&) = delete;
   Object& operator=(const Object&) = delete;
 
-  Object(Object&&)                 = delete;
-  Object& operator=(Object&& other) {
+  Object(Object&&) = delete;
+  Object& operator=(Object&& other)
+  {
     if (this != &other) {
-      data_                = std::move(other.data_);
-      local_ref_cnt_       = other.local_ref_cnt_.load();
-      timeout_ms_          = other.timeout_ms_;
-      endpoint_            = std::move(other.endpoint_);
-      other.timeout_ms_    = other.timeout_ms_;
+      data_ = std::move(other.data_);
+      local_ref_cnt_ = other.local_ref_cnt_.load();
+      timeout_ms_ = other.timeout_ms_;
+      endpoint_ = std::move(other.endpoint_);
+      other.timeout_ms_ = other.timeout_ms_;
     }
     return *this;
   }
 
- protected:
+protected:
   Object() = default;
 };
 
 class NPRPC_API Rpc
 {
- public:
+public:
   // Create a new POA builder
   PoaBuilder create_poa() { return PoaBuilder(this); }
   virtual void destroy_poa(Poa* poa) = 0;
   virtual void destroy() = 0;
-  virtual ObjectPtr<common::Nameserver> get_nameserver(std::string_view nameserver_ip) = 0;
+  virtual ObjectPtr<common::Nameserver>
+  get_nameserver(std::string_view nameserver_ip) = 0;
   virtual SessionContext* get_object_session_context(Object* obj) = 0;
   virtual ~Rpc() = default;
 };
 
 namespace impl {
 struct BuildConfig {
-  DebugLevel  debug_level       = DebugLevel::DebugLevel_Critical;
-  uuid_t      uuid;
+  DebugLevel debug_level = DebugLevel::DebugLevel_Critical;
+  uuid_t uuid;
 
-  uint16_t    tcp_port          = 0;
-  uint16_t    udp_port          = 0;
+  uint16_t tcp_port = 0;
+  uint16_t udp_port = 0;
   std::string hostname;
 
   // HTTP/HTTPS settings + WebSocket/SSL WebSocket settings
-  uint16_t    http_port         = 0;
-  bool        http_ssl_enabled                     = false;
-  bool        http3_enabled                        = false;
-  bool        ssr_enabled                          = false;
-  bool        http_ssl_client_disable_verification = false;
+  uint16_t http_port = 0;
+  bool http_ssl_enabled = false;
+  bool http3_enabled = false;
+  bool ssr_enabled = false;
+  bool http_ssl_client_disable_verification = false;
   std::string http_cert_file;
   std::string http_key_file;
   std::string http_dhparams_file;
   std::string http_root_dir;
-  std::string ssr_handler_dir;  // Path to SSR handler (index.js), defaults to http_root_dir
+  std::string ssr_handler_dir; // Path to SSR handler (index.js), defaults to
+                               // http_root_dir
 
   // QUIC settings
-  uint16_t    quic_port         = 0;
+  uint16_t quic_port = 0;
   std::string quic_cert_file;
   std::string quic_key_file;
   std::string ssl_client_self_signed_cert_path;
@@ -344,10 +347,12 @@ class RpcBuilderQuic;
 class RpcBuilderTcp;
 class RpcBuilderUdp;
 
-class RpcBuilderBase {
+class RpcBuilderBase
+{
 protected:
   BuildConfig& cfg_;
   RpcBuilderBase(impl::BuildConfig& cfg) : cfg_(cfg) {};
+
 public:
   RpcBuilderBase& set_debug_level(::nprpc::DebugLevel level) noexcept
   {
@@ -361,8 +366,8 @@ public:
     return *this;
   }
 
-  RpcBuilderBase& enable_ssl_client_self_signed_cert(
-    std::string_view cert_path) noexcept
+  RpcBuilderBase&
+  enable_ssl_client_self_signed_cert(std::string_view cert_path) noexcept
   {
     cfg_.ssl_client_self_signed_cert_path = cert_path;
     return *this;
@@ -382,27 +387,30 @@ public:
   NPRPC_API Rpc* build(boost::asio::io_context& ioc);
 };
 
-class RpcBuilderTcp : public RpcBuilderBase {
- public:
+class RpcBuilderTcp : public RpcBuilderBase
+{
+public:
   explicit RpcBuilderTcp(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
 };
 
-class RpcBuilderUdp : public RpcBuilderBase {
- public:
+class RpcBuilderUdp : public RpcBuilderBase
+{
+public:
   explicit RpcBuilderUdp(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
 };
 
-class RpcBuilderHttp : public RpcBuilderBase {
- public:
+class RpcBuilderHttp : public RpcBuilderBase
+{
+public:
   explicit RpcBuilderHttp(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
 
   RpcBuilderHttp& ssl(std::string_view cert_file,
                       std::string_view key_file,
                       std::string_view dhparams_file = "") noexcept
   {
-    cfg_.http_ssl_enabled   = true;
-    cfg_.http_cert_file     = cert_file;
-    cfg_.http_key_file      = key_file;
+    cfg_.http_ssl_enabled = true;
+    cfg_.http_cert_file = cert_file;
+    cfg_.http_key_file = key_file;
     cfg_.http_dhparams_file = dhparams_file;
     return *this;
   }
@@ -429,9 +437,9 @@ class RpcBuilderHttp : public RpcBuilderBase {
   }
 };
 
-
-class RpcBuilderQuic : public RpcBuilderBase {
- public:
+class RpcBuilderQuic : public RpcBuilderBase
+{
+public:
   explicit RpcBuilderQuic(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
 
   RpcBuilderQuic& port(uint16_t port) noexcept
@@ -444,41 +452,47 @@ class RpcBuilderQuic : public RpcBuilderBase {
                       std::string_view key_file) noexcept
   {
     cfg_.quic_cert_file = cert_file;
-    cfg_.quic_key_file  = key_file;
+    cfg_.quic_key_file = key_file;
     return *this;
   }
 };
 
-inline RpcBuilderTcp RpcBuilderBase::with_tcp(uint16_t port) noexcept {
+inline RpcBuilderTcp RpcBuilderBase::with_tcp(uint16_t port) noexcept
+{
   cfg_.tcp_port = port;
   return RpcBuilderTcp(cfg_);
 }
 
-inline RpcBuilderHttp RpcBuilderBase::with_http(uint16_t port) noexcept {
+inline RpcBuilderHttp RpcBuilderBase::with_http(uint16_t port) noexcept
+{
   cfg_.http_port = port;
   return RpcBuilderHttp(cfg_);
 }
 
-inline RpcBuilderUdp RpcBuilderBase::with_udp(uint16_t port) noexcept {
+inline RpcBuilderUdp RpcBuilderBase::with_udp(uint16_t port) noexcept
+{
   cfg_.udp_port = port;
   return RpcBuilderUdp(cfg_);
 }
 
-inline RpcBuilderQuic RpcBuilderBase::with_quic(uint16_t port) noexcept {
+inline RpcBuilderQuic RpcBuilderBase::with_quic(uint16_t port) noexcept
+{
   cfg_.quic_port = port;
   return RpcBuilderQuic(cfg_);
 }
 
 } // namespace impl
 
-class RpcBuilder : public impl::RpcBuilderBase {
+class RpcBuilder : public impl::RpcBuilderBase
+{
   impl::BuildConfig cfg_;
- public:
+
+public:
   NPRPC_API RpcBuilder();
 };
 
-template<class T>
-  requires (std::is_base_of_v<Object, T>)
+template <class T>
+  requires(std::is_base_of_v<Object, T>)
 T* narrow(Object*& obj) noexcept
 {
   static_assert(std::is_base_of_v<Object, T>);
@@ -495,19 +509,17 @@ T* narrow(Object*& obj) noexcept
   return result;
 }
 
-}  // namespace nprpc
+} // namespace nprpc
 
-#include <ostream>
 #include <iomanip>
+#include <ostream>
 
-inline std::ostream& operator<<(
-  std::ostream& os, const nprpc::Object& obj)
+inline std::ostream& operator<<(std::ostream& os, const nprpc::Object& obj)
 {
   os << "object_id: " << std::hex << std::setw(16) << std::setfill('0')
      << obj.object_id() << "\npoa_idx: " << obj.poa_idx()
-     << "\nflags: " << obj.flags()
-     << "\nclass_id: " << obj.class_id() << "\nurls: " << obj.urls()
-     << '\n';
+     << "\nflags: " << obj.flags() << "\nclass_id: " << obj.class_id()
+     << "\nurls: " << obj.urls() << '\n';
 
   return os;
 }
