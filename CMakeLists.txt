@@ -68,7 +68,17 @@ set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 # Force spdlog to be static regardless of global BUILD_SHARED_LIBS
 set(BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
 set(BUILD_SHARED_LIBS OFF)
+# Ensure static library is compiled with -fPIC so it can be linked into shared nprpc lib
+set(CMAKE_POSITION_INDEPENDENT_CODE_SAVED ${CMAKE_POSITION_INDEPENDENT_CODE})
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_CXX_VISIBILITY_PRESET_SAVED ${CMAKE_CXX_VISIBILITY_PRESET})
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN_SAVED ${CMAKE_VISIBILITY_INLINES_HIDDEN})
+set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 add_subdirectory(third_party/spdlog)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN ${CMAKE_VISIBILITY_INLINES_HIDDEN_SAVED})
+set(CMAKE_CXX_VISIBILITY_PRESET ${CMAKE_CXX_VISIBILITY_PRESET_SAVED})
+set(CMAKE_POSITION_INDEPENDENT_CODE ${CMAKE_POSITION_INDEPENDENT_CODE_SAVED})
 set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED})
 
 # MsQuic integration
@@ -196,6 +206,7 @@ add_library(nprpc
   # HTTP transport
   src/http/http_server.cpp
   src/http/http_utils.cpp
+  src/http/http_rpc_session.cpp
   src/http/http_file_cache.cpp
   src/http/http3_server_msh3.cpp
   src/http/http3_server_nghttp3.cpp
@@ -367,9 +378,14 @@ if(NPRPC_BUILD_TOOLS)
     npnameserver/npnameserver.cpp
     ${nprpc_nameserver_GENERATED_SOURCES}
   )
-  
-  target_link_libraries(npnameserver PRIVATE nprpc::nprpc)
-  
+
+  target_link_libraries(npnameserver
+    PRIVATE
+      nprpc::nprpc
+      # ~512 KB in size increase when spdlog::spdlog statically linked
+      $<BUILD_INTERFACE:spdlog::spdlog>
+    )
+
   if(TARGET npidl)
     add_dependencies(npnameserver nprpc_stub_gen)
   endif()
