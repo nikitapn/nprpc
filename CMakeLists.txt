@@ -57,6 +57,20 @@ endif()
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
+
+# Spdlog integration
+# Build as static library to prevent symbol leakage
+set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(SPDLOG_FMT_EXTERNAL OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+
+# Force spdlog to be static regardless of global BUILD_SHARED_LIBS
+set(BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS OFF)
+add_subdirectory(third_party/spdlog)
+set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED})
+
 # MsQuic integration
 if(NPRPC_ENABLE_QUIC)
   message(STATUS "QUIC transport enabled - building MsQuic")
@@ -271,6 +285,8 @@ target_link_libraries(nprpc
     Threads::Threads
     OpenSSL::SSL
     OpenSSL::Crypto
+  PRIVATE
+    $<BUILD_INTERFACE:spdlog::spdlog>
 )
 
 # MsQuic linking

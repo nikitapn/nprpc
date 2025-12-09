@@ -11,7 +11,6 @@
 #include <unistd.h>
 #include <sys/eventfd.h>
 #include <cstring>
-#include <iostream>
 
 namespace nprpc_node {
 
