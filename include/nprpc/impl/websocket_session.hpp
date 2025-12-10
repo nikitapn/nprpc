@@ -23,7 +23,8 @@ template <class Derived> class WebSocketSession : public Session
     outgoing_message(
         flat_buffer&& buf,
         std::function<void(const boost::system::error_code&)>&& handler)
-        : buffer(std::move(buf)), completion_handler(std::move(handler))
+        : buffer(std::move(buf))
+        , completion_handler(std::move(handler))
     {
     }
   };
@@ -43,8 +44,8 @@ template <class Derived> class WebSocketSession : public Session
     pending_request(std::function<void(const boost::system::error_code&,
                                        flat_buffer&)>&& handler,
                     std::chrono::milliseconds timeout)
-        : completion_handler(std::move(handler)),
-          timeout_point(std::chrono::steady_clock::now() + timeout)
+        : completion_handler(std::move(handler))
+        , timeout_point(std::chrono::steady_clock::now() + timeout)
     {
     }
   };
@@ -88,7 +89,10 @@ public:
                                        flat_buffer&)>>&& completion_handler,
       uint32_t timeout_ms);
 
-  WebSocketSession(net::any_io_executor executor) : Session(executor) {}
+  WebSocketSession(net::any_io_executor executor)
+      : Session(executor)
+  {
+  }
 };
 
 template <class Derived>
@@ -101,7 +105,8 @@ public:
   using stream_t = plain_stream;
   // Create the session
   explicit PlainWebSocketSessionT(plain_ws&& _ws_)
-      : base(_ws_.get_executor()), ws_(std::move(_ws_))
+      : base(_ws_.get_executor())
+      , ws_(std::move(_ws_))
   {
   }
 
@@ -122,7 +127,8 @@ public:
   using stream_t = ssl_stream;
   // Create the session
   explicit SSLWebSocketSessionT(ssl_ws&& _ws_)
-      : base(_ws_.get_executor()), ws_(std::move(_ws_))
+      : base(_ws_.get_executor())
+      , ws_(std::move(_ws_))
   {
   }
 

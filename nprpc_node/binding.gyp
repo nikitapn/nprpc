@@ -8,7 +8,6 @@
             "sources": [
                 "src/addon.cpp",
                 "src/shm_channel_wrapper.cpp",
-                "src/nprpc_stub.cpp",
                 "../src/shm/lock_free_ring_buffer.cpp"
             ],
             "include_dirs": [

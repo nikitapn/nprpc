@@ -45,10 +45,8 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     return false;
   };
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-    NPRPC_LOG_INFO("[nprpc] Handle Request: received a message:");
-    dump_message(rx_buffer, true);
-  }
+  NPRPC_LOG_INFO("[nprpc] Handle Request: received a message:");
+  // dump_message(rx_buffer, true);
 
   // Set context buffers
   ctx_.rx_buffer = &rx_buffer;
@@ -68,12 +66,10 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
   case MessageId::FunctionCall: {
     impl::flat::CallHeader_Direct ch(rx_buffer, sizeof(impl::Header));
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[nprpc] Handle Request: FunctionCall. request_id: {}, "
-                     "interface_idx: {}, fn_idx: {}, poa_idx: {}, oid: {}",
-                     header->request_id, (uint32_t)ch.interface_idx(),
-                     (uint32_t)ch.function_idx(), ch.poa_idx(), ch.object_id());
-    }
+    NPRPC_LOG_INFO("[nprpc] Handle Request: FunctionCall. request_id: {}, "
+                   "interface_idx: {}, fn_idx: {}, poa_idx: {}, oid: {}",
+                   header->request_id, (uint32_t)ch.interface_idx(),
+                   (uint32_t)ch.function_idx(), ch.poa_idx(), ch.object_id());
 
     bool not_found = true;
     if (auto obj = get_object(ctx_, ch.poa_idx(), ch.object_id()); obj) {
@@ -109,11 +105,8 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     detail::flat::ObjectIdLocal_Direct msg(rx_buffer, sizeof(impl::Header));
     detail::ObjectIdLocal oid{msg.poa_idx(), msg.object_id()};
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO(
-          "[nprpc] Handle Request: AddReference. poa_idx: {}, oid: {}",
-          oid.poa_idx, oid.object_id);
-    }
+    NPRPC_LOG_INFO("[nprpc] Handle Request: AddReference. poa_idx: {}, oid: {}",
+                   oid.poa_idx, oid.object_id);
 
     bool success = false;
     if (auto obj = get_object(ctx_, msg.poa_idx(), msg.object_id()); obj) {
@@ -126,14 +119,10 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     }
 
     if (success) {
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        NPRPC_LOG_INFO("[nprpc] Handle Request: Refference added.");
-      }
+      NPRPC_LOG_INFO("[nprpc] Handle Request: Refference added.");
       make_simple_answer(ctx_, nprpc::impl::MessageId::Success);
     } else {
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        NPRPC_LOG_INFO("[nprpc] Handle Request: Object not found.");
-      }
+      NPRPC_LOG_INFO("[nprpc] Handle Request: Object not found.");
       make_simple_answer(ctx_, nprpc::impl::MessageId::Error_ObjectNotExist);
     }
 
@@ -143,11 +132,9 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     detail::flat::ObjectIdLocal_Direct msg(rx_buffer, sizeof(impl::Header));
     detail::ObjectIdLocal oid{msg.poa_idx(), msg.object_id()};
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO(
-          "[nprpc] Handle Request: ReleaseObject. poa_idx: {}, oid: {}",
-          oid.poa_idx, oid.object_id);
-    }
+    NPRPC_LOG_INFO(
+        "[nprpc] Handle Request: ReleaseObject. poa_idx: {}, oid: {}",
+        oid.poa_idx, oid.object_id);
 
     if (ctx_.ref_list.remove_ref(msg.poa_idx(), msg.object_id())) {
       make_simple_answer(ctx_, nprpc::impl::MessageId::Success);
@@ -164,10 +151,8 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     break;
   }
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-    NPRPC_LOG_INFO("[nprpc] Handle Request: sending reply:");
-    dump_message(tx_buffer, true);
-  }
+  NPRPC_LOG_INFO("[nprpc] Handle Request: sending reply:");
+  // dump_message(tx_buffer, true);
 }
 
 } // namespace nprpc::impl

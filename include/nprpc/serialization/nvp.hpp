@@ -33,7 +33,8 @@ template <size_t N, typename T> struct nvp : nvp_base {
   T& obj;
 
   explicit constexpr nvp(const char (&_name)[N + 1], T& _obj)
-      : name(_name), obj(_obj)
+      : name(_name)
+      , obj(_obj)
   {
   }
 };

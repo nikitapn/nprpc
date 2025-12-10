@@ -28,14 +28,21 @@ template <typename T> class ObjectPtr
   }
 
 public:
-  ObjectPtr() noexcept : obj_{nullptr} {}
+  ObjectPtr() noexcept
+      : obj_{nullptr}
+  {
+  }
 
-  ObjectPtr(const ObjectPtr<T>& other) noexcept : obj_{other.obj_}
+  ObjectPtr(const ObjectPtr<T>& other) noexcept
+      : obj_{other.obj_}
   {
     safe_add_ref();
   }
 
-  explicit ObjectPtr(T* obj) noexcept : obj_{obj} {}
+  explicit ObjectPtr(T* obj) noexcept
+      : obj_{obj}
+  {
+  }
 
   ObjectPtr(ObjectPtr<T>&& other) noexcept
       : obj_{boost::exchange(other.obj_, nullptr)}

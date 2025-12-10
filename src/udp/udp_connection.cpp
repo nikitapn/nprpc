@@ -12,24 +12,24 @@ namespace nprpc::impl {
 
 UdpConnection::UdpConnection(boost::asio::io_context& ioc,
                              const endpoint_type& remote_endpoint)
-    : ioc_(ioc), socket_(ioc, boost::asio::ip::udp::v4()),
-      remote_endpoint_(remote_endpoint)
+    : ioc_(ioc)
+    , socket_(ioc, boost::asio::ip::udp::v4())
+    , remote_endpoint_(remote_endpoint)
 {
   // Set socket options for better performance
   socket_.set_option(boost::asio::socket_base::send_buffer_size(65536));
   socket_.set_option(boost::asio::socket_base::receive_buffer_size(65536));
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[UDP] Connection created to {}:{}",
-                   remote_endpoint_.address().to_string(),
-                   remote_endpoint_.port());
-  }
+  NPRPC_LOG_INFO("[UDP] Connection created to {}:{}",
+                 remote_endpoint_.address().to_string(),
+                 remote_endpoint_.port());
 }
 
 UdpConnection::UdpConnection(boost::asio::io_context& ioc,
                              const std::string& host,
                              uint16_t port)
-    : ioc_(ioc), socket_(ioc, boost::asio::ip::udp::v4())
+    : ioc_(ioc)
+    , socket_(ioc, boost::asio::ip::udp::v4())
 {
   // Resolve hostname
   boost::asio::ip::udp::resolver resolver(ioc);
@@ -45,31 +45,25 @@ UdpConnection::UdpConnection(boost::asio::io_context& ioc,
   socket_.set_option(boost::asio::socket_base::send_buffer_size(65536));
   socket_.set_option(boost::asio::socket_base::receive_buffer_size(65536));
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[UDP] Connection created to {}:{}",
-                   remote_endpoint_.address().to_string(),
-                   remote_endpoint_.port());
-  }
+  NPRPC_LOG_INFO("[UDP] Connection created to {}:{}",
+                 remote_endpoint_.address().to_string(),
+                 remote_endpoint_.port());
 }
 
 UdpConnection::~UdpConnection()
 {
   close();
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[UDP] Connection destroyed");
-  }
+  NPRPC_LOG_INFO("[UDP] Connection destroyed");
 }
 
 void UdpConnection::send(flat_buffer&& buffer)
 {
   // Fire-and-forget - no callback needed
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-    auto data = buffer.cdata();
-    NPRPC_LOG_INFO("[UDP] send() called with {} bytes to {}:{}", data.size(),
-                   remote_endpoint_.address().to_string(),
-                   remote_endpoint_.port());
-  }
+  auto data = buffer.cdata();
+  NPRPC_LOG_INFO("[UDP] send() called with {} bytes to {}:{}", data.size(),
+                 remote_endpoint_.address().to_string(),
+                 remote_endpoint_.port());
   send_async(std::move(buffer), nullptr);
 }
 
@@ -101,11 +95,9 @@ void UdpConnection::do_send()
 
   auto data = pending.buffer.cdata();
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-    NPRPC_LOG_INFO("[UDP] Sending {} bytes to {}:{}", data.size(),
-                   remote_endpoint_.address().to_string(),
-                   remote_endpoint_.port());
-  }
+  NPRPC_LOG_INFO("[UDP] Sending {} bytes to {}:{}", data.size(),
+                 remote_endpoint_.address().to_string(),
+                 remote_endpoint_.port());
 
   socket_.async_send_to(
       boost::asio::buffer(data.data(), data.size()), remote_endpoint_,
@@ -119,9 +111,7 @@ void UdpConnection::do_send()
         }
 
         if (ec) {
-          if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-            NPRPC_LOG_ERROR("[UDP] Send error: {}", ec.message());
-          }
+          NPRPC_LOG_ERROR("[UDP] Send error: {}", ec.message());
         }
 
         // Continue with next queued send
@@ -156,10 +146,8 @@ void UdpConnection::send_reliable(flat_buffer& buffer,
     header->request_id = request_id;
   }
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[UDP] send_reliable() blocking request_id={} timeout={}ms",
-                   request_id, timeout_ms);
-  }
+  NPRPC_LOG_INFO("[UDP] send_reliable() blocking request_id={} timeout={}ms",
+                 request_id, timeout_ms);
 
   auto timer = std::make_unique<boost::asio::steady_timer>(ioc_);
 
@@ -208,7 +196,7 @@ void UdpConnection::send_reliable(flat_buffer& buffer,
       boost::asio::buffer(data.data(), data.size()), remote_endpoint_,
       [this, self = shared_from_this(), request_id](
           const boost::system::error_code& ec, std::size_t bytes_sent) {
-        if (ec && g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
+        if (ec) {
           NPRPC_LOG_ERROR("[UDP] Send error for request_id={}: {}", request_id,
                           ec.message());
         }
@@ -231,10 +219,8 @@ void UdpConnection::send_reliable_async(flat_buffer&& buffer,
     header->request_id = request_id;
   }
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[UDP] send_reliable_async() request_id={} timeout={}ms",
-                   request_id, timeout_ms);
-  }
+  NPRPC_LOG_INFO("[UDP] send_reliable_async() request_id={} timeout={}ms",
+                 request_id, timeout_ms);
 
   auto timer = std::make_unique<boost::asio::steady_timer>(ioc_);
 
@@ -269,7 +255,7 @@ void UdpConnection::send_reliable_async(flat_buffer&& buffer,
       boost::asio::buffer(data.data(), data.size()), remote_endpoint_,
       [this, self = shared_from_this(), request_id](
           const boost::system::error_code& ec, std::size_t bytes_sent) {
-        if (ec && g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
+        if (ec) {
           NPRPC_LOG_ERROR("[UDP] Send error for request_id={}: {}", request_id,
                           ec.message());
         }
@@ -289,9 +275,7 @@ void UdpConnection::start_receive()
                                         std::size_t bytes_received) {
         if (ec) {
           if (ec != boost::asio::error::operation_aborted) {
-            if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-              NPRPC_LOG_ERROR("[UDP] Receive error: {}", ec.message());
-            }
+            NPRPC_LOG_ERROR("[UDP] Receive error: {}", ec.message());
           }
           receiving_ = false;
           return;
@@ -314,26 +298,20 @@ void UdpConnection::start_receive()
 void UdpConnection::handle_response(size_t bytes_received)
 {
   if (bytes_received < sizeof(Header)) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-      NPRPC_LOG_ERROR("[UDP] Response too small: {}", bytes_received);
-    }
+    NPRPC_LOG_ERROR("[UDP] Response too small: {}", bytes_received);
     return;
   }
 
   auto* header = reinterpret_cast<const Header*>(recv_buffer_.data());
   uint32_t request_id = header->request_id;
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[UDP] Received response request_id={} size={}", request_id,
-                   bytes_received);
-  }
+  NPRPC_LOG_INFO("[UDP] Received response request_id={} size={}", request_id,
+                 bytes_received);
 
   // Find pending call
   auto it = pending_calls_.find(request_id);
   if (it == pending_calls_.end()) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[UDP] No pending call for request_id={}", request_id);
-    }
+    NPRPC_LOG_INFO("[UDP] No pending call for request_id={}", request_id);
     return;
   }
 
@@ -368,10 +346,8 @@ void UdpConnection::do_retransmit(uint32_t request_id)
 
   if (pending.retry_count > pending.max_retries) {
     // Max retries exceeded - call handler with timeout error
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-      NPRPC_LOG_ERROR("[UDP] Timeout after {} retries for request_id={}",
-                      pending.max_retries, request_id);
-    }
+    NPRPC_LOG_ERROR("[UDP] Timeout after {} retries for request_id={}",
+                    pending.max_retries, request_id);
 
     auto handler = std::move(pending.handler);
     pending_calls_.erase(it);
@@ -383,10 +359,8 @@ void UdpConnection::do_retransmit(uint32_t request_id)
     return;
   }
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[UDP] Retransmit #{} for request_id={}",
-                   pending.retry_count, request_id);
-  }
+  NPRPC_LOG_INFO("[UDP] Retransmit #{} for request_id={}", pending.retry_count,
+                 request_id);
 
   // Restart timer
   pending.timer->expires_after(std::chrono::milliseconds(pending.timeout_ms));
@@ -403,7 +377,7 @@ void UdpConnection::do_retransmit(uint32_t request_id)
       boost::asio::buffer(data.data(), data.size()), remote_endpoint_,
       [this, self = shared_from_this(), request_id](
           const boost::system::error_code& ec, std::size_t bytes_sent) {
-        if (ec && g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
+        if (ec) {
           NPRPC_LOG_ERROR("[UDP] Retransmit error for request_id={}: {}",
                           request_id, ec.message());
         }

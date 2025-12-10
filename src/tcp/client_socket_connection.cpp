@@ -16,9 +16,7 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 {
   assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-    dump_message(buffer, false);
-  }
+  // dump_message(buffer, false);
 
   struct WorkImpl : IOWork {
     flat_buffer& buf;
@@ -75,7 +73,9 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
     }
 
     WorkImpl(flat_buffer& _buf, SocketConnection& _this_, uint32_t _timeout_ms)
-        : buf(_buf), this_(_this_), timeout_ms(_timeout_ms)
+        : buf(_buf)
+        , this_(_this_)
+        , timeout_ms(_timeout_ms)
     {
     }
   };
@@ -86,9 +86,7 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
   auto ec = w->wait();
 
   if (!ec) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-      dump_message(buffer, true);
-    }
+    // dump_message(buffer, true);
     return;
   }
 
@@ -157,8 +155,10 @@ void SocketConnection::send_receive_async(
              std::optional<std::function<void(const boost::system::error_code&,
                                               flat_buffer&)>>&& _handler,
              uint32_t _timeout_ms)
-        : buf(std::move(_buf)), this_(_this_), timeout_ms(_timeout_ms),
-          handler(std::move(_handler))
+        : buf(std::move(_buf))
+        , this_(_this_)
+        , timeout_ms(_timeout_ms)
+        , handler(std::move(_handler))
     {
     }
   };
@@ -258,7 +258,8 @@ void SocketConnection::on_read_body(const boost::system::error_code& ec,
 
 SocketConnection::SocketConnection(const EndPoint& endpoint,
                                    boost::asio::ip::tcp::socket&& socket)
-    : Session(socket.get_executor()), socket_{std::move(socket)}
+    : Session(socket.get_executor())
+    , socket_{std::move(socket)}
 {
   ctx_.remote_endpoint = endpoint;
   timeout_timer_.expires_at(boost::posix_time::pos_infin);

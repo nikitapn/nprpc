@@ -144,7 +144,10 @@ public:
    */
   virtual void finalize() = 0;
 
-  Builder(Context* ctx) : ctx_{ctx} {}
+  Builder(Context* ctx)
+      : ctx_{ctx}
+  {
+  }
   virtual ~Builder() = default;
 
   virtual Builder* clone(Context* ctx) const = 0;
@@ -172,14 +175,18 @@ public:
 
   void finalize() { emit(&Builder::finalize); }
 
-  BuildGroup(const BuildGroup& other, Context* ctx) : ctx_{ctx}
+  BuildGroup(const BuildGroup& other, Context* ctx)
+      : ctx_{ctx}
   {
     for (auto& other_builder : other.builders_) {
       builders_.emplace_back(other_builder->clone(ctx));
     }
   }
 
-  BuildGroup(Context* ctx = nullptr) : ctx_{ctx} {}
+  BuildGroup(Context* ctx = nullptr)
+      : ctx_{ctx}
+  {
+  }
 };
 
 } // namespace npidl::builders

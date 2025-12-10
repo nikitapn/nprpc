@@ -146,7 +146,9 @@ template <class T, class TD> struct Span_ref {
       return offset != other.offset;
     }
 
-    Ptr_ref(flat_buffer& b, std::uint32_t o) : buffer(b), offset(o)
+    Ptr_ref(flat_buffer& b, std::uint32_t o)
+        : buffer(b)
+        , offset(o)
     {
       assert(offset % alignof(T) == 0);
     }
@@ -169,7 +171,9 @@ template <class T, class TD> struct Span_ref {
 
   Span_ref(flat_buffer& b,
            const std::tuple<std::uint32_t, std::uint32_t>& range)
-      : buffer(b), first(std::get<0>(range)), last(std::get<1>(range))
+      : buffer(b)
+      , first(std::get<0>(range))
+      , last(std::get<1>(range))
   {
     assert(first % alignof(T) == 0);
   }
@@ -329,7 +333,8 @@ public:
   }
 
   Vector_Direct(flat_buffer& buffer, std::uint32_t offset)
-      : buffer_(buffer), offset_(offset)
+      : buffer_(buffer)
+      , offset_(offset)
   {
   }
 };
@@ -476,7 +481,8 @@ public:
   }
 
   Optional_Direct(flat_buffer& buffer, std::uint32_t offset)
-      : buffer_(buffer), offset_(offset)
+      : buffer_(buffer)
+      , offset_(offset)
   {
   }
 };

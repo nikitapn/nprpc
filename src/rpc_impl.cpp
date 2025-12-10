@@ -164,8 +164,9 @@ NPRPC_API Rpc* RpcBuilderBase::build(boost::asio::io_context& ioc)
     g_cfg.ssl_context_client.set_verify_mode(ssl::verify_peer);
   }
 
+  nprpc::impl::get_logger()->set_level(cfg_.log_level);
+
   // Copy builder config to global config
-  g_cfg.debug_level = cfg_.debug_level;
   g_cfg.hostname = cfg_.hostname;
   g_cfg.listen_tcp_port = cfg_.tcp_port;
   g_cfg.listen_http_port = cfg_.http_port;
@@ -655,7 +656,8 @@ RpcImpl::get_nameserver(std::string_view nameserver_ip)
   return obj;
 }
 
-RpcImpl::RpcImpl(boost::asio::io_context& ioc) : ioc_{ioc}
+RpcImpl::RpcImpl(boost::asio::io_context& ioc)
+    : ioc_{ioc}
 {
   poas_created_.fill(false);
 

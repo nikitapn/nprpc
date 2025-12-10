@@ -13,7 +13,8 @@ using namespace nprpc;
 
 namespace nprpc {
 
-NPRPC_API RpcBuilder::RpcBuilder() : impl::RpcBuilderBase(cfg_)
+NPRPC_API RpcBuilder::RpcBuilder()
+    : impl::RpcBuilderBase(cfg_)
 {
   auto& uuid = impl::SharedUUID::instance().get();
   memcpy(cfg_.uuid.data(), &uuid, 16);

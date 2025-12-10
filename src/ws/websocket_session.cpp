@@ -67,8 +67,7 @@ void WebSocketSession<Derived>::on_read(
 
   if (ec) {
     close();
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall)
-      fail(ec, "read");
+    fail(ec, "read");
     return;
   }
 
@@ -164,8 +163,7 @@ void WebSocketSession<Derived>::on_write(beast::error_code ec,
 
   if (ec) {
     close();
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall)
-      fail(ec, "write");
+    fail(ec, "write");
     return;
   }
 
@@ -235,8 +233,7 @@ void WebSocketSession<Derived>::send_receive(flat_buffer& buffer,
 {
   assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent)
-    dump_message(buffer, false);
+  // dump_message(buffer, false);
 
   std::promise<std::pair<boost::system::error_code, flat_buffer>> promise;
   auto future = promise.get_future();
@@ -252,8 +249,7 @@ void WebSocketSession<Derived>::send_receive(flat_buffer& buffer,
 
   if (!ec) {
     buffer = std::move(response);
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent)
-      dump_message(buffer, true);
+    // dump_message(buffer, true);
   } else {
     throw nprpc::ExceptionCommFailure();
   }
@@ -274,13 +270,11 @@ void WebSocketSession<Derived>::send_receive_async(
   // Inject request ID into message header
   inject_request_id(buffer, request_id);
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    nprpc::impl::flat::Header_Direct header(buffer, 0);
-    std::cout << "[nprpc] WebSocketSession: send_receive_async called. size: "
-              << buffer.size()
-              << ", msg_id: " << static_cast<uint32_t>(header.msg_id())
-              << ", request_id: " << header.request_id() << std::endl;
-  }
+  // nprpc::impl::flat::Header_Direct header(buffer, 0);
+  // std::cout << "[nprpc] WebSocketSession: send_receive_async called. size: "
+  //           << buffer.size()
+  //           << ", msg_id: " << static_cast<uint32_t>(header.msg_id())
+  //           << ", request_id: " << header.request_id() << std::endl;
 
   // Queue the request for sending
   boost::asio::post(

@@ -13,8 +13,16 @@ struct SourcePosition {
   uint32_t line;
   uint32_t column;
 
-  SourcePosition() : line(0), column(0) {}
-  SourcePosition(uint32_t l, uint32_t c) : line(l), column(c) {}
+  SourcePosition()
+      : line(0)
+      , column(0)
+  {
+  }
+  SourcePosition(uint32_t l, uint32_t c)
+      : line(l)
+      , column(c)
+  {
+  }
 
   bool is_valid() const { return line > 0; }
 };
@@ -24,12 +32,17 @@ struct SourceRange {
   SourcePosition end;
 
   SourceRange() = default;
-  SourceRange(SourcePosition s, SourcePosition e) : start(s), end(e) {}
+  SourceRange(SourcePosition s, SourcePosition e)
+      : start(s)
+      , end(e)
+  {
+  }
   SourceRange(uint32_t start_line,
               uint32_t start_col,
               uint32_t end_line,
               uint32_t end_col)
-      : start(start_line, start_col), end(end_line, end_col)
+      : start(start_line, start_col)
+      , end(end_line, end_col)
   {
   }
 

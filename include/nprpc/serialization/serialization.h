@@ -317,7 +317,10 @@ public:
     return operator<<(obj);
   }
 
-  basic_oarchive(std::ostream& os) : os_(os) {}
+  basic_oarchive(std::ostream& os)
+      : os_(os)
+  {
+  }
 };
 
 template <typename Archive>
@@ -341,7 +344,10 @@ public:
 
   template <typename T> Archive& operator&(T& obj) { return operator>>(obj); }
 
-  basic_iarchive(std::istream& is) : is_(is) {}
+  basic_iarchive(std::istream& is)
+      : is_(is)
+  {
+  }
 };
 
 } // namespace nprpc::serialization

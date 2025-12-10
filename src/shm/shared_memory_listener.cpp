@@ -12,8 +12,9 @@ namespace nprpc::impl {
 SharedMemoryListener::SharedMemoryListener(boost::asio::io_context& ioc,
                                            const std::string& listener_name,
                                            AcceptHandler accept_handler)
-    : listener_name_(listener_name), ioc_(ioc),
-      accept_handler_(std::move(accept_handler))
+    : listener_name_(listener_name)
+    , ioc_(ioc)
+    , accept_handler_(std::move(accept_handler))
 {
   if (listener_name_.empty()) {
     throw std::invalid_argument("Listener name cannot be empty");
@@ -34,9 +35,7 @@ SharedMemoryListener::SharedMemoryListener(boost::asio::io_context& ioc,
     accept_ring_ = LockFreeRingBuffer::create(accept_ring_name,
                                               10 * 1024); // 10KB total buffer
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("SharedMemoryListener created: {}", listener_name_);
-    }
+    NPRPC_LOG_INFO("SharedMemoryListener created: {}", listener_name_);
   } catch (const std::exception& e) {
     NPRPC_LOG_ERROR("Failed to create listener ring: {}", e.what());
     throw std::runtime_error(
@@ -54,9 +53,7 @@ SharedMemoryListener::~SharedMemoryListener()
   try {
     std::string accept_ring_name = make_shm_name(listener_name_, "accept");
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("SharedMemoryListener cleaned up: {}", listener_name_);
-    }
+    // NPRPC_LOG_INFO("SharedMemoryListener cleaned up: {}", listener_name_);
   } catch (const std::exception& e) {
     // Ignore cleanup errors
   }
@@ -71,9 +68,7 @@ void SharedMemoryListener::start()
   running_ = true;
   accept_thread_ = std::make_unique<std::thread>([this]() { accept_loop(); });
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("SharedMemoryListener started: {}", listener_name_);
-  }
+  // NPRPC_LOG_INFO("SharedMemoryListener started: {}", listener_name_);
 }
 
 void SharedMemoryListener::stop()
@@ -88,9 +83,7 @@ void SharedMemoryListener::stop()
     accept_thread_->join();
   }
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("SharedMemoryListener stopped: {}", listener_name_);
-  }
+  NPRPC_LOG_INFO("SharedMemoryListener stopped: {}", listener_name_);
 }
 
 void SharedMemoryListener::accept_loop()
@@ -132,9 +125,7 @@ void SharedMemoryListener::accept_loop()
     }
   }
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("SharedMemoryListener accept loop exiting");
-  }
+  NPRPC_LOG_INFO("SharedMemoryListener accept loop exiting");
 }
 
 void SharedMemoryListener::handle_connection_request(
@@ -142,10 +133,8 @@ void SharedMemoryListener::handle_connection_request(
 {
   std::string channel_id(handshake.channel_id);
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("SharedMemoryListener: Accepting connection on channel: {}",
-                   channel_id);
-  }
+  NPRPC_LOG_INFO("SharedMemoryListener: Accepting connection on channel: {}",
+                 channel_id);
 
   try {
     // Create dedicated channel for this client (server creates the rings)
@@ -153,10 +142,8 @@ void SharedMemoryListener::handle_connection_request(
                                                          /*is_server=*/true,
                                                          /*create_rings=*/true);
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("SharedMemoryListener: Channel created successfully: {}",
-                     channel_id);
-    }
+    NPRPC_LOG_INFO("SharedMemoryListener: Channel created successfully: {}",
+                   channel_id);
 
     // Call accept handler immediately in this thread
     // This ensures on_data_received is set before any messages arrive
@@ -182,10 +169,8 @@ connect_to_shared_memory_listener(boost::asio::io_context& ioc,
   // Generate unique channel ID for this connection
   std::string channel_id = SharedMemoryChannel::generate_channel_id();
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("Connecting to listener: {} with channel: {}", listener_name,
-                   channel_id);
-  }
+  NPRPC_LOG_INFO("Connecting to listener: {} with channel: {}", listener_name,
+                 channel_id);
 
   // Create our side of the channel first (client doesn't create queues yet)
   // We'll wait for the server to create them
@@ -207,11 +192,8 @@ connect_to_shared_memory_listener(boost::asio::io_context& ioc,
                                "listener (ring buffer full)");
     }
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO(
-          "Sent connection request, waiting for server to create ring "
-          "buffers...");
-    }
+    NPRPC_LOG_INFO("Sent connection request, waiting for server to create ring "
+                   "buffers...");
 
     // Poll for ring buffer existence (wait for server to create them)
     std::unique_ptr<SharedMemoryChannel> channel;
@@ -235,10 +217,8 @@ connect_to_shared_memory_listener(boost::asio::io_context& ioc,
       }
     }
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("Connected to listener with dedicated channel: {}",
-                     channel_id);
-    }
+    NPRPC_LOG_INFO("Connected to listener with dedicated channel: {}",
+                   channel_id);
 
     return channel;
 

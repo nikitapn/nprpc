@@ -99,7 +99,8 @@ public:
   }
 
   Session(boost::asio::any_io_executor executor)
-      : timeout_timer_{executor}, inactive_timer_{executor}
+      : timeout_timer_{executor}
+      , inactive_timer_{executor}
   {
   }
 

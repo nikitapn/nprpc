@@ -44,15 +44,25 @@ struct Token {
   int line;
   int col;
 
-  Token() : id(TokenId::Unknown), line(0), col(0) {}
+  Token()
+      : id(TokenId::Unknown)
+      , line(0)
+      , col(0)
+  {
+  }
 
   Token(TokenId _id, int _line = 0, int _col = 0)
-      : id(_id), line(_line), col(_col)
+      : id(_id)
+      , line(_line)
+      , col(_col)
   {
   }
 
   Token(TokenId _id, std::string_view _name, int _line = 0, int _col = 0)
-      : id(_id), name(_name), line(_line), col(_col)
+      : id(_id)
+      , name(_name)
+      , line(_line)
+      , col(_col)
   {
   }
 
@@ -61,7 +71,11 @@ struct Token {
         std::string_view _static_name,
         int _line = 0,
         int _col = 0)
-      : id(_id), name(_name), static_name(_static_name), line(_line), col(_col)
+      : id(_id)
+      , name(_name)
+      , static_name(_static_name)
+      , line(_line)
+      , col(_col)
   {
   }
 
@@ -371,8 +385,9 @@ public:
 
   // Single constructor - source provider injected
   Lexer(ISourceProvider& source_provider, Context& ctx)
-      : source_provider_(source_provider), ctx_(ctx),
-        text_(source_provider.read_file(ctx.get_file_path()))
+      : source_provider_(source_provider)
+      , ctx_(ctx)
+      , text_(source_provider.read_file(ctx.get_file_path()))
   {
     text_ += '\0';
     ptr_ = text_.c_str();
@@ -514,7 +529,9 @@ class Parser : public IParser
 
   public:
     PeekGuard(Parser& parser)
-        : parser_(parser), saved_(parser.tokens_looked_), discard_(false)
+        : parser_(parser)
+        , saved_(parser.tokens_looked_)
+        , discard_(false)
     {
     }
 
@@ -1614,8 +1631,11 @@ public:
          builders::BuildGroup& builder,
          IImportResolver& import_resolver,
          IErrorHandler& error_handler)
-      : lex_(lex), ctx_(ctx), builder_(builder),
-        import_resolver_(import_resolver), error_handler_(error_handler)
+      : lex_(lex)
+      , ctx_(ctx)
+      , builder_(builder)
+      , import_resolver_(import_resolver)
+      , error_handler_(error_handler)
   {
   }
 

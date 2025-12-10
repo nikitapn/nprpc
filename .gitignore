@@ -1,8 +1,7 @@
 /.cache
 /.build*
 /build
-/include/nprpc_nameserver.hpp
-/include/nprpc_base.hpp
+/include/nprpc_*
 /compile_commands.json
 
 /perf.*

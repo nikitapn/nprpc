@@ -2077,7 +2077,8 @@ void CppBuilder::emit_enum(AstEnumDecl* e)
 }
 
 CppBuilder::CppBuilder(Context* ctx, std::filesystem::path out_path)
-    : Builder(ctx), out_path_(out_path)
+    : Builder(ctx)
+    , out_path_(out_path)
 {
   if (!ctx)
     return;

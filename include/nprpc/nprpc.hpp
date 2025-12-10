@@ -137,7 +137,10 @@ class NPRPC_API PoaBuilder
   Rpc* rpc_ = nullptr;
 
 public:
-  explicit PoaBuilder(Rpc* rpc) : rpc_(rpc) {}
+  explicit PoaBuilder(Rpc* rpc)
+      : rpc_(rpc)
+  {
+  }
 
   // Set maximum number of objects this POA can handle
   PoaBuilder& with_max_objects(uint32_t max)
@@ -199,7 +202,10 @@ public:
 
   poa_idx_t get_index() const noexcept { return idx_; }
 
-  Poa(poa_idx_t idx) : idx_{idx} {}
+  Poa(poa_idx_t idx)
+      : idx_{idx}
+  {
+  }
 
   // Poa lifetime is managed by RpcImpl, so no need to delete it manually via
   // delete or wrap Poa in a smart pointer.
@@ -314,7 +320,7 @@ public:
 
 namespace impl {
 struct BuildConfig {
-  DebugLevel debug_level = DebugLevel::DebugLevel_Critical;
+  LogLevel log_level = LogLevel::info;
   uuid_t uuid;
 
   uint16_t tcp_port = 0;
@@ -350,12 +356,13 @@ class RpcBuilderBase
 {
 protected:
   BuildConfig& cfg_;
-  RpcBuilderBase(impl::BuildConfig& cfg) : cfg_(cfg) {};
+  RpcBuilderBase(impl::BuildConfig& cfg)
+      : cfg_(cfg) {};
 
 public:
-  RpcBuilderBase& set_debug_level(::nprpc::DebugLevel level) noexcept
+  RpcBuilderBase& set_log_level(::nprpc::LogLevel level) noexcept
   {
-    cfg_.debug_level = level;
+    cfg_.log_level = level;
     return *this;
   }
 
@@ -389,19 +396,28 @@ public:
 class RpcBuilderTcp : public RpcBuilderBase
 {
 public:
-  explicit RpcBuilderTcp(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
+  explicit RpcBuilderTcp(impl::BuildConfig& cfg)
+      : RpcBuilderBase(cfg)
+  {
+  }
 };
 
 class RpcBuilderUdp : public RpcBuilderBase
 {
 public:
-  explicit RpcBuilderUdp(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
+  explicit RpcBuilderUdp(impl::BuildConfig& cfg)
+      : RpcBuilderBase(cfg)
+  {
+  }
 };
 
 class RpcBuilderHttp : public RpcBuilderBase
 {
 public:
-  explicit RpcBuilderHttp(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
+  explicit RpcBuilderHttp(impl::BuildConfig& cfg)
+      : RpcBuilderBase(cfg)
+  {
+  }
 
   RpcBuilderHttp& ssl(std::string_view cert_file,
                       std::string_view key_file,
@@ -439,7 +455,10 @@ public:
 class RpcBuilderQuic : public RpcBuilderBase
 {
 public:
-  explicit RpcBuilderQuic(impl::BuildConfig& cfg) : RpcBuilderBase(cfg) {}
+  explicit RpcBuilderQuic(impl::BuildConfig& cfg)
+      : RpcBuilderBase(cfg)
+  {
+  }
 
   RpcBuilderQuic& port(uint16_t port) noexcept
   {

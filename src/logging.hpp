@@ -12,17 +12,9 @@
 #include <memory>
 #include <mutex>
 
-namespace nprpc::impl {
+#include <nprpc_base.hpp>
 
-enum class LogLevel {
-  trace = 0,
-  debug = 1,
-  info = 2,
-  warn = 3,
-  error = 4,
-  critical = 5,
-  off = 6
-};
+namespace nprpc::impl {
 
 // Simple logger that mimics spdlog's interface
 class SimpleLogger
@@ -93,7 +85,7 @@ class SimpleLogger
   template <typename... Args>
   void log_impl(LogLevel lvl, std::format_string<Args...> fmt, Args&&... args)
   {
-    if (lvl < level_)
+    if (level_ < lvl)
       return;
 
     std::lock_guard<std::mutex> lock(mutex_);
@@ -107,7 +99,8 @@ class SimpleLogger
 
 public:
   SimpleLogger(const std::string& name, LogLevel level = LogLevel::info)
-      : name_(name), level_(level)
+      : name_(name)
+      , level_(level)
   {
   }
 
@@ -162,8 +155,8 @@ inline std::shared_ptr<SimpleLogger>& get_logger()
 } // namespace nprpc::impl
 
 // Internal logging macros - same interface as before
-#define NPRPC_LOG_TRACE(...) nprpc::impl::get_logger()->trace(__VA_ARGS__)
 #define NPRPC_LOG_DEBUG(...) nprpc::impl::get_logger()->debug(__VA_ARGS__)
+#define NPRPC_LOG_TRACE(...) nprpc::impl::get_logger()->trace(__VA_ARGS__)
 #define NPRPC_LOG_INFO(...) nprpc::impl::get_logger()->info(__VA_ARGS__)
 #define NPRPC_LOG_WARN(...) nprpc::impl::get_logger()->warn(__VA_ARGS__)
 #define NPRPC_LOG_ERROR(...) nprpc::impl::get_logger()->error(__VA_ARGS__)

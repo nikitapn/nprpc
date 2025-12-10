@@ -73,11 +73,12 @@ public:
                  std::string host,
                  std::uint16_t port,
                  std::chrono::milliseconds timeout)
-      : ioc_(ioc), resolver_(ioc)
-        // , timer_(ioc)
-        ,
-        host_(std::move(host)), port_(port),
-        deadline_(std::chrono::steady_clock::now() + timeout)
+      : ioc_(ioc)
+      , resolver_(ioc)
+      // , timer_(ioc)
+      , host_(std::move(host))
+      , port_(port)
+      , deadline_(std::chrono::steady_clock::now() + timeout)
   {
     // timer_.expires_at(deadline_);
   }

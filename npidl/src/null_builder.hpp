@@ -11,7 +11,10 @@ namespace npidl::builders {
 class NullBuilder : public Builder
 {
 public:
-  NullBuilder(Context* ctx) : Builder(ctx) {}
+  NullBuilder(Context* ctx)
+      : Builder(ctx)
+  {
+  }
 
   void finalize() override {}
   void emit_namespace_begin() override {}

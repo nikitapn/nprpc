@@ -31,7 +31,10 @@ struct cached_file_body {
     CachedFileGuard guard;
 
     value_type() = default;
-    explicit value_type(CachedFileGuard g) : guard(std::move(g)) {}
+    explicit value_type(CachedFileGuard g)
+        : guard(std::move(g))
+    {
+    }
 
     bool is_open() const noexcept { return static_cast<bool>(guard); }
     std::uint64_t size() const noexcept { return guard ? guard->size() : 0; }
@@ -150,10 +153,8 @@ handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req)
       return rpc_error("Failed to process RPC request");
     }
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("HTTP RPC: Processed request, response size: {} bytes",
-                     response_body.size());
-    }
+    NPRPC_LOG_INFO("HTTP RPC: Processed request, response size: {} bytes",
+                   response_body.size());
 
     return rpc_response(std::move(response_body));
 
@@ -384,7 +385,8 @@ public:
   // Construct the session
   http_session(flat_buffer buffer,
                std::shared_ptr<std::string const> const& doc_root)
-      : doc_root_(doc_root), buffer_(std::move(buffer))
+      : doc_root_(doc_root)
+      , buffer_(std::move(buffer))
   {
   }
 
@@ -504,8 +506,8 @@ public:
   plain_http_session(beast_tcp_stream_strand&& stream,
                      flat_buffer&& buffer,
                      std::shared_ptr<std::string const> const& doc_root)
-      : http_session<plain_http_session>(std::move(buffer), doc_root),
-        stream_(std::move(stream))
+      : http_session<plain_http_session>(std::move(buffer), doc_root)
+      , stream_(std::move(stream))
   {
   }
 
@@ -543,8 +545,8 @@ public:
                    ssl::context& ctx,
                    flat_buffer&& buffer,
                    std::shared_ptr<std::string const> const& doc_root)
-      : http_session<ssl_http_session>(std::move(buffer), doc_root),
-        stream_(std::move(stream), ctx)
+      : http_session<ssl_http_session>(std::move(buffer), doc_root)
+      , stream_(std::move(stream), ctx)
   {
   }
 
@@ -617,7 +619,9 @@ public:
   explicit detect_session(beast_tcp_stream_strand&& socket,
                           ssl::context& ctx,
                           std::shared_ptr<std::string const> const& doc_root)
-      : stream_(std::move(socket)), ctx_(ctx), doc_root_(doc_root)
+      : stream_(std::move(socket))
+      , ctx_(ctx)
+      , doc_root_(doc_root)
   {
   }
 
@@ -678,8 +682,10 @@ public:
            ssl::context& ctx,
            tcp::endpoint endpoint,
            std::shared_ptr<std::string const> const& doc_root)
-      : ioc_(ioc), ctx_(ctx), acceptor_(net::make_strand(ioc)),
-        doc_root_(doc_root)
+      : ioc_(ioc)
+      , ctx_(ctx)
+      , acceptor_(net::make_strand(ioc))
+      , doc_root_(doc_root)
   {
     beast::error_code ec;
 

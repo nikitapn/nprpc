@@ -23,7 +23,10 @@ public:
                 int _line,
                 int _col,
                 const char* msg)
-      : std::runtime_error(msg), file_path(_file_path), line(_line), col(_col)
+      : std::runtime_error(msg)
+      , file_path(_file_path)
+      , line(_line)
+      , col(_col)
   {
   }
 
@@ -31,7 +34,10 @@ public:
                 int _line,
                 int _col,
                 const std::string& msg)
-      : std::runtime_error(msg), file_path(_file_path), line(_line), col(_col)
+      : std::runtime_error(msg)
+      , file_path(_file_path)
+      , line(_line)
+      , col(_col)
   {
   }
 };

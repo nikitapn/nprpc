@@ -16,7 +16,8 @@ class PositionIndexBuilder
 
 public:
   PositionIndexBuilder(PositionIndex& index, Context& ctx)
-      : index_(index), ctx_(ctx)
+      : index_(index)
+      , ctx_(ctx)
   {
   }
 

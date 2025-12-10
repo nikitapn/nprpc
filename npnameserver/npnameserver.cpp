@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 #include <memory>
-#include <unordered_map>
 #include <print>
+#include <unordered_map>
 
 #include <nprpc_nameserver.hpp>
 
@@ -59,7 +59,7 @@ int main()
 
   try {
     auto rpc = nprpc::RpcBuilder()
-                   .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
+                   .set_log_level(nprpc::LogLevel::error)
                    .with_tcp(15000)
                    .with_http(15001)
                    .build(ioc);

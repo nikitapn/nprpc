@@ -28,11 +28,14 @@ namespace nprpc::impl {
 CachedFile::~CachedFile() { cleanup(); }
 
 CachedFile::CachedFile(CachedFile&& other) noexcept
-    : data_(other.data_), size_(other.size_),
-      content_type_(other.content_type_), mtime_(other.mtime_),
-      heap_data_(std::move(other.heap_data_)), mmap_addr_(other.mmap_addr_),
-      mmap_len_(other.mmap_len_),
-      active_refs_(other.active_refs_.load(std::memory_order_relaxed))
+    : data_(other.data_)
+    , size_(other.size_)
+    , content_type_(other.content_type_)
+    , mtime_(other.mtime_)
+    , heap_data_(std::move(other.heap_data_))
+    , mmap_addr_(other.mmap_addr_)
+    , mmap_len_(other.mmap_len_)
+    , active_refs_(other.active_refs_.load(std::memory_order_relaxed))
 {
   other.data_ = nullptr;
   other.size_ = 0;
@@ -194,7 +197,10 @@ size_t CachedFile::memory_usage() const noexcept
 // HttpFileCache Implementation
 //==============================================================================
 
-HttpFileCache::HttpFileCache(Config config) : config_(std::move(config)) {}
+HttpFileCache::HttpFileCache(Config config)
+    : config_(std::move(config))
+{
+}
 
 CachedFileGuard HttpFileCache::get(const std::filesystem::path& path)
 {

@@ -58,8 +58,7 @@ public:
                 [[maybe_unused]] std::size_t bytes_transferred)
   {
     if (ec) {
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall)
-        fail(ec, "write");
+      fail(ec, "write");
       return;
     }
 
@@ -79,8 +78,7 @@ public:
   void on_read_body(const boost::system::error_code& ec, size_t len)
   {
     if (ec) {
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall)
-        fail(ec, "server_session_socket: on_read_body");
+      fail(ec, "server_session_socket: on_read_body");
       return;
     }
 
@@ -113,8 +111,7 @@ public:
   void on_read_size(const boost::system::error_code& ec, size_t len)
   {
     if (ec) {
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall)
-        fail(ec, "server_session_socket: on_read_size");
+      fail(ec, "server_session_socket: on_read_size");
       return;
     }
 
@@ -145,7 +142,8 @@ public:
   void run() { do_read_size(); }
 
   Session_Socket(tcp::socket&& socket)
-      : Session(socket.get_executor()), socket_(std::move(socket))
+      : Session(socket.get_executor())
+      , socket_(std::move(socket))
   {
     auto endpoint = socket_.remote_endpoint();
     ctx_.remote_endpoint =
@@ -192,7 +190,8 @@ public:
   }
 
   Acceptor(net::io_context& ioc, unsigned short port)
-      : ioc_(ioc), acceptor_(ioc, tcp::endpoint(tcp::v4(), port))
+      : ioc_(ioc)
+      , acceptor_(ioc, tcp::endpoint(tcp::v4(), port))
   {
   }
 };

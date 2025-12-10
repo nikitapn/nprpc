@@ -17,7 +17,10 @@ public:
 
   void load_byte_sequence(char* ptr, unsigned int size) { is_.read(ptr, size); }
 
-  binary_iarchive(std::istream& is) : basic_iarchive<binary_iarchive>(is) {}
+  binary_iarchive(std::istream& is)
+      : basic_iarchive<binary_iarchive>(is)
+  {
+  }
 };
 
 class text_iarchive : public basic_iarchive<text_iarchive>
@@ -27,7 +30,10 @@ public:
 
   void load_byte_sequence(char* ptr, unsigned int size) { is_.read(ptr, size); }
 
-  text_iarchive(std::istream& is) : basic_iarchive<text_iarchive>(is) {}
+  text_iarchive(std::istream& is)
+      : basic_iarchive<text_iarchive>(is)
+  {
+  }
 };
 
 } // namespace nprpc::serialization

@@ -128,7 +128,8 @@ public:
     tail_ix_ = Val{0};
   }
 
-  IdToPtr(uint32_t max_size) noexcept : max_size_{max_size}
+  IdToPtr(uint32_t max_size) noexcept
+      : max_size_{max_size}
   {
     assert(max_size_ > 0);
     items_ = reinterpret_cast<Items>(new char[max_size * sizeof(Item)]);

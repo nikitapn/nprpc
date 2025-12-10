@@ -27,7 +27,10 @@ template <int _Mod> struct token_os_mod {
 template <int _Write> struct read_write_field : token_os_mod<_Write> {
   inline static int offset_addr = std::ios_base::xalloc();
   int offset;
-  explicit read_write_field(int o) : offset(o) {}
+  explicit read_write_field(int o)
+      : offset(o)
+  {
+  }
 };
 
 template <int _Mod>
@@ -2113,7 +2116,8 @@ void TSBuilder::emit_unmarshal_function(AstStructDecl* s)
 }
 
 TSBuilder::TSBuilder(Context* ctx, std::filesystem::path out_dir)
-    : Builder(ctx), out_dir_(out_dir)
+    : Builder(ctx)
+    , out_dir_(out_dir)
 {
 }
 

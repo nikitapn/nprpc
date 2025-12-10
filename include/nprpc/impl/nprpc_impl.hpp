@@ -28,7 +28,7 @@
 namespace nprpc::impl {
 
 struct Config {
-  DebugLevel debug_level = ::nprpc::DebugLevel::DebugLevel_Critical;
+  LogLevel log_level = ::nprpc::LogLevel::warn;
   uuid_t uuid;
   std::string hostname;
   std::string listen_address = "0.0.0.0";
@@ -320,7 +320,8 @@ public:
     return !obj_->to_delete_.load() ? obj_ : nullptr;
   }
 
-  explicit ObjectGuard(ObjectServant* obj) noexcept : obj_(obj)
+  explicit ObjectGuard(ObjectServant* obj) noexcept
+      : obj_(obj)
   {
     ++obj->in_use_cnt_;
   }
@@ -389,16 +390,18 @@ public:
           uint16_t idx,
           PoaPolicy::Lifespan lifespan,
           PoaPolicy::ObjectIdPolicy object_id_policy)
-      : Poa(idx), max_objects_{objects_max},
-        id_to_ptr_{
-            object_id_policy == PoaPolicy::ObjectIdPolicy::UserSupplied
-                ? std::variant<SystemObjects,
-                               UserObjects>{std::in_place_type<UserObjects>,
-                                            objects_max}
-                : std::variant<SystemObjects,
-                               UserObjects>{std::in_place_type<SystemObjects>,
-                                            objects_max}},
-        pl_lifespan_{lifespan}
+      : Poa(idx)
+      , max_objects_{objects_max}
+      , id_to_ptr_{object_id_policy == PoaPolicy::ObjectIdPolicy::UserSupplied
+                       ? std::variant<
+                             SystemObjects,
+                             UserObjects>{std::in_place_type<UserObjects>,
+                                          objects_max}
+                       : std::variant<
+                             SystemObjects,
+                             UserObjects>{std::in_place_type<SystemObjects>,
+                                          objects_max}}
+      , pl_lifespan_{lifespan}
   {
   }
 

@@ -62,9 +62,7 @@ QuicApi::QuicApi()
                              std::to_string(status));
   }
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[QUIC] MsQuic initialized successfully");
-  }
+  NPRPC_LOG_INFO("[QUIC] MsQuic initialized successfully");
 }
 
 QuicApi::~QuicApi()
@@ -143,7 +141,10 @@ HQUIC QuicApi::create_configuration(const char* alpn,
 // QuicConnection - Client connection
 //==============================================================================
 
-QuicConnection::QuicConnection(boost::asio::io_context& ioc) : ioc_(ioc) {}
+QuicConnection::QuicConnection(boost::asio::io_context& ioc)
+    : ioc_(ioc)
+{
+}
 
 QuicConnection::~QuicConnection() { close(); }
 
@@ -389,9 +390,7 @@ void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
   switch (event->Type) {
   case QUIC_CONNECTION_EVENT_CONNECTED: {
     NPRPC_QUIC_DEBUG_LOG("CONNECTED event received");
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[QUIC] Client connection established");
-    }
+    NPRPC_LOG_INFO("[QUIC] Client connection established");
     connected_ = true;
 
     // Open a bidirectional stream for RPC
@@ -418,10 +417,8 @@ void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
   }
 
   case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[QUIC] Connection shutdown by transport: {}",
-                     event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status);
-    }
+    NPRPC_LOG_INFO("[QUIC] Connection shutdown by transport: {}",
+                   event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status);
     connected_ = false;
     {
       std::lock_guard lock(mutex_);
@@ -431,9 +428,7 @@ void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
     break;
 
   case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[QUIC] Connection shutdown by peer");
-    }
+    NPRPC_LOG_INFO("[QUIC] Connection shutdown by peer");
     connected_ = false;
     {
       std::lock_guard lock(mutex_);
@@ -560,7 +555,9 @@ void QuicConnection::handle_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event)
 QuicServerConnection::QuicServerConnection(boost::asio::io_context& ioc,
                                            HQUIC connection,
                                            HQUIC configuration)
-    : ioc_(ioc), connection_(connection), configuration_(configuration)
+    : ioc_(ioc)
+    , connection_(connection)
+    , configuration_(configuration)
 {
   // Get remote address
   QUIC_ADDR addr;
@@ -661,10 +658,8 @@ void QuicServerConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
   switch (event->Type) {
   case QUIC_CONNECTION_EVENT_CONNECTED:
     NPRPC_QUIC_DEBUG_LOG("Server CONNECTED");
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[QUIC] Server connection established from {}:{}",
-                     remote_addr_, remote_port_);
-    }
+    NPRPC_LOG_INFO("[QUIC] Server connection established from {}:{}",
+                   remote_addr_, remote_port_);
     break;
 
   case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED: {
@@ -674,9 +669,7 @@ void QuicServerConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
     quic.api()->SetCallbackHandler(
         stream_, reinterpret_cast<void*>(stream_callback), this);
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[QUIC] Stream started from peer");
-    }
+    NPRPC_LOG_INFO("[QUIC] Stream started from peer");
     break;
   }
 
@@ -800,7 +793,9 @@ void QuicServerConnection::process_receive_buffer()
 QuicListener::QuicListener(boost::asio::io_context& ioc,
                            const std::string& cert_file,
                            const std::string& key_file)
-    : ioc_(ioc), cert_file_(cert_file), key_file_(key_file)
+    : ioc_(ioc)
+    , cert_file_(cert_file)
+    , key_file_(key_file)
 {
 }
 
@@ -847,9 +842,7 @@ void QuicListener::start(uint16_t port, AcceptCallback callback)
     throw std::runtime_error("ListenerStart failed: " + std::to_string(status));
   }
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[QUIC] Listener started on port {}", port);
-  }
+  NPRPC_LOG_INFO("[QUIC] Listener started on port {}", port);
 }
 
 void QuicListener::stop()
@@ -912,9 +905,7 @@ void QuicListener::handle_listener_event(QUIC_LISTENER_EVENT* event)
 {
   switch (event->Type) {
   case QUIC_LISTENER_EVENT_NEW_CONNECTION: {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[QUIC] New connection from client");
-    }
+    NPRPC_LOG_INFO("[QUIC] New connection from client");
 
     auto& quic = QuicApi::instance();
 
@@ -942,9 +933,7 @@ void QuicListener::handle_listener_event(QUIC_LISTENER_EVENT* event)
   }
 
   case QUIC_LISTENER_EVENT_STOP_COMPLETE:
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[QUIC] Listener stopped");
-    }
+    NPRPC_LOG_INFO("[QUIC] Listener stopped");
     break;
 
   default:
@@ -1042,9 +1031,7 @@ public:
       handle_request(rx_buffer_, tx_buffer_);
 
       // No response sent for datagram messages
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        NPRPC_LOG_INFO("QuicServerSession: Processed datagram (no response)");
-      }
+      NPRPC_LOG_INFO("QuicServerSession: Processed datagram (no response)");
     } catch (const std::exception& e) {
       NPRPC_LOG_ERROR("QuicServerSession: Error processing datagram: {}",
                       e.what());
@@ -1053,16 +1040,15 @@ public:
 
   QuicServerSession(boost::asio::io_context& ioc,
                     std::shared_ptr<QuicServerConnection> connection)
-      : Session(ioc.get_executor()), connection_(std::move(connection))
+      : Session(ioc.get_executor())
+      , connection_(std::move(connection))
   {
     ctx_.remote_endpoint =
         EndPoint(EndPointType::Quic, connection_->remote_address(),
                  connection_->remote_port());
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("QuicServerSession created for {}:{}",
-                     connection_->remote_address(), connection_->remote_port());
-    }
+    NPRPC_LOG_INFO("QuicServerSession created for {}:{}",
+                   connection_->remote_address(), connection_->remote_port());
   }
 
   void start()
@@ -1077,12 +1063,7 @@ public:
         });
   }
 
-  ~QuicServerSession()
-  {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("QuicServerSession destroyed");
-    }
-  }
+  ~QuicServerSession() { NPRPC_LOG_INFO("QuicServerSession destroyed"); }
 };
 
 //==============================================================================
@@ -1176,8 +1157,9 @@ public:
   const EndPoint& remote_endpoint() const noexcept { return endpoint_; }
 
   QuicClientSession(const EndPoint& endpoint, boost::asio::io_context& ioc)
-      : Session(ioc.get_executor()),
-        connection_(std::make_shared<QuicConnection>(ioc)), endpoint_(endpoint)
+      : Session(ioc.get_executor())
+      , connection_(std::make_shared<QuicConnection>(ioc))
+      , endpoint_(endpoint)
   {
     ctx_.remote_endpoint = endpoint;
   }

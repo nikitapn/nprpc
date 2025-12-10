@@ -34,7 +34,8 @@ class HttpRpcSession : public Session,
   flat_buffer tx_buffer_{flat_buffer::default_initial_size()};
 
 public:
-  HttpRpcSession(boost::asio::io_context& ioc) : Session(ioc.get_executor())
+  HttpRpcSession(boost::asio::io_context& ioc)
+      : Session(ioc.get_executor())
   {
     // HTTP sessions are "tethered" (ephemeral) - use TcpTethered type
     ctx_.remote_endpoint = EndPoint(EndPointType::TcpTethered, "", 0);

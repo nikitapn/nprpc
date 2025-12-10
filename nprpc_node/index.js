@@ -6,8 +6,13 @@ const path = require('path');
 // Try to load the native addon
 let addon;
 try {
-    // First try the standard node-gyp build location
-    addon = require('./build/Release/nprpc_shm.node');
+    // First try the flat structure (dist folder)
+    try {
+        addon = require('./nprpc_shm.node');
+    } catch (e0) {
+        // Then try the standard node-gyp build location
+        addon = require('./build/Release/nprpc_shm.node');
+    }
 } catch (e1) {
     try {
         // Try debug build

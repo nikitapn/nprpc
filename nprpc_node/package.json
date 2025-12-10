@@ -6,12 +6,12 @@
   "types": "index.d.ts",
   "scripts": {
     "configure": "node-gyp configure -- -f compile_commands_json",
-    "install": "node-gyp rebuild",
-    "build": "node-gyp build",
-    "build:debug": "node-gyp build --debug",
-    "rebuild": "node-gyp rebuild",
+    "install": "npm run configure && node-gyp rebuild",
+    "build": "npm run configure && node-gyp build",
+    "build:debug": "npm run configure && node-gyp build --debug",
+    "rebuild": "npm run configure && node-gyp rebuild",
     "clean": "node-gyp clean",
-    "test": "node test/test_shm.js && node test/test_async.js && node test/test_large.js"
+    "test": "npm run build && node test/test_shm.js && node test/test_async.js && node test/test_large.js"
   },
   "files": [
     "index.js",

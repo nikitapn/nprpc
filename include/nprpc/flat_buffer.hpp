@@ -199,7 +199,8 @@ public:
 
   /// Constructor with initial capacity (owned mode)
   explicit flat_buffer(std::size_t initial_capacity)
-      : buffer_(new std::uint8_t[initial_capacity]), capacity_(initial_capacity)
+      : buffer_(new std::uint8_t[initial_capacity])
+      , capacity_(initial_capacity)
   {
   }
 
@@ -212,19 +213,25 @@ public:
               std::size_t size,
               std::size_t max_size,
               const EndPoint* endpoint = nullptr)
-      : view_base_(base), view_size_(size), view_max_size_(max_size),
-        endpoint_(endpoint)
+      : view_base_(base)
+      , view_size_(size)
+      , view_max_size_(max_size)
+      , endpoint_(endpoint)
   {
   }
 
   /// Move constructor
   flat_buffer(flat_buffer&& other) noexcept
-      : buffer_(other.buffer_), in_(other.in_), out_(other.out_),
-        capacity_(other.capacity_), view_base_(other.view_base_),
-        view_size_(other.view_size_), view_max_size_(other.view_max_size_),
-        endpoint_(other.endpoint_),
-        reservation_write_idx_(other.reservation_write_idx_),
-        has_reservation_(other.has_reservation_)
+      : buffer_(other.buffer_)
+      , in_(other.in_)
+      , out_(other.out_)
+      , capacity_(other.capacity_)
+      , view_base_(other.view_base_)
+      , view_size_(other.view_size_)
+      , view_max_size_(other.view_max_size_)
+      , endpoint_(other.endpoint_)
+      , reservation_write_idx_(other.reservation_write_idx_)
+      , has_reservation_(other.has_reservation_)
   {
     other.buffer_ = nullptr;
     other.in_ = 0;
@@ -271,8 +278,10 @@ public:
 
   /// Copy constructor (deep copy, always creates owned buffer)
   flat_buffer(const flat_buffer& other)
-      : buffer_(other.size() > 0 ? new std::uint8_t[other.size()] : nullptr),
-        in_(0), out_(other.size()), capacity_(other.size())
+      : buffer_(other.size() > 0 ? new std::uint8_t[other.size()] : nullptr)
+      , in_(0)
+      , out_(other.size())
+      , capacity_(other.size())
   {
     if (out_ > 0) {
       std::memcpy(buffer_, other.data().data(), out_);

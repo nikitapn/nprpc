@@ -25,12 +25,14 @@ exception ExceptionUnsecuredObject {
 exception ExceptionBadAccess {}
 exception ExceptionBadInput {}
 
-enum DebugLevel {
-  DebugLevel_Critical,
-  DebugLevel_InactiveTimeout,
-  DebugLevel_EveryCall,
-  DebugLevel_EveryMessageContent,
-  DebugLevel_TraceAll,
+enum LogLevel {
+  off,
+  critical,
+  error,
+  warn,
+  info,
+  debug,
+  trace,
 };
 
 enum EndPointType {

@@ -9,25 +9,21 @@ namespace nprpc::impl {
 
 UdpListener::UdpListener(boost::asio::io_context& ioc, uint16_t port)
     : socket_(ioc,
-              boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), port)),
-      port_(port)
+              boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), port))
+    , port_(port)
 {
   // Set socket options
   socket_.set_option(boost::asio::socket_base::receive_buffer_size(65536));
   socket_.set_option(boost::asio::socket_base::reuse_address(true));
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[UDP Listener] Created on port {}", port);
-  }
+  NPRPC_LOG_INFO("[UDP Listener] Created on port {}", port);
 }
 
 UdpListener::~UdpListener()
 {
   stop();
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[UDP Listener] Destroyed");
-  }
+  NPRPC_LOG_INFO("[UDP Listener] Destroyed");
 }
 
 void UdpListener::start()
@@ -38,9 +34,7 @@ void UdpListener::start()
   running_ = true;
   do_receive();
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[UDP Listener] Started on port {}", port_);
-  }
+  NPRPC_LOG_INFO("[UDP Listener] Started on port {}", port_);
 }
 
 void UdpListener::stop()
@@ -54,9 +48,7 @@ void UdpListener::stop()
   socket_.cancel(ec);
   socket_.close(ec);
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[UDP Listener] Stopped");
-  }
+  NPRPC_LOG_INFO("[UDP Listener] Stopped");
 }
 
 void UdpListener::do_receive()
@@ -70,9 +62,7 @@ void UdpListener::do_receive()
                                         std::size_t bytes_received) {
         if (ec) {
           if (ec != boost::asio::error::operation_aborted) {
-            if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-              NPRPC_LOG_ERROR("[UDP Listener] Receive error: {}", ec.message());
-            }
+            NPRPC_LOG_ERROR("[UDP Listener] Receive error: {}", ec.message());
           }
           return;
         }
@@ -89,18 +79,14 @@ void UdpListener::do_receive()
 void UdpListener::handle_datagram(const endpoint_type& sender,
                                   size_t bytes_received)
 {
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-    NPRPC_LOG_INFO("[UDP Listener] Received {} bytes from {}:{}",
-                   bytes_received, sender.address().to_string(), sender.port());
-  }
+  NPRPC_LOG_INFO("[UDP Listener] Received {} bytes from {}:{}", bytes_received,
+                 sender.address().to_string(), sender.port());
 
   // Validate minimum header size
   if (bytes_received < sizeof(Header)) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-      NPRPC_LOG_ERROR("[UDP Listener] Datagram too small: {} bytes (need "
-                      "at least {})",
-                      bytes_received, sizeof(Header));
-    }
+    NPRPC_LOG_ERROR("[UDP Listener] Datagram too small: {} bytes (need "
+                    "at least {})",
+                    bytes_received, sizeof(Header));
     return;
   }
 
@@ -108,10 +94,8 @@ void UdpListener::handle_datagram(const endpoint_type& sender,
   auto* header = reinterpret_cast<const Header*>(recv_buffer_.data());
 
   if (header->msg_id != MessageId::FunctionCall) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-      NPRPC_LOG_ERROR("[UDP Listener] Unexpected message ID: {}",
-                      static_cast<int>(header->msg_id));
-    }
+    NPRPC_LOG_ERROR("[UDP Listener] Unexpected message ID: {}",
+                    static_cast<int>(header->msg_id));
     return;
   }
 
@@ -119,31 +103,25 @@ void UdpListener::handle_datagram(const endpoint_type& sender,
   uint32_t expected_size =
       header->size + 4; // size field doesn't include itself
   if (expected_size != bytes_received) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-      NPRPC_LOG_ERROR(
-          "[UDP Listener] Size mismatch: header says {} but received {}",
-          expected_size, bytes_received);
-    }
+    NPRPC_LOG_ERROR(
+        "[UDP Listener] Size mismatch: header says {} but received {}",
+        expected_size, bytes_received);
     return;
   }
 
   // Parse call header to get POA and object ID
   if (bytes_received < sizeof(Header) + sizeof(flat::CallHeader)) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-      NPRPC_LOG_ERROR("[UDP Listener] Datagram too small for CallHeader");
-    }
+    NPRPC_LOG_ERROR("[UDP Listener] Datagram too small for CallHeader");
     return;
   }
 
   auto* call_header = reinterpret_cast<const flat::CallHeader*>(
       recv_buffer_.data() + sizeof(Header));
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO(
-        "[UDP Listener] Looking for object: poa={} oid={} iface={} fn={}",
-        call_header->poa_idx, call_header->object_id,
-        (int)call_header->interface_idx, (int)call_header->function_idx);
-  }
+  NPRPC_LOG_INFO(
+      "[UDP Listener] Looking for object: poa={} oid={} iface={} fn={}",
+      call_header->poa_idx, call_header->object_id,
+      (int)call_header->interface_idx, (int)call_header->function_idx);
 
   // Look up the object
   auto obj_guard =
@@ -156,9 +134,7 @@ void UdpListener::handle_datagram(const endpoint_type& sender,
 
   auto* servant = obj_guard->get();
   if (!servant) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-      NPRPC_LOG_ERROR("[UDP Listener] Servant is null or deleted");
-    }
+    NPRPC_LOG_ERROR("[UDP Listener] Servant is null or deleted");
     return;
   }
 
@@ -191,11 +167,9 @@ void UdpListener::handle_datagram(const endpoint_type& sender,
             reinterpret_cast<Header*>(response_buf.data().data());
         resp_header->request_id = request_id;
 
-        if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-          NPRPC_LOG_INFO("[UDP Listener] Sending response for "
-                         "request_id={} size={}",
-                         request_id, response_buf.size());
-        }
+        NPRPC_LOG_INFO("[UDP Listener] Sending response for "
+                       "request_id={} size={}",
+                       request_id, response_buf.size());
 
         // Move response to flat_buffer for sending
         flat_buffer send_buf(response_buf.size());
@@ -205,22 +179,17 @@ void UdpListener::handle_datagram(const endpoint_type& sender,
         send_buf.commit(src.size());
 
         send_response(sender, std::move(send_buf));
-      } else if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
+      } else {
         NPRPC_LOG_WARN("[UDP Listener] WARNING: response_buf is empty "
                        "for reliable call!");
       }
-    } else if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+    } else {
       NPRPC_LOG_INFO("[UDP Listener] Fire-and-forget, no response sent");
     }
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[UDP Listener] Dispatched to {}", servant->get_class());
-    }
-
+    NPRPC_LOG_INFO("[UDP Listener] Dispatched to {}", servant->get_class());
   } catch (const std::exception& e) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-      NPRPC_LOG_ERROR("[UDP Listener] Dispatch error: {}", e.what());
-    }
+    NPRPC_LOG_ERROR("[UDP Listener] Dispatch error: {}", e.what());
 
     // For reliable calls, send error response
     if (request_id != 0) {
@@ -247,12 +216,9 @@ void UdpListener::send_response(const endpoint_type& target,
       [this, self = shared_from_this(), buf = std::move(buffer)](
           const boost::system::error_code& ec, std::size_t bytes_sent) {
         if (ec) {
-          if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-            NPRPC_LOG_ERROR("[UDP Listener] Send response error: {}",
-                            ec.message());
-          }
-        } else if (g_cfg.debug_level >=
-                   DebugLevel::DebugLevel_EveryMessageContent) {
+          NPRPC_LOG_ERROR("[UDP Listener] Send response error: {}",
+                          ec.message());
+        } else {
           NPRPC_LOG_INFO("[UDP Listener] Sent {} bytes response", bytes_sent);
         }
       });

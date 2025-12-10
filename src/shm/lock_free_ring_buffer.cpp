@@ -134,13 +134,11 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size)
     // 8) Mirrored data region pointer - points to start of reserved area
     uint8_t* mirrored_data_region = static_cast<uint8_t*>(reserved);
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("Created ring buffer '{}': {} bytes with mirrored "
-                     "mapping at {} "
-                     "(ring_window={})",
-                     name, buffer_size,
-                     static_cast<void*>(mirrored_data_region), ring_window);
-    }
+    NPRPC_LOG_INFO("Created ring buffer '{}': {} bytes with mirrored "
+                   "mapping at {} "
+                   "(ring_window={})",
+                   name, buffer_size, static_cast<void*>(mirrored_data_region),
+                   ring_window);
 
     return std::unique_ptr<LockFreeRingBuffer>(new LockFreeRingBuffer(
         name, std::move(shm), header, mirrored_data_region, reserved,
@@ -224,13 +222,11 @@ LockFreeRingBuffer::open(const std::string& name)
     // Mirrored data region pointer - points to start of reserved area
     uint8_t* mirrored_data_region = static_cast<uint8_t*>(reserved);
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO(
-          "Opened ring buffer '{}': {} bytes with mirrored mapping at {} "
-          "(ring_window={})",
-          name, buffer_size, static_cast<void*>(mirrored_data_region),
-          ring_window);
-    }
+    NPRPC_LOG_INFO(
+        "Opened ring buffer '{}': {} bytes with mirrored mapping at {} "
+        "(ring_window={})",
+        name, buffer_size, static_cast<void*>(mirrored_data_region),
+        ring_window);
 
     return std::unique_ptr<LockFreeRingBuffer>(new LockFreeRingBuffer(
         name, std::move(shm), header, mirrored_data_region, reserved,
@@ -245,9 +241,7 @@ LockFreeRingBuffer::open(const std::string& name)
 void LockFreeRingBuffer::remove(const std::string& name)
 {
   boost::interprocess::shared_memory_object::remove(name.c_str());
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("Removed ring buffer '{}'", name);
-  }
+  NPRPC_LOG_INFO("Removed ring buffer '{}'", name);
 }
 
 LockFreeRingBuffer::LockFreeRingBuffer(
@@ -258,9 +252,13 @@ LockFreeRingBuffer::LockFreeRingBuffer(
     void* mirror_base,
     size_t ring_window,
     bool is_creator)
-    : name_(name), shm_(std::move(shm)), header_(header),
-      data_region_(data_region), mirror_base_(mirror_base),
-      ring_window_(ring_window), is_creator_(is_creator)
+    : name_(name)
+    , shm_(std::move(shm))
+    , header_(header)
+    , data_region_(data_region)
+    , mirror_base_(mirror_base)
+    , ring_window_(ring_window)
+    , is_creator_(is_creator)
 {
 }
 
@@ -279,7 +277,7 @@ LockFreeRingBuffer::~LockFreeRingBuffer()
       NPRPC_LOG_WARN(
           "Warning: Failed to remove shared memory for ring buffer '{}'",
           name_);
-    } else if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+    } else {
       NPRPC_LOG_INFO("LockFreeRingBuffer destroyed and removed: '{}'", name_);
     }
   }

@@ -135,7 +135,10 @@ Http3Server::Http3Server(boost::asio::io_context& ioc,
                          const std::string& cert_file,
                          const std::string& key_file,
                          uint16_t port)
-    : ioc_(ioc), cert_file_(cert_file), key_file_(key_file), port_(port)
+    : ioc_(ioc)
+    , cert_file_(cert_file)
+    , key_file_(key_file)
+    , port_(port)
 {
 }
 
@@ -201,9 +204,7 @@ bool Http3Server::start()
     return false;
   }
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[HTTP/3] Server listening on port {}", port_);
-  }
+  NPRPC_LOG_INFO("[HTTP/3] Server listening on port {}", port_);
 
   return true;
 }
@@ -248,18 +249,14 @@ MSH3_STATUS MSH3_CALL Http3Server::listener_callback(MSH3_LISTENER* listener,
   switch (event->Type) {
   case MSH3_LISTENER_EVENT_NEW_CONNECTION:
     NPRPC_HTTP3_TRACE("Listener New connection");
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[HTTP/3] New connection");
-    }
+    NPRPC_LOG_INFO("[HTTP/3] New connection");
     self->handle_new_connection(event->NEW_CONNECTION.Connection,
                                 event->NEW_CONNECTION.ServerName);
     break;
 
   case MSH3_LISTENER_EVENT_SHUTDOWN_COMPLETE:
     NPRPC_HTTP3_TRACE("Listener shutdown complete");
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[HTTP/3] Listener shutdown complete");
-    }
+    NPRPC_LOG_INFO("[HTTP/3] Listener shutdown complete");
     break;
   }
 
@@ -277,15 +274,11 @@ MSH3_STATUS MSH3_CALL Http3Server::connection_callback(
     break;
 
   case MSH3_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[HTTP/3] Connection shutdown by transport");
-    }
+    NPRPC_LOG_INFO("[HTTP/3] Connection shutdown by transport");
     break;
 
   case MSH3_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[HTTP/3] Connection shutdown by peer");
-    }
+    NPRPC_LOG_INFO("[HTTP/3] Connection shutdown by peer");
     break;
 
   case MSH3_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
@@ -345,7 +338,7 @@ MSH3_STATUS MSH3_CALL Http3Server::request_callback(MSH3_REQUEST* request,
     } else if (event->DATA_RECEIVED.Length == 0) {
       // Zero-length receive, just acknowledge
       MsH3RequestCompleteReceive(request, 0);
-    } else if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+    } else {
       NPRPC_LOG_WARN("[HTTP/3] Ignoring bogus data length: {}",
                      event->DATA_RECEIVED.Length);
     }
@@ -374,10 +367,7 @@ MSH3_STATUS MSH3_CALL Http3Server::request_callback(MSH3_REQUEST* request,
     break;
 
   default:
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_WARN("[HTTP/3] Unknown request event type: {}",
-                     (int)event->Type);
-    }
+    NPRPC_LOG_WARN("[HTTP/3] Unknown request event type: {}", (int)event->Type);
     break;
   }
 
@@ -391,10 +381,8 @@ MSH3_STATUS MSH3_CALL Http3Server::request_callback(MSH3_REQUEST* request,
 void Http3Server::handle_new_connection(MSH3_CONNECTION* connection,
                                         const char* server_name)
 {
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[HTTP/3] New connection from: {}",
-                   (server_name ? server_name : "unknown"));
-  }
+  NPRPC_LOG_INFO("[HTTP/3] New connection from: {}",
+                 (server_name ? server_name : "unknown"));
 
   // Set connection callback
   MsH3ConnectionSetCallbackHandler(connection, connection_callback, this);
@@ -439,28 +427,22 @@ void Http3Server::handle_header(Http3Request* req, const MSH3_HEADER* header)
     req->content_length = std::stoul(value);
   }
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[HTTP/3] Header: {}: {}", name, value);
-  }
+  NPRPC_LOG_INFO("[HTTP/3] Header: {}: {}", name, value);
 }
 
 void Http3Server::handle_data(Http3Request* req,
                               const uint8_t* data,
                               uint32_t length)
 {
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[HTTP/3] Data received: {} bytes (total: {}/{})", length,
-                   req->body.size() + length, req->content_length);
-  }
+  NPRPC_LOG_INFO("[HTTP/3] Data received: {} bytes (total: {}/{})", length,
+                 req->body.size() + length, req->content_length);
   req->body.insert(req->body.end(), data, data + length);
 }
 
 void Http3Server::handle_request_complete(Http3Request* req)
 {
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[HTTP/3] Request: {} {} (body: {} bytes)", req->method,
-                   req->path, req->body.size());
-  }
+  NPRPC_LOG_INFO("[HTTP/3] Request: {} {} (body: {} bytes)", req->method,
+                 req->path, req->body.size());
 
   // Handle OPTIONS preflight for CORS
   if (req->method == "OPTIONS") {
@@ -523,10 +505,8 @@ void Http3Server::handle_rpc_request(Http3Request* req)
       return;
     }
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("[HTTP/3] RPC processed, response size: {} bytes",
-                     response_body.size());
-    }
+    NPRPC_LOG_INFO("[HTTP/3] RPC processed, response size: {} bytes",
+                   response_body.size());
 
     send_response(req, 200, "application/octet-stream", response_body);
 
@@ -553,11 +533,9 @@ void Http3Server::send_response(Http3Request* req,
   req->response_content_type = content_type;
   req->response_content_length = std::to_string(req->response_body.size());
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    NPRPC_LOG_INFO("[HTTP/3] Sending response: status={}, content-type={}, "
-                   "body size={}",
-                   status_code, content_type, req->response_body.size());
-  }
+  NPRPC_LOG_INFO("[HTTP/3] Sending response: status={}, content-type={}, "
+                 "body size={}",
+                 status_code, content_type, req->response_body.size());
 
   MSH3_HEADER headers[] = {
       {":status", 7, req->response_status.c_str(), req->response_status.size()},

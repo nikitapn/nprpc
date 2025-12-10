@@ -524,9 +524,13 @@ Http3Connection::Http3Connection(
     size_t tokenlen,
     uint32_t version,
     SSL_CTX* ssl_ctx)
-    : server_(server), socket_(socket), local_ep_(local_ep),
-      remote_ep_(remote_ep), timer_(server->io_context()), ssl_ctx_(ssl_ctx),
-      version_(version)
+    : server_(server)
+    , socket_(socket)
+    , local_ep_(local_ep)
+    , remote_ep_(remote_ep)
+    , timer_(server->io_context())
+    , ssl_ctx_(ssl_ctx)
+    , version_(version)
 {
   // dcid_ stores the client's source CID - this is what
   // ngtcp2_conn_server_new expects as its 'dcid' parameter (the CID that
@@ -1511,10 +1515,8 @@ int Http3Connection::handle_rpc_request(Http3Stream* stream)
       return send_static_response(stream, 500, "text/plain",
                                   "RPC processing failed");
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      std::cout << "[HTTP/3] RPC processed, response size: "
-                << response_body.size() << " bytes" << std::endl;
-    }
+    std::cout << "[HTTP/3] RPC processed, response size: "
+              << response_body.size() << " bytes" << std::endl;
 
     return send_dynamic_response(stream, 200, "application/octet-stream",
                                  std::move(response_body));
@@ -2097,8 +2099,11 @@ Http3Server::Http3Server(boost::asio::io_context& ioc,
                          const std::string& cert_file,
                          const std::string& key_file,
                          uint16_t port)
-    : ioc_(ioc), cert_file_(cert_file), key_file_(key_file), port_(port),
-      socket_(ioc)
+    : ioc_(ioc)
+    , cert_file_(cert_file)
+    , key_file_(key_file)
+    , port_(port)
+    , socket_(ioc)
 {
 }
 
@@ -2293,9 +2298,7 @@ int Http3Server::send_packet(const boost::asio::ip::udp::endpoint& remote_ep,
   boost::system::error_code ec;
   socket_.send_to(boost::asio::buffer(data, len), remote_ep, 0, ec);
   if (ec) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      std::cerr << "[HTTP/3][E] send_to failed: " << ec.message() << std::endl;
-    }
+    std::cerr << "[HTTP/3][E] send_to failed: " << ec.message() << std::endl;
     return -1;
   }
   return 0;

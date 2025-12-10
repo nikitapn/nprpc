@@ -20,7 +20,10 @@ public:
     os_.write(data, size);
   }
 
-  binary_oarchive(std::ostream& os) : basic_oarchive<binary_oarchive>(os) {}
+  binary_oarchive(std::ostream& os)
+      : basic_oarchive<binary_oarchive>(os)
+  {
+  }
 };
 
 class text_oarchive : public basic_oarchive<text_oarchive>
@@ -33,7 +36,10 @@ public:
     os_.write(data, size);
   }
 
-  text_oarchive(std::ostream& os) : basic_oarchive<text_oarchive>(os) {}
+  text_oarchive(std::ostream& os)
+      : basic_oarchive<text_oarchive>(os)
+  {
+  }
 };
 
 class json_oarchive : public basic_oarchive<json_oarchive>
@@ -105,7 +111,10 @@ public:
 
   void save_bool(const bool b) { os_ << (b ? "true" : "false"); }
 
-  json_oarchive(std::ostream& os) : basic_oarchive<json_oarchive>(os) {}
+  json_oarchive(std::ostream& os)
+      : basic_oarchive<json_oarchive>(os)
+  {
+  }
 };
 
 } // namespace nprpc::serialization

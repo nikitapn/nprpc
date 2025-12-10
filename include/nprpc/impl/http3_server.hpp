@@ -6,9 +6,7 @@
 #ifdef NPRPC_HTTP3_ENABLED
 
 #include <boost/asio/io_context.hpp>
-#include <memory>
 #include <nprpc/export.hpp>
-#include <string>
 
 namespace nprpc::impl {
 

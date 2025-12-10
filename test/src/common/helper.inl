@@ -113,7 +113,7 @@ public:
         try {
             // Use the new RpcBuilder API
             rpc = nprpc::RpcBuilder()
-                .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
+                .set_log_level(nprpc::LogLevel::error)
                 .set_hostname("localhost")
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
                 .with_tcp(22222)

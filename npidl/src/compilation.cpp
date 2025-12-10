@@ -17,8 +17,8 @@ struct Compilation {
 
   Compilation(builders::BuildGroup&& build_group,
               std::vector<std::filesystem::path>&& input_files)
-      : build_group_(std::move(build_group)),
-        input_files_(std::move(input_files))
+      : build_group_(std::move(build_group))
+      , input_files_(std::move(input_files))
   {
   }
 

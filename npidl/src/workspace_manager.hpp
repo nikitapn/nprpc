@@ -35,8 +35,8 @@ struct ProjectContext {
   std::unordered_map<std::string, std::vector<std::string>> reverse_imports;
 
   ProjectContext()
-      : ctx(std::make_unique<Context>("<project>")),
-        builder(std::make_unique<builders::BuildGroup>(ctx.get()))
+      : ctx(std::make_unique<Context>("<project>"))
+      , builder(std::make_unique<builders::BuildGroup>(ctx.get()))
   {
   }
 

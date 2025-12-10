@@ -12,8 +12,10 @@ SharedMemoryChannel::SharedMemoryChannel(boost::asio::io_context& ioc,
                                          const std::string& channel_id,
                                          bool is_server,
                                          bool create_rings)
-    : channel_id_(channel_id), is_server_(is_server), ioc_(ioc),
-      recv_buffer_(MAX_MESSAGE_SIZE)
+    : channel_id_(channel_id)
+    , is_server_(is_server)
+    , ioc_(ioc)
+    , recv_buffer_(MAX_MESSAGE_SIZE)
 {
   // Server writes to s2c, reads from c2s
   // Client writes to c2s, reads from s2c
@@ -29,20 +31,16 @@ SharedMemoryChannel::SharedMemoryChannel(boost::asio::io_context& ioc,
       recv_ring_ =
           LockFreeRingBuffer::create(recv_ring_name_, RING_BUFFER_SIZE);
 
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        std::cout << "Created ring buffers: " << send_ring_name_ << ", "
-                  << recv_ring_name_ << " (" << RING_BUFFER_SIZE
-                  << " bytes each)" << std::endl;
-      }
+      std::cout << "Created ring buffers: " << send_ring_name_ << ", "
+                << recv_ring_name_ << " (" << RING_BUFFER_SIZE << " bytes each)"
+                << std::endl;
     } else {
       // Open existing ring buffers
       send_ring_ = LockFreeRingBuffer::open(send_ring_name_);
       recv_ring_ = LockFreeRingBuffer::open(recv_ring_name_);
 
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        std::cout << "Opened ring buffers: " << send_ring_name_ << ", "
-                  << recv_ring_name_ << std::endl;
-      }
+      std::cout << "Opened ring buffers: " << send_ring_name_ << ", "
+                << recv_ring_name_ << std::endl;
     }
 
     // Start read thread with blocking read
@@ -98,7 +96,7 @@ bool SharedMemoryChannel::send(const void* data, uint32_t size)
   try {
     bool sent = send_ring_->try_write(data, size);
 
-    if (!sent && g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
+    if (!sent) {
       std::cerr << "SharedMemoryChannel: Ring buffer full, message dropped"
                 << std::endl;
     }
@@ -230,9 +228,7 @@ void SharedMemoryChannel::read_loop()
     }
   }
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-    std::cout << "SharedMemoryChannel read thread exiting" << std::endl;
-  }
+  std::cout << "SharedMemoryChannel read thread exiting" << std::endl;
 }
 
 void SharedMemoryChannel::cleanup_rings()
@@ -245,15 +241,11 @@ void SharedMemoryChannel::cleanup_rings()
   // Only the creator (server) should remove the shared memory
   if (is_server_) {
     try {
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        std::cout << "Cleaned up ring buffers: " << send_ring_name_ << ", "
-                  << recv_ring_name_ << std::endl;
-      }
+      std::cout << "Cleaned up ring buffers: " << send_ring_name_ << ", "
+                << recv_ring_name_ << std::endl;
     } catch (const std::exception& e) {
       // Ignore cleanup errors
-      if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-        std::cout << "Cleanup error (ignored): " << e.what() << std::endl;
-      }
+      std::cout << "Cleanup error (ignored): " << e.what() << std::endl;
     }
   }
 }

@@ -54,7 +54,8 @@ struct alignas(64) RingBufferHeader {
   boost::interprocess::interprocess_condition data_available;
 
   RingBufferHeader(size_t buf_size, uint32_t max_msg_sz)
-      : buffer_size(buf_size), max_message_size(max_msg_sz)
+      : buffer_size(buf_size)
+      , max_message_size(max_msg_sz)
   {
   }
 };

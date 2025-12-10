@@ -31,9 +31,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
 {
   assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
 
-  if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-    dump_message(buffer, false);
-  }
+  // dump_message(buffer, false);
 
   struct work_impl : IOWork {
     flat_buffer& buf;
@@ -113,8 +111,10 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
               SharedMemoryConnection& _this_,
               uint32_t _timeout_ms,
               LockFreeRingBuffer::WriteReservation _reservation)
-        : buf(_buf), this_(_this_), timeout_ms(_timeout_ms),
-          reservation(_reservation)
+        : buf(_buf)
+        , this_(_this_)
+        , timeout_ms(_timeout_ms)
+        , reservation(_reservation)
     {
     }
   };
@@ -131,9 +131,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
   // ec.message() << std::endl;
 
   if (!ec) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryMessageContent) {
-      dump_message(buffer, true);
-    }
+    // dump_message(buffer, true);
     return;
   }
 
@@ -209,8 +207,10 @@ void SharedMemoryConnection::send_receive_async(
               std::optional<std::function<void(const boost::system::error_code&,
                                                flat_buffer&)>>&& _handler,
               uint32_t _timeout_ms)
-        : buf(std::move(_buf)), this_(_this_), timeout_ms(_timeout_ms),
-          handler(std::move(_handler))
+        : buf(std::move(_buf))
+        , this_(_this_)
+        , timeout_ms(_timeout_ms)
+        , handler(std::move(_handler))
     {
     }
   };
@@ -221,7 +221,8 @@ void SharedMemoryConnection::send_receive_async(
 
 SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
                                                boost::asio::io_context& ioc)
-    : Session(ioc.get_executor()), ioc_(ioc)
+    : Session(ioc.get_executor())
+    , ioc_(ioc)
 {
   ctx_.remote_endpoint = endpoint;
   timeout_timer_.expires_at(boost::posix_time::pos_infin);

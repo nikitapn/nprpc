@@ -31,7 +31,9 @@ struct SharedMemoryHandshake {
   uint32_t version;
   char channel_id[64]; // UUID for the dedicated client-server channel
 
-  SharedMemoryHandshake() : magic(MAGIC), version(VERSION)
+  SharedMemoryHandshake()
+      : magic(MAGIC)
+      , version(VERSION)
   {
     channel_id[0] = '\0';
   }

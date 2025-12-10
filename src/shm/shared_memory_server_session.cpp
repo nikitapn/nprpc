@@ -129,7 +129,8 @@ public:
 
   SharedMemoryServerSession(boost::asio::io_context& ioc,
                             std::unique_ptr<SharedMemoryChannel> channel)
-      : Session(ioc.get_executor()), channel_(std::move(channel))
+      : Session(ioc.get_executor())
+      , channel_(std::move(channel))
   {
     // Set the endpoint for this session (used for tethered objects)
     // Server sessions get a "tethered" shared memory endpoint
@@ -147,10 +148,8 @@ public:
     // Note: We can't call shared_from_this() in constructor
     // The handler will be set up after construction
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("SharedMemoryServerSession created for channel: {}",
-                     channel_->channel_id());
-    }
+    NPRPC_LOG_INFO("SharedMemoryServerSession created for channel: {}",
+                   channel_->channel_id());
   }
 
   /**
@@ -171,10 +170,8 @@ public:
 
   ~SharedMemoryServerSession()
   {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("SharedMemoryServerSession destroyed for channel: {}",
-                     channel_->channel_id());
-    }
+    NPRPC_LOG_INFO("SharedMemoryServerSession destroyed for channel: {}",
+                   channel_->channel_id());
   }
 };
 

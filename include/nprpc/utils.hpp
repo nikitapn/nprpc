@@ -37,7 +37,10 @@ template <typename T, typename U> struct wrapper1 {
   auto operator->() noexcept { return &ref_; }
   auto const operator->() const noexcept { return &ref_; }
 
-  wrapper1(_T& ref) : ref_(ref) {}
+  wrapper1(_T& ref)
+      : ref_(ref)
+  {
+  }
   _T& ref_;
 };
 
@@ -49,7 +52,10 @@ template <typename T> struct wrapper1<T, std::true_type> {
   auto operator->() noexcept { return ref_.get(); }
   auto const operator->() const noexcept { return ref_.get(); }
 
-  wrapper1(_T& ref) : ref_(ref) {}
+  wrapper1(_T& ref)
+      : ref_(ref)
+  {
+  }
   _T& ref_;
 };
 } // namespace detail

@@ -237,7 +237,10 @@ SharedUUID& SharedUUID::instance()
   return instance;
 }
 
-SharedUUID::SharedUUID() : pimpl_(std::make_unique<Impl>()) {}
+SharedUUID::SharedUUID()
+    : pimpl_(std::make_unique<Impl>())
+{
+}
 SharedUUID::~SharedUUID() = default;
 
 const SharedUUID::uuid_array& SharedUUID::get() const noexcept

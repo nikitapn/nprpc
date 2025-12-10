@@ -103,7 +103,9 @@ public:
   EndPoint(EndPointType type,
            std::string_view hostname,
            std::uint16_t port) noexcept
-      : type_{type}, hostname_{hostname}, port_{port}
+      : type_{type}
+      , hostname_{hostname}
+      , port_{port}
   {
   }
 

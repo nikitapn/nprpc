@@ -33,8 +33,8 @@ class thread_pool
   std::mutex mtx_;
 
   thread_pool()
-      : work_guard_(boost::asio::make_work_guard(ioc_)),
-        work_guard1_(boost::asio::make_work_guard(ioc1_))
+      : work_guard_(boost::asio::make_work_guard(ioc_))
+      , work_guard1_(boost::asio::make_work_guard(ioc1_))
   {
     for (size_t i = 0; i < NUMBER_OF_IOC_THREADS; ++i) {
       boost::asio::post(pool_, [this] {

@@ -102,10 +102,14 @@ class Namespace
   std::string construct_path(std::string delim, int level) const noexcept;
 
 public:
-  Namespace() : parent_(nullptr) {}
+  Namespace()
+      : parent_(nullptr)
+  {
+  }
 
   Namespace(Namespace* parent, std::string&& name)
-      : parent_(parent), name_(std::move(name))
+      : parent_(parent)
+      , name_(std::move(name))
   {
   }
 
@@ -257,7 +261,8 @@ struct AstVoidDecl : AstTypeDecl {
 struct AstFundamentalType : AstTypeDecl {
   TokenId token_id;
 
-  AstFundamentalType(TokenId _token_id) : token_id(_token_id)
+  AstFundamentalType(TokenId _token_id)
+      : token_id(_token_id)
   {
     id = FieldType::Fundamental;
   }
@@ -265,7 +270,10 @@ struct AstFundamentalType : AstTypeDecl {
 
 struct AstWrapType : AstTypeDecl {
   AstTypeDecl* type;
-  AstWrapType(AstTypeDecl* _type) : type(_type) {}
+  AstWrapType(AstTypeDecl* _type)
+      : type(_type)
+  {
+  }
 
   AstTypeDecl* real_type();
 };
@@ -274,14 +282,19 @@ struct AstArrayDecl : AstWrapType {
   const int length;
 
   AstArrayDecl(AstTypeDecl* _type, int _length)
-      : AstWrapType(_type), length(_length)
+      : AstWrapType(_type)
+      , length(_length)
   {
     id = FieldType::Array;
   }
 };
 
 struct AstVectorDecl : AstWrapType {
-  AstVectorDecl() : AstWrapType(nullptr) { id = FieldType::Vector; }
+  AstVectorDecl()
+      : AstWrapType(nullptr)
+  {
+    id = FieldType::Vector;
+  }
 };
 
 struct AstAliasDecl : AstWrapType, AstNodeWithPosition {
@@ -296,7 +309,8 @@ struct AstAliasDecl : AstWrapType, AstNodeWithPosition {
   }
 
   AstAliasDecl(std::string&& _name, Namespace* _nm, AstTypeDecl* _type)
-      : AstWrapType(_type), nm(_nm)
+      : AstWrapType(_type)
+      , nm(_nm)
   {
     name = std::move(_name);
     id = FieldType::Alias;
@@ -321,7 +335,11 @@ struct AstEnumDecl : AstFundamentalType, AstNodeWithPosition {
   Namespace* nm;
   std::vector<std::pair<std::string, std::pair<AstNumber, bool>>> items;
 
-  AstEnumDecl() : AstFundamentalType(TokenId::UInt32) { id = FieldType::Enum; }
+  AstEnumDecl()
+      : AstFundamentalType(TokenId::UInt32)
+  {
+    id = FieldType::Enum;
+  }
 };
 
 struct AstFieldDecl : AstNodeWithPosition {
@@ -375,7 +393,8 @@ struct AstStructDecl : AstTypeDecl, AstNodeWithPosition {
 };
 
 struct AstOptionalDecl : AstWrapType {
-  AstOptionalDecl(AstTypeDecl* _type) : AstWrapType(_type)
+  AstOptionalDecl(AstTypeDecl* _type)
+      : AstWrapType(_type)
   {
     id = FieldType::Optional;
   }
@@ -670,7 +689,8 @@ public:
   }
 
   Context(std::filesystem::path initial_file_path = "<in-memory>")
-      : nm_root_(new Namespace()), nm_cur_(nm_root_)
+      : nm_root_(new Namespace())
+      , nm_cur_(nm_root_)
   {
     // Initialize file stack with the main file
     std::string base_name =
