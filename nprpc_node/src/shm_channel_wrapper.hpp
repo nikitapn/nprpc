@@ -61,6 +61,12 @@ public:
   // Get file descriptor for poll (used by libuv)
   int get_poll_fd() const { return eventfd_; }
 
+  // Get the receive ring buffer for advanced operations
+  auto get_recv_ring() { return recv_ring_.get(); }
+
+  // Get the send ring buffer for advanced operations
+  auto get_send_ring() { return send_ring_.get(); }
+
 private:
   std::string channel_id_;
   std::string send_ring_name_;
@@ -91,6 +97,8 @@ private:
   Napi::Value GetError(const Napi::CallbackInfo& info);
   Napi::Value Send(const Napi::CallbackInfo& info);
   Napi::Value TryReceive(const Napi::CallbackInfo& info);
+  Napi::Value TryReceiveSSRRequest(const Napi::CallbackInfo& info);
+  Napi::Value SendSSRResponse(const Napi::CallbackInfo& info);
   Napi::Value HasData(const Napi::CallbackInfo& info);
   void Close(const Napi::CallbackInfo& info);
 

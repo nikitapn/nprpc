@@ -187,6 +187,7 @@ add_library(nprpc
   src/session.cpp
   src/helper.hpp
   src/helper.cpp
+  src/flat_buffer.cpp
   src/uuid.cpp
   src/framework.h
   # Public headers

@@ -30,59 +30,13 @@ await server.init({
 });
 
 /**
- * Message format for HTTP request over shared memory:
- * {
- *   type: 'request',
- *   id: number,           // Request ID for matching response
- *   method: string,       // HTTP method
- *   url: string,          // Full URL
- *   headers: Record<string, string>,
- *   body?: string         // Base64 encoded body for POST/PUT
- * }
- * 
- * Response format:
- * {
- *   type: 'response',
- *   id: number,           // Matches request ID
- *   status: number,
- *   headers: Record<string, string>,
- *   body: string          // Base64 encoded body
- * }
- */
-
-/**
- * Parse incoming request from shared memory
- * @param {Uint8Array} data
- * @returns {object | null}
- */
-function parseRequest(data) {
-    try {
-        const text = new TextDecoder().decode(data);
-        return JSON.parse(text);
-    } catch (e) {
-        console.error('Failed to parse request:', e);
-        return null;
-    }
-}
-
-/**
- * Serialize response for shared memory
- * @param {object} response
- * @returns {Uint8Array}
- */
-function serializeResponse(response) {
-    const text = JSON.stringify(response);
-    return new TextEncoder().encode(text);
-}
-
-/**
  * Convert shared memory request to Web API Request
- * @param {object} req
+ * @param {ShmResponse} req
  * @returns {Request}
  */
 function toWebRequest(req) {
     const headers = new Headers(req.headers || {});
-    
+
     /** @type {RequestInit} */
     const init = {
         method: req.method,
@@ -91,7 +45,7 @@ function toWebRequest(req) {
 
     // Add body for methods that support it
     if (req.body && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
-        init.body = Buffer.from(req.body, 'base64');
+        init.body = req.body;
     }
 
     return new Request(req.url, init);
@@ -101,7 +55,7 @@ function toWebRequest(req) {
  * Convert Web API Response to shared memory response
  * @param {number} requestId
  * @param {Response} response
- * @returns {Promise<object>}
+ * @returns {Promise<ShmResponse>}
  */
 async function fromWebResponse(requestId, response) {
     const headers = /** @type {Record<string, string>} */ ({});
@@ -110,7 +64,7 @@ async function fromWebResponse(requestId, response) {
     });
 
     const arrayBuffer = await response.arrayBuffer();
-    const body = Buffer.from(arrayBuffer).toString('base64');
+    const body = Buffer.from(arrayBuffer)
 
     return {
         type: 'response',
@@ -123,7 +77,7 @@ async function fromWebResponse(requestId, response) {
 
 /**
  * Handle a single request
- * @param {object} req
+ * @param {ShmRequest} req
  */
 async function handleRequest(req) {
     if (req.type !== 'request') {
@@ -135,7 +89,7 @@ async function handleRequest(req) {
         // Check for prerendered page first
         const url = new URL(req.url);
         let pathname = url.pathname;
-        
+
         // Normalize path
         if (pathname !== '/' && pathname.endsWith('/')) {
             pathname = pathname.slice(0, -1);
@@ -144,12 +98,12 @@ async function handleRequest(req) {
         // Check if it's a prerendered page
         if (prerendered.has(pathname) || prerendered.has(pathname + '/')) {
             const prerenderedPath = path.join(dir, 'prerendered', base, pathname);
-            
+
             // Try to serve prerendered HTML
-            const htmlPath = prerenderedPath.endsWith('.html') 
-                ? prerenderedPath 
+            const htmlPath = prerenderedPath.endsWith('.html')
+                ? prerenderedPath
                 : `${prerenderedPath}/index.html`;
-            
+
             if (fs.existsSync(htmlPath)) {
                 const content = fs.readFileSync(htmlPath);
                 const response = {
@@ -160,7 +114,7 @@ async function handleRequest(req) {
                         'content-type': 'text/html; charset=utf-8',
                         'content-length': String(content.length)
                     },
-                    body: content.toString('base64')
+                    body: content
                 };
                 sendResponse(response);
                 return;
@@ -184,7 +138,7 @@ async function handleRequest(req) {
 
     } catch (error) {
         console.error('Error handling request:', error);
-        
+
         // Send error response
         const response = {
             type: 'response',
@@ -193,7 +147,7 @@ async function handleRequest(req) {
             headers: {
                 'content-type': 'text/plain'
             },
-            body: Buffer.from('Internal Server Error').toString('base64')
+            body: Buffer.from('Internal Server Error')
         };
         sendResponse(response);
     }
@@ -201,7 +155,7 @@ async function handleRequest(req) {
 
 /**
  * Send response back via shared memory
- * @param {object} response
+ * @param {ShmResponse} response
  */
 function sendResponse(response) {
     if (!channel || !channel.isOpen()) {
@@ -209,9 +163,8 @@ function sendResponse(response) {
         return;
     }
 
-    const data = serializeResponse(response);
-    const success = channel.send(data);
-    
+    const success = channel.sendSSRResponse(response);
+
     if (!success) {
         console.error('Failed to send response via shared memory');
     }
@@ -226,15 +179,12 @@ function pollRequests() {
     }
 
     while (channel.hasData()) {
-        const data = channel.tryReceive();
-        if (data) {
-            const req = parseRequest(data);
-            if (req) {
-                // Handle request asynchronously
-                handleRequest(req).catch(err => {
-                    console.error('Unhandled error in request handler:', err);
-                });
-            }
+        const req = channel.tryReceiveSSRRequest();
+        if (req) {
+            // Handle request asynchronously
+            handleRequest(req).catch(err => {
+                console.error('Unhandled error in request handler:', err);
+            });
         }
     }
 
@@ -257,7 +207,7 @@ export function start(channelId) {
     try {
         // Connect as client to the C++ server's channel
         channel = new ShmChannel(channelId, { isServer: false, create: false });
-        
+
         if (!channel.isOpen()) {
             throw new Error(`Failed to open channel: ${channel.getError()}`);
         }
@@ -279,7 +229,7 @@ export function start(channelId) {
  */
 export function stop() {
     running = false;
-    
+
     if (pollTimer) {
         clearTimeout(pollTimer);
         pollTimer = null;
@@ -300,7 +250,7 @@ export function stop() {
  */
 export async function handler(req) {
     const webRequest = toWebRequest(req);
-    
+
     const webResponse = await server.respond(webRequest, {
         getClientAddress: () => req.clientAddress || '127.0.0.1',
         platform: {}

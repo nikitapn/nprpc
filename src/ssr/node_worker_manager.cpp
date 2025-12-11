@@ -7,7 +7,7 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 
 #include "../logging.hpp"
-#include <glaze/glaze.hpp>
+#include <nprpc_node.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -17,27 +17,9 @@ namespace nprpc::impl {
 
 namespace fs = std::filesystem;
 
-// JSON structures for SSR protocol
-struct SsrRequestJson {
-  std::string type = "request";
-  uint64_t id{};
-  std::string method;
-  std::string url;
-  std::map<std::string, std::string> headers;
-  std::optional<std::string> body; // Base64 encoded
-  std::string clientAddress;
-};
-
-struct SsrResponseJson {
-  std::string type;
-  uint64_t id{};
-  int status{};
-  std::map<std::string, std::string> headers;
-  std::optional<std::string> body; // Base64 encoded
-};
-
 NodeWorkerManager::NodeWorkerManager(boost::asio::io_context& ioc)
-    : ioc_(ioc), channel_id_(generate_channel_id())
+    : ioc_(ioc)
+    , channel_id_(generate_channel_id())
 {
 }
 
@@ -98,8 +80,8 @@ bool NodeWorkerManager::start(const std::string& handler_path,
     }
 
     // Set up response handler
-    channel_->on_data_received = [this](std::vector<char>&& data) {
-      handle_response(std::move(data));
+    channel_->on_data_received_view = [this](const LockFreeRingBuffer::ReadView& view) {
+      handle_response(view);
     };
 
     // Determine working directory - use parent of handler_path to find
@@ -114,13 +96,11 @@ bool NodeWorkerManager::start(const std::string& handler_path,
     };
 
     // Start Node.js process
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-      NPRPC_LOG_INFO("NodeWorkerManager: Starting Node.js worker");
-      NPRPC_LOG_INFO("  Node: {}", node_path.string());
-      NPRPC_LOG_INFO("  Handler: {}", index_path.string());
-      NPRPC_LOG_INFO("  Working dir: {}", working_dir.string());
-      NPRPC_LOG_INFO("  Channel: {}", channel_id_);
-    }
+    NPRPC_LOG_INFO("NodeWorkerManager: Starting Node.js worker");
+    NPRPC_LOG_INFO("  Node: {}", node_path.string());
+    NPRPC_LOG_INFO("  Handler: {}", index_path.string());
+    NPRPC_LOG_INFO("  Working dir: {}", working_dir.string());
+    NPRPC_LOG_INFO("  Channel: {}", channel_id_);
 
     // Create pipes for stdout/stderr
     node_stdout_ = std::make_unique<boost::asio::readable_pipe>(ioc_);
@@ -149,10 +129,8 @@ bool NodeWorkerManager::start(const std::string& handler_path,
       return false;
     }
 
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-      NPRPC_LOG_INFO("NodeWorkerManager: Node.js worker started (PID: {})",
-                     node_process_->id());
-    }
+    NPRPC_LOG_INFO("NodeWorkerManager: Node.js worker started (PID: {})",
+                   node_process_->id());
 
     return true;
 
@@ -169,9 +147,7 @@ void NodeWorkerManager::stop()
 
   // Terminate Node.js process
   if (node_process_ && node_process_->running()) {
-    if (g_cfg.debug_level >= DebugLevel::DebugLevel_Critical) {
-      NPRPC_LOG_INFO("NodeWorkerManager: Stopping Node.js worker");
-    }
+    NPRPC_LOG_INFO("NodeWorkerManager: Stopping Node.js worker");
 
     node_process_->terminate();
     node_process_->wait();
@@ -224,10 +200,8 @@ void NodeWorkerManager::async_read_stdout()
           return;
         }
 
-        if (g_cfg.debug_level >= DebugLevel::DebugLevel_EveryCall) {
-          NPRPC_LOG_INFO("[Node.js] {}",
-                         std::string_view(stdout_buffer_.data(), bytes));
-        }
+        NPRPC_LOG_INFO("[Node.js] {}",
+                       std::string_view(stdout_buffer_.data(), bytes));
 
         // Continue reading
         async_read_stdout();
@@ -249,7 +223,7 @@ void NodeWorkerManager::async_read_stderr()
           return;
         }
 
-        NPRPC_LOG_ERROR("[Node.js ERROR] {}",
+        NPRPC_LOG_ERROR("[Node.js] {}",
                         std::string_view(stderr_buffer_.data(), bytes));
 
         // Continue reading
@@ -276,17 +250,49 @@ NodeWorkerManager::forward_request(const SsrRequest& request,
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
 
   uint64_t request_id = next_request_id_++;
+  auto reservation = channel_->reserve_write(10 * 1024 * 1024);
 
-  // Build request JSON using glaze
-  SsrRequestJson req;
-  req.id = request_id;
-  req.method = request.method;
-  req.url = request.url;
-  req.headers = request.headers;
-  req.clientAddress = request.client_address;
+  if (!reservation) {
+    NPRPC_LOG_ERROR(
+        "NodeWorkerManager: forward_request: Failed to reserve write buffer");
+    return std::nullopt;
+  }
 
+  // Allocate the root object
+  nprpc::flat_buffer fb;
+  fb.set_view(reservation.data, sizeof(nprpc::node::flat::SSRRequest), reservation.max_size, nullptr,
+              reservation.write_idx, true);
+  auto req_builder = nprpc::node::flat::SSRRequest_Direct(fb, 0);
+
+  // Set fields
+  req_builder.id() = request_id;
+  req_builder.method(request.method);
+  req_builder.url(request.url);
+  req_builder.clientAddress(request.client_address);
+
+  // Headers
+  req_builder.headers(static_cast<uint32_t>(request.headers.size()));
+  auto headers_vec = req_builder.headers_d();
+  auto headers_span = headers_vec();
+
+  auto it = headers_span.begin();
+  for (const auto& [key, value] : request.headers) {
+    auto header = *it;
+
+    header.key(key);
+    header.value(value);
+
+    ++it;
+  }
+
+  // Body
   if (!request.body.empty()) {
-    req.body = base64_encode(request.body);
+    req_builder.body(static_cast<uint32_t>(request.body.size()));
+    auto body_vec = req_builder.body_d();
+    auto body_span = body_vec();
+    std::memcpy(body_span.data(), request.body.data(), request.body.size());
+  } else {
+    req_builder.body(0);
   }
 
   // Register pending request
@@ -296,14 +302,13 @@ NodeWorkerManager::forward_request(const SsrRequest& request,
   }
 
   // Send request
-  std::string request_str = glz::write_json(req).value_or("");
-  if (request_str.empty() ||
-      !channel_->send(request_str.data(),
-                      static_cast<uint32_t>(request_str.size()))) {
-    std::lock_guard<std::mutex> lock(pending_mtx_);
-    pending_requests_.erase(request_id);
-    return std::nullopt;
-  }
+  // The buffer data is in fb.data()
+
+  channel_->commit_write(reservation, fb.size());
+
+  // std::lock_guard<std::mutex> lock(pending_mtx_);
+  // pending_requests_.erase(request_id);
+  // return std::nullopt;
 
   // Wait for response - poll io_context while waiting to avoid deadlock
   // The response comes via shared memory which posts to io_context
@@ -349,16 +354,40 @@ void NodeWorkerManager::forward_request_async(
 
   uint64_t request_id = next_request_id_++;
 
-  // Build request JSON using glaze
-  SsrRequestJson req;
-  req.id = request_id;
-  req.method = request.method;
-  req.url = request.url;
-  req.headers = request.headers;
-  req.clientAddress = request.client_address;
+  // Build request using flat buffer
+  nprpc::flat_buffer fb;
+  fb.prepare(4096);
 
+  auto req_builder = nprpc::node::flat::SSRRequest_Direct(fb, 0);
+
+  req_builder.id() = request_id;
+  req_builder.method(request.method);
+  req_builder.url(request.url);
+  req_builder.clientAddress(request.client_address);
+
+  // Headers
+  req_builder.headers(static_cast<uint32_t>(request.headers.size()));
+  auto headers_vec = req_builder.headers_d();
+  auto headers_span = headers_vec();
+
+  auto it = headers_span.begin();
+  for (const auto& [key, value] : request.headers) {
+    auto header = *it;
+
+    header.key(key);
+    header.value(value);
+
+    ++it;
+  }
+
+  // Body
   if (!request.body.empty()) {
-    req.body = base64_encode(request.body);
+    req_builder.body(static_cast<uint32_t>(request.body.size()));
+    auto body_vec = req_builder.body_d();
+    auto body_span = body_vec();
+    std::memcpy(body_span.data(), request.body.data(), request.body.size());
+  } else {
+    req_builder.body(0);
   }
 
   // Register pending request
@@ -368,10 +397,9 @@ void NodeWorkerManager::forward_request_async(
   }
 
   // Send request
-  std::string request_str = glz::write_json(req).value_or("");
-  if (request_str.empty() ||
-      !channel_->send(request_str.data(),
-                      static_cast<uint32_t>(request_str.size()))) {
+  auto data_span = fb.data();
+  if (!channel_->send(reinterpret_cast<const uint8_t*>(data_span.data()),
+                      static_cast<uint32_t>(data_span.size()))) {
     std::lock_guard<std::mutex> lock(pending_mtx_);
     pending_requests_.erase(request_id);
     if (callback)
@@ -398,27 +426,18 @@ void NodeWorkerManager::forward_request_async(
       });
 }
 
-void NodeWorkerManager::handle_response(std::vector<char>&& data)
+void NodeWorkerManager::handle_response(const LockFreeRingBuffer::ReadView& view)
 {
   try {
-    // Parse response JSON using glaze
-    SsrResponseJson resp;
-    auto ec = glz::read_json(resp, std::string_view(data.data(), data.size()));
+    nprpc::flat_buffer fb;
+    fb.set_view_from_read(
+        view.data, view.size,
+        channel_->get_recv_ring(), // Pass ring buffer pointer for commit
+        view.read_idx);
 
-    if (ec) {
-      NPRPC_LOG_ERROR(
-          "NodeWorkerManager: Failed to parse response JSON: {}",
-          glz::format_error(ec, std::string_view(data.data(), data.size())));
-      return;
-    }
-
-    if (resp.type != "response") {
-      NPRPC_LOG_ERROR("NodeWorkerManager: Unknown message type: {}", resp.type);
-      return;
-    }
-
-    uint64_t request_id = resp.id;
-
+    // Read the root object
+    auto resp_reader = nprpc::node::flat::SSRResponse_Direct(fb, 0);
+    uint64_t request_id = resp_reader.id();
     std::shared_ptr<PendingRequest> pending;
     {
       std::lock_guard<std::mutex> lock(pending_mtx_);
@@ -435,11 +454,23 @@ void NodeWorkerManager::handle_response(std::vector<char>&& data)
     // Build response
     SsrResponse ssr_response;
     ssr_response.request_id = request_id;
-    ssr_response.status_code = resp.status;
-    ssr_response.headers = std::move(resp.headers);
+    ssr_response.status_code = resp_reader.status();
 
-    if (resp.body) {
-      ssr_response.body = base64_decode(*resp.body);
+    // Headers
+    auto headers_vec = resp_reader.headers_d();
+    auto headers_span = headers_vec();
+    for (auto it = headers_span.begin(); it != headers_span.end(); ++it) {
+      auto header = *it;
+      // header.key() returns a Span<char>, which converts to string_view/string
+      ssr_response.headers.emplace(std::string(header.key()),
+                                   std::string(header.value()));
+    }
+
+    // Body
+    auto body_vec = resp_reader.body_d();
+    auto body_span = body_vec();
+    if (body_span.size() > 0) {
+      ssr_response.body.assign(body_span.begin(), body_span.end());
     }
 
     // Complete the request
@@ -459,71 +490,71 @@ void NodeWorkerManager::handle_response(std::vector<char>&& data)
   }
 }
 
-std::string NodeWorkerManager::base64_encode(const std::string& data)
-{
-  static const char* chars =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+// std::string NodeWorkerManager::base64_encode(const std::string& data)
+// {
+//   static const char* chars =
+//       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-  std::string result;
-  result.reserve((data.size() + 2) / 3 * 4);
+//   std::string result;
+//   result.reserve((data.size() + 2) / 3 * 4);
 
-  for (size_t i = 0; i < data.size(); i += 3) {
-    uint32_t n = static_cast<uint8_t>(data[i]) << 16;
-    if (i + 1 < data.size())
-      n |= static_cast<uint8_t>(data[i + 1]) << 8;
-    if (i + 2 < data.size())
-      n |= static_cast<uint8_t>(data[i + 2]);
+//   for (size_t i = 0; i < data.size(); i += 3) {
+//     uint32_t n = static_cast<uint8_t>(data[i]) << 16;
+//     if (i + 1 < data.size())
+//       n |= static_cast<uint8_t>(data[i + 1]) << 8;
+//     if (i + 2 < data.size())
+//       n |= static_cast<uint8_t>(data[i + 2]);
 
-    result += chars[(n >> 18) & 63];
-    result += chars[(n >> 12) & 63];
-    result += (i + 1 < data.size()) ? chars[(n >> 6) & 63] : '=';
-    result += (i + 2 < data.size()) ? chars[n & 63] : '=';
-  }
+//     result += chars[(n >> 18) & 63];
+//     result += chars[(n >> 12) & 63];
+//     result += (i + 1 < data.size()) ? chars[(n >> 6) & 63] : '=';
+//     result += (i + 2 < data.size()) ? chars[n & 63] : '=';
+//   }
 
-  return result;
-}
+//   return result;
+// }
 
-std::string NodeWorkerManager::base64_decode(const std::string& data)
-{
-  static const int lookup[256] = {
-      -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-      -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-      -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63, 52, 53, 54, 55, 56, 57,
-      58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,
-      7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-      25, -1, -1, -1, -1, -1, -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36,
-      37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1,
-      -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-      -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-      -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-      -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-      -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-      -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-      -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-      -1, -1, -1, -1};
+// std::string NodeWorkerManager::base64_decode(const std::string& data)
+// {
+//   static const int lookup[256] = {
+//       -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+//       -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+//       -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63, 52, 53, 54, 55, 56, 57,
+//       58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,
+//       7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+//       25, -1, -1, -1, -1, -1, -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36,
+//       37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1,
+//       -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+//       -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+//       -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+//       -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+//       -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+//       -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+//       -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+//       -1, -1, -1, -1};
 
-  std::string result;
-  result.reserve(data.size() * 3 / 4);
+//   std::string result;
+//   result.reserve(data.size() * 3 / 4);
 
-  uint32_t n = 0;
-  int bits = 0;
+//   uint32_t n = 0;
+//   int bits = 0;
 
-  for (char c : data) {
-    if (c == '=')
-      break;
-    int v = lookup[static_cast<uint8_t>(c)];
-    if (v < 0)
-      continue;
-    n = (n << 6) | v;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      result += static_cast<char>((n >> bits) & 0xFF);
-    }
-  }
+//   for (char c : data) {
+//     if (c == '=')
+//       break;
+//     int v = lookup[static_cast<uint8_t>(c)];
+//     if (v < 0)
+//       continue;
+//     n = (n << 6) | v;
+//     bits += 6;
+//     if (bits >= 8) {
+//       bits -= 8;
+//       result += static_cast<char>((n >> bits) & 0xFF);
+//     }
+//   }
 
-  return result;
-}
+//   return result;
+// }
 
 } // namespace nprpc::impl
 

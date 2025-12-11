@@ -1531,9 +1531,9 @@ int Http3Connection::send_static_response(Http3Stream* stream,
                                           std::string_view content_type,
                                           std::string_view body)
 {
-  std::cerr << "[HTTP/3][E] Sending response: " << status_code
-            << " Content-Type: " << content_type
-            << " Body length: " << body.size() << std::endl;
+  // std::cerr << "[HTTP/3][E] Sending response: " << status_code
+  //           << " Content-Type: " << content_type
+  //           << " Body length: " << body.size() << std::endl;
 
   // Store response data in stream to keep it alive
   stream->response_data = reinterpret_cast<const uint8_t*>(body.data());
@@ -1592,9 +1592,9 @@ int Http3Connection::send_dynamic_response(Http3Stream* stream,
                                            std::string_view content_type,
                                            std::string&& body)
 {
-  std::cerr << "[HTTP/3][E] Sending response: " << status_code
-            << " Content-Type: " << content_type
-            << " Body length: " << body.size() << std::endl;
+  // std::cerr << "[HTTP/3][E] Sending response: " << status_code
+  //           << " Content-Type: " << content_type
+  //           << " Body length: " << body.size() << std::endl;
 
   // Store response data in stream to keep it alive
   stream->dynamic_body = std::move(body);

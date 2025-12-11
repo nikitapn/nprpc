@@ -10,18 +10,18 @@ message Header {
 
 [force_helpers]
 message SSRRequest {
-  request_id: u64;
+  id: u64;
   method: string;
   url: string;
   headers: vector<Header>;
   body: bytes;
-  client_address: string;
+  clientAddress: string;
 }
 
 [force_helpers]
 message SSRResponse {
-  request_id: u64;
-  status_code: i32;
+  id: u64;
+  status: i32;
   headers: vector<Header>;
   body: bytes;
 }

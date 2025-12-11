@@ -4,6 +4,8 @@
 // nprpc_node - Native Node.js addon for shared memory transport
 
 #include "shm_channel_wrapper.hpp"
+#include "converter.hpp"
+#include "nprpc_node.hpp"
 #include <nprpc/impl/lock_free_ring_buffer.hpp>
 
 #include <cstring>
@@ -24,7 +26,8 @@ using LockFreeRingBuffer = nprpc::impl::LockFreeRingBuffer;
 ShmChannel::ShmChannel(const std::string& channel_id,
                        bool is_server,
                        bool create)
-    : channel_id_(channel_id), is_server_(is_server)
+    : channel_id_(channel_id)
+    , is_server_(is_server)
 {
   // Ring buffer names follow the same convention as C++ server
   // Server writes to "s2c", client writes to "c2s"
@@ -117,6 +120,10 @@ Napi::Object ShmChannelWrapper::Init(Napi::Env env, Napi::Object exports)
           InstanceMethod("getError", &ShmChannelWrapper::GetError),
           InstanceMethod("send", &ShmChannelWrapper::Send),
           InstanceMethod("tryReceive", &ShmChannelWrapper::TryReceive),
+          InstanceMethod("tryReceiveSSRRequest",
+                         &ShmChannelWrapper::TryReceiveSSRRequest),
+          InstanceMethod("sendSSRResponse",
+                         &ShmChannelWrapper::SendSSRResponse),
           InstanceMethod("hasData", &ShmChannelWrapper::HasData),
           InstanceMethod("close", &ShmChannelWrapper::Close),
           InstanceMethod("startPolling", &ShmChannelWrapper::StartPolling),
@@ -258,6 +265,74 @@ Napi::Value ShmChannelWrapper::TryReceive(const Napi::CallbackInfo& info)
   memcpy(result.Data(), recv_buffer.data(), bytes_read);
 
   return result;
+}
+
+Napi::Value
+ShmChannelWrapper::TryReceiveSSRRequest(const Napi::CallbackInfo& info)
+{
+  Napi::Env env = info.Env();
+
+  if (!channel_ || !channel_->is_open()) {
+    return env.Null();
+  }
+
+  // Allocate a buffer for receiving (max message size)
+  static thread_local std::vector<uint8_t> recv_buffer(
+      ShmChannel::MAX_MESSAGE_SIZE);
+
+  auto read_view = channel_->get_recv_ring()->try_read_view();
+  if (!read_view)
+    return env.Null(); // No data
+
+  nprpc::flat_buffer buf;
+  buf.set_view_from_read(
+      read_view.data, read_view.size,
+      channel_->get_recv_ring(), // Pass ring buffer pointer for commit
+      read_view.read_idx);
+
+  return nprpc_node::ToJS(env, nprpc::node::flat::SSRRequest_Direct(buf, 0));
+}
+
+Napi::Value ShmChannelWrapper::SendSSRResponse(const Napi::CallbackInfo& info)
+{
+  Napi::Env env = info.Env();
+
+  if (!channel_ || !channel_->is_open()) {
+    Napi::Error::New(env, "Channel not open").ThrowAsJavaScriptException();
+    return Napi::Boolean::New(env, false);
+  }
+
+  if (info.Length() < 1 || !info[0].IsObject()) {
+    Napi::TypeError::New(env, "Expected SSRResponse object")
+        .ThrowAsJavaScriptException();
+    return Napi::Boolean::New(env, false);
+  }
+
+  Napi::Object respObj = info[0].As<Napi::Object>();
+
+  constexpr size_t max_size = 10 * 1024 * 1024; // 1MB
+  auto reservation =
+      channel_->get_send_ring()->try_reserve_write(max_size); // 1MB
+  if (!reservation) {
+    std::cerr << "SharedMemoryConnection: prepare_write_buffer failed to "
+                 "reserve buffer of size "
+              << max_size << std::endl;
+    return Napi::Boolean::New(env, false);
+  }
+
+  // Build flat buffer
+  nprpc::flat_buffer fb;
+  fb.set_view(reservation.data, sizeof(nprpc::node::flat::SSRResponse), reservation.max_size, nullptr,
+              reservation.write_idx, true);
+
+  auto resp = nprpc::node::flat::SSRResponse_Direct(fb, 0);
+  nprpc_node::FromJS(env, respObj, resp);
+
+  // Send
+  auto data_span = fb.data();
+  channel_->get_send_ring()->commit_write(reservation, data_span.size());
+
+  return Napi::Boolean::New(env, true);
 }
 
 Napi::Value ShmChannelWrapper::HasData(const Napi::CallbackInfo& info)

@@ -6,6 +6,11 @@
 #include "shm_channel_wrapper.hpp"
 #include <napi.h>
 
+namespace nprpc::impl {
+// Stub for global RPC pointer since it's declared in hpp as extern
+class RpcImpl* g_rpc = nullptr;
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports)
 {
   nprpc_node::ShmChannelWrapper::Init(env, exports);

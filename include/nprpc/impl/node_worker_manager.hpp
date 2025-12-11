@@ -127,12 +127,12 @@ public:
       uint32_t timeout_ms = 30000);
 
 private:
-  void handle_response(std::vector<char>&& data);
+  void handle_response(const LockFreeRingBuffer::ReadView& view);
   void read_loop();
 
   static std::string generate_channel_id();
-  static std::string base64_encode(const std::string& data);
-  static std::string base64_decode(const std::string& data);
+  // static std::string base64_encode(const std::string& data);
+  // static std::string base64_decode(const std::string& data);
 
   boost::asio::io_context& ioc_;
   std::string channel_id_;
