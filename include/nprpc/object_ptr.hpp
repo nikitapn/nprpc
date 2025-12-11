@@ -4,6 +4,7 @@
 #pragma once
 
 #include <nprpc/exception.hpp>
+#include <utility> // std::exchange
 
 namespace nprpc {
 
@@ -45,7 +46,7 @@ public:
   }
 
   ObjectPtr(ObjectPtr<T>&& other) noexcept
-      : obj_{boost::exchange(other.obj_, nullptr)}
+      : obj_{std::exchange(other.obj_, nullptr)}
   {
   }
 
@@ -58,7 +59,7 @@ public:
 
   ObjectPtr<T>& operator=(ObjectPtr<T>&& other) noexcept
   {
-    obj_ = boost::exchange(other.obj_, nullptr);
+    obj_ = std::exchange(other.obj_, nullptr);
     return *this;
   }
 

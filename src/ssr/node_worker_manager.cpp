@@ -80,9 +80,10 @@ bool NodeWorkerManager::start(const std::string& handler_path,
     }
 
     // Set up response handler
-    channel_->on_data_received_view = [this](const LockFreeRingBuffer::ReadView& view) {
-      handle_response(view);
-    };
+    channel_->on_data_received_view =
+        [this](const LockFreeRingBuffer::ReadView& view) {
+          handle_response(view);
+        };
 
     // Determine working directory - use parent of handler_path to find
     // node_modules Structure: client/build/index.js, node_modules is at
@@ -260,8 +261,8 @@ NodeWorkerManager::forward_request(const SsrRequest& request,
 
   // Allocate the root object
   nprpc::flat_buffer fb;
-  fb.set_view(reservation.data, sizeof(nprpc::node::flat::SSRRequest), reservation.max_size, nullptr,
-              reservation.write_idx, true);
+  fb.set_view(reservation.data, sizeof(nprpc::node::flat::SSRRequest),
+              reservation.max_size, nullptr, reservation.write_idx, true);
   auto req_builder = nprpc::node::flat::SSRRequest_Direct(fb, 0);
 
   // Set fields
@@ -426,7 +427,8 @@ void NodeWorkerManager::forward_request_async(
       });
 }
 
-void NodeWorkerManager::handle_response(const LockFreeRingBuffer::ReadView& view)
+void NodeWorkerManager::handle_response(
+    const LockFreeRingBuffer::ReadView& view)
 {
   try {
     nprpc::flat_buffer fb;

@@ -187,7 +187,7 @@ void SocketConnection::do_read_size()
   buf.consume(buf.size());
   buf.prepare(4);
 
-  timeout_timer_.expires_from_now(timeout_);
+  timeout_timer_.expires_after(timeout_);
   socket_.async_read_some(net::mutable_buffer(&rx_size_, 4),
                           std::bind(&SocketConnection::on_read_size,
                                     shared_from_this(), std::placeholders::_1,
@@ -196,7 +196,7 @@ void SocketConnection::do_read_size()
 
 void SocketConnection::do_read_body()
 {
-  timeout_timer_.expires_from_now(timeout_);
+  timeout_timer_.expires_after(timeout_);
   socket_.async_read_some(current_rx_buffer().prepare(rx_size_),
                           std::bind(&SocketConnection::on_read_body,
                                     shared_from_this(), std::placeholders::_1,
@@ -206,7 +206,7 @@ void SocketConnection::do_read_body()
 void SocketConnection::on_read_size(const boost::system::error_code& ec,
                                     size_t len)
 {
-  timeout_timer_.expires_at(boost::posix_time::pos_infin);
+  timeout_timer_.expires_after(std::chrono::system_clock::duration::max());
 
   if (ec) {
     fail(ec, "client_socket_session: on_read_size");
@@ -234,7 +234,7 @@ void SocketConnection::on_read_size(const boost::system::error_code& ec,
 void SocketConnection::on_read_body(const boost::system::error_code& ec,
                                     size_t len)
 {
-  timeout_timer_.expires_at(boost::posix_time::pos_infin);
+  timeout_timer_.expires_after(std::chrono::system_clock::duration::max());
 
   if (ec) {
     fail(ec, "client_socket_session: on_read_body");
@@ -262,7 +262,7 @@ SocketConnection::SocketConnection(const EndPoint& endpoint,
     , socket_{std::move(socket)}
 {
   ctx_.remote_endpoint = endpoint;
-  timeout_timer_.expires_at(boost::posix_time::pos_infin);
+  timeout_timer_.expires_after(std::chrono::system_clock::duration::max());
   endpoint_ = sync_socket_connect(endpoint, socket_);
 
   start_timeout_timer();

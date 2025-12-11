@@ -322,8 +322,8 @@ Napi::Value ShmChannelWrapper::SendSSRResponse(const Napi::CallbackInfo& info)
 
   // Build flat buffer
   nprpc::flat_buffer fb;
-  fb.set_view(reservation.data, sizeof(nprpc::node::flat::SSRResponse), reservation.max_size, nullptr,
-              reservation.write_idx, true);
+  fb.set_view(reservation.data, sizeof(nprpc::node::flat::SSRResponse),
+              reservation.max_size, nullptr, reservation.write_idx, true);
 
   auto resp = nprpc::node::flat::SSRResponse_Direct(fb, 0);
   nprpc_node::FromJS(env, respObj, resp);

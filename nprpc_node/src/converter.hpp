@@ -80,8 +80,9 @@ inline void FromJS(Napi::Env env,
     auto body_span = resp.body();
     std::memcpy(body_span.data(), bodyStr.data(), bodyStr.size());
   } else {
-    throw Napi::TypeError::New(env, "body must be null, Buffer, Uint8Array or string. Got type: " +
-                                     std::to_string(bodyValue.Type()));
+    throw Napi::TypeError::New(
+        env, "body must be null, Buffer, Uint8Array or string. Got type: " +
+                 std::to_string(bodyValue.Type()));
   }
 }
 

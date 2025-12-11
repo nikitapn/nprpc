@@ -4,12 +4,16 @@
 #pragma once
 
 #include <boost/asio/deadline_timer.hpp>
+#include <boost/asio/system_timer.hpp>
 #include <boost/date_time/posix_time/ptime.hpp>
 
+#include <chrono>
 #include <nprpc/basic.hpp>
 #include <nprpc/common.hpp>
 #include <nprpc/flat_buffer.hpp>
 #include <nprpc/session_context.h>
+
+#include "logging.hpp"
 
 namespace nprpc::impl {
 
@@ -18,10 +22,10 @@ class Session
 protected:
   SessionContext ctx_;
 
-  boost::asio::deadline_timer timeout_timer_;
-  boost::asio::deadline_timer inactive_timer_;
-  boost::posix_time::time_duration timeout_ =
-      boost::posix_time::milliseconds(1000);
+  boost::asio::system_timer timeout_timer_;
+  boost::asio::system_timer inactive_timer_;
+  std::chrono::system_clock::duration timeout_ =
+      std::chrono::milliseconds(1000);
 
   std::atomic<bool> closed_{false};
 
@@ -57,8 +61,8 @@ public:
 
   void set_timeout(uint32_t timeout_ms)
   {
-    timeout_ = boost::posix_time::milliseconds(timeout_ms);
-    timeout_timer_.expires_from_now(timeout_);
+    timeout_ = std::chrono::milliseconds(timeout_ms);
+    timeout_timer_.expires_after(timeout_);
   }
 
   // monitors every asynchronous operation
@@ -69,14 +73,16 @@ public:
     if (is_closed())
       return;
 
-    const auto now = boost::asio::deadline_timer::traits_type::now();
-    if (timeout_timer_.expires_at() <= now) {
+    const auto now = std::chrono::system_clock::now();
+    if (timeout_timer_.expiry() <= now) {
       timeout_action();
 
-      boost::system::error_code ec;
-      timeout_timer_.expires_at(boost::posix_time::pos_infin, ec);
-      if (ec)
-        fail(ec, "timeout_timer::expires_at()");
+      try {
+        timeout_timer_.expires_after(
+            std::chrono::system_clock::duration::max());
+      } catch (boost::system::system_error& ec) {
+        NPRPC_LOG_ERROR("Session: start_timeout_timer: {}", ec.what());
+      }
     }
     timeout_timer_.async_wait(std::bind(&Session::start_timeout_timer, this));
   }
@@ -93,9 +99,14 @@ public:
   virtual void shutdown()
   {
     closed_.store(true);
-    boost::system::error_code ec;
-    timeout_timer_.cancel(ec);
-    inactive_timer_.cancel(ec);
+    try {
+      timeout_timer_.cancel();
+    } catch (...) {
+    }
+    try {
+      inactive_timer_.cancel();
+    } catch (...) {
+    }
   }
 
   Session(boost::asio::any_io_executor executor)

@@ -139,7 +139,7 @@ public:
   template <typename WriteHandler>
   void write_async(const flat_buffer& buf, WriteHandler&& handler)
   {
-    timeout_timer_.expires_from_now(timeout_);
+    timeout_timer_.expires_after(timeout_);
     boost::asio::async_write(socket_, buf.cdata(),
                              std::forward<WriteHandler>(handler));
   }

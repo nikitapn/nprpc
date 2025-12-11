@@ -157,11 +157,11 @@ void SharedMemoryChannel::read_loop()
               boost::interprocess::interprocess_mutex>
               lock(recv_ring_->header()->mutex);
 
-          auto deadline = boost::posix_time::microsec_clock::universal_time() +
-                          boost::posix_time::milliseconds(100);
+          auto deadline =
+              std::chrono::system_clock::now() + std::chrono::milliseconds(100);
 
           while (recv_ring_->is_empty() && running_) {
-            auto now = boost::posix_time::microsec_clock::universal_time();
+            auto now = std::chrono::system_clock::now();
             if (now >= deadline) {
               break; // Timeout, check running_ and try again
             }

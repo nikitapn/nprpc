@@ -21,6 +21,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Export compile commands for IDE support
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+add_compile_definitions(BOOST_ASIO_NO_DEPRECATED)
+
 # Options
 # For systems with OpenSSL < 3.5, can use system libcrypto (faster builds)
 # For OpenSSL 3.5+, must build from source due to ossl_time_now being internal

@@ -225,7 +225,7 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
     , ioc_(ioc)
 {
   ctx_.remote_endpoint = endpoint;
-  timeout_timer_.expires_at(boost::posix_time::pos_infin);
+  timeout_timer_.expires_after(std::chrono::system_clock::duration::max());
 
   // Parse endpoint to extract listener name
   // Expected format: mem://listener_name (no port needed for shared memory)

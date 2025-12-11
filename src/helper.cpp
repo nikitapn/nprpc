@@ -5,7 +5,6 @@
 
 #include <nprpc/exception.hpp>
 
-
 namespace nprpc::impl {
 
 boost::asio::ip::tcp::endpoint
