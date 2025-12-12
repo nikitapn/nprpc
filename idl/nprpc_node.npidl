@@ -1,0 +1,27 @@
+
+module nprpc.node;
+
+alias bytes = vector<u8>;
+
+message Header {
+  key: string;
+  value: string;
+}
+
+[force_helpers]
+message SSRRequest {
+  id: u64;
+  method: string;
+  url: string;
+  headers: vector<Header>;
+  body: bytes;
+  clientAddress: string;
+}
+
+[force_helpers]
+message SSRResponse {
+  id: u64;
+  status: i32;
+  headers: vector<Header>;
+  body: bytes;
+}

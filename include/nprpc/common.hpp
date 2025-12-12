@@ -1,21 +1,20 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
-// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// SPDX-License-Identifier: MIT
 
 #pragma once
 
 #include <nprpc/flat_buffer.hpp>
 
-#include <iostream>
-#include <boost/asio/io_context.hpp>
 #include <boost/asio/basic_stream_socket.hpp>
+#include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
-#include <boost/beast/websocket.hpp>
-#include <boost/beast/websocket/ssl.hpp>
+#include <boost/asio/ssl/context.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/ssl.hpp>
-#include <boost/asio/ssl/context.hpp>
-
+#include <boost/beast/websocket.hpp>
+#include <boost/beast/websocket/ssl.hpp>
+#include <iostream>
 
 namespace nprpc::impl {
 
@@ -29,25 +28,24 @@ using error_code = boost::system::error_code;
 namespace http = boost::beast::http;
 namespace websocket = boost::beast::websocket;
 
-using tcp_stream_strand = net::basic_stream_socket<
-  net::ip::tcp, net::strand<net::io_context::executor_type>>;
+using tcp_stream_strand =
+    net::basic_stream_socket<net::ip::tcp,
+                             net::strand<net::io_context::executor_type>>;
 
-using beast_tcp_stream_strand = beast::basic_stream<
-  net::ip::tcp, net::strand<net::io_context::executor_type>>;
+using beast_tcp_stream_strand =
+    beast::basic_stream<net::ip::tcp,
+                        net::strand<net::io_context::executor_type>>;
 
 using plain_stream = beast_tcp_stream_strand;
 
-using ssl_stream = beast::ssl_stream<
-  beast_tcp_stream_strand>;
+using ssl_stream = beast::ssl_stream<beast_tcp_stream_strand>;
 
-using plain_ws = websocket::stream<
-  beast_tcp_stream_strand>;
+using plain_ws = websocket::stream<beast_tcp_stream_strand>;
 
-using ssl_ws = websocket::stream<
-  beast::ssl_stream<beast_tcp_stream_strand>>;
+using ssl_ws = websocket::stream<beast::ssl_stream<beast_tcp_stream_strand>>;
 
 // Report a failure
-void fail(beast::error_code ec, char const *what);
+void fail(beast::error_code ec, char const* what);
 
 // Maximum allowed message size to prevent memory exhaustion attacks
 // This limit is enforced at the transport level before allocating memory

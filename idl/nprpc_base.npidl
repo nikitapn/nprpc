@@ -1,5 +1,5 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
-// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// SPDX-License-Identifier: MIT
 
 module nprpc;
 
@@ -25,12 +25,14 @@ exception ExceptionUnsecuredObject {
 exception ExceptionBadAccess {}
 exception ExceptionBadInput {}
 
-enum DebugLevel {
-  DebugLevel_Critical,
-  DebugLevel_InactiveTimeout,
-  DebugLevel_EveryCall,
-  DebugLevel_EveryMessageContent,
-  DebugLevel_TraceAll,
+enum LogLevel {
+  off,
+  critical,
+  error,
+  warn,
+  info,
+  debug,
+  trace,
 };
 
 enum EndPointType {

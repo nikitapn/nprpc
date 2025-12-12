@@ -1,6 +1,5 @@
-// Copyright (c) 2021-2025 nikitapnn1@gmail.com
-// This file is a part of npsystem (Distributed Control System) and covered by
-// LICENSING file in the topmost directory
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MIT
 
 #pragma once
 
@@ -8,34 +7,33 @@
 #include <ostream>
 
 namespace nprpc::serialization {
-class binary_iarchive : public basic_iarchive<binary_iarchive> {
+class binary_iarchive : public basic_iarchive<binary_iarchive>
+{
 public:
-	template<typename U>
-	void load_fundamental(U& obj) {
-		is_.read(reinterpret_cast<char*>(&obj), sizeof(U));
-	}
+  template <typename U> void load_fundamental(U& obj)
+  {
+    is_.read(reinterpret_cast<char*>(&obj), sizeof(U));
+  }
 
-	void load_byte_sequence(char* ptr, unsigned int size) {
-		is_.read(ptr, size);
-	}
+  void load_byte_sequence(char* ptr, unsigned int size) { is_.read(ptr, size); }
 
-	binary_iarchive(std::istream& is)
-		: basic_iarchive<binary_iarchive>(is) {}
+  binary_iarchive(std::istream& is)
+      : basic_iarchive<binary_iarchive>(is)
+  {
+  }
 };
 
-class text_iarchive : public basic_iarchive<text_iarchive> {
+class text_iarchive : public basic_iarchive<text_iarchive>
+{
 public:
-	template<typename U>
-	void load_fundamental(U& obj) {
-		is_ >> obj;
-	}
+  template <typename U> void load_fundamental(U& obj) { is_ >> obj; }
 
-	void load_byte_sequence(char* ptr, unsigned int size) {
-		is_.read(ptr, size);
-	}
+  void load_byte_sequence(char* ptr, unsigned int size) { is_.read(ptr, size); }
 
-	text_iarchive(std::istream& is)
-		: basic_iarchive<text_iarchive>(is) {}
+  text_iarchive(std::istream& is)
+      : basic_iarchive<text_iarchive>(is)
+  {
+  }
 };
 
-} // namespace nprpc::serializations
+} // namespace nprpc::serialization

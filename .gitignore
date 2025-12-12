@@ -1,6 +1,7 @@
+/.cache
 /.build*
-/include/nprpc_nameserver.hpp
-/include/nprpc_base.hpp
+/build
+/include/nprpc_*
 /compile_commands.json
 
 /perf.*
@@ -8,3 +9,4 @@
 /cmake_test_discovery*
 /hotspots_with_symbols.txt
 /certs/out/*
+/third_party

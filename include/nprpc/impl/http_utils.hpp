@@ -1,9 +1,7 @@
-// Copyright (c) 2021-2025 nikitapnn1@gmail.com
-// This file is a part of npsystem (Distributed Control System) and covered by
-// LICENSING file in the topmost directory
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MIT
 
-#ifndef NPRPC_HTTP_UTILS_HPP
-#define NPRPC_HTTP_UTILS_HPP
+#pragma once
 
 #include <string>
 #include <string_view>
@@ -19,5 +17,3 @@ std::string_view mime_type(std::string_view path);
 std::string path_cat(std::string_view base, std::string_view path);
 
 } // namespace nprpc::impl
-
-#endif // NPRPC_HTTP_UTILS_HPP

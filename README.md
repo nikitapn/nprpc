@@ -250,7 +250,7 @@ int main() {
 
   // Create RPC with multiple transports
   auto rpc = nprpc::RpcBuilder()
-    .set_debug_level(nprpc::DebugLevel::DebugLevel_Critical)
+    .set_log_level(nprpc::LogLevel::Error)
     .set_listen_tcp_port(15000)
     .set_listen_http_port(8080)
     .set_http_root_dir("./public")

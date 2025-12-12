@@ -1,5 +1,39 @@
 // TypeScript declarations for nprpc_node native addon
 
+/**
+ * HTTP Request received via shared memory from C++ server
+ */
+export interface ShmRequest {
+    type: 'request';
+    /** Unique request ID for matching responses */
+    id: number;
+    /** HTTP method (GET, POST, etc.) */
+    method: string;
+    /** Full URL including query string */
+    url: string;
+    /** HTTP headers */
+    headers: Record<string, string>;
+    /** Base64 encoded request body (for POST/PUT) */
+    body?: string;
+    /** Client IP address */
+    clientAddress?: string;
+}
+
+/**
+ * HTTP Response to send back via shared memory
+ */
+export interface ShmResponse {
+    type: 'response';
+    /** Request ID this response is for */
+    id: number;
+    /** HTTP status code */
+    status: number;
+    /** HTTP response headers */
+    headers: Record<string, string>;
+    /** Base64 encoded response body */
+    body: string;
+}
+
 export interface ShmChannelOptions {
     /** Whether this is the server side (creates shared memory) */
     isServer: boolean;
@@ -41,10 +75,23 @@ export class ShmChannel {
     send(data: Uint8Array): boolean;
 
     /**
+     * Send ShmResponse through the channel
+     * @param obj Object to send
+     * @returns true if sent successfully, false if buffer is full
+     */
+    sendSSRResponse(obj: ShmResponse): boolean;
+
+    /**
      * Try to receive data from the channel (non-blocking)
      * @returns Uint8Array with received data, or null if no data available
      */
     tryReceive(): Uint8Array | null;
+
+    /**
+     * Try to receive data from the server-side channel (non-blocking)
+     * @returns ShmRequest object, or null if no data available
+     */
+    tryReceiveSSRRequest(): ShmRequest | null;
 
     /**
      * Check if there is data available to read

@@ -1,11 +1,21 @@
 # TODO.md
 
 ## Build System
- [ ] Generate npnameserver stubs when building nprpc target, to avoid full rebuilds when npnameserver is built separately.
+* [ ] Generate npnameserver stubs when building nprpc target, to avoid full rebuilds when npnameserver is built separately.
+
+## Serialization
+* [ ] Add hint attributes [estimated_in_size=x], [estimated_out_size=x] to IDL for preallocating buffers, before method calls.
+* [ ] Support flat_buffer view mode in generated code to avoid copies when serializing/deserializing from shared memory.
 
 ## Shared Memory Transport
- [ ] Optimize shared memory server session to avoid unnecessary copies when receiving messages.
- [ ] Build on Windows is broken due to missing `sys/mman.h` and `shm_open()`. Need to implement Windows shared memory APIs using `CreateFileMapping` and `MapViewOfFile`.
+* [ ] Optimize shared memory server session to avoid unnecessary copies when receiving messages.
+* [ ] Build on Windows is broken due to missing `sys/mman.h` and `shm_open()`. Need to implement Windows shared memory APIs using `CreateFileMapping` and `MapViewOfFile`.
+* [ ] **Add cross-process atomic tests**: Current tests run client/server in same process. Need separate executables to verify atomics work correctly across true process boundaries (different address spaces). This is critical because the recent race bug was single-process (read thread vs io_context thread), not cross-process.
+
+## TCP Transport
+* [ ] Encryption support (TLS) for TCP transport.
+* [ ] Deflate or zlib compression for large messages.
+* [ ] Async socket connect with timeout.
 
 ## UDP Transport (Game Networking)
 

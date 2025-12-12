@@ -330,7 +330,7 @@ npm run build
 Enable verbose logging in NPRPC:
 ```cpp
 nprpc::Config cfg;
-cfg.debug_level = nprpc::DebugLevel::DebugLevel_EveryCall;
+cfg.debug_level = nprpc::LogLevel::warn;
 ```
 
 This logs:

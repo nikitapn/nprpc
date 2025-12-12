@@ -25,7 +25,7 @@ export type { ObjectId };
 export let rpc: Rpc;
 let host_info: HostInfo = {secured: false, objects: {}};
 
-let g_debug_level: DebugLevel = DebugLevel.DebugLevel_Critical;
+let g_debug_level: DebugLevel = DebugLevel.Error;
 
 export class EndPoint {
   constructor(
@@ -186,7 +186,7 @@ export class Connection {
         case impl.MessageId.FunctionCall: {
           let ch = impl.unmarshal_CallHeader(buf, header_size);
 
-          if (g_debug_level >= DebugLevel.DebugLevel_EveryCall) {
+          if (g_debug_level >= DebugLevel.Warning) {
             console.log("FunctionCall. interface_idx: " + ch.interface_idx + " , fn_idx: " + ch.function_idx 
               + " , poa_idx: " + ch.poa_idx + " , oid: " + ch.object_id);
           }
@@ -202,7 +202,7 @@ export class Connection {
           let msg = detail.unmarshal_ObjectIdLocal(buf, header_size);
 
           //detail::ObjectIdLocal oid{ msg.poa_idx(), msg.object_id() };
-          if (g_debug_level >= DebugLevel.DebugLevel_EveryCall) {
+          if (g_debug_level >= DebugLevel.Warning) {
             console.log("AddReference. poa_idx: " + msg.poa_idx + " , oid: " + msg.object_id);
           }
 
@@ -210,9 +210,7 @@ export class Connection {
           let obj = get_object(buf, msg.poa_idx, msg.object_id)
   
           if (obj) {
-            //  if (g_cfg.debug_level >= DebugLevel_EveryCall) {
             //    std::cout << "Refference added." << std::endl;
-            //  }
 
             make_simple_answer(buf, impl.MessageId.Success);
           } 
@@ -223,9 +221,7 @@ export class Connection {
           let msg = detail.unmarshal_ObjectIdLocal(buf, header_size);
           //detail::ObjectIdLocal oid{ msg.poa_idx(), msg.object_id() };
 
-          //if (g_cfg.debug_level >= DebugLevel_EveryCall) {
           //  std::cout << "ReleaseObject. " << "poa_idx: " << oid.poa_idx << ", oid: " << oid.object_id << std::endl;
-          //}
 
           //if (ref_list_.remove_ref(msg.poa_idx(), msg.object_id())) {
           //  make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Success);
@@ -708,6 +704,6 @@ export const init = async (use_host_json: boolean = true): Promise<Rpc> => {
   return rpc ? rpc : (rpc = new Rpc(use_host_json ? await Rpc.read_host() : {} as HostInfo));
 }
 
-export const set_debug_level = (debug_level: DebugLevel): void => {
+export const set_log_level = (debug_level: DebugLevel): void => {
   g_debug_level = debug_level;
 }

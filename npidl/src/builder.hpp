@@ -1,91 +1,103 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
-// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// SPDX-License-Identifier: MIT
 
 #pragma once
 
 #include "ast.hpp"
-#include <memory>
-#include <array>
-#include <functional>
 #include <algorithm>
+#include <array>
 #include <fstream>
+#include <functional>
+#include <memory>
 
 namespace npidl::builders {
 
-template<typename Fn>
-struct OstreamWrapper {
-    Fn fn;
+template <typename Fn> struct OstreamWrapper {
+  Fn fn;
 };
 
-template<typename Fn>
-inline std::ostream& operator<<(std::ostream& os, const OstreamWrapper<Fn>& wrapper) {
+template <typename Fn>
+inline std::ostream& operator<<(std::ostream& os,
+                                const OstreamWrapper<Fn>& wrapper)
+{
   wrapper.fn(os);
   return os;
 }
 
-class BlockDepth {
+class BlockDepth
+{
   friend std::ostream& operator<<(std::ostream&, const BlockDepth&);
   size_t depth_ = 0;
+
 public:
+  std::string str() const noexcept { return std::to_string(depth_); }
 
-  std::string str() const noexcept {
-    return std::to_string(depth_);
-  }
-
-  BlockDepth& operator =(size_t n) {
+  BlockDepth& operator=(size_t n)
+  {
     depth_ = n;
     return *this;
   }
 
-  BlockDepth& operator --() {
+  BlockDepth& operator--()
+  {
     // assert(depth_);
-    if (depth_ == 0) depth_ = 1;
+    if (depth_ == 0)
+      depth_ = 1;
     --depth_;
     return *this;
   }
 
-  BlockDepth& operator ++() {
+  BlockDepth& operator++()
+  {
     ++depth_;
     return *this;
   }
 
-  BlockDepth operator ++(int) {
+  BlockDepth operator++(int)
+  {
     BlockDepth tmp = *this;
     ++depth_;
     return tmp;
   }
 
-  BlockDepth operator +(size_t depth) {
+  BlockDepth operator+(size_t depth)
+  {
     BlockDepth tmp = *this;
     tmp.depth_ += depth;
     return tmp;
   }
 
-  BlockDepth operator -(size_t depth) {
+  BlockDepth operator-(size_t depth)
+  {
     assert(depth_ > depth);
     BlockDepth tmp = *this;
     tmp.depth_ -= depth;
     return tmp;
   }
 
-  BlockDepth& operator -=(size_t depth) {
+  BlockDepth& operator-=(size_t depth)
+  {
     assert(depth_ > depth);
     depth_ -= depth;
     return *this;
   }
 
-  BlockDepth& operator +=(size_t depth) {
+  BlockDepth& operator+=(size_t depth)
+  {
     depth_ += depth;
     return *this;
   }
 };
 
-inline std::ostream& operator<<(std::ostream& os, const BlockDepth& block) {
-  for (size_t i = 0; i < block.depth_; ++i) os << "  ";
+inline std::ostream& operator<<(std::ostream& os, const BlockDepth& block)
+{
+  for (size_t i = 0; i < block.depth_; ++i)
+    os << "  ";
   return os;
 }
 
-class Builder {
+class Builder
+{
 protected:
   Context* ctx_;
   BlockDepth block_depth_;
@@ -95,7 +107,8 @@ protected:
   void make_arguments_structs(AstFunctionDecl* fn);
   void emit_arguments_structs(std::function<void(AstStructDecl*)> fn);
 
-  auto bb(bool newline = true) {
+  auto bb(bool newline = true)
+  {
     return OstreamWrapper{[this, newline](std::ostream& os) {
       if (newline)
         os << block_depth_ << "{\n";
@@ -103,7 +116,8 @@ protected:
     }};
   }
 
-  auto eb(bool newline = true) {
+  auto eb(bool newline = true)
+  {
     return OstreamWrapper{[this, newline](std::ostream& os) {
       --block_depth_;
       if (newline)
@@ -111,10 +125,9 @@ protected:
     }};
   }
 
-  auto bl() {
-    return OstreamWrapper{[this](std::ostream& os) {
-      os << block_depth_;
-    }};
+  auto bl()
+  {
+    return OstreamWrapper{[this](std::ostream& os) { os << block_depth_; }};
   }
 
 public:
@@ -131,42 +144,49 @@ public:
    */
   virtual void finalize() = 0;
 
-  Builder(Context* ctx): ctx_{ctx} {}
+  Builder(Context* ctx)
+      : ctx_{ctx}
+  {
+  }
   virtual ~Builder() = default;
 
   virtual Builder* clone(Context* ctx) const = 0;
 };
 
-class BuildGroup {
+class BuildGroup
+{
   Context* ctx_;
   std::vector<std::unique_ptr<Builder>> builders_;
+
 public:
-  template<typename F, typename... Args>
-  void emit(F fptr, Args&&... args) {
+  template <typename F, typename... Args> void emit(F fptr, Args&&... args)
+  {
     auto mf = std::mem_fn(fptr);
     for (auto& ptr : builders_) {
       mf(ptr.get(), std::forward<Args>(args)...);
     }
   }
 
-  template<typename T, typename... Args>
-  void add(Args&&... args) {
-    builders_.emplace_back(std::make_unique<T>(ctx_, std::forward<Args>(args)...));
+  template <typename T, typename... Args> void add(Args&&... args)
+  {
+    builders_.emplace_back(
+        std::make_unique<T>(ctx_, std::forward<Args>(args)...));
   }
 
-  void finalize() {
-    emit(&Builder::finalize);
-  }
+  void finalize() { emit(&Builder::finalize); }
 
   BuildGroup(const BuildGroup& other, Context* ctx)
-    : ctx_{ctx}
+      : ctx_{ctx}
   {
     for (auto& other_builder : other.builders_) {
       builders_.emplace_back(other_builder->clone(ctx));
     }
   }
 
-  BuildGroup(Context* ctx = nullptr) : ctx_{ctx} {}
+  BuildGroup(Context* ctx = nullptr)
+      : ctx_{ctx}
+  {
+  }
 };
 
 } // namespace npidl::builders

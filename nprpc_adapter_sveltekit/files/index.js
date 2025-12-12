@@ -1,7 +1,7 @@
 // @nprpc/adapter-sveltekit - Main entry point
 // This file starts the SvelteKit handler connected via shared memory to NPRPC C++ server
 
-import { handler, start, stop } from './handler.js';
+import { start, stop } from './handler.js';
 
 // Channel ID can be provided via environment or build-time config
 const channelId = process.env.NPRPC_CHANNEL_ID || CHANNEL_ID;

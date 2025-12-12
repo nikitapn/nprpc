@@ -64,7 +64,7 @@ int main() {
   
   nprpc::Config cfg;
   cfg.udp_port = 50000;  // Listen for UDP on port 50000
-  cfg.debug_level = nprpc::DebugLevel::Info;
+  cfg.debug_level = nprpc::LogLevel::Error;
   
   auto rpc = nprpc::RPC::create(io, cfg);
   auto poa = rpc->create_poa(1);

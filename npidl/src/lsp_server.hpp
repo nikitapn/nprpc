@@ -1,16 +1,16 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
-// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// SPDX-License-Identifier: MIT
 
 #pragma once
 
-#include <string>
-#include <map>
-#include <vector>
-#include <optional>
-#include <memory>
-#include <iostream>
-#include <sstream>
 #include <glaze/glaze.hpp>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #include "workspace_manager.hpp"
 
@@ -140,18 +140,18 @@ struct ServerCapabilities {
     int openClose = 1;
     int change = 1; // 1=Full, 2=Incremental
   };
-  
+
   struct SemanticTokensLegend {
     std::vector<std::string> tokenTypes;
     std::vector<std::string> tokenModifiers;
   };
-  
+
   struct SemanticTokensOptions {
     SemanticTokensLegend legend;
     bool full = true;
     bool range = false;
   };
-  
+
   TextDocumentSync textDocumentSync;
   bool hoverProvider = true;
   bool definitionProvider = true;
@@ -167,219 +167,187 @@ struct InitializeResult {
 } // namespace lsp
 
 // Glaze metadata for serialization
-template <>
-struct glz::meta<lsp::Position> {
+template <> struct glz::meta<lsp::Position> {
   using T = lsp::Position;
-  static constexpr auto value = object(
-    "line", &T::line,
-    "character", &T::character
-  );
+  static constexpr auto value =
+      object("line", &T::line, "character", &T::character);
 };
 
-template <>
-struct glz::meta<lsp::Range> {
+template <> struct glz::meta<lsp::Range> {
   using T = lsp::Range;
-  static constexpr auto value = object(
-    "start", &T::start,
-    "end", &T::end
-  );
+  static constexpr auto value = object("start", &T::start, "end", &T::end);
 };
 
-template <>
-struct glz::meta<lsp::Location> {
+template <> struct glz::meta<lsp::Location> {
   using T = lsp::Location;
-  static constexpr auto value = object(
-    "uri", &T::uri,
-    "range", &T::range
-  );
+  static constexpr auto value = object("uri", &T::uri, "range", &T::range);
 };
 
-template <>
-struct glz::meta<lsp::SymbolKind> {
+template <> struct glz::meta<lsp::SymbolKind> {
   using enum lsp::SymbolKind;
-  static constexpr auto value = enumerate(
-    File, Module, Namespace, Package, Class, Method, Property, Field,
-    Constructor, Enum, Interface, Function, Variable, Constant,
-    String, Number, Boolean, Array, Object, Key, Null, EnumMember,
-    Struct, Event, Operator, TypeParameter
-  );
+  static constexpr auto value = enumerate(File,
+                                          Module,
+                                          Namespace,
+                                          Package,
+                                          Class,
+                                          Method,
+                                          Property,
+                                          Field,
+                                          Constructor,
+                                          Enum,
+                                          Interface,
+                                          Function,
+                                          Variable,
+                                          Constant,
+                                          String,
+                                          Number,
+                                          Boolean,
+                                          Array,
+                                          Object,
+                                          Key,
+                                          Null,
+                                          EnumMember,
+                                          Struct,
+                                          Event,
+                                          Operator,
+                                          TypeParameter);
 };
 
-template <>
-struct glz::meta<lsp::DocumentSymbol> {
+template <> struct glz::meta<lsp::DocumentSymbol> {
   using T = lsp::DocumentSymbol;
-  static constexpr auto value = object(
-    "name", &T::name,
-    "detail", &T::detail,
-    "kind", &T::kind,
-    "range", &T::range,
-    "selectionRange", &T::selectionRange,
-    "children", &T::children
-  );
+  static constexpr auto value = object("name",
+                                       &T::name,
+                                       "detail",
+                                       &T::detail,
+                                       "kind",
+                                       &T::kind,
+                                       "range",
+                                       &T::range,
+                                       "selectionRange",
+                                       &T::selectionRange,
+                                       "children",
+                                       &T::children);
 };
 
-template <>
-struct glz::meta<lsp::Diagnostic> {
+template <> struct glz::meta<lsp::Diagnostic> {
   using T = lsp::Diagnostic;
-  static constexpr auto value = object(
-    "range", &T::range,
-    "severity", &T::severity,
-    "message", &T::message,
-    "source", &T::source
-  );
+  static constexpr auto value = object("range",
+                                       &T::range,
+                                       "severity",
+                                       &T::severity,
+                                       "message",
+                                       &T::message,
+                                       "source",
+                                       &T::source);
 };
 
-template <>
-struct glz::meta<lsp::TextDocumentIdentifier> {
+template <> struct glz::meta<lsp::TextDocumentIdentifier> {
   using T = lsp::TextDocumentIdentifier;
-  static constexpr auto value = object(
-    "uri", &T::uri
-  );
+  static constexpr auto value = object("uri", &T::uri);
 };
 
-template <>
-struct glz::meta<lsp::VersionedTextDocumentIdentifier> {
+template <> struct glz::meta<lsp::VersionedTextDocumentIdentifier> {
   using T = lsp::VersionedTextDocumentIdentifier;
-  static constexpr auto value = object(
-    "uri", &T::uri,
-    "version", &T::version
-  );
+  static constexpr auto value = object("uri", &T::uri, "version", &T::version);
 };
 
-template <>
-struct glz::meta<lsp::TextDocumentItem> {
+template <> struct glz::meta<lsp::TextDocumentItem> {
   using T = lsp::TextDocumentItem;
-  static constexpr auto value = object(
-    "uri", &T::uri,
-    "languageId", &T::languageId,
-    "version", &T::version,
-    "text", &T::text
-  );
+  static constexpr auto value = object("uri",
+                                       &T::uri,
+                                       "languageId",
+                                       &T::languageId,
+                                       "version",
+                                       &T::version,
+                                       "text",
+                                       &T::text);
 };
 
-template <>
-struct glz::meta<lsp::TextDocumentContentChangeEvent> {
+template <> struct glz::meta<lsp::TextDocumentContentChangeEvent> {
   using T = lsp::TextDocumentContentChangeEvent;
-  static constexpr auto value = object(
-    "range", &T::range,
-    "text", &T::text
-  );
+  static constexpr auto value = object("range", &T::range, "text", &T::text);
 };
 
-template <>
-struct glz::meta<lsp::DidOpenTextDocumentParams> {
+template <> struct glz::meta<lsp::DidOpenTextDocumentParams> {
   using T = lsp::DidOpenTextDocumentParams;
-  static constexpr auto value = object(
-    "textDocument", &T::textDocument
-  );
+  static constexpr auto value = object("textDocument", &T::textDocument);
 };
 
-template <>
-struct glz::meta<lsp::DidChangeTextDocumentParams> {
+template <> struct glz::meta<lsp::DidChangeTextDocumentParams> {
   using T = lsp::DidChangeTextDocumentParams;
   static constexpr auto value = object(
-    "textDocument", &T::textDocument,
-    "contentChanges", &T::contentChanges
-  );
+      "textDocument", &T::textDocument, "contentChanges", &T::contentChanges);
 };
 
-template <>
-struct glz::meta<lsp::DidCloseTextDocumentParams> {
+template <> struct glz::meta<lsp::DidCloseTextDocumentParams> {
   using T = lsp::DidCloseTextDocumentParams;
-  static constexpr auto value = object(
-    "textDocument", &T::textDocument
-  );
+  static constexpr auto value = object("textDocument", &T::textDocument);
 };
 
-template <>
-struct glz::meta<lsp::TextDocumentPositionParams> {
+template <> struct glz::meta<lsp::TextDocumentPositionParams> {
   using T = lsp::TextDocumentPositionParams;
-  static constexpr auto value = object(
-    "textDocument", &T::textDocument,
-    "position", &T::position
-  );
+  static constexpr auto value =
+      object("textDocument", &T::textDocument, "position", &T::position);
 };
 
-template <>
-struct glz::meta<lsp::Hover> {
+template <> struct glz::meta<lsp::Hover> {
   using T = lsp::Hover;
-  static constexpr auto value = object(
-    "contents", &T::contents,
-    "range", &T::range
-  );
+  static constexpr auto value =
+      object("contents", &T::contents, "range", &T::range);
 };
 
-template <>
-struct glz::meta<lsp::DocumentSymbolParams> {
+template <> struct glz::meta<lsp::DocumentSymbolParams> {
   using T = lsp::DocumentSymbolParams;
-  static constexpr auto value = object(
-    "textDocument", &T::textDocument
-  );
+  static constexpr auto value = object("textDocument", &T::textDocument);
 };
 
-template <>
-struct glz::meta<lsp::SemanticTokensParams> {
+template <> struct glz::meta<lsp::SemanticTokensParams> {
   using T = lsp::SemanticTokensParams;
-  static constexpr auto value = object(
-    "textDocument", &T::textDocument
-  );
+  static constexpr auto value = object("textDocument", &T::textDocument);
 };
 
-template <>
-struct glz::meta<lsp::SemanticTokensResponse> {
+template <> struct glz::meta<lsp::SemanticTokensResponse> {
   using T = lsp::SemanticTokensResponse;
-  static constexpr auto value = object(
-    "data", &T::data
-  );
+  static constexpr auto value = object("data", &T::data);
 };
 
-template <>
-struct glz::meta<lsp::ServerCapabilities::TextDocumentSync> {
+template <> struct glz::meta<lsp::ServerCapabilities::TextDocumentSync> {
   using T = lsp::ServerCapabilities::TextDocumentSync;
-  static constexpr auto value = object(
-    "openClose", &T::openClose,
-    "change", &T::change
-  );
+  static constexpr auto value =
+      object("openClose", &T::openClose, "change", &T::change);
 };
 
-template <>
-struct glz::meta<lsp::ServerCapabilities::SemanticTokensLegend> {
+template <> struct glz::meta<lsp::ServerCapabilities::SemanticTokensLegend> {
   using T = lsp::ServerCapabilities::SemanticTokensLegend;
   static constexpr auto value = object(
-    "tokenTypes", &T::tokenTypes,
-    "tokenModifiers", &T::tokenModifiers
-  );
+      "tokenTypes", &T::tokenTypes, "tokenModifiers", &T::tokenModifiers);
 };
 
-template <>
-struct glz::meta<lsp::ServerCapabilities::SemanticTokensOptions> {
+template <> struct glz::meta<lsp::ServerCapabilities::SemanticTokensOptions> {
   using T = lsp::ServerCapabilities::SemanticTokensOptions;
-  static constexpr auto value = object(
-    "legend", &T::legend,
-    "full", &T::full,
-    "range", &T::range
-  );
+  static constexpr auto value =
+      object("legend", &T::legend, "full", &T::full, "range", &T::range);
 };
 
-template <>
-struct glz::meta<lsp::ServerCapabilities> {
+template <> struct glz::meta<lsp::ServerCapabilities> {
   using T = lsp::ServerCapabilities;
-  static constexpr auto value = object(
-    "textDocumentSync", &T::textDocumentSync,
-    "hoverProvider", &T::hoverProvider,
-    "definitionProvider", &T::definitionProvider,
-    "referencesProvider", &T::referencesProvider,
-    "documentSymbolProvider", &T::documentSymbolProvider,
-    "semanticTokensProvider", &T::semanticTokensProvider
-  );
+  static constexpr auto value = object("textDocumentSync",
+                                       &T::textDocumentSync,
+                                       "hoverProvider",
+                                       &T::hoverProvider,
+                                       "definitionProvider",
+                                       &T::definitionProvider,
+                                       "referencesProvider",
+                                       &T::referencesProvider,
+                                       "documentSymbolProvider",
+                                       &T::documentSymbolProvider,
+                                       "semanticTokensProvider",
+                                       &T::semanticTokensProvider);
 };
 
-template <>
-struct glz::meta<lsp::InitializeResult> {
+template <> struct glz::meta<lsp::InitializeResult> {
   using T = lsp::InitializeResult;
-  static constexpr auto value = object(
-    "capabilities", &T::capabilities
-  );
+  static constexpr auto value = object("capabilities", &T::capabilities);
 };
 
 // JSON-RPC 2.0 Message Structures
@@ -408,36 +376,34 @@ struct Notification : Message {
 
 } // namespace jsonrpc
 
-template <>
-struct glz::meta<jsonrpc::Request> {
+template <> struct glz::meta<jsonrpc::Request> {
   using T = jsonrpc::Request;
-  static constexpr auto value = object(
-    "jsonrpc", &T::jsonrpc,
-    "id", &T::id,
-    "method", &T::method,
-    "params", &T::params
-  );
+  static constexpr auto value = object("jsonrpc",
+                                       &T::jsonrpc,
+                                       "id",
+                                       &T::id,
+                                       "method",
+                                       &T::method,
+                                       "params",
+                                       &T::params);
 };
 
-template <>
-struct glz::meta<jsonrpc::Response> {
+template <> struct glz::meta<jsonrpc::Response> {
   using T = jsonrpc::Response;
-  static constexpr auto value = object(
-    "jsonrpc", &T::jsonrpc,
-    "id", &T::id,
-    "result", &T::result,
-    "error", &T::error
-  );
+  static constexpr auto value = object("jsonrpc",
+                                       &T::jsonrpc,
+                                       "id",
+                                       &T::id,
+                                       "result",
+                                       &T::result,
+                                       "error",
+                                       &T::error);
 };
 
-template <>
-struct glz::meta<jsonrpc::Notification> {
+template <> struct glz::meta<jsonrpc::Notification> {
   using T = jsonrpc::Notification;
   static constexpr auto value = object(
-    "jsonrpc", &T::jsonrpc,
-    "method", &T::method,
-    "params", &T::params
-  );
+      "jsonrpc", &T::jsonrpc, "method", &T::method, "params", &T::params);
 };
 
 // Forward declarations
@@ -445,76 +411,81 @@ class Context;
 class Parser;
 
 // Document Management
-class DocumentManager {
+class DocumentManager
+{
 public:
   struct Document {
     std::string uri;
     std::string content;
     int version = 0;
     std::vector<lsp::Diagnostic> diagnostics;
-    
+
     // Parsed imports from this file
     std::vector<std::string> imports;
-    
-    // Note: Context and AST are stored in ProjectContext via WorkspaceManager
+
+    // Note: Context and AST are stored in ProjectContext via
+    // WorkspaceManager
   };
 
   void open(const std::string& uri, const std::string& text, int version);
   void change(const std::string& uri, const std::string& text, int version);
   void close(const std::string& uri);
-  
+
   Document* get(const std::string& uri);
-  
-  std::vector<lsp::Diagnostic> parse_and_get_diagnostics(
-    npidl::WorkspaceManager& workspace,
-    Document& doc
-  );
+
+  std::vector<lsp::Diagnostic>
+  parse_and_get_diagnostics(npidl::WorkspaceManager& workspace, Document& doc);
 
 private:
   std::map<std::string, Document> documents_;
 };
 
 // LSP Server
-class LspServer {
+class LspServer
+{
 public:
   LspServer();
 
   void run();
+
 private:
   DocumentManager documents_;
   npidl::WorkspaceManager workspace_;
   bool initialized_ = false;
-  
+
   // Message I/O
   std::optional<std::string> read_message();
   void send_message(const std::string& message);
   void send_response(const glz::generic& id, const std::string& result);
   void send_error(const glz::generic& id, int code, const std::string& message);
   void send_notification(const std::string& method, const std::string& params);
-  
+
   // Request handlers
   void handle_initialize(const glz::generic& id, const glz::raw_json& params);
   void handle_initialized(const glz::raw_json& params);
   void handle_shutdown(const glz::generic& id);
   void handle_exit();
-  
+
   // Text document handlers
   void handle_did_open(const glz::raw_json& params);
   void handle_did_change(const glz::raw_json& params);
   void handle_did_close(const glz::raw_json& params);
   void handle_hover(const glz::generic& id, const glz::raw_json& params);
   void handle_definition(const glz::generic& id, const glz::raw_json& params);
-  void handle_document_symbol(const glz::generic& id, const glz::raw_json& params);
-  void handle_semantic_tokens_full(const glz::generic& id, const glz::raw_json& params);
-  
+  void handle_document_symbol(const glz::generic& id,
+                              const glz::raw_json& params);
+  void handle_semantic_tokens_full(const glz::generic& id,
+                                   const glz::raw_json& params);
+
   // Debug commands
-  void handle_debug_positions(const glz::generic& id, const glz::raw_json& params);
-  
+  void handle_debug_positions(const glz::generic& id,
+                              const glz::raw_json& params);
+
   // Helper methods for hover
   std::string create_hover_content(const npidl::PositionIndex::Entry* entry);
   std::string format_type(npidl::AstTypeDecl* type);
-  
-  // Diagnostics
-  void publish_diagnostics(const std::string& uri, const std::vector<lsp::Diagnostic>& diagnostics);
-};
 
+  // Diagnostics
+  void publish_diagnostics(const std::string& uri,
+                           const std::vector<lsp::Diagnostic>& diagnostics);
+};
