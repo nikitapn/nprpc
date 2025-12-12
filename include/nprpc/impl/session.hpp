@@ -13,8 +13,6 @@
 #include <nprpc/flat_buffer.hpp>
 #include <nprpc/session_context.h>
 
-#include "logging.hpp"
-
 namespace nprpc::impl {
 
 class Session
@@ -81,7 +79,7 @@ public:
         timeout_timer_.expires_after(
             std::chrono::system_clock::duration::max());
       } catch (boost::system::system_error& ec) {
-        NPRPC_LOG_ERROR("Session: start_timeout_timer: {}", ec.what());
+        // nothing we can do here
       }
     }
     timeout_timer_.async_wait(std::bind(&Session::start_timeout_timer, this));
