@@ -75,7 +75,7 @@ interface TestLargeMessage {
 [force_helpers=1]
 message Opt1 {
 	str: string;
-	stream?: bytestream;
+	data?: bytestream;
 };
 
 interface TestOptional {
@@ -156,4 +156,8 @@ interface TestUnreliable {
 
 	// Reliable UDP - needs ACK, can have return value and throw
 	boolean ReliableCall(a: in u32, b: in boolean, c: in vector<u8>) raises (AssertionFailed);
+}
+
+interface TestStreams {
+	stream<u8> GetByteStream(size: in u64) raises (AssertionFailed);
 }

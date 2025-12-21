@@ -17,6 +17,9 @@
 * [ ] Deflate or zlib compression for large messages.
 * [ ] Async socket connect with timeout.
 
+## WebSocket Transport
+* [ ] Support openning another WebSocket connection on demand when existing one is busy (for high-throughput clients).
+
 ## UDP Transport (Game Networking)
 
 ### Done

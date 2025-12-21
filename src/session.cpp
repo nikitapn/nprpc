@@ -1,9 +1,15 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
-#include "logging.hpp"
-#include <nprpc/impl/nprpc_impl.hpp>
 #include <optional>
+
+#include <nprpc/stream_base.hpp>
+#include <nprpc/stream_reader.hpp>
+#include <nprpc/stream_writer.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/stream_manager.hpp>
+
+#include "logging.hpp"
 
 namespace nprpc {
 extern void set_context(impl::Session& session);
@@ -32,6 +38,13 @@ get_object(SessionContext& ctx, uint16_t poa_idx, uint64_t object_id)
   return std::nullopt;
 }
 
+Session::Session(boost::asio::any_io_executor executor)
+    : timeout_timer_{executor}
+    , inactive_timer_{executor}
+{
+  ctx_.stream_manager = new impl::StreamManager(ctx_);
+}
+
 void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
 {
   auto validate = [this](ObjectServant& obj) {
@@ -39,13 +52,13 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
       return true;
 
     NPRPC_LOG_ERROR(
-        "[nprpc] Handle Request: {} is trying to access secured object: {}",
+        "Handle Request: {} is trying to access secured object: {}",
         remote_endpoint().to_string(), obj.get_class());
     make_simple_answer(ctx_, nprpc::impl::MessageId::Error_BadAccess);
     return false;
   };
 
-  NPRPC_LOG_INFO("[nprpc] Handle Request: received a message:");
+  NPRPC_LOG_INFO("Handle Request: received a message:");
   // dump_message(rx_buffer, true);
 
   // Set context buffers
@@ -63,10 +76,67 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
 
   auto header = static_cast<const impl::flat::Header*>(cb.data());
   switch (header->msg_id) {
+  case MessageId::StreamInitialization: {
+    impl::flat::StreamInit_Direct msg(rx_buffer, sizeof(impl::Header));
+
+    NPRPC_LOG_INFO("Handle Request: StreamInit. stream_id: {}, "
+                   "interface_idx: {}, fn_idx: {}, poa_idx: {}, oid: {}",
+                   msg.stream_id(), (uint32_t)msg.interface_idx(),
+                   (uint32_t)msg.func_idx(), msg.poa_idx(), msg.object_id());
+
+    bool not_found = true;
+    if (auto obj = get_object(ctx_, msg.poa_idx(), msg.object_id()); obj) {
+      if (auto real_obj = (*obj).get(); real_obj) {
+        if (!validate(*real_obj))
+          return;
+        set_context(*this);
+        try {
+          // Dispatch to servant (servant must handle StreamInit msg_id)
+          real_obj->dispatch(ctx_, false);
+        } catch (const std::exception& e) {
+          NPRPC_LOG_ERROR(
+              "Handle Request: Exception during stream dispatch: {}",
+              e.what());
+          // Send StreamError
+          ctx_.stream_manager->send_error(msg.stream_id(), 1,
+                                          {}); // TODO: proper error code
+        }
+        reset_context();
+        not_found = false;
+      }
+    }
+
+    if (not_found) {
+      NPRPC_LOG_ERROR("Handle Request: Object not found for stream. {}",
+                      msg.object_id());
+      ctx_.stream_manager->send_error(msg.stream_id(), 1,
+                                      {}); // TODO: proper error code
+    }
+    break;
+  }
+  case MessageId::StreamDataChunk: {
+    ctx_.stream_manager->on_chunk_received(std::move(rx_buffer));
+    break;
+  }
+  case MessageId::StreamCompletion: {
+    // impl::flat::StreamComplete_Direct msg(rx_buffer, sizeof(impl::Header));
+    // ctx_.stream_manager->on_stream_complete(msg);
+    break;
+  }
+  case MessageId::StreamError: {
+    // impl::flat::StreamError_Direct msg(rx_buffer, sizeof(impl::Header));
+    // ctx_.stream_manager->on_stream_error(msg);
+    break;
+  }
+  case MessageId::StreamCancellation: {
+    // impl::flat::StreamCancel_Direct msg(rx_buffer, sizeof(impl::Header));
+    // ctx_.stream_manager->on_stream_cancel(std::move(rx_buffer));
+    break;
+  }
   case MessageId::FunctionCall: {
     impl::flat::CallHeader_Direct ch(rx_buffer, sizeof(impl::Header));
 
-    NPRPC_LOG_INFO("[nprpc] Handle Request: FunctionCall. request_id: {}, "
+    NPRPC_LOG_INFO("Handle Request: FunctionCall. request_id: {}, "
                    "interface_idx: {}, fn_idx: {}, poa_idx: {}, oid: {}",
                    header->request_id, (uint32_t)ch.interface_idx(),
                    (uint32_t)ch.function_idx(), ch.poa_idx(), ch.object_id());
@@ -83,7 +153,7 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
           real_obj->dispatch(ctx_, false);
         } catch (const std::exception& e) {
           NPRPC_LOG_ERROR(
-              "[nprpc] Handle Request: Exception during dispatch: {}",
+              "Handle Request: Exception during dispatch: {}",
               e.what());
           // TODO: find out why Web client does not handle
           // Error_BadInput properly
@@ -95,7 +165,7 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     }
 
     if (not_found) {
-      NPRPC_LOG_ERROR("[nprpc] Handle Request: Object not found. {}",
+      NPRPC_LOG_ERROR("Handle Request: Object not found. {}",
                       ch.object_id());
     }
 
@@ -105,7 +175,7 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     detail::flat::ObjectIdLocal_Direct msg(rx_buffer, sizeof(impl::Header));
     detail::ObjectIdLocal oid{msg.poa_idx(), msg.object_id()};
 
-    NPRPC_LOG_INFO("[nprpc] Handle Request: AddReference. poa_idx: {}, oid: {}",
+    NPRPC_LOG_INFO("Handle Request: AddReference. poa_idx: {}, oid: {}",
                    oid.poa_idx, oid.object_id);
 
     bool success = false;
@@ -119,10 +189,10 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     }
 
     if (success) {
-      NPRPC_LOG_INFO("[nprpc] Handle Request: Refference added.");
+      NPRPC_LOG_INFO("Handle Request: Refference added.");
       make_simple_answer(ctx_, nprpc::impl::MessageId::Success);
     } else {
-      NPRPC_LOG_INFO("[nprpc] Handle Request: Object not found.");
+      NPRPC_LOG_INFO("Handle Request: Object not found.");
       make_simple_answer(ctx_, nprpc::impl::MessageId::Error_ObjectNotExist);
     }
 
@@ -133,7 +203,7 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     detail::ObjectIdLocal oid{msg.poa_idx(), msg.object_id()};
 
     NPRPC_LOG_INFO(
-        "[nprpc] Handle Request: ReleaseObject. poa_idx: {}, oid: {}",
+        "Handle Request: ReleaseObject. poa_idx: {}, oid: {}",
         oid.poa_idx, oid.object_id);
 
     if (ctx_.ref_list.remove_ref(msg.poa_idx(), msg.object_id())) {
@@ -145,13 +215,13 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     break;
   }
   default:
-    NPRPC_LOG_ERROR("[nprpc] Handle Request: Unknown message ID: {}",
+    NPRPC_LOG_ERROR("Handle Request: Unknown message ID: {}",
                     static_cast<uint32_t>(header->msg_id));
     make_simple_answer(ctx_, nprpc::impl::MessageId::Error_UnknownMessageId);
     break;
   }
 
-  NPRPC_LOG_INFO("[nprpc] Handle Request: sending reply:");
+  NPRPC_LOG_INFO("Handle Request: sending reply:");
   // dump_message(tx_buffer, true);
 }
 

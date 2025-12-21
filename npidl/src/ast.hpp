@@ -45,7 +45,7 @@ enum class TokenId {
   ONE_CHAR_TOKENS()
 #undef TOKEN_FUNC
 
-      Boolean = fundamental_type_first,
+  Boolean = fundamental_type_first,
   Int8,
   UInt8,
   Int16,
@@ -82,6 +82,7 @@ enum class TokenId {
   Module,
   Import,
   QuotedString,
+  Stream
 };
 
 struct AstStructDecl;
@@ -185,6 +186,7 @@ enum class FieldType {
   Interface,
   Alias,
   Enum,
+  Stream
 };
 
 enum class NumberFormat { Decimal, Hex, Scientific };
@@ -314,6 +316,14 @@ struct AstAliasDecl : AstWrapType, AstNodeWithPosition {
   {
     name = std::move(_name);
     id = FieldType::Alias;
+  }
+};
+
+struct AstStreamDecl : AstWrapType {
+  AstStreamDecl()
+      : AstWrapType(nullptr)
+  {
+    id = FieldType::Stream;
   }
 };
 
@@ -511,6 +521,7 @@ struct AstFunctionDecl : AstNodeWithPosition {
   bool is_async;
   bool is_reliable =
       true; // [unreliable] attribute maybe used for UDP and quic methods
+  bool is_stream;
 
   bool is_void() const noexcept { return ret_value->id == FieldType::Void; }
 };

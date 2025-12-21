@@ -33,7 +33,7 @@ public:
     nprpc::test::Opt1 ReturnOpt1() override {
         nprpc::test::Opt1 ret;
         ret.str = "test_string";
-        ret.stream = std::vector<uint8_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        ret.data = std::vector<uint8_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
         return ret;
     }
 };

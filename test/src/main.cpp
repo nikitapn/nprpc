@@ -143,10 +143,10 @@ TEST_F(NprpcTest, TestOptional)
 
       auto opt = obj->ReturnOpt1();
       EXPECT_EQ(opt.str, "test_string");
-      EXPECT_TRUE(opt.stream.has_value());
-      EXPECT_EQ(opt.stream->size(), 10u);
+      EXPECT_TRUE(opt.data.has_value());
+      EXPECT_EQ(opt.data->size(), 10u);
       for (uint8_t i = 0; i < 10; ++i) {
-        EXPECT_EQ(opt.stream->at(i), i);
+        EXPECT_EQ(opt.data->at(i), i);
       }
 
     } catch (nprpc::Exception& ex) {

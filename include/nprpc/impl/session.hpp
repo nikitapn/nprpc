@@ -8,6 +8,7 @@
 #include <boost/date_time/posix_time/ptime.hpp>
 
 #include <chrono>
+
 #include <nprpc/basic.hpp>
 #include <nprpc/common.hpp>
 #include <nprpc/flat_buffer.hpp>
@@ -107,11 +108,7 @@ public:
     }
   }
 
-  Session(boost::asio::any_io_executor executor)
-      : timeout_timer_{executor}
-      , inactive_timer_{executor}
-  {
-  }
+  Session(boost::asio::any_io_executor executor);
 
   virtual ~Session() = default;
 };

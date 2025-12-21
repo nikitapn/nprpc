@@ -5,11 +5,9 @@
 #include <charconv>
 #include <cstdint>
 #include <exception>
-#include <fstream>
 #include <functional>
 #include <iostream>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -19,14 +17,10 @@
 #include <boost/container/small_vector.hpp>
 
 #include "ast.hpp"
-#include "cpp_builder.hpp"
+#include "builder.hpp"
 #include "lexer_parser_interfaces.hpp"
-#include "lsp_server.hpp"
-#include "null_builder.hpp"
 #include "parser_factory.hpp"
-#include "parser_implementations.hpp"
 #include "parser_interfaces.hpp"
-#include "ts_builder.hpp"
 #include "utils.hpp"
 
 #include <nprpc/impl/misc/colored_cout.h>
@@ -156,30 +150,16 @@ class Lexer : public ILexer
 
   static constexpr bool is_delimeter(char c) noexcept
   {
+    // clang-format off
     switch (c) {
-    case ' ':
-    case '\0':
-    case '\n':
-    case '\t':
-    case '{':
-    case '}':
-    case '<':
-    case '>':
-    case '[':
-    case ']':
-    case '(':
-    case ')':
-    case ':':
-    case ',':
-    case ';':
-    case '/':
-    case '=':
-    case '?':
-    case '.':
+    case ' ': case '\0': case '\n': case '\t': case '{': case '}': case '<': case '>':
+    case '[': case ']': case '(': case ')': case ':': case ',': case ';': case '/':
+    case '=': case '?': case '.':
       return true;
     default:
       return false;
     }
+    //clang-format on
   }
 
   void skip_wp() noexcept
@@ -291,6 +271,7 @@ class Lexer : public ILexer
         {"const"sv, TokenId::Const},
         {"module"sv, TokenId::Module},
         {"import"sv, TokenId::Import},
+        {"stream"sv, TokenId::Stream},
     };
 
     static constexpr Map<std::string_view, TokenId,
@@ -467,38 +448,34 @@ public:
   throw parser_error(ctx_.current_file_path(), lex_.line(), lex_.col(),        \
                      "Unexpected token: '" +                                   \
                          std::string(tok.to_string_view()) + '\'');
+// clang-format off
 
 // Simple Recursive Descent Parser
 // Every rule is called via Parser::check() which saves/restores lookahead state
 //
 // NPIDL Grammar (EBNF):
 //   file           ::= stmt_decl* EOF
-//   stmt_decl      ::= const_decl | namespace_decl | attributes_decl?
-//   (interface_decl | struct_decl)
+//   stmt_decl      ::= const_decl | namespace_decl | attributes_decl? (interface_decl | struct_decl)
 //                      | enum_decl | alias_decl | module_decl | ';'
 //   module_decl    ::= 'module' (IDENTIFIER '.')* IDENTIFIER ';'
 //   const_decl     ::= 'const' IDENTIFIER '=' NUMBER ';'
 //   namespace_decl ::= 'namespace' IDENTIFIER '{' stmt_decl* '}'
 //   alias_decl     ::= 'alias' IDENTIFIER '=' type_decl ';'
-//   enum_decl      ::= 'enum' IDENTIFIER (':' fundamental_type)? '{' enum_item
-//   (',' enum_item)* '}' enum_item      ::= IDENTIFIER ('=' NUMBER)?
-//   interface_decl ::= 'interface' IDENTIFIER (':' IDENTIFIER (','
-//   IDENTIFIER)*)? '{' function_decl* '}' struct_decl    ::= '('message' |
-//   'exception') IDENTIFIER '{' (field_decl ';' | version_decl)* '}'
-//   function_decl  ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (','
-//   arg_decl)*)? ')'
-//                      (';' | 'raises' '(' IDENTIFIER ')' ';')
+//   enum_decl      ::= 'enum' IDENTIFIER (':' fundamental_type)? '{' enum_item (',' enum_item)* '}'
+//   enum_item      ::= IDENTIFIER ('=' NUMBER)?
+//   interface_decl ::= 'interface' IDENTIFIER (':' IDENTIFIER (',' IDENTIFIER)*)? '{' function_decl* '}'
+//   struct_decl    ::= '('message' | 'exception') IDENTIFIER '{' (field_decl ';' | version_decl)* '}'
+//   function_decl  ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (',' arg_decl)*)? ')' (';' | 'raises' '(' IDENTIFIER ')' ';')
 //   field_decl     ::= (IDENTIFIER | 'message') '?'? ':' type_decl
-//   arg_decl       ::= (IDENTIFIER | 'message') '?'? ':' ('in' | 'out'
-//   'direct'?) type_decl type_decl      ::= fundamental_type array_decl? |
-//   IDENTIFIER array_decl?
-//                      | 'vector' '<' type_decl '>' | 'string' array_decl? |
-//                      'void' | 'object'
+//   arg_decl       ::= (IDENTIFIER | 'message') '?'? ':' ('in' | 'out' 'direct'?) type_decl
+//   type_decl      ::= fundamental_type array_decl? | IDENTIFIER array_decl?
+//                      | 'vector' '<' type_decl '>' | 'string' array_decl?
+//                      | 'void' | 'object' | 'stream' '<' type_decl '>'
 //   array_decl     ::= '[' (IDENTIFIER | NUMBER) ']'
 //   version_decl   ::= '#' 'version' NUMBER
-//   attributes_decl::= '[' (IDENTIFIER '=' (IDENTIFIER | NUMBER))? ']'
-//   attributes_decl?
-//
+//   attributes_decl::= '[' (IDENTIFIER '=' (IDENTIFIER | NUMBER))? ']' attributes_decl?
+
+// clang-format on
 class Parser : public IParser
 {
   friend struct PeekGuard;
@@ -754,6 +731,7 @@ class Parser : public IParser
   //             | 'string' array_decl?
   //             | 'void'
   //             | 'object'
+  //             | 'stream' '<' type_decl '>'
   // type_decl without type reference tracking (for recursive/vector types)
   bool type_decl(AstTypeDecl*& type)
   {
@@ -799,6 +777,15 @@ class Parser : public IParser
       match('<');
       if (!check(&Parser::type_decl,
                  std::ref(static_cast<AstVectorDecl*>(type)->type)))
+        throw_error("Expected a type declaration");
+      match('>');
+      return true;
+    case TokenId::Stream:
+      flush();
+      type = new AstStreamDecl();
+      match('<');
+      if (!check(&Parser::type_decl,
+                 std::ref(static_cast<AstStreamDecl*>(type)->type)))
         throw_error("Expected a type declaration");
       match('>');
       return true;
@@ -1154,9 +1141,9 @@ class Parser : public IParser
 
     return true;
   }
-
-  // function_decl ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (','
-  // arg_decl)*)? ')' (';' | 'raises' '(' IDENTIFIER ')' ';')
+  // clang-format off
+  // function_decl ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (',' arg_decl)*)? ')' (';' | 'raises' '(' IDENTIFIER ')' ';')
+  // clang-format on
   bool function_decl(AstFunctionDecl*& f)
   {
     bool is_async;
@@ -1176,6 +1163,7 @@ class Parser : public IParser
     f = new AstFunctionDecl();
     f->ret_value = ret_type;
     f->is_async = is_async;
+    f->is_stream = ret_type->id == FieldType::Stream;
     auto name_tok = match(TokenId::Identifier);
     f->name = name_tok.name;
 

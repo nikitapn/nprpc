@@ -11,9 +11,12 @@ namespace nprpc {
 
 class ObjectServant;
 
+class StreamManager;
+
 namespace impl {
 class ReferenceListImpl;
 class SharedMemoryChannel;
+class StreamManager;
 } // namespace impl
 
 class NPRPC_API ReferenceList
@@ -37,6 +40,8 @@ struct SessionContext {
   // client-side, etc.)
   impl::SharedMemoryChannel* shm_channel = nullptr;
   flat_buffer *rx_buffer = nullptr, *tx_buffer = nullptr;
+
+  impl::StreamManager* stream_manager = nullptr;
 };
 
 NPRPC_API SessionContext& get_context();

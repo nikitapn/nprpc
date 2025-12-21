@@ -11,7 +11,7 @@ alias ifs_idx_t = u8;
 alias fn_idx_t  = u8;
 
 exception ExceptionCommFailure {
-  /** Error message */
+  // Error message
   what: string;
 }
 
@@ -36,14 +36,22 @@ enum LogLevel {
 };
 
 enum EndPointType {
+  // Plain TCP (no encryption and compression)
   Tcp,
   TcpTethered,
+  // Plain WebSocket with no encryption and deflate compression
   WebSocket,
+  // Secured WebSocket with TLS encryption and deflate compression
   SecuredWebSocket,
-  Http, // HTTP/1.1 or HTTP/3 (not implemented yet)
+  // HTTP or HTTP/3
+  Http,
+  // HTTPS or HTTPS/3
   SecuredHttp,
+  // Shared memory transport
   SharedMemory,
+  // Plain UDP transport
   Udp,
+  // QUIC transport with encryption and compression
   Quic
 };
 
@@ -54,37 +62,37 @@ message ObjectIdLocal {
 }
 
 enum ObjectFlag {
-  /**
-    * false  - transient object
-    * true   - persistent object
-    */
+  // `false`  - transient object
+  // `true`   - persistent object
   Persistent = 1,
-  /**
-    * true  - only one client can access the object in the existing opened session (this is for objects that originate from webbrowser or clients behind NAT)
-    * false - multiple clients can access the object by opening multiple sessions
-    */
+
+  // `true`  - only one client can access the object in the existing opened session
+  // (this is for objects that originate from a Browser or clients behind NAT)
+  // `false` - multiple clients can access the object by opening multiple sessions
   Tethered  = 2,
 }
 
-[force_helpers=1]
+[force_helpers]
 message ObjectId {
+  // Unique object identifier
   object_id: oid_t;
+  // POA index where the object resides
   poa_idx: poa_idx_t;
+  // Object flags
   flags: oflags_t;
-  /** UUID of the machine where the object was created */
+  // UUID of the machine where the object was created
   origin: uuid_t;
+  // Class identifier of the object
   class_id: string;
-  /**
-    * List of urls available for connection separated by ';'
-    * Currently supported protocols:
-    *   [PLAIN | TETHERED] tcp://<hostname|ip>:<port>
-    *   [PLAIN]            ws://<hostname|ip>:<port>
-    *   [SECURED]          wss://hostname>:<port>
-    *   [PLAIN]            http://<hostname|ip>:<port>/rpc
-    *   [SECURED]          https://<hostname>:<port>/rpc
-    *   [PLAIN]            mem://<path>
-    *   [SECURED]          quic://<hostname>:<port>
-    */
+  // List of urls available for connection separated by ';'
+  // Currently supported protocols:
+  //   [PLAIN | TETHERED] tcp://<hostname|ip>:<port>
+  //   [PLAIN]            ws://<hostname|ip>:<port>
+  //   [SECURED]          wss://hostname>:<port>
+  //   [PLAIN]            http://<hostname|ip>:<port>/rpc
+  //   [SECURED]          https://<hostname>:<port>/rpc
+  //   [PLAIN]            mem://<path>
+  //   [SECURED]          quic://<hostname>:<port>
   urls: string;
 }
 
@@ -92,9 +100,19 @@ message ObjectId {
 
 namespace impl {
 enum MessageId: u32 {
-  // Function call
-  FunctionCall = 0,
-  // Function response
+  // A simple function call
+  FunctionCall,
+  // Streaming initialization
+  StreamInitialization,
+  // Streaming data chunk
+  StreamDataChunk,
+  // Streaming completion
+  StreamCompletion,
+  // Streaming error
+  StreamError,
+  // Streaming cancellation
+  StreamCancellation,
+  // Function or Stream response
   BlockResponse,
   // Increase reference count
   AddReference,
@@ -114,29 +132,81 @@ enum MessageId: u32 {
   Error_UnknownFunctionIdx,
   // Unknown message id
   Error_UnknownMessageId,
-  // Attempt to access unsecured object
+  // Attempt to access secured object from a different session
   Error_BadAccess,
-  // Invalid input data (array out of bounds, etc)
+  // Invalid input data (an array out of bounds, etc)
   Error_BadInput
 }
 
 enum MessageType: u32 {
   Request = 0,
-  Answer
+  Answer = 1
 }
 
 message Header {
+  // Total message size including header
   size: u32;
+  // Message identifier
   msg_id: MessageId;
+  // Message type (request/answer)
   msg_type: MessageType;
+  // Unique request identifier (for matching requests and responses)
   request_id: u32;
 }
 
 message CallHeader {
+  // Target POA index
   poa_idx: poa_idx_t;
+  // Target interface index
   interface_idx: ifs_idx_t;
+  // Target function index
   function_idx: fn_idx_t;
+  // Target object identifier
   object_id: oid_t;
+}
+
+// Stream control message types
+enum StreamMessageType : u8 {
+  STREAM_INIT = 0,      // Client initiates stream
+  STREAM_CHUNK = 1,     // Server sends data chunk
+  STREAM_COMPLETE = 2,  // Server signals end of stream
+  STREAM_ERROR = 3,     // Server reports error
+  STREAM_CANCEL = 4     // Client requests cancellation
+}
+
+// Stream initialization request (replaces normal RPC call for streaming methods)
+message StreamInit {
+  stream_id: u64;            // Unique stream identifier (client-generated)
+  poa_idx: poa_idx_t;        // Target POA
+  interface_idx: ifs_idx_t;  // Target interface
+  object_id: oid_t;          // Target object
+  func_idx: fn_idx_t;        // Method index
+}
+
+// Data chunk from server to client
+message StreamChunk {
+  stream_id: u64;       // Stream identifier
+  sequence: u64;        // Monotonic sequence number (for ordering)
+  data: vector<u8>;     // Data payload
+  window_size: u32;     // Client's remaining buffer capacity (for backpressure)
+}
+
+// Stream completion marker
+message StreamComplete {
+  stream_id: u64;       // Stream identifier
+  final_sequence: u64;  // Last sequence number sent
+}
+
+// Stream error
+message StreamError {
+  stream_id: u64;         // Stream identifier
+  error_code: u32;        // Error code (exception ID or system error)
+  error_data: vector<u8>; // Serialized exception data
+}
+
+// Client cancellation request
+message StreamCancel {
+  stream_id: u64;       // Stream identifier
 }
 
 } // namespace impl

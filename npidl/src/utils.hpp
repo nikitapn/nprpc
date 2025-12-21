@@ -22,6 +22,7 @@ bool contains_object(AstTypeDecl* type);
 constexpr uint32_t size_of_header = 16;
 constexpr uint32_t size_of_call_header = 16;
 constexpr uint32_t align_of_call_header = 8;
+constexpr uint32_t size_of_stream_init = 32;
 
 constexpr size_t size_of_object = 48;
 constexpr size_t align_of_object = 8;

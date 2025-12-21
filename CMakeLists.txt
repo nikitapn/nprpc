@@ -187,6 +187,7 @@ add_library(nprpc
   src/rpc_impl.cpp
   src/session_context.cpp
   src/session.cpp
+  src/stream_manager.cpp
   src/helper.hpp
   src/helper.cpp
   src/flat_buffer.cpp
@@ -206,6 +207,10 @@ add_library(nprpc
   include/nprpc/session_context.h
   include/nprpc/utils.hpp
   include/nprpc/host_json.hpp
+  include/nprpc/stream_base.hpp
+  include/nprpc/stream_reader.hpp
+  include/nprpc/stream_writer.hpp
+  # Implementation headers
   include/nprpc/impl/async_connect.hpp
   include/nprpc/impl/nprpc_impl.hpp
   include/nprpc/impl/session.hpp
@@ -215,6 +220,7 @@ add_library(nprpc
   include/nprpc/impl/http3_server.hpp
   include/nprpc/impl/uuid.hpp
   include/nprpc/impl/websocket_session.hpp
+  include/nprpc/impl/stream_manager.hpp
   include/nprpc/serialization/iarchive.h
   include/nprpc/serialization/nvp.hpp
   include/nprpc/serialization/oarchive.h

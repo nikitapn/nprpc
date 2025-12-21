@@ -14,13 +14,14 @@
 #include "cpp_builder.hpp"
 #include "utils.hpp"
 
+// clang-format off
+
 namespace npidl::builders {
 
 using std::placeholders::_1;
 using std::placeholders::_2;
 
-void Builder::emit_arguments_structs(
-    std::function<void(AstStructDecl*)> emitter)
+void Builder::emit_arguments_structs(std::function<void(AstStructDecl*)> emitter)
 {
   always_full_namespace(true);
   for (auto& [unused, s] : ctx_->affa_list)
@@ -36,7 +37,9 @@ void Builder::make_arguments_structs(AstFunctionDecl* fn)
   auto& in_args = fn->in_args;
   auto& out_args = fn->out_args;
 
-  if (!fn->is_void()) {
+  // Note: Streaming functions don't have traditional return values - they
+  // return a StreamReader on the client side, not output parameters.
+  if (!fn->is_void() && !fn->is_stream) {
     auto ret = new AstFunctionArgument();
     ret->name = "ret_val";
     ret->modifier = ArgumentModifier::Out;
@@ -51,8 +54,7 @@ void Builder::make_arguments_structs(AstFunctionDecl* fn)
       out_args.push_back(arg);
   }
 
-  auto make_struct =
-      [this, fn](std::vector<AstFunctionArgument*>& args) -> AstStructDecl* {
+  auto make_struct = [this, fn](std::vector<AstFunctionArgument*>& args) -> AstStructDecl* {
     if (args.empty())
       return nullptr;
 
@@ -67,8 +69,7 @@ void Builder::make_arguments_structs(AstFunctionDecl* fn)
                      f->type = arg->type;
                      s->flat &= is_flat(arg->type);
                      f->function_argument = true;
-                     f->input_function_argument =
-                         (arg->modifier == ArgumentModifier::In);
+                     f->input_function_argument = (arg->modifier == ArgumentModifier::In);
                      f->function_name = fn->name;
                      f->function_argument_name = arg->name;
                      return f;
@@ -293,22 +294,17 @@ void CppBuilder::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type,
   }
 }
 
-void CppBuilder::emit_parameter_type_for_proxy_call(AstFunctionArgument* arg,
-                                                    std::ostream& os)
+void CppBuilder::emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, std::ostream& os)
 {
   const bool input = (arg->modifier == ArgumentModifier::In);
 
-  if (input && arg->type->id != FieldType::Fundamental &&
-      arg->type->id != FieldType::Vector) {
+  if (input && arg->type->id != FieldType::Fundamental && arg->type->id != FieldType::Vector)
     os << "const ";
-  }
 
   emit_parameter_type_for_proxy_call_r(arg->type, os, input);
 
-  if (!input || (arg->type->id != FieldType::Fundamental &&
-                 arg->type->id != FieldType::Vector)) {
+  if (!input || (arg->type->id != FieldType::Fundamental && arg->type->id != FieldType::Vector))
     os << '&';
-  }
 }
 
 void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type,
@@ -362,8 +358,7 @@ void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type,
     break;
   case FieldType::Optional:
     if (copt(type)->real_type()->id == FieldType::Struct) {
-      os << "::nprpc::flat::Optional_Direct<"
-         << emit_flat_type(copt(type)->type) << ", "
+      os << "::nprpc::flat::Optional_Direct<" << emit_flat_type(copt(type)->type) << ", "
          << emit_flat_type(copt(type)->type) << "_Direct>";
     } else {
       os << "::nprpc::flat::Optional_Direct<";
@@ -386,8 +381,7 @@ void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type,
     if (!input) {
       if (rt->id == FieldType::Array || rt->id == FieldType::Vector) {
         // At least for now, only arrays/vectors need special handling
-        emit_parameter_type_for_servant_callback_r(
-            calias(type)->get_real_type(), os, input);
+        emit_parameter_type_for_servant_callback_r(calias(type)->get_real_type(), os, input);
       } else {
         os << ns(calias(type)->nm) << calias(type)->name;
       }
@@ -395,8 +389,7 @@ void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type,
       if (rt->id == FieldType::Fundamental) {
         os << ns(calias(type)->nm) << calias(type)->name;
       } else {
-        emit_parameter_type_for_servant_callback_r(
-            calias(type)->get_real_type(), os, input);
+        emit_parameter_type_for_servant_callback_r(calias(type)->get_real_type(), os, input);
       }
     }
     break;
@@ -410,15 +403,13 @@ void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type,
   }
 }
 
-void CppBuilder::emit_parameter_type_for_servant_callback(
-    AstFunctionArgument* arg, std::ostream& os)
+void CppBuilder::emit_parameter_type_for_servant_callback(AstFunctionArgument* arg,
+                                                          std::ostream& os)
 {
   auto const input = (arg->modifier == ArgumentModifier::In);
   emit_parameter_type_for_servant_callback_r(arg->type, os, input);
-  if (!input && (arg->type->id != FieldType::Vector &&
-                 arg->type->id != FieldType::Object &&
-                 arg->type->id != FieldType::String &&
-                 arg->type->id != FieldType::Optional)) {
+  if (!input && (arg->type->id != FieldType::Vector && arg->type->id != FieldType::Object &&
+                 arg->type->id != FieldType::String && arg->type->id != FieldType::Optional)) {
     os << '&';
   }
 }
@@ -443,8 +434,7 @@ void CppBuilder::emit_direct_type(AstTypeDecl* type, std::ostream& os)
     else if (type->id == FieldType::Vector)
       os << "::nprpc::flat::Vector_Direct";
 
-    auto const is_primitive =
-        (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum);
+    auto const is_primitive = (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum);
 
     os << (is_primitive ? '1' : '2');
     os << '<';
@@ -477,98 +467,67 @@ void CppBuilder::emit_direct_type(AstTypeDecl* type, std::ostream& os)
   }
 }
 
-void CppBuilder::emit_accessors(const std::string& flat_name,
-                                AstFieldDecl* f,
-                                std::ostream& os)
+void CppBuilder::emit_accessors(const std::string& flat_name, AstFieldDecl* f, std::ostream& os)
 {
   switch (f->type->id) {
   case FieldType::Fundamental: {
     auto type_name = fundamental_to_flat(cft(f->type)->token_id);
-    os << "  const " << type_name << "& " << f->name
-       << "() const noexcept { return base()." << f->name << ";}\n";
-    os << "  " << type_name << "& " << f->name << "() noexcept { return base()."
-       << f->name << ";}\n";
+    os << "  const " << type_name << "& " << f->name << "() const noexcept { return base()." << f->name << ";}\n";
+    os << "  " << type_name << "& " << f->name << "() noexcept { return base()." << f->name << ";}\n";
     break;
   }
 
   case FieldType::Struct:
-    os << "  auto " << f->name << "() noexcept { return "
-       << ns(cflat(f->type)->nm) << "flat::" << cflat(f->type)->name
-       << "_Direct(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name
-       << ")); }\n";
+    os << "  auto " << f->name << "() noexcept { return " << ns(cflat(f->type)->nm)
+       << "flat::" << cflat(f->type)->name << "_Direct(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
     break;
 
   case FieldType::Vector:
-    os << "  void " << f->name
-       << "(std::uint32_t elements_size) { new (&base()." << f->name
-       << ") ::nprpc::flat::Vector<";
+    os << "  void " << f->name << "(std::uint32_t elements_size) { new (&base()." << f->name << ") ::nprpc::flat::Vector<";
     emit_flat_type(static_cast<AstWrapType*>(f->type)->type, os);
     os << ">(buffer_, elements_size); }\n";
 
     os << "  auto " << f->name << "_d() noexcept { return ";
     emit_direct_type(f->type, os);
-    os << "(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name
-       << ")); }\n";
+    os << "(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
     [[fallthrough]];
   case FieldType::Array: {
     auto wt = cwt(f->type)->real_type();
     if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
-      os << "  auto " << f->name
-         << "() noexcept { return (::nprpc::flat::Span<";
+      os << "  auto " << f->name << "() noexcept { return (::nprpc::flat::Span<";
       emit_flat_type(wt, os);
       os << ">)base()." << f->name << "; }\n";
-      os << "  const auto " << f->name
-         << "() const noexcept { return (::nprpc::flat::Span<const ";
+      os << "  const auto " << f->name << "() const noexcept { return (::nprpc::flat::Span<const ";
       emit_flat_type(wt, os);
       os << ">)base()." << f->name << "; }\n";
     } else if (wt->id == FieldType::Struct) {
-      os << "  auto " << f->name
-         << "() noexcept { return ::nprpc::flat::Span_ref<";
+      os << "  auto " << f->name << "() noexcept { return ::nprpc::flat::Span_ref<";
       emit_flat_type(wt, os);
       os << ", ";
       emit_direct_type(wt, os);
-      os << ">(buffer_, base()." << f->name
-         << ".range(buffer_.data().data())); }\n";
+      os << ">(buffer_, base()." << f->name << ".range(buffer_.data().data())); }\n";
     }
     break;
   }
 
   case FieldType::String:
-    os << "  void " << f->name << "(const char* str) { new (&base()." << f->name
-       << ") ::nprpc::flat::String(buffer_, str); }\n";
-    os << "  void " << f->name << "(const std::string& str) { new (&base()."
-       << f->name << ") ::nprpc::flat::String(buffer_, str); }\n";
-    os << "  auto " << f->name
-       << "() noexcept { return (::nprpc::flat::Span<char>)base()." << f->name
-       << "; }\n";
-    os << "  auto " << f->name
-       << "() const noexcept { return (::nprpc::flat::Span<const "
-          "char>)base()."
-       << f->name << "; }\n";
-    os << "  auto " << f->name
-       << "_d() noexcept { "
-          "    return ::nprpc::flat::String_Direct1(buffer_, offset_ + "
-          "offsetof("
-       << flat_name << ", " << f->name
-       << "));"
-          "  }\n";
+    os << "  void " << f->name << "(const char* str) { new (&base()." << f->name << ") ::nprpc::flat::String(buffer_, str); }\n";
+    os << "  void " << f->name << "(const std::string& str) { new (&base()." << f->name << ") ::nprpc::flat::String(buffer_, str); }\n";
+    os << "  auto " << f->name << "() noexcept { return (::nprpc::flat::Span<char>)base()." << f->name << "; }\n";
+    os << "  auto " << f->name << "() const noexcept { return (::nprpc::flat::Span<const char>)base()." << f->name << "; }\n";
+    os << "  auto " << f->name << "_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
     break;
 
   case FieldType::Optional: {
     os << "  auto " << f->name << "() noexcept { return ";
     emit_direct_type(f->type, os);
-    os << "(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name
-       << "));"
-          "  }\n";
+    os << "(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
     break;
   }
 
   case FieldType::Object:
     os << "  auto " << f->name
-       << "() noexcept { return "
-          "::nprpc::detail::flat::ObjectId_Direct(buffer_, offset_ + "
-          "offsetof("
-       << flat_name << ", " << f->name << ")); }\n";
+       << "() noexcept { return ::nprpc::detail::flat::ObjectId_Direct(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
     break;
 
   case FieldType::Alias: {
@@ -583,8 +542,8 @@ void CppBuilder::emit_accessors(const std::string& flat_name,
     auto e = cenum(f->type);
     os << "  const " << ns(e->nm) << e->name << "& " << f->name
        << "() const noexcept { return base()." << f->name << ";}\n";
-    os << "  " << ns(e->nm) << e->name << "& " << f->name
-       << "() noexcept { return base()." << f->name << ";}\n";
+    os << "  " << ns(e->nm) << e->name << "& " << f->name << "() noexcept { return base()."
+       << f->name << ";}\n";
     break;
   }
   default:
@@ -613,15 +572,13 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
   case FieldType::Struct: {
     auto s = cflat(type);
     if (s->flat) {
-      os << bd << "memcpy(" << op1 << (top_type ? "" : "()") << ".__data(), &"
-         << op2 << ", " << s->size << ");\n";
+      os << bd << "memcpy(" << op1 << (top_type ? "" : "()") << ".__data(), &" << op2 << ", "
+         << s->size << ");\n";
     } else {
       for (auto field : s->fields) {
-        assign_from_cpp_type(
-            field->type,
-            op1 + (top_type ? "." : (from_iterator ? "." : "().")) +
-                field->name,
-            op2 + (from_iterator ? "->" : ".") + field->name, os);
+        assign_from_cpp_type(field->type,
+                             op1 + (top_type ? "." : (from_iterator ? "." : "().")) + field->name,
+                             op2 + (from_iterator ? "->" : ".") + field->name, os);
       }
     }
     break;
@@ -629,8 +586,7 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
 
   case FieldType::Vector:
     if (top_type) {
-      os << bd << op1 << ".length(static_cast<uint32_t>(" << op2
-         << ".size()));\n";
+      os << bd << op1 << ".length(static_cast<uint32_t>(" << op2 << ".size()));\n";
     } else {
       os << bd << op1 << "(static_cast<uint32_t>(" << op2 << ".size()));\n";
     }
@@ -639,8 +595,8 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
     auto wt = cwt(type)->type;
     if (is_flat(wt)) {
       auto [size, align] = get_type_size_align(wt);
-      os << bd << "memcpy(" << op1 << "().data(), " << op2 << ".data(), " << op2
-         << ".size() * " << size << ");\n";
+      os << bd << "memcpy(" << op1 << "().data(), " << op2 << ".data(), " << op2 << ".size() * "
+         << size << ");\n";
     } else if (wt->id == FieldType::String) {
       os << bd << "{\n"
          << (bd += 1) << "auto vdir = " << op1 << "_d();\n"
@@ -673,8 +629,7 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
 
   case FieldType::Alias:
     // For alias types top_type should be forwarded as is
-    assign_from_cpp_type(calias(type)->type, op1, op2, os, from_iterator,
-                         top_type);
+    assign_from_cpp_type(calias(type)->type, op1, op2, os, from_iterator, top_type);
     break;
 
   case FieldType::String:
@@ -689,14 +644,12 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
     os << bd << op1 << accessor << "alloc();\n";
 
     auto wt = copt(type)->real_type();
-    if (wt->id == FieldType::Struct || wt->id == FieldType::Vector ||
-        wt->id == FieldType::Array) {
+    if (wt->id == FieldType::Struct || wt->id == FieldType::Vector || wt->id == FieldType::Array) {
       os << bd << "auto value = " << op1 << accessor << "value();\n";
-      assign_from_cpp_type(wt, "value", op2 + ".value()", os, false, true,
-                           true);
+      assign_from_cpp_type(wt, "value", op2 + ".value()", os, false, true, true);
     } else {
-      assign_from_cpp_type(wt, op1 + std::string(accessor) + "value",
-                           op2 + ".value()", os, false, false);
+      assign_from_cpp_type(wt, op1 + std::string(accessor) + "value", op2 + ".value()", os, false,
+                           false);
     }
 
     os << bd0 << "} else { \n";
@@ -738,23 +691,21 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type,
   case FieldType::Fundamental: {
     // assert(top_object == false);
     auto ft = cft(type);
-    os << bd << op1 << " = "
-       << (ft->token_id == TokenId::Boolean ? "(bool)" : "") << op2 << "();\n";
+    os << bd << op1 << " = " << (ft->token_id == TokenId::Boolean ? "(bool)" : "") << op2
+       << "();\n";
     break;
   }
 
   case FieldType::Struct: {
     auto s = cflat(type);
     if (s->flat) {
-      os << bd << "memcpy(&" << op1 << ", " << op2 << (top_object ? "." : "().")
-         << "__data(), " << s->size << ");\n";
+      os << bd << "memcpy(&" << op1 << ", " << op2 << (top_object ? "." : "().") << "__data(), "
+         << s->size << ");\n";
     } else {
       for (auto field : s->fields) {
         assign_from_flat_type(
             field->type, op1 + '.' + field->name,
-            op2 + (top_object ? "." : (from_iterator ? "." : "().")) +
-                field->name,
-            os);
+            op2 + (top_object ? "." : (from_iterator ? "." : "().")) + field->name, os);
       }
     }
     break;
@@ -767,17 +718,14 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type,
 
     bool is_string = (wt->id == FieldType::String);
 
-    os << bd << "{\n"
-       << bd + 1 << "auto span = " << op2
-       << (is_string ? "_d()();\n" : "();\n");
+    os << bd << "{\n" << bd + 1 << "auto span = " << op2 << (is_string ? "_d()();\n" : "();\n");
 
     if (type->id == FieldType::Vector) {
       os << bd + 1 << op1 << ".resize(span.size());\n";
     }
 
     if (is_flat(wt)) {
-      os << bd + 1 << "memcpy(" << op1 << ".data(), span.data(), " << size
-         << " * span.size());\n";
+      os << bd + 1 << "memcpy(" << op1 << ".data(), span.data(), " << size << " * span.size());\n";
     } else {
       auto its = "it" + (bd + 1).str();
       os << bd + 1 << "auto " << its << " = " << "std::begin(" << op1 << ");\n";
@@ -809,13 +757,11 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type,
 
     os << bd + 1 << "auto opt = " << op2 << "();\n";
     os << bd + 1 << "if (opt.has_value()) {\n";
-    os << bd + 2 << op1 << " = std::decay<decltype(" << op1
-       << ")>::type::value_type{};\n";
+    os << bd + 2 << op1 << " = std::decay<decltype(" << op1 << ")>::type::value_type{};\n";
     os << bd + 2 << "auto& value_to = " << op1 << ".value();\n";
 
     bd = bd + 2;
-    if (wt->id == FieldType::Struct || wt->id == FieldType::Vector ||
-        wt->id == FieldType::Array) {
+    if (wt->id == FieldType::Struct || wt->id == FieldType::Vector || wt->id == FieldType::Array) {
       os << bd << "auto value_from = opt.value();\n";
       assign_from_flat_type(wt, "value_to", "value_from", os, false, true);
     } else {
@@ -839,8 +785,7 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type,
     break;
 
   case FieldType::Alias:
-    assign_from_flat_type(calias(type)->get_real_type(), op1, op2, os,
-                          from_iterator);
+    assign_from_flat_type(calias(type)->get_real_type(), op1, op2, os, from_iterator);
     break;
 
   case FieldType::Object:
@@ -872,8 +817,7 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
 
   if (target == Target::Regular) {
     make_struct(std::bind(
-        static_cast<void (CppBuilder::*)(AstTypeDecl*, std::ostream&)>(
-            &CppBuilder::emit_type),
+        static_cast<void (CppBuilder::*)(AstTypeDecl*, std::ostream&)>(&CppBuilder::emit_type),
         this, _1, _2));
   } else if (target == Target::Exception) {
     os << "class " << s->name
@@ -881,37 +825,33 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
           "public:\n";
 
     if (s->fields.size() > 1) {
-      std::for_each(next(begin(s->fields)), end(s->fields),
-                    [this, &os](auto f) {
-                      os << "  ";
-                      emit_type(f->type, os);
-                      os << " " << f->name << ";\n";
-                    });
+      std::for_each(next(begin(s->fields)), end(s->fields), [this, &os](auto f) {
+        os << "  ";
+        emit_type(f->type, os);
+        os << " " << f->name << ";\n";
+      });
       os << '\n';
     }
 
-    os << "  " << s->name << "() : ::nprpc::Exception(\"" << s->name
-       << "\") {} \n";
+    os << "  " << s->name << "() : ::nprpc::Exception(\"" << s->name << "\") {} \n";
 
     if (s->fields.size() > 1) {
       os << "  " << s->name << '(';
-      std::for_each(
-          next(begin(s->fields)), end(s->fields),
-          [this, &os, ix = 1ul, size = s->fields.size()](auto f) mutable {
-            emit_type(f->type, os);
-            os << " _" << f->name;
-            if (++ix < size)
-              os << ", ";
-          });
+      std::for_each(next(begin(s->fields)), end(s->fields),
+                    [this, &os, ix = 1ul, size = s->fields.size()](auto f) mutable {
+                      emit_type(f->type, os);
+                      os << " _" << f->name;
+                      if (++ix < size)
+                        os << ", ";
+                    });
 
       os << ")\n"
             "    : ::nprpc::Exception(\""
          << s->name << "\")\n";
 
-      std::for_each(next(begin(s->fields)), end(s->fields),
-                    [this, &os](auto f) mutable {
-                      os << "    , " << f->name << "(_" << f->name << ")\n";
-                    });
+      std::for_each(next(begin(s->fields)), end(s->fields), [this, &os](auto f) mutable {
+        os << "    , " << f->name << "(_" << f->name << ")\n";
+      });
 
       os << "  {\n"
             "  }\n";
@@ -923,10 +863,9 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
   if (target != Target::FunctionArgument)
     os << "namespace flat {\n";
 
-  make_struct(
-      std::bind(static_cast<void (CppBuilder::*)(AstTypeDecl*, std::ostream&)>(
-                    &CppBuilder::emit_flat_type),
-                this, _1, _2));
+  make_struct(std::bind(
+      static_cast<void (CppBuilder::*)(AstTypeDecl*, std::ostream&)>(&CppBuilder::emit_flat_type),
+      this, _1, _2));
 
   auto const accessor_name = s->name + "_Direct";
 
@@ -969,21 +908,17 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
 void CppBuilder::emit_constant(const std::string& name, AstNumber* number)
 {
   oh << "constexpr auto " << name << " = ";
-  std::visit(
-      overloaded{
-          [&](int64_t x) { oh << x; },
-          [&](float x) { oh << x << 'f'; },
-          [&](double x) { oh << x; },
-          [&](bool x) { oh << std::ios::boolalpha << x << std::ios::dec; },
-      },
-      number->value);
+  std::visit(overloaded{
+                 [&](int64_t x) { oh << x; },
+                 [&](float x) { oh << x << 'f'; },
+                 [&](double x) { oh << x; },
+                 [&](bool x) { oh << std::ios::boolalpha << x << std::ios::dec; },
+             },
+             number->value);
   oh << ";\n";
 }
 
-void CppBuilder::emit_struct(AstStructDecl* s)
-{
-  emit_struct2(s, oh, Target::Regular);
-}
+void CppBuilder::emit_struct(AstStructDecl* s) { emit_struct2(s, oh, Target::Regular); }
 
 void CppBuilder::emit_exception(AstStructDecl* s)
 {
@@ -1021,7 +956,9 @@ void CppBuilder::finalize()
              "#include <nprpc/flat.hpp>\n";
 
   if (!ctx_->is_nprpc_base()) {
-    ofs_hpp << "#include <nprpc/nprpc.hpp>\n\n";
+    ofs_hpp << "#include <nprpc/nprpc.hpp>\n";
+    ofs_hpp << "#include <nprpc/stream_writer.hpp>\n";
+    ofs_hpp << "#include <nprpc/stream_reader.hpp>\n\n";
   } else {
     ofs_hpp << "#include <nprpc/exception.hpp>\n";
     ofs_hpp << "#include <string_view>\n\n";
@@ -1050,14 +987,11 @@ void CppBuilder::finalize()
 
   ofs_cpp << "#include <nprpc/impl/nprpc_impl.hpp>\n\n"
              "void "
-          << ctx_->current_file()
-          << "_throw_exception(::nprpc::flat_buffer& buf);\n\n";
+          << ctx_->current_file() << "_throw_exception(::nprpc::flat_buffer& buf);\n\n";
 
   if (is_module) {
-    ofs_hpp << "namespace " << ctx_->nm_root()->to_cpp17_namespace()
-            << " {\n\n";
-    ofs_cpp << "namespace " << ctx_->nm_root()->to_cpp17_namespace()
-            << " {\n\n";
+    ofs_hpp << "namespace " << ctx_->nm_root()->to_cpp17_namespace() << " {\n\n";
+    ofs_cpp << "namespace " << ctx_->nm_root()->to_cpp17_namespace() << " {\n\n";
   }
 
   emit_helpers();
@@ -1066,8 +1000,8 @@ void CppBuilder::finalize()
   std::stringstream ss;
 
   ss << "namespace {\n";
-  emit_arguments_structs(std::bind(&CppBuilder::emit_struct2, this, _1,
-                                   std::ref(ss), Target::FunctionArgument));
+  emit_arguments_structs(
+      std::bind(&CppBuilder::emit_struct2, this, _1, std::ref(ss), Target::FunctionArgument));
   ocpp << ss.str() << "\n";
   emit_safety_checks();
   ocpp << "} // \n\n" << oc.str();
@@ -1103,8 +1037,7 @@ void CppBuilder::finalize()
 
       for (size_t i = 1; i < ex->fields.size(); ++i) {
         auto f = ex->fields[i];
-        assign_from_flat_type(f->type, "ex." + f->name, "ex_flat." + f->name,
-                              ocpp, false, true);
+        assign_from_flat_type(f->type, "ex." + f->name, "ex_flat." + f->name, ocpp, false, true);
       }
 
       ocpp << "    throw ex;\n"
@@ -1123,19 +1056,16 @@ void CppBuilder::finalize()
   ofs_cpp << ocpp.str();
 }
 
-void CppBuilder::emit_safety_checks_r(AstTypeDecl* type,
-                                      std::string op,
-                                      std::ostream& os,
-                                      bool /* from_iterator */,
-                                      bool top_type)
+void CppBuilder::emit_safety_checks_r(
+    AstTypeDecl* type, std::string op, std::ostream& os, bool /* from_iterator */, bool top_type)
 {
   switch (type->id) {
   case FieldType::Struct: {
     auto s = cflat(type);
 
     if (top_type) {
-      os << "  if (static_cast<std::uint32_t>(buf.size()) < " << op
-         << ".offset() + " << s->size << ") goto check_failed;\n";
+      os << "  if (static_cast<std::uint32_t>(buf.size()) < " << op << ".offset() + " << s->size
+         << ") goto check_failed;\n";
     }
 
     if (s->flat)
@@ -1149,12 +1079,9 @@ void CppBuilder::emit_safety_checks_r(AstTypeDecl* type,
           ftr->id == FieldType::Struct || ftr->id == FieldType::String) {
         os << bd << "{\n";
         auto str = op + "." + field->name +
-                   (ftr->id == FieldType::Vector || ftr->id == FieldType::String
-                        ? "_d()"
-                        : "()");
+                   (ftr->id == FieldType::Vector || ftr->id == FieldType::String ? "_d()" : "()");
         bd += 1;
-        emit_safety_checks_r(field->type, str, os, false,
-                             ftr->id != FieldType::Struct);
+        emit_safety_checks_r(field->type, str, os, false, ftr->id != FieldType::Struct);
         bd -= 1;
         os << bd << "}\n";
       } else if (ftr->id == FieldType::Array) {
@@ -1239,8 +1166,8 @@ void CppBuilder::emit_safety_checks()
         continue;
       set.emplace(name);
 
-      ocpp << "bool check_" << name << "(::nprpc::flat_buffer& buf, "
-           << fn->in_s->name << "_Direct& ia" << ") {\n";
+      ocpp << "bool check_" << name << "(::nprpc::flat_buffer& buf, " << fn->in_s->name
+           << "_Direct& ia" << ") {\n";
 
       emit_safety_checks_r(s, "ia", ocpp, false, true);
 
@@ -1365,8 +1292,7 @@ void CppBuilder::proxy_call(AstFunctionDecl* fn)
         "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n";
 
   if (fn->ex)
-    oc << "  if (std_reply == 1) " << ctx_->current_file()
-       << "_throw_exception(buf);\n";
+    oc << "  if (std_reply == 1) " << ctx_->current_file() << "_throw_exception(buf);\n";
 
   if (!fn->out_s) {
     oc << "  if (std_reply != 0) {\n"
@@ -1377,17 +1303,15 @@ void CppBuilder::proxy_call(AstFunctionDecl* fn)
           "    throw ::nprpc::Exception(\"Unknown Error\");\n"
           "  }\n";
 
-    oc << "  " << fn->out_s->name
-       << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
+    oc << "  " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
 
     int ix = fn->is_void() ? 0 : 1;
     bd = 2;
     for (auto out : fn->args) {
       if (out->modifier == ArgumentModifier::In)
         continue;
-      assign_from_flat_type(
-          out->type, out->name, "out._" + std::to_string(++ix), oc, false,
-          out->type->id == FieldType::Object && out->direct == false);
+      assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), oc, false,
+                            out->type->id == FieldType::Object && out->direct == false);
     }
 
     if (!fn->is_void()) {
@@ -1422,8 +1346,7 @@ void CppBuilder::proxy_udp_reliable_call(AstFunctionDecl* fn)
         "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n";
 
   if (fn->ex)
-    oc << "  if (std_reply == 1) " << ctx_->current_file()
-       << "_throw_exception(buf);\n";
+    oc << "  if (std_reply == 1) " << ctx_->current_file() << "_throw_exception(buf);\n";
 
   if (!fn->out_s) {
     oc << "  if (std_reply != 0) {\n"
@@ -1434,17 +1357,15 @@ void CppBuilder::proxy_udp_reliable_call(AstFunctionDecl* fn)
           "    throw ::nprpc::Exception(\"Unknown Error\");\n"
           "  }\n";
 
-    oc << "  " << fn->out_s->name
-       << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
+    oc << "  " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
 
     int ix = fn->is_void() ? 0 : 1;
     bd = 2;
     for (auto out : fn->args) {
       if (out->modifier == ArgumentModifier::In)
         continue;
-      assign_from_flat_type(
-          out->type, out->name, "out._" + std::to_string(++ix), oc, false,
-          out->type->id == FieldType::Object && out->direct == false);
+      assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), oc, false,
+                            out->type->id == FieldType::Object && out->direct == false);
     }
 
     if (!fn->is_void()) {
@@ -1480,6 +1401,61 @@ void CppBuilder::proxy_udp_reliable_async_call(AstFunctionDecl* fn)
         "  }));\n";
 }
 
+void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
+{
+  oc << "  auto session = "
+        "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n";
+  oc << "  auto stream_id = ::nprpc::impl::generate_stream_id();\n";
+
+  // Calculate buffer size: Header + StreamInit (24 bytes) + input args
+  const auto stream_init_size = size_of_stream_init;
+  const auto args_offset = size_of_header + stream_init_size;
+  const auto fixed_size = args_offset + (fn->in_s ? fn->in_s->size : 0);
+  const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
+
+  // Prepare StreamInit message
+  oc << "  ::nprpc::flat_buffer buf;\n"
+        "  buf.prepare(" << capacity << ");\n"
+        "  buf.commit(" << fixed_size << ");\n";
+
+  oc << "  auto* header = "
+        "static_cast<::nprpc::impl::Header*>(buf.data().data());\n"
+        "  header->msg_id = ::nprpc::impl::MessageId::StreamInitialization;\n"
+        "  header->msg_type = ::nprpc::impl::MessageType::Request;\n";
+
+  oc << "  ::nprpc::impl::flat::StreamInit_Direct init(buf, "
+        "sizeof(::nprpc::impl::Header));\n"
+        "  init.stream_id() = stream_id;\n"
+        "  init.poa_idx() = this->poa_idx();\n"
+        "  init.interface_idx() = interface_idx_;\n"
+        "  init.object_id() = this->object_id();\n"
+        "  init.func_idx() = "
+     << fn->idx << ";\n";
+
+  // Serialize input arguments
+  if (fn->in_s) {
+    oc << "  " << fn->in_s->name << "_Direct _(buf," << args_offset << ");\n";
+    int ix = 0;
+    for (auto in : fn->args) {
+      if (in->modifier == ArgumentModifier::Out)
+        continue;
+      bd = 1;
+      assign_from_cpp_type(in->type, "_._" + std::to_string(++ix), in->name, oc);
+    }
+  }
+
+  oc << "  header->size = static_cast<uint32_t>(buf.size() - 4);\n";
+
+  // Send reliable (StreamInit must be reliable)
+  oc << "  ::nprpc::impl::g_rpc->call_async(this->get_endpoint(), "
+        "std::move(buf), std::nullopt, this->get_timeout());\n";
+
+  // Create StreamReader and return
+  oc << "  return ::nprpc::StreamReader<";
+  emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oc);
+  oc << ">(session->ctx(), stream_id);\n";
+}
+
 void CppBuilder::proxy_async_call(AstFunctionDecl* fn)
 {
   oc << "  ::nprpc::impl::g_rpc->call_async(this->get_endpoint(), "
@@ -1495,8 +1471,7 @@ void CppBuilder::proxy_async_call(AstFunctionDecl* fn)
 
     bd = 4;
 
-    oc << "    " << fn->out_s->name
-       << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
+    oc << "    " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
 
     for (auto arg : fn->out_args) {
       oc << bd;
@@ -1506,9 +1481,8 @@ void CppBuilder::proxy_async_call(AstFunctionDecl* fn)
 
     size_t ix = 0;
     for (auto out : fn->out_args) {
-      assign_from_flat_type(
-          out->type, out->name, "out._" + std::to_string(++ix), oc, false,
-          out->type->id == FieldType::Object && out->direct == false);
+      assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), oc, false,
+                            out->type->id == FieldType::Object && out->direct == false);
     }
   } else {
     oc << bd << "(*handler)();\n";
@@ -1525,9 +1499,7 @@ std::string_view CppBuilder::proxy_arguments(AstFunctionDecl* fn)
   std::stringstream ss;
   if (!fn->is_async || !fn->is_reliable) {
     emit_function_arguments(
-        fn, ss,
-        std::bind(&CppBuilder::emit_parameter_type_for_proxy_call, this, _1,
-                  _2));
+        fn, ss, std::bind(&CppBuilder::emit_parameter_type_for_proxy_call, this, _1, _2));
   } else {
     size_t out_args_size = fn->out_args.size();
     ss << "(std::optional<std::function<void(";
@@ -1569,8 +1541,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 
   oh << "public:\n"
         "  static std::string_view _get_class() noexcept { return \""
-     << ctx_->current_file() << '/' << ctx_->nm_cur()->to_ts_namespace() << '.'
-     << ifs->name
+     << ctx_->current_file() << '/' << ctx_->nm_cur()->to_ts_namespace() << '.' << ifs->name
      << "\"; }\n"
         "  std::string_view get_class() const noexcept override { return I"
      << ifs->name
@@ -1580,12 +1551,16 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 
   for (auto fn : ifs->fns) {
     oh << "  virtual ";
-    emit_type(fn->ret_value, oh);
+    if (fn->is_stream) {
+      oh << "::nprpc::StreamWriter<";
+      emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oh);
+      oh << ">";
+    } else {
+      emit_type(fn->ret_value, oh);
+    }
     oh << ' ' << fn->name << " ";
     emit_function_arguments(
-        fn, oh,
-        std::bind(&CppBuilder::emit_parameter_type_for_servant_callback, this,
-                  _1, _2));
+        fn, oh, std::bind(&CppBuilder::emit_parameter_type_for_servant_callback, this, _1, _2));
     oh << " = 0;\n";
   }
 
@@ -1610,8 +1585,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
      << ifs->name << "_Servant;\n\n";
 
   if (ifs->plist.empty()) {
-    oh << "  " << ifs->name
-       << "(uint8_t interface_idx) : interface_idx_(interface_idx) {}\n";
+    oh << "  " << ifs->name << "(uint8_t interface_idx) : interface_idx_(interface_idx) {}\n";
   } else {
     oh << "  " << ifs->name << "(uint8_t interface_idx)\n";
 
@@ -1619,8 +1593,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 
     int n = 1;
     for (auto parent : ifs->plist) {
-      oh << (n == 1 ? "    : " : "    , ") << parent->name
-         << "(interface_idx + " << n << ")\n";
+      oh << (n == 1 ? "    : " : "    , ") << parent->name << "(interface_idx + " << n << ")\n";
       dfs_interface(std::bind(count_all, _1, std::ref(n)), parent);
     }
 
@@ -1633,7 +1606,13 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   for (auto& fn : ifs->fns) {
     make_arguments_structs(fn);
     oh << "  ";
-    emit_type(fn->ret_value, oh);
+    if (fn->is_stream) {
+      oh << "::nprpc::StreamReader<";
+      emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oh);
+      oh << ">";
+    } else {
+      emit_type(fn->ret_value, oh);
+    }
     oh << ' ' << fn->name << " ";
     oh << proxy_arguments(fn) << ";\n";
   }
@@ -1644,23 +1623,33 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   // auto const nm = ctx_->nm_cur()->to_cpp17_namespace();
 
   for (auto fn : ifs->fns) {
-    emit_type(fn->ret_value, oc);
+    if (fn->is_stream) {
+      oc << "::nprpc::StreamReader<";
+      emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oc);
+      oc << ">";
+    } else {
+      emit_type(fn->ret_value, oc);
+    }
     oc << ' ' << ns(ctx_->nm_cur()) << ifs->name << "::" << fn->name;
     oc << proxy_arguments(fn) << " {\n";
+
+    // Stream methods use different protocol flow
+    if (fn->is_stream) {
+      proxy_stream_call(fn);
+      oc << "}\n\n";
+      continue;
+    }
+
     oc << "  ::nprpc::flat_buffer buf;\n";
 
-    const auto fixed_size =
-        get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
-    const auto capacity =
-        fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
+    const auto fixed_size = get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
+    const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
 
     // Try zero-copy buffer for shared memory transport
     oc << "  auto session = "
           "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n"
           "  if "
-          "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(),"
-          " "
-          "buf, "
+          "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, "
        << capacity
        << "))\n"
           "    buf.prepare("
@@ -1671,16 +1660,12 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
        << fixed_size
        << ");\n"
           "    "
-          "static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id "
-          "= "
+          "static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = "
           "::nprpc::impl::MessageId::FunctionCall;\n"
-          "    "
-          "static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_"
-          "type "
-          "= ::nprpc::impl::MessageType::Request;\n"
+          "  static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type ="
+          "::nprpc::impl::MessageType::Request;\n"
           "  }\n"
-          "  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, "
-          "sizeof(::nprpc::impl::Header));\n"
+          "  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));\n"
           "  __ch.object_id() = this->object_id();\n"
           "  __ch.poa_idx() = this->poa_idx();\n"
           "  __ch.interface_idx() = interface_idx_;\n"
@@ -1688,8 +1673,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
        << fn->idx << ";\n";
 
     if (fn->in_s) {
-      oc << "  " << fn->in_s->name << "_Direct _(buf," << get_arguments_offset()
-         << ");\n";
+      oc << "  " << fn->in_s->name << "_Direct _(buf," << get_arguments_offset() << ");\n";
     }
 
     int ix = 0;
@@ -1697,8 +1681,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       if (in->modifier == ArgumentModifier::Out)
         continue;
       bd = 1;
-      assign_from_cpp_type(in->type, "_._" + std::to_string(++ix), in->name,
-                           oc);
+      assign_from_cpp_type(in->type, "_._" + std::to_string(++ix), in->name, oc);
     }
 
     oc << "  static_cast<::nprpc::impl::Header*>(buf.data().data())->size "
@@ -1720,6 +1703,8 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       proxy_unreliable_call(fn);
     } else if (!fn->is_async) {
       proxy_call(fn);
+    } else if (!fn->is_async) {
+      proxy_call(fn);
     } else {
       proxy_async_call(fn);
     }
@@ -1731,8 +1716,61 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   oc << "void " << ns(ctx_->nm_cur()) << 'I' << ifs->name
      << "_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]] "
         "bool from_parent) {\n"
-        "  assert(ctx.rx_buffer != nullptr);\n"
-        "  ::nprpc::impl::flat::CallHeader_Direct __ch(*ctx.rx_buffer, "
+        "  assert(ctx.rx_buffer != nullptr);\n";
+
+  oc << "  auto* header = "
+        "static_cast<::nprpc::impl::Header*>(ctx.rx_buffer->data().data());\n";
+
+  // Check for StreamInit
+  oc << "  if (header->msg_id == "
+        "::nprpc::impl::MessageId::StreamInitialization) {\n"
+        "    ::nprpc::impl::flat::StreamInit_Direct init(*ctx.rx_buffer, "
+        "sizeof(::nprpc::impl::Header));\n";
+
+  // Dispatch based on func_idx from StreamInit
+  oc << "    switch(init.func_idx()) {\n";
+  for (auto fn : ifs->fns) {
+    if (fn->is_stream) {
+      oc << "      case " << fn->idx << ": {\n";
+
+      // Unmarshal input arguments if any
+      if (fn->in_s) {
+        oc << "        " << fn->in_s->name << "_Direct ia(*ctx.rx_buffer, "
+           << (size_of_header + size_of_stream_init) << ");\n"; // Header + StreamInit fields
+      }
+
+      // Call servant method with parameters
+      oc << "        auto writer = " << fn->name << "(";
+      int in_ix = 0;
+      for (auto arg : fn->args) {
+        if (arg->modifier == ArgumentModifier::Out)
+          continue;
+        if (in_ix > 0)
+          oc << ", ";
+        oc << "ia._" << ++in_ix << "()";
+      }
+      oc << ");\n";
+
+      // Register writer with stream manager and start streaming
+      oc << "        writer.set_manager(ctx.stream_manager, "
+            "init.stream_id());\n";
+      oc << "        ctx.stream_manager->register_stream(init.stream_id(), "
+            "std::make_unique<::nprpc::StreamWriter<";
+      emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oc);
+      oc << ">>(std::move(writer)));\n";
+
+      oc << "        break;\n";
+      oc << "      }\n";
+    }
+  }
+  oc << "      default:\n"
+        "        // Error\n"
+        "        break;\n"
+        "    }\n"
+        "    return;\n"
+        "  }\n";
+
+  oc << "  ::nprpc::impl::flat::CallHeader_Direct __ch(*ctx.rx_buffer, "
         "sizeof(::nprpc::impl::Header));\n";
 
   if (ifs->plist.empty()) {
@@ -1768,13 +1806,17 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   oc << "  switch(__ch.function_idx()) {\n";
 
   for (auto fn : ifs->fns) {
+    // Skip stream functions - they are handled by StreamInitialization above
+    if (fn->is_stream) {
+      continue;
+    }
+
     oc << "    case " << fn->idx << ": {\n";
 
     if (fn->in_s) {
       oc << "      assert(ctx.rx_buffer != nullptr);\n"
             "      "
-         << fn->in_s->name << "_Direct ia(*ctx.rx_buffer, "
-         << get_arguments_offset() << ");\n";
+         << fn->in_s->name << "_Direct ia(*ctx.rx_buffer, " << get_arguments_offset() << ");\n";
       if (ifs->trusted == false) {
         // const auto fixed_size = get_arguments_offset() +
         // fn->in_s->size;
@@ -1827,8 +1869,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
         real_type = calias(real_type)->get_real_type();
 
       return arg->modifier == ArgumentModifier::Out &&
-             (real_type->id == FieldType::Vector ||
-              real_type->id == FieldType::String ||
+             (real_type->id == FieldType::Vector || real_type->id == FieldType::String ||
               real_type->id == FieldType::Struct);
     };
 
@@ -1860,8 +1901,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
           real_type = calias(real_type)->get_real_type();
 
         oc << bd << "auto oa_" << ++out_temp_ix << " = oa._" << ++out_ix
-           << ((real_type->id == FieldType::Vector ||
-                real_type->id == FieldType::String)
+           << ((real_type->id == FieldType::Vector || real_type->id == FieldType::String)
                    ? "_d();\n"
                    : "();\n");
       }
@@ -1946,8 +1986,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
          << initial_size
          << ");\n"
             "        "
-         << ns(fn->ex->nm) << "flat::" << fn->ex->name << "_Direct oa(obuf,"
-         << offset
+         << ns(fn->ex->nm) << "flat::" << fn->ex->name << "_Direct oa(obuf," << offset
          << ");\n"
             "        oa.__ex_id() = "
          << fn->ex->exception_id << ";\n";
@@ -2058,8 +2097,7 @@ void CppBuilder::emit_using(AstAliasDecl* u)
 
 void CppBuilder::emit_enum(AstEnumDecl* e)
 {
-  oh << "enum class " << e->name << " : " << fundamental_to_cpp(e->token_id)
-     << " {\n";
+  oh << "enum class " << e->name << " : " << fundamental_to_cpp(e->token_id) << " {\n";
   int64_t ix = 0;
   for (size_t i = 0; i < e->items.size(); ++i) {
     oh << "  " << e->items[i].first;

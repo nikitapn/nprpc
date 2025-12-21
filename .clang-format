@@ -3,12 +3,15 @@ IndentWidth: 2
 ---
 Language: Cpp
 PointerAlignment: Left
+# ColumnLimit: 100
 BinPackParameters: OnePerLine
 BreakBeforeBraces: Custom
 BreakBeforeBinaryOperators: None
 BreakBinaryOperations: Never
 BreakConstructorInitializers: BeforeComma
+BreakTemplateDeclarations: Yes
 AlwaysBreakBeforeMultilineStrings: false
+BreakStringLiterals: false
 BraceWrapping:
   AfterCaseLabel:  false
   AfterClass:      true
