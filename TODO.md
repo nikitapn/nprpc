@@ -1,5 +1,8 @@
 # TODO.md
 
+## STD
+* [ ] Replace std::unordered_map with absl::flat_hash_map in performance-critical paths.
+
 ## Build System
 * [ ] Generate npnameserver stubs when building nprpc target, to avoid full rebuilds when npnameserver is built separately.
 

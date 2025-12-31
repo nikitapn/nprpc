@@ -37,12 +37,41 @@ StreamManager::~StreamManager() { cancel_all(); }
 void StreamManager::register_stream(uint64_t stream_id,
                                     std::unique_ptr<StreamWriterBase> writer)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto* raw_writer = writer.get();
-  writers_[stream_id] = std::move(writer);
+  StreamWriterBase* raw_writer = writer.get();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    writers_[stream_id] = std::move(writer);
+  }
 
-  // Start the stream by resuming the coroutine
-  raw_writer->resume();
+  NPRPC_LOG_INFO("Stream registered: {}", stream_id);
+
+  // Post the stream pumping to run asynchronously AFTER the reply is sent
+  // This ensures the client receives the StreamInit reply before any data chunks
+  if (post_callback_) {
+    post_callback_([this, stream_id, raw_writer]() {
+      // Pump the stream - call resume() until the coroutine is done
+      // Each resume() runs to the next co_yield and sends a chunk
+      while (!raw_writer->is_done()) {
+        raw_writer->resume();
+      }
+
+      // Clean up after completion
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        writers_.erase(stream_id);
+      }
+    });
+  } else {
+    // Fallback to synchronous if no post callback (shouldn't happen in normal use)
+    NPRPC_LOG_WARN("StreamManager: No post_callback set, pumping synchronously");
+    while (!raw_writer->is_done()) {
+      raw_writer->resume();
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      writers_.erase(stream_id);
+    }
+  }
 }
 
 void StreamManager::register_reader(uint64_t stream_id,
@@ -67,39 +96,30 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
   }
 }
 
-void StreamManager::on_stream_complete(const flat::StreamComplete& msg)
+void StreamManager::on_stream_complete(uint64_t stream_id)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto it = readers_.find(msg.stream_id);
+  auto it = readers_.find(stream_id);
   if (it != readers_.end()) {
     it->second->on_complete();
     readers_.erase(it);
   }
 }
 
-void StreamManager::on_stream_error(const flat::StreamError& msg)
+void StreamManager::on_stream_error(uint64_t stream_id, uint32_t error_code, flat_buffer&& error_data)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto it = readers_.find(msg.stream_id);
+  auto it = readers_.find(stream_id);
   if (it != readers_.end()) {
-    // Create a flat_buffer containing the error data for the reader
-    flat_buffer error_fb;
-    // The error_data is a flat::Vector - copy its contents
-    auto error_span = static_cast<nprpc::flat::Span<const uint8_t>>(msg.error_data);
-    if (error_span.size() > 0) {
-      error_fb.prepare(error_span.size());
-      error_fb.commit(error_span.size());
-      std::memcpy(error_fb.data().data(), error_span.data(), error_span.size());
-    }
-    it->second->on_error(msg.error_code, std::move(error_fb));
+    it->second->on_error(error_code, std::move(error_data));
     readers_.erase(it);
   }
 }
 
-void StreamManager::on_stream_cancel(const flat::StreamCancel& msg)
+void StreamManager::on_stream_cancel(uint64_t stream_id)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto it = writers_.find(msg.stream_id);
+  auto it = writers_.find(stream_id);
   if (it != writers_.end()) {
     it->second->cancel();
     writers_.erase(it);
@@ -110,6 +130,8 @@ void StreamManager::send_chunk(uint64_t stream_id,
                                std::span<const uint8_t> data,
                                uint64_t sequence)
 {
+  std::cerr << "[DEBUG] send_chunk called: stream_id=" << stream_id << " data.size()=" << data.size() << " sequence=" << sequence << '\n';
+
   // TODO: Shared Memory Optimization - write directly to shared ring buffer
   if (session_.shm_channel) {
     // For now, fall through to regular transport
@@ -151,9 +173,11 @@ void StreamManager::send_chunk(uint64_t stream_id,
   header = reinterpret_cast<flat::Header*>(fb.data().data());
   header->size = static_cast<uint32_t>(fb.size() - 4);
 
-  // Send fire-and-forget
-  if (auto session = g_rpc->get_session(session_.remote_endpoint)) {
-    session->send_datagram(std::move(fb));
+  // Send via callback
+  if (send_callback_) {
+    send_callback_(std::move(fb));
+  } else {
+    NPRPC_LOG_ERROR("StreamManager::send_chunk: no send callback set");
   }
 }
 
@@ -177,8 +201,10 @@ void StreamManager::send_complete(uint64_t stream_id, uint64_t final_sequence)
   msg.stream_id() = stream_id;
   msg.final_sequence() = final_sequence;
 
-  if (auto session = g_rpc->get_session(session_.remote_endpoint)) {
-    session->send_datagram(std::move(fb));
+  if (send_callback_) {
+    send_callback_(std::move(fb));
+  } else {
+    NPRPC_LOG_ERROR("StreamManager::send_complete: no send callback set");
   }
 }
 
@@ -216,8 +242,10 @@ void StreamManager::send_error(uint64_t stream_id,
   header = reinterpret_cast<flat::Header*>(fb.data().data());
   header->size = static_cast<uint32_t>(fb.size() - 4);
 
-  if (auto session = g_rpc->get_session(session_.remote_endpoint)) {
-    session->send_datagram(std::move(fb));
+  if (send_callback_) {
+    send_callback_(std::move(fb));
+  } else {
+    NPRPC_LOG_ERROR("StreamManager::send_error: no send callback set");
   }
 }
 
@@ -240,8 +268,10 @@ void StreamManager::send_cancel(uint64_t stream_id)
   flat::StreamCancel_Direct msg(fb, header_size);
   msg.stream_id() = stream_id;
 
-  if (auto session = g_rpc->get_session(session_.remote_endpoint)) {
-    session->send_datagram(std::move(fb));
+  if (send_callback_) {
+    send_callback_(std::move(fb));
+  } else {
+    NPRPC_LOG_ERROR("StreamManager::send_cancel: no send callback set");
   }
 }
 

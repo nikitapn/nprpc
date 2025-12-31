@@ -101,19 +101,24 @@ public:
       } else if (coro_.promise().has_value_) {
         // Yielded a value, send it
         if (coro_.promise().manager_) {
-          // Serialize T to bytes
-          // TODO: Need serialization helper for T
-          // For now assuming T is vector<u8> or similar that can be spanned
-          // Or use nprpc serialization
-
-          // If T is std::vector<uint8_t>
+          // Serialize T to bytes depending on type
           if constexpr (std::is_same_v<T, std::vector<uint8_t>>) {
+            // Vector of bytes - send directly
             coro_.promise().manager_->send_chunk(coro_.promise().stream_id_,
                                                  coro_.promise().current_value_,
                                                  0 // sequence
             );
+          } else if constexpr (std::is_trivially_copyable_v<T>) {
+            // Scalar or POD type - send as raw bytes
+            const auto* data_ptr = reinterpret_cast<const uint8_t*>(&coro_.promise().current_value_);
+            coro_.promise().manager_->send_chunk(coro_.promise().stream_id_,
+                                                 std::span<const uint8_t>(data_ptr, sizeof(T)),
+                                                 0 // sequence
+            );
           } else {
-            // TODO: Serialize other types
+            // TODO: Handle complex types via serialization
+            static_assert(std::is_trivially_copyable_v<T>, 
+                "StreamWriter<T>: T must be trivially copyable or std::vector<uint8_t> for now");
           }
 
           coro_.promise().has_value_ = false;

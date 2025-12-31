@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -23,8 +24,19 @@ namespace impl {
 class NPRPC_API StreamManager
 {
 public:
+  // Callback type for sending data back through the session
+  using SendCallback = std::function<void(flat_buffer&&)>;
+  // Callback type for posting async work
+  using PostCallback = std::function<void(std::function<void()>)>;
+
   explicit StreamManager(SessionContext& session);
   ~StreamManager();
+
+  // Set the callback for sending data (must be called by Session after construction)
+  void set_send_callback(SendCallback callback) { send_callback_ = std::move(callback); }
+
+  // Set the callback for posting async work (must be called by Session after construction)
+  void set_post_callback(PostCallback callback) { post_callback_ = std::move(callback); }
 
   // Server-side: register outgoing stream
   void register_stream(uint64_t stream_id,
@@ -35,9 +47,9 @@ public:
 
   // Handle incoming messages
   void on_chunk_received(flat_buffer&& fb);
-  void on_stream_complete(const impl::flat::StreamComplete& msg);
-  void on_stream_error(const impl::flat::StreamError& msg);
-  void on_stream_cancel(const impl::flat::StreamCancel& msg);
+  void on_stream_complete(uint64_t stream_id);
+  void on_stream_error(uint64_t stream_id, uint32_t error_code, flat_buffer&& error_data);
+  void on_stream_cancel(uint64_t stream_id);
 
   // Send methods
   void send_chunk(uint64_t stream_id,
@@ -54,6 +66,8 @@ public:
 
 private:
   SessionContext& session_;
+  SendCallback send_callback_;
+  PostCallback post_callback_;
 
   // Active outgoing streams (server-side)
   std::unordered_map<uint64_t, std::unique_ptr<StreamWriterBase>> writers_;

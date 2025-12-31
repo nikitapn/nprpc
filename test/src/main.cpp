@@ -1,4 +1,5 @@
 #include <chrono>
+#include <coroutine>
 #include <cstdlib>
 #include <iostream>
 #include <numeric>
@@ -9,6 +10,8 @@
 #include <gtest/gtest.h>
 
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/stream_reader.hpp>
+#include <nprpc/stream_writer.hpp>
 #include <nprpc_nameserver.hpp>
 #include <nprpc_test.hpp>
 #include <test_udp.hpp>
@@ -746,6 +749,44 @@ TEST_F(NprpcTest, TestQuicUnreliable)
   }
 }
 #endif // NPRPC_HAS_QUIC
+
+// Streaming test
+TEST_F(NprpcTest, TestStreams)
+{
+#include "common/tests/streams.inl"
+  TestStreamsImpl servant;
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+    try {
+      auto obj = make_stuff_happen<nprpc::test::TestStreams>(servant, flags, "streams_test");
+
+      // Request a stream of 100 bytes
+      auto reader = obj->GetByteStream(5);
+
+      std::vector<uint8_t> received;
+      received.reserve(5);
+
+      // Read all chunks from the stream
+      for (auto& chunk : reader) {
+        std::cout << "[CLIENT] Received a byte." << std::endl;
+        received.push_back(chunk);
+      }
+
+      // Verify we received all expected bytes
+      EXPECT_EQ(received.size(), 5u);
+      for (uint64_t i = 0; i < received.size(); ++i) {
+        EXPECT_EQ(received[i], static_cast<uint8_t>(i & 0xFF));
+      }
+
+      std::cout << "Stream test passed for transport" << std::endl;
+
+    } catch (nprpc::Exception& ex) {
+      FAIL() << "Exception in TestStreams: " << ex.what();
+    }
+  };
+
+  // Test streaming over TCP
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+}
 
 } // namespace nprpctest
 

@@ -49,6 +49,7 @@ target_link_libraries(nprpc_test
 target_compile_definitions(nprpc_test
   PRIVATE
     NPRPC_USE_GTEST
+    NPRPC_BUILD_DIR="${CMAKE_BINARY_DIR}"
     $<$<BOOL:${NPRPC_ENABLE_QUIC}>:NPRPC_HAS_QUIC>
 )
 

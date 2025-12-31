@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstring>
 #include <condition_variable>
 #include <coroutine>
 #include <mutex>
@@ -10,9 +11,11 @@
 #include <queue>
 #include <stdexcept>
 
+#include <nprpc/flat_buffer.hpp>
 #include <nprpc/session_context.h>
 #include <nprpc/stream_base.hpp>
 #include <nprpc/impl/stream_manager.hpp>
+#include <nprpc_base.hpp>
 
 namespace nprpc {
 
@@ -101,14 +104,35 @@ public:
       return std::nullopt; // Stream complete
     }
 
-    auto chunk = std::move(chunks_.front());
+    auto fb = std::move(chunks_.front());
     chunks_.pop();
 
     // Update window size and send to server
     window_size_++;
     send_window_update();
 
-    return chunk;
+    // Deserialize T from the flat buffer
+    // The buffer contains: Header + StreamChunk (stream_id, sequence, data, window_size)
+    // Use StreamChunk_Direct to access the data vector
+    impl::flat::StreamChunk_Direct chunk(fb, sizeof(impl::flat::Header));
+    auto data_span = chunk.data();
+
+    if constexpr (std::is_fundamental_v<T>) {
+      // For primitive types, read directly from the data vector
+      if (data_span.size() >= sizeof(T)) {
+        T value;
+        std::memcpy(&value, data_span.data(), sizeof(T));
+        return value;
+      }
+      return std::nullopt;
+    } else {
+      // For complex types, use Direct accessor pattern
+      // TODO: implement for complex types - need to return a wrapper
+      // that holds the buffer and provides Direct-style access
+      static_assert(std::is_fundamental_v<T>, 
+          "Only fundamental types supported for streaming currently");
+      return std::nullopt;
+    }
   }
 
   // Called by StreamManager when chunk arrives

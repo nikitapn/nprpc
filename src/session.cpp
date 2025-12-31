@@ -43,10 +43,20 @@ Session::Session(boost::asio::any_io_executor executor)
     , inactive_timer_{executor}
 {
   ctx_.stream_manager = new impl::StreamManager(ctx_);
+  // Set up send callback - capture 'this' to use virtual send_stream_message
+  ctx_.stream_manager->set_send_callback([this](flat_buffer&& fb) {
+    this->send_stream_message(std::move(fb));
+  });
+  // Set up post callback - use executor to post async work
+  ctx_.stream_manager->set_post_callback([executor](std::function<void()> work) {
+    boost::asio::post(executor, std::move(work));
+  });
 }
 
-void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
+bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
 {
+  bool needs_reply = true;  // Most messages need a reply
+
   auto validate = [this](ObjectServant& obj) {
     if (obj.validate_session(this->ctx_))
       return true;
@@ -71,7 +81,7 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
   if (cb.size() < sizeof(impl::flat::Header)) {
     NPRPC_LOG_ERROR("Message too small for header: {} bytes", cb.size());
     make_simple_answer(ctx_, nprpc::impl::MessageId::Error_BadInput);
-    return;
+    return needs_reply;
   }
 
   auto header = static_cast<const impl::flat::Header*>(cb.data());
@@ -88,7 +98,7 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     if (auto obj = get_object(ctx_, msg.poa_idx(), msg.object_id()); obj) {
       if (auto real_obj = (*obj).get(); real_obj) {
         if (!validate(*real_obj))
-          return;
+          return needs_reply;
         set_context(*this);
         try {
           // Dispatch to servant (servant must handle StreamInit msg_id)
@@ -115,22 +125,38 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     break;
   }
   case MessageId::StreamDataChunk: {
+    NPRPC_LOG_ERROR("Handle Request: StreamDataChunk.");
     ctx_.stream_manager->on_chunk_received(std::move(rx_buffer));
+    needs_reply = false;  // Fire-and-forget, no reply needed
     break;
   }
   case MessageId::StreamCompletion: {
-    // impl::flat::StreamComplete_Direct msg(rx_buffer, sizeof(impl::Header));
-    // ctx_.stream_manager->on_stream_complete(msg);
+    NPRPC_LOG_INFO("Handle Request: StreamCompletion.");
+    impl::flat::StreamComplete_Direct msg(rx_buffer, sizeof(impl::Header));
+    ctx_.stream_manager->on_stream_complete(msg.stream_id());
+    needs_reply = false;  // Fire-and-forget
     break;
   }
   case MessageId::StreamError: {
-    // impl::flat::StreamError_Direct msg(rx_buffer, sizeof(impl::Header));
-    // ctx_.stream_manager->on_stream_error(msg);
+    NPRPC_LOG_INFO("Handle Request: StreamError.");
+    impl::flat::StreamError_Direct msg(rx_buffer, sizeof(impl::Header));
+    // Copy error data from the message
+    flat_buffer error_fb;
+    auto error_span = msg.error_data();
+    if (error_span.size() > 0) {
+      error_fb.prepare(error_span.size());
+      error_fb.commit(error_span.size());
+      std::memcpy(error_fb.data().data(), error_span.data(), error_span.size());
+    }
+    ctx_.stream_manager->on_stream_error(msg.stream_id(), msg.error_code(), std::move(error_fb));
+    needs_reply = false;  // Fire-and-forget
     break;
   }
   case MessageId::StreamCancellation: {
-    // impl::flat::StreamCancel_Direct msg(rx_buffer, sizeof(impl::Header));
-    // ctx_.stream_manager->on_stream_cancel(std::move(rx_buffer));
+    NPRPC_LOG_INFO("Handle Request: StreamCancellation.");
+    impl::flat::StreamCancel_Direct msg(rx_buffer, sizeof(impl::Header));
+    ctx_.stream_manager->on_stream_cancel(msg.stream_id());
+    needs_reply = false;  // Fire-and-forget
     break;
   }
   case MessageId::FunctionCall: {
@@ -145,7 +171,7 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     if (auto obj = get_object(ctx_, ch.poa_idx(), ch.object_id()); obj) {
       if (auto real_obj = (*obj).get(); real_obj) {
         if (!validate(*real_obj))
-          return;
+          return needs_reply;
         set_context(*this);
         // save request ID for later use
         auto request_id = header->request_id;
@@ -182,7 +208,7 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     if (auto obj = get_object(ctx_, msg.poa_idx(), msg.object_id()); obj) {
       if (auto real_obj = (*obj).get(); real_obj) {
         if (!validate(*real_obj))
-          return;
+          return needs_reply;
         success = true;
         ctx_.ref_list.add_ref(real_obj);
       }
@@ -221,8 +247,11 @@ void Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     break;
   }
 
-  NPRPC_LOG_INFO("Handle Request: sending reply:");
-  // dump_message(tx_buffer, true);
+  if (needs_reply) {
+    NPRPC_LOG_INFO("Handle Request: sending reply:");
+    // dump_message(tx_buffer, true);
+  }
+  return needs_reply;
 }
 
 } // namespace nprpc::impl

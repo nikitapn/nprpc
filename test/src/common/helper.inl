@@ -1,3 +1,4 @@
+#include "nprpc_base.hpp"
 using namespace std::string_literals;
 using namespace std::string_view_literals;
 
@@ -51,10 +52,16 @@ public:
             return false;
         } else if (nameserver_pid == 0) {
             // Child process - run the nameserver
-            // Try to find npnameserver in the build directory
-            execl("/home/nikita/projects/nprpc/.build_release/npnameserver", "npnameserver", nullptr);
-            execl("/home/nikita/projects/nprpc/.build_debug/npnameserver", "npnameserver", nullptr);
-
+            // Use the build directory configured by CMake
+#ifdef NPRPC_BUILD_DIR
+            std::string nameserver_path = std::string(NPRPC_BUILD_DIR) + "/npnameserver";
+            execl(nameserver_path.c_str(), "npnameserver", nullptr);
+#else
+            // Fallback: try common build directories
+            execl(".build_relwith_debinfo/npnameserver", "npnameserver", nullptr);
+            execl(".build_release/npnameserver", "npnameserver", nullptr);
+            execl(".build_debug/npnameserver", "npnameserver", nullptr);
+#endif
             // If all fail, exit with error
             std::cerr << "Failed to execute npnameserver" << std::endl;
             _exit(1);
@@ -113,7 +120,7 @@ public:
         try {
             // Use the new RpcBuilder API
             rpc = nprpc::RpcBuilder()
-                .set_log_level(nprpc::LogLevel::error)
+                .set_log_level(nprpc::LogLevel::trace)
                 .set_hostname("localhost")
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
                 .with_tcp(22222)

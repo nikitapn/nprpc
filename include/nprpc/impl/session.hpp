@@ -92,8 +92,16 @@ public:
   SessionContext& ctx() noexcept { return ctx_; }
   // Handles incoming request in rx_buffer and prepares response in tx_buffer
   // in some cases rx_buffer and tx_buffer can be the same buffer
-  void handle_request(nprpc::flat_buffer& rx_buffer,
+  // Returns true if a reply should be sent, false for fire-and-forget messages
+  bool handle_request(nprpc::flat_buffer& rx_buffer,
                       nprpc::flat_buffer& tx_buffer);
+
+  // Send a message for streaming (async, fire-and-forget)
+  // Default implementation uses send_receive_async with no handler
+  virtual void send_stream_message(flat_buffer&& buffer)
+  {
+    send_receive_async(std::move(buffer), std::nullopt, 0);
+  }
 
   virtual void shutdown()
   {

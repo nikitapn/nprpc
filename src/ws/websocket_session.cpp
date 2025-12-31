@@ -82,19 +82,26 @@ void WebSocketSession<Derived>::on_read(
   nprpc::impl::flat::Header_Direct header(rx_buffer_, 0);
   const uint32_t request_id = header.request_id();
 
+  std::cerr << "[DEBUG] WS on_read: size=" << rx_buffer_.size()
+            << " msg_id=" << static_cast<uint32_t>(header.msg_id())
+            << " msg_type=" << static_cast<uint32_t>(header.msg_type())
+            << " request_id=" << request_id << '\n';
+
   if (header.msg_type() == nprpc::impl::MessageType::Request) {
     // Handle incoming request
-    handle_request(rx_buffer_, tx_buffer_);
+    bool needs_reply = handle_request(rx_buffer_, tx_buffer_);
 
-    // Queue response for sending
-    std::function<void(const boost::system::error_code&)> completion_handler =
-        [](const boost::system::error_code&) {};
+    if (needs_reply) {
+      // Queue response for sending
+      std::function<void(const boost::system::error_code&)> completion_handler =
+          [](const boost::system::error_code&) {};
 
-    // Inject request ID into the response header
-    inject_request_id(tx_buffer_, request_id);
-    write_queue_.emplace_back(std::move(tx_buffer_),
-                              std::move(completion_handler));
-    do_write();
+      // Inject request ID into the response header
+      inject_request_id(tx_buffer_, request_id);
+      write_queue_.emplace_back(std::move(tx_buffer_),
+                                std::move(completion_handler));
+      do_write();
+    }
   } else { // received an answer
     auto it = pending_requests_.find(request_id);
     if (it != pending_requests_.end()) {
@@ -311,6 +318,22 @@ void WebSocketSession<Derived>::send_receive_async(
             };
         write_queue_.emplace_back(std::move(buffer),
                                   std::move(write_completion));
+        do_write();
+      });
+}
+
+template <class Derived>
+void WebSocketSession<Derived>::send_stream_message(flat_buffer&& buffer)
+{
+  std::cerr << "[DEBUG] send_stream_message: buffer.size()=" << buffer.size() << '\n';
+
+  // Fire-and-forget message for streaming - no response expected
+  boost::asio::post(
+      derived().ws().get_executor(),
+      [this, buffer = std::move(buffer)]() mutable {
+        std::cerr << "[DEBUG] send_stream_message posted: buffer.size()=" << buffer.size() << '\n';
+        // Queue with no completion handler (fire and forget)
+        write_queue_.emplace_back(std::move(buffer), nullptr);
         do_write();
       });
 }
