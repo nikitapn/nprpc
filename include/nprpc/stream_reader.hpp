@@ -33,6 +33,30 @@ public:
     }
   }
 
+  // Move constructor - re-register with new 'this' pointer
+  StreamReader(StreamReader&& other) noexcept
+      : session_(other.session_)
+      , stream_id_(other.stream_id_)
+      , chunks_(std::move(other.chunks_))
+      , completed_(other.completed_)
+      , cancelled_(other.cancelled_)
+      , error_(std::move(other.error_))
+      , resume_handle_(other.resume_handle_)
+      , window_size_(other.window_size_)
+  {
+    // Update the registration to point to new 'this'
+    if (session_.stream_manager && !cancelled_) {
+      session_.stream_manager->register_reader(stream_id_, this);
+    }
+    // Mark the moved-from object as cancelled so it doesn't unregister
+    other.cancelled_ = true;
+  }
+
+  // Disable copy
+  StreamReader(const StreamReader&) = delete;
+  StreamReader& operator=(const StreamReader&) = delete;
+  StreamReader& operator=(StreamReader&&) = delete;
+
   ~StreamReader() override { cancel(); }
 
   // Async iterator support

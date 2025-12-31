@@ -206,36 +206,12 @@ void QuicConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 
   auto& quic = QuicApi::instance();
 
-  // Prepare for receive
+  // Prepare for receive - process_receive_buffer will set receive_complete_
   {
     std::lock_guard lock(mutex_);
     pending_receive_.clear();
     receive_complete_ = false;
   }
-
-  // Set up receive callback to notify us
-  set_receive_callback([this](const uint8_t* data, size_t len) {
-    NPRPC_QUIC_DEBUG_LOG(std::format("receive_callback called, len={}", len));
-    std::lock_guard lock(mutex_);
-    pending_receive_.insert(pending_receive_.end(), data, data + len);
-
-    // Check if we have a complete message
-    // First 4 bytes = payload size (not including the 4-byte size field)
-    // Total message size = payload_size + 4
-    if (pending_receive_.size() >= 4) {
-      uint32_t payload_size =
-          *reinterpret_cast<uint32_t*>(pending_receive_.data());
-      uint32_t total_size = payload_size + 4;
-      NPRPC_QUIC_DEBUG_LOG(std::format(
-          "checking complete: pending={}, payload_size={}, total_size={}",
-          pending_receive_.size(), payload_size, total_size));
-      if (pending_receive_.size() >= total_size) {
-        NPRPC_QUIC_DEBUG_LOG("message complete, notifying cv");
-        receive_complete_ = true;
-        cv_.notify_one();
-      }
-    }
-  });
 
   // Send the request
   auto data = buffer.cdata();
@@ -255,6 +231,7 @@ void QuicConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
   }
 
   // Wait for response with timeout
+  // process_receive_buffer() will set receive_complete_ and put data in pending_receive_
   std::unique_lock lock(mutex_);
   auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
@@ -268,6 +245,30 @@ void QuicConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
   auto mb = buffer.prepare(pending_receive_.size());
   std::memcpy(mb.data(), pending_receive_.data(), pending_receive_.size());
   buffer.commit(pending_receive_.size());
+}
+
+bool QuicConnection::send(const void* data, size_t len)
+{
+  if (!connected_ || !stream_) {
+    return false;
+  }
+
+  auto& quic = QuicApi::instance();
+
+  QUIC_BUFFER* send_buf = new QUIC_BUFFER;
+  send_buf->Length = static_cast<uint32_t>(len);
+  send_buf->Buffer = new uint8_t[len];
+  std::memcpy(send_buf->Buffer, data, len);
+
+  QUIC_STATUS status = quic.api()->StreamSend(stream_, send_buf, 1,
+                                              QUIC_SEND_FLAG_NONE, send_buf);
+
+  if (QUIC_FAILED(status)) {
+    delete[] send_buf->Buffer;
+    delete send_buf;
+    return false;
+  }
+  return true;
 }
 
 void QuicConnection::async_send_stream(const uint8_t* data,
@@ -351,6 +352,87 @@ void QuicConnection::set_receive_callback(ReceiveCallback callback)
 {
   std::lock_guard lock(mutex_);
   receive_callback_ = std::move(callback);
+}
+
+void QuicConnection::set_message_callback(MessageCallback callback)
+{
+  std::lock_guard lock(mutex_);
+  message_callback_ = std::move(callback);
+}
+
+void QuicConnection::set_data_stream_callback(DataStreamCallback callback)
+{
+  std::lock_guard lock(data_streams_mutex_);
+  data_stream_callback_ = std::move(callback);
+}
+
+void QuicConnection::process_receive_buffer()
+{
+  // NPRPC message format: first 4 bytes = payload size (not including the
+  // 4-byte size field) Total message size = payload_size + 4
+  // Header format (after size): msg_id(4) + msg_type(4) + request_id(4)
+  // msg_type: 0 = Request, 1 = Answer
+  while (receive_buffer_.size() >= 4) {
+    uint32_t payload_size =
+        *reinterpret_cast<uint32_t*>(receive_buffer_.data());
+    uint32_t total_size = payload_size + 4;
+    NPRPC_QUIC_DEBUG_LOG(std::format("Client process_receive_buffer: payload_size={}, "
+                                     "total_size={}, buffer_size={}",
+                                     payload_size, total_size,
+                                     receive_buffer_.size()));
+
+    if (receive_buffer_.size() < total_size) {
+      break; // Incomplete message
+    }
+
+    // Extract complete message
+    std::vector<uint8_t> message(receive_buffer_.begin(),
+                                 receive_buffer_.begin() + total_size);
+    receive_buffer_.erase(receive_buffer_.begin(),
+                          receive_buffer_.begin() + total_size);
+
+    // Check message type: Answer (1) = reply to our request, Request (0) = server-initiated message (stream)
+    // Header: size(4) + msg_id(4) + msg_type(4) + request_id(4)
+    // msg_type is at offset 8 (after size and msg_id)
+    uint32_t msg_type = 0;  // Default to Request
+    if (message.size() >= 12) {
+      msg_type = *reinterpret_cast<uint32_t*>(message.data() + 8);
+    }
+    
+    const bool is_response = (msg_type == 1);  // MessageType::Answer = 1
+    
+    NPRPC_QUIC_DEBUG_LOG(std::format("Client message msg_type={}, is_response={}",
+                                     msg_type, is_response));
+
+    {
+      std::lock_guard lock(mutex_);
+      
+      // If we're waiting for a synchronous response AND this is a response
+      if (!receive_complete_ && is_response) {
+        // This is the reply we're waiting for
+        pending_receive_ = std::move(message);
+        receive_complete_ = true;
+        cv_.notify_one();
+      } else if (message_callback_) {
+        // Dispatch to message callback (for stream messages or if not waiting)
+        NPRPC_QUIC_DEBUG_LOG(
+            std::format("Client posting message to callback, size={}", message.size()));
+        boost::asio::post(ioc_, [this, self = shared_from_this(),
+                                 msg = std::move(message)]() mutable {
+          MessageCallback cb;
+          {
+            std::lock_guard lk(mutex_);
+            cb = message_callback_;
+          }
+          if (cb) {
+            cb(std::move(msg));
+          }
+        });
+      } else {
+        NPRPC_QUIC_DEBUG_LOG("Client: message dropped (no callback and not waiting for response)");
+      }
+    }
+  }
 }
 
 void QuicConnection::close()
@@ -440,7 +522,33 @@ void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
   case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
     connected_ = false;
     datagram_send_enabled_ = false;
+    // Clean up any data streams
+    {
+      std::lock_guard lock(data_streams_mutex_);
+      for (auto& [handle, info] : data_streams_) {
+        QuicApi::instance().api()->StreamClose(handle);
+      }
+      data_streams_.clear();
+    }
     break;
+
+  case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED: {
+    // Server has opened a data stream for streaming RPC
+    HQUIC stream = event->PEER_STREAM_STARTED.Stream;
+    NPRPC_LOG_INFO("[QUIC] Client: Server opened a data stream");
+    
+    // Set up callback for this stream
+    auto& quic = QuicApi::instance();
+    quic.api()->SetCallbackHandler(
+        stream, reinterpret_cast<void*>(data_stream_callback), this);
+    
+    // Initialize stream info
+    {
+      std::lock_guard lock(data_streams_mutex_);
+      data_streams_[stream] = DataStreamInfo{};
+    }
+    break;
+  }
 
   case QUIC_CONNECTION_EVENT_DATAGRAM_STATE_CHANGED: {
     // Peer has indicated whether they support receiving datagrams
@@ -507,23 +615,17 @@ void QuicConnection::handle_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event)
   case QUIC_STREAM_EVENT_RECEIVE: {
     NPRPC_QUIC_DEBUG_LOG(std::format("Client STREAM_RECEIVE, buffers: {}",
                                      event->RECEIVE.BufferCount));
-    // Data received on stream - copy callback under lock, then call without
-    // lock
-    ReceiveCallback cb;
-    {
-      std::lock_guard lock(mutex_);
-      cb = receive_callback_;
+    // Append data to receive buffer
+    for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) {
+      auto& buf = event->RECEIVE.Buffers[i];
+      NPRPC_QUIC_DEBUG_LOG(
+          std::format("Client received {} bytes", buf.Length));
+      receive_buffer_.insert(receive_buffer_.end(), buf.Buffer,
+                             buf.Buffer + buf.Length);
     }
-    if (cb) {
-      for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) {
-        auto& buf = event->RECEIVE.Buffers[i];
-        NPRPC_QUIC_DEBUG_LOG(
-            std::format("Client received {} bytes", buf.Length));
-        cb(buf.Buffer, buf.Length);
-      }
-    } else {
-      NPRPC_QUIC_DEBUG_LOG("Client no receive_callback_!");
-    }
+
+    // Process complete messages
+    process_receive_buffer();
     break;
   }
 
@@ -545,6 +647,122 @@ void QuicConnection::handle_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event)
 
   default:
     break;
+  }
+}
+
+// Callback for server-opened data streams (client side)
+QUIC_STATUS QUIC_API QuicConnection::data_stream_callback(
+    HQUIC stream, void* context, QUIC_STREAM_EVENT* event)
+{
+  auto* self = static_cast<QuicConnection*>(context);
+  self->handle_data_stream_event(stream, event);
+  return QUIC_STATUS_SUCCESS;
+}
+
+void QuicConnection::handle_data_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event)
+{
+  NPRPC_QUIC_DEBUG_LOG(
+      std::format("Client data_stream_event type: {}", event->Type));
+      
+  switch (event->Type) {
+  case QUIC_STREAM_EVENT_RECEIVE: {
+    NPRPC_QUIC_DEBUG_LOG(std::format("Client DATA_STREAM_RECEIVE, buffers: {}",
+                                     event->RECEIVE.BufferCount));
+    // Append data to this stream's receive buffer
+    {
+      std::lock_guard lock(data_streams_mutex_);
+      auto it = data_streams_.find(stream);
+      if (it != data_streams_.end()) {
+        for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) {
+          auto& buf = event->RECEIVE.Buffers[i];
+          it->second.receive_buffer.insert(it->second.receive_buffer.end(), 
+                                           buf.Buffer, buf.Buffer + buf.Length);
+        }
+      }
+    }
+    
+    // Process complete messages
+    process_data_stream_buffer(stream);
+    break;
+  }
+  
+  case QUIC_STREAM_EVENT_PEER_SEND_SHUTDOWN:
+  case QUIC_STREAM_EVENT_PEER_SEND_ABORTED:
+    NPRPC_LOG_DEBUG("[QUIC] Client: Data stream peer send shutdown/aborted");
+    break;
+    
+  case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE: {
+    NPRPC_LOG_DEBUG("[QUIC] Client: Data stream shutdown complete");
+    // Remove from map
+    std::lock_guard lock(data_streams_mutex_);
+    data_streams_.erase(stream);
+    break;
+  }
+  
+  default:
+    break;
+  }
+}
+
+void QuicConnection::process_data_stream_buffer(HQUIC stream)
+{
+  // NPRPC message format: first 4 bytes = payload size
+  // Total message size = payload_size + 4
+  // For data streams, each message has stream_id in the header
+  
+  std::lock_guard lock(data_streams_mutex_);
+  auto it = data_streams_.find(stream);
+  if (it == data_streams_.end()) {
+    return;
+  }
+  
+  auto& info = it->second;
+  
+  while (info.receive_buffer.size() >= 4) {
+    uint32_t payload_size = *reinterpret_cast<uint32_t*>(info.receive_buffer.data());
+    uint32_t total_size = payload_size + 4;
+    
+    NPRPC_QUIC_DEBUG_LOG(std::format("Client data stream: payload_size={}, "
+                                     "total_size={}, buffer_size={}",
+                                     payload_size, total_size,
+                                     info.receive_buffer.size()));
+    
+    if (info.receive_buffer.size() < total_size) {
+      break; // Incomplete message
+    }
+    
+    // Extract complete message
+    std::vector<uint8_t> message(info.receive_buffer.begin(),
+                                 info.receive_buffer.begin() + total_size);
+    info.receive_buffer.erase(info.receive_buffer.begin(),
+                              info.receive_buffer.begin() + total_size);
+    
+    // Extract stream_id from message if not yet known
+    // StreamChunk format: Header (size + msg_id + msg_type + request_id) + stream_id(8) + ...
+    // stream_id is at offset 4 (size) + 4 (msg_id) + 4 (msg_type) + 4 (request_id) = 16
+    if (!info.stream_id_known && message.size() >= 24) {
+      info.stream_id = *reinterpret_cast<uint64_t*>(message.data() + 16);
+      info.stream_id_known = true;
+      NPRPC_LOG_INFO("[QUIC] Client: Learned stream_id={} for data stream", info.stream_id);
+    }
+    
+    // Dispatch to callback
+    if (data_stream_callback_) {
+      uint64_t stream_id = info.stream_id;
+      NPRPC_LOG_DEBUG("[QUIC] Client: Dispatching data stream message, stream_id={}, size={}",
+                     stream_id, message.size());
+      boost::asio::post(ioc_, [this, self = shared_from_this(), 
+                               stream_id, msg = std::move(message)]() mutable {
+        DataStreamCallback cb;
+        {
+          std::lock_guard lk(data_streams_mutex_);
+          cb = data_stream_callback_;
+        }
+        if (cb) {
+          cb(stream_id, std::move(msg));
+        }
+      });
+    }
   }
 }
 
@@ -630,6 +848,15 @@ void QuicServerConnection::close()
 {
   auto& quic = QuicApi::instance();
 
+  // Close all data streams first
+  {
+    std::lock_guard lock(data_streams_mutex_);
+    for (auto& [stream_id, handle] : data_streams_) {
+      quic.api()->StreamClose(handle);
+    }
+    data_streams_.clear();
+  }
+
   if (stream_) {
     quic.api()->StreamClose(stream_);
     stream_ = nullptr;
@@ -638,6 +865,152 @@ void QuicServerConnection::close()
   if (connection_) {
     quic.api()->ConnectionClose(connection_);
     connection_ = nullptr;
+  }
+}
+
+// Context struct for data stream callbacks - contains both connection and stream_id
+struct DataStreamContext {
+  QuicServerConnection* connection;
+  uint64_t stream_id;
+};
+
+bool QuicServerConnection::open_data_stream(uint64_t stream_id)
+{
+  // Check if already open
+  {
+    std::lock_guard lock(data_streams_mutex_);
+    if (data_streams_.find(stream_id) != data_streams_.end()) {
+      NPRPC_LOG_DEBUG("[QUIC] Data stream already open for stream_id={}", stream_id);
+      return true;  // Already open, success
+    }
+  }
+  
+  auto& quic = QuicApi::instance();
+  
+  HQUIC stream = nullptr;
+  
+  // Open a server-initiated unidirectional stream (server -> client only)
+  QUIC_STATUS status = quic.api()->StreamOpen(
+      connection_,
+      QUIC_STREAM_OPEN_FLAG_UNIDIRECTIONAL,  // Server sends, client receives
+      data_stream_callback,
+      new DataStreamContext{this, stream_id},  // Context includes stream_id
+      &stream);
+      
+  if (QUIC_FAILED(status)) {
+    NPRPC_LOG_ERROR("[QUIC] Failed to open data stream: {}", status);
+    return false;
+  }
+  
+  // Start the stream
+  status = quic.api()->StreamStart(stream, QUIC_STREAM_START_FLAG_NONE);
+  if (QUIC_FAILED(status)) {
+    NPRPC_LOG_ERROR("[QUIC] Failed to start data stream: {}", status);
+    quic.api()->StreamClose(stream);
+    return false;
+  }
+  
+  // Store the mapping
+  {
+    std::lock_guard lock(data_streams_mutex_);
+    data_streams_[stream_id] = stream;
+  }
+  
+  NPRPC_LOG_INFO("[QUIC] Opened native data stream for stream_id={}", stream_id);
+  return true;
+}
+
+bool QuicServerConnection::send_on_stream(uint64_t stream_id, const void* data, size_t len)
+{
+  HQUIC stream = nullptr;
+  
+  {
+    std::lock_guard lock(data_streams_mutex_);
+    auto it = data_streams_.find(stream_id);
+    if (it == data_streams_.end()) {
+      NPRPC_LOG_ERROR("[QUIC] send_on_stream: stream_id {} not found", stream_id);
+      return false;
+    }
+    stream = it->second;
+  }
+  
+  auto& quic = QuicApi::instance();
+  
+  QUIC_BUFFER* send_buf = new QUIC_BUFFER;
+  send_buf->Length = static_cast<uint32_t>(len);
+  send_buf->Buffer = new uint8_t[len];
+  std::memcpy(send_buf->Buffer, data, len);
+  
+  QUIC_STATUS status = quic.api()->StreamSend(
+      stream, send_buf, 1, QUIC_SEND_FLAG_NONE, send_buf);
+      
+  if (QUIC_FAILED(status)) {
+    NPRPC_LOG_ERROR("[QUIC] Failed to send on data stream: {}", status);
+    delete[] send_buf->Buffer;
+    delete send_buf;
+    return false;
+  }
+  
+  NPRPC_LOG_DEBUG("[QUIC] Sent {} bytes on native stream_id={}", len, stream_id);
+  return true;
+}
+
+void QuicServerConnection::close_data_stream(uint64_t stream_id)
+{
+  auto& quic = QuicApi::instance();
+  
+  HQUIC stream = nullptr;
+  {
+    std::lock_guard lock(data_streams_mutex_);
+    auto it = data_streams_.find(stream_id);
+    if (it != data_streams_.end()) {
+      stream = it->second;
+      data_streams_.erase(it);
+    }
+  }
+  
+  if (stream) {
+    // Send FIN to close the stream gracefully
+    quic.api()->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
+    quic.api()->StreamClose(stream);
+    NPRPC_LOG_INFO("[QUIC] Closed native data stream for stream_id={}", stream_id);
+  }
+}
+
+QUIC_STATUS QUIC_API QuicServerConnection::data_stream_callback(
+    HQUIC stream, void* context, QUIC_STREAM_EVENT* event)
+{
+  auto* ctx = static_cast<DataStreamContext*>(context);
+  ctx->connection->handle_data_stream_event(stream, ctx->stream_id, event);
+  
+  // Clean up context on stream shutdown
+  if (event->Type == QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE) {
+    delete ctx;
+  }
+  
+  return QUIC_STATUS_SUCCESS;
+}
+
+void QuicServerConnection::handle_data_stream_event(
+    HQUIC stream, uint64_t stream_id, QUIC_STREAM_EVENT* event)
+{
+  switch (event->Type) {
+  case QUIC_STREAM_EVENT_SEND_COMPLETE: {
+    // Clean up send buffer
+    auto* send_buf = static_cast<QUIC_BUFFER*>(event->SEND_COMPLETE.ClientContext);
+    if (send_buf) {
+      delete[] send_buf->Buffer;
+      delete send_buf;
+    }
+    break;
+  }
+  
+  case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
+    NPRPC_LOG_DEBUG("[QUIC] Data stream shutdown complete for stream_id={}", stream_id);
+    break;
+    
+  default:
+    break;
   }
 }
 
@@ -970,6 +1343,7 @@ public:
 
   virtual void send_receive(flat_buffer&, uint32_t) override
   {
+    NPRPC_LOG_ERROR("QuicServerSession: send_receive called unexpectedly");
     assert(false && "send_receive should not be called on server session");
   }
 
@@ -979,8 +1353,52 @@ public:
                                        flat_buffer&)>>&&,
       uint32_t) override
   {
-    assert(false &&
-           "send_receive_async should not be called on server session");
+    NPRPC_LOG_ERROR("QuicServerSession: send_receive_async called unexpectedly");
+    assert(false && "send_receive_async should not be called on server session");
+  }
+
+  // Override for streaming - send on native QUIC stream
+  // Uses dedicated QUIC streams per NPRPC stream for zero head-of-line blocking
+  virtual void send_stream_message(flat_buffer&& buffer) override
+  {
+    if (!connection_) {
+      NPRPC_LOG_ERROR("QuicServerSession: No connection for stream message");
+      return;
+    }
+    
+    auto data = buffer.cdata();
+    
+    // Extract stream_id from the message
+    // Format: size(4) + Header(msg_id(4) + msg_type(4) + request_id(4)) + stream_id(8)
+    // stream_id is at offset 16
+    if (data.size() < 24) {
+      NPRPC_LOG_ERROR("QuicServerSession: Stream message too small to contain stream_id");
+      return;
+    }
+    
+    uint64_t stream_id = *reinterpret_cast<const uint64_t*>(
+        static_cast<const uint8_t*>(data.data()) + 16);
+    
+    NPRPC_LOG_INFO("QuicServerSession::send_stream_message: stream_id={}, size={}", 
+                   stream_id, data.size());
+    
+    // Open native QUIC stream if not already open
+    if (!connection_->open_data_stream(stream_id)) {
+      // Already open or failed - try to send anyway (might already exist)
+      NPRPC_LOG_DEBUG("QuicServerSession: Data stream may already exist for stream_id={}", stream_id);
+    }
+    
+    // Send on native QUIC stream
+    if (!connection_->send_on_stream(stream_id, data.data(), data.size())) {
+      NPRPC_LOG_ERROR("QuicServerSession: Failed to send on native stream for stream_id={}", stream_id);
+      // Fallback to main stream (for compatibility)
+      if (!connection_->send(data.data(), data.size())) {
+        NPRPC_LOG_ERROR("QuicServerSession: Fallback send also failed");
+      }
+    } else {
+      NPRPC_LOG_INFO("QuicServerSession: Sent {} bytes on native QUIC stream_id={}", 
+                     data.size(), stream_id);
+    }
   }
 
   void on_message_received(std::vector<uint8_t>&& data)
@@ -996,18 +1414,20 @@ public:
 
       // Dispatch the RPC request
       NPRPC_QUIC_DEBUG_LOG("calling handle_request");
-      handle_request(rx_buffer_, tx_buffer_);
+      bool needs_reply = handle_request(rx_buffer_, tx_buffer_);
       NPRPC_QUIC_DEBUG_LOG(std::format(
-          "handle_request returned, rx_buffer size={}", rx_buffer_().size()));
+          "handle_request returned, needs_reply={}", needs_reply));
 
-      // Send response back
-      auto response_data = tx_buffer_.cdata();
-      NPRPC_QUIC_DEBUG_LOG(
-          std::format("sending response, size={}", response_data.size()));
-      if (!connection_->send(response_data.data(), response_data.size())) {
-        NPRPC_LOG_ERROR("QuicServerSession: Failed to send response");
-      } else {
-        NPRPC_QUIC_DEBUG_LOG("response sent successfully");
+      // Send response back only if needed
+      if (needs_reply) {
+        auto response_data = tx_buffer_.cdata();
+        NPRPC_QUIC_DEBUG_LOG(
+            std::format("sending response, size={}", response_data.size()));
+        if (!connection_->send(response_data.data(), response_data.size())) {
+          NPRPC_LOG_ERROR("QuicServerSession: Failed to send response");
+        } else {
+          NPRPC_QUIC_DEBUG_LOG("response sent successfully");
+        }
       }
     } catch (const std::exception& e) {
       NPRPC_LOG_ERROR("QuicServerSession: Error processing message: {}",
@@ -1076,6 +1496,56 @@ class QuicClientSession : public Session,
   std::shared_ptr<QuicConnection> connection_;
   EndPoint endpoint_;
   bool connected_ = false;
+  flat_buffer rx_buffer_;
+  flat_buffer tx_buffer_;
+
+  void setup_message_callback()
+  {
+    // Set up message callback for receiving stream messages on main RPC stream
+    connection_->set_message_callback(
+        [this, self = shared_from_this()](std::vector<uint8_t>&& data) {
+          on_message_received(std::move(data));
+        });
+    
+    // Set up callback for data received on native QUIC streams (for streaming RPC)
+    connection_->set_data_stream_callback(
+        [this, self = shared_from_this()](uint64_t stream_id, std::vector<uint8_t>&& data) {
+          on_data_stream_received(stream_id, std::move(data));
+        });
+  }
+
+  void on_message_received(std::vector<uint8_t>&& data)
+  {
+    NPRPC_LOG_INFO("QuicClientSession::on_message_received (main stream), size={}", data.size());
+    
+    // Copy to flat_buffer for handle_request
+    rx_buffer_.consume(rx_buffer_.size());
+    auto mb = rx_buffer_.prepare(data.size());
+    std::memcpy(mb.data(), data.data(), data.size());
+    rx_buffer_.commit(data.size());
+
+    // handle_request dispatches to StreamManager for stream messages
+    handle_request(rx_buffer_, tx_buffer_);
+    
+    // Note: Stream messages are fire-and-forget, no response needed
+    // The handle_request will return false for stream messages and 
+    // dispatch chunks to StreamManager automatically
+  }
+
+  void on_data_stream_received(uint64_t stream_id, std::vector<uint8_t>&& data)
+  {
+    NPRPC_LOG_INFO("QuicClientSession::on_data_stream_received (native stream), "
+                   "stream_id={}, size={}", stream_id, data.size());
+    
+    // Copy to flat_buffer for handle_request
+    rx_buffer_.consume(rx_buffer_.size());
+    auto mb = rx_buffer_.prepare(data.size());
+    std::memcpy(mb.data(), data.data(), data.size());
+    rx_buffer_.commit(data.size());
+
+    // handle_request dispatches to StreamManager for stream chunk messages
+    handle_request(rx_buffer_, tx_buffer_);
+  }
 
 public:
   virtual void timeout_action() final
@@ -1101,6 +1571,9 @@ public:
         throw nprpc::ExceptionCommFailure("QUIC connection failed");
       }
       connected_ = true;
+      
+      // Set up message callback for receiving stream messages after connect
+      setup_message_callback();
     }
 
     connection_->send_receive(buffer, timeout_ms);
@@ -1125,6 +1598,23 @@ public:
     } catch (...) {
       if (handler) {
         (*handler)(boost::asio::error::connection_aborted, buffer);
+      }
+    }
+  }
+
+  /**
+   * @brief Send stream message (fire-and-forget)
+   * Override Session's default to use the QUIC connection directly
+   */
+  virtual void send_stream_message(flat_buffer&& buffer) override
+  {
+    NPRPC_LOG_INFO("QuicClientSession::send_stream_message called, size={}", buffer.size());
+    if (connection_ && connected_) {
+      auto data = buffer.cdata();
+      if (!connection_->send(data.data(), data.size())) {
+        NPRPC_LOG_ERROR("QuicClientSession: Failed to send stream message");
+      } else {
+        NPRPC_LOG_INFO("QuicClientSession: Stream message sent successfully");
       }
     }
   }

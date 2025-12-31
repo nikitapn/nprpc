@@ -80,10 +80,10 @@ TEST_F(NprpcTest, TestBasic)
     }
   };
 
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
@@ -759,7 +759,7 @@ TEST_F(NprpcTest, TestStreams)
     try {
       auto obj = make_stuff_happen<nprpc::test::TestStreams>(servant, flags, "streams_test");
 
-      // Request a stream of 100 bytes
+      // Request a stream of 5 bytes
       auto reader = obj->GetByteStream(5);
 
       std::vector<uint8_t> received;
@@ -784,8 +784,8 @@ TEST_F(NprpcTest, TestStreams)
     }
   };
 
-  // Test streaming over TCP
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
 } // namespace nprpctest

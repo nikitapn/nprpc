@@ -681,26 +681,99 @@ void StreamManager::send_chunk_tcp(uint64_t stream_id,
 - `src/server_session_socket.cpp` - handle async chunk writes
 - `src/server_session_websocket.cpp` - WebSocket framing for chunks
 
-### 3.3 HTTP/3 Streaming
+### 3.3 QUIC Transport Streaming with Native QUIC Streams
 
-HTTP/3 natively supports streams via QUIC:
+Native QUIC transport (implemented via MsQuic) now uses **true native QUIC streams** for streaming RPC. Each NPRPC stream gets its own dedicated QUIC stream, providing:
 
+- **Zero head-of-line blocking** between independent streams
+- **Parallel data transfer** without interference
+- **Independent flow control** per stream
+
+**Architecture:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    QUIC Connection                          │
+├─────────────────────────────────────────────────────────────┤
+│  Main Stream (bidirectional)     - RPC request/response     │
+├─────────────────────────────────────────────────────────────┤
+│  Data Stream 1 (server→client)   - stream_id=123 chunks     │
+├─────────────────────────────────────────────────────────────┤
+│  Data Stream 2 (server→client)   - stream_id=456 chunks     │
+├─────────────────────────────────────────────────────────────┤
+│  ...                                                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Server-side implementation:**
 ```cpp
-void StreamManager::send_chunk_http3(uint64_t stream_id,
-                                      std::span<const uint8_t> data) {
-    // Map NPRPC stream_id to QUIC stream ID
-    auto quic_stream_id = map_to_quic_stream(stream_id);
+// QuicServerSession::send_stream_message extracts stream_id and routes to native stream
+void send_stream_message(flat_buffer&& buffer) override {
+    uint64_t stream_id = extract_stream_id(buffer);
     
-    // Send data on dedicated QUIC stream (parallel to other requests)
-    quic_transport_.send_on_stream(quic_stream_id, data);
+    // Open native QUIC stream if not already open
+    connection_->open_data_stream(stream_id);
+    
+    // Send on dedicated native stream
+    connection_->send_on_stream(stream_id, buffer.data(), buffer.size());
 }
 ```
 
-**Files to modify:**
-- `src/http3_server.cpp` - map stream IDs to QUIC streams
-- `src/quic_transport.cpp` - implement stream mapping
+**Client-side handling:**
+```cpp
+// Client accepts server-opened streams and routes data to StreamManager
+void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event) {
+    case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED:
+        // Server opened a new data stream
+        accept_data_stream(event->PEER_STREAM_STARTED.Stream);
+        break;
+}
+```
 
-### 3.4 UDP Considerations
+**Note:** This is for **native clients only** (C++ applications using `quic://` URLs).
+
+**Files modified:**
+- `src/quic/quic_transport.cpp` - native QUIC stream management
+  - `QuicServerConnection::open_data_stream()` - opens new QUIC stream per NPRPC stream
+  - `QuicServerConnection::send_on_stream()` - sends on dedicated stream
+  - `QuicConnection::data_stream_callback()` - receives data from server streams
+- `include/nprpc/impl/quic_transport.hpp` - stream maps and callbacks
+
+### 3.4 Browser Streaming: WebSocket vs WebTransport
+
+**Current browser solution: WebSocket**
+- Full-duplex communication over single TCP connection
+- Works in all browsers
+- Already implemented in NPRPC ✅
+
+**Future browser solution: WebTransport API**
+- W3C standard for bidirectional streams over HTTP/3/QUIC
+- Provides true QUIC streams to JavaScript
+- Lower latency than WebSocket (no TCP head-of-line blocking)
+- Not yet widely supported (Chrome/Edge only as of 2024)
+
+```cpp
+// Future: WebTransport support
+void StreamManager::send_chunk_webtransport(uint64_t stream_id,
+                                             std::span<const uint8_t> data) {
+    // Use WebTransport's unidirectional/bidirectional streams
+    webtransport_session_.send_on_stream(stream_id, data);
+}
+```
+
+**Streaming transport matrix:**
+
+| Transport    | Client Type  | True QUIC Streams | HOL Blocking | Status      |
+|-------------|--------------|-------------------|--------------|-------------|
+| WebSocket   | Browser/C++  | No (app-muxed)    | Yes (TCP)    | ✅ Working  |
+| Native QUIC | C++ only     | Yes               | No           | ✅ Working  |
+| HTTP/3      | Browser      | No (req/res)      | No           | ❌ N/A      |
+| WebTransport| Browser      | Yes               | No           | 🔮 Future   |
+
+**Files to modify (future WebTransport):**
+- `src/webtransport_server.cpp` - new server implementation
+- `nprpc_js/src/webtransport.ts` - browser client
+
+### 3.5 UDP Considerations
 
 UDP unreliable transport is **not suitable** for streaming:
 - No ordering guarantees

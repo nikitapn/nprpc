@@ -1407,6 +1407,12 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
         "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n";
   oc << "  auto stream_id = ::nprpc::impl::generate_stream_id();\n";
 
+  // Create StreamReader BEFORE sending StreamInit to avoid race condition
+  // where chunks arrive before the reader is registered
+  oc << "  ::nprpc::StreamReader<";
+  emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oc);
+  oc << "> reader(session->ctx(), stream_id);\n";
+
   // Calculate buffer size: Header + StreamInit (24 bytes) + input args
   const auto stream_init_size = size_of_stream_init;
   const auto args_offset = size_of_header + stream_init_size;
@@ -1450,10 +1456,8 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
   oc << "  ::nprpc::impl::g_rpc->call_async(this->get_endpoint(), "
         "std::move(buf), std::nullopt, this->get_timeout());\n";
 
-  // Create StreamReader and return
-  oc << "  return ::nprpc::StreamReader<";
-  emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oc);
-  oc << ">(session->ctx(), stream_id);\n";
+  // Return the already-created reader
+  oc << "  return reader;\n";
 }
 
 void CppBuilder::proxy_async_call(AstFunctionDecl* fn)

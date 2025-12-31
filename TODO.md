@@ -3,9 +3,6 @@
 ## STD
 * [ ] Replace std::unordered_map with absl::flat_hash_map in performance-critical paths.
 
-## Build System
-* [ ] Generate npnameserver stubs when building nprpc target, to avoid full rebuilds when npnameserver is built separately.
-
 ## Serialization
 * [ ] Add hint attributes [estimated_in_size=x], [estimated_out_size=x] to IDL for preallocating buffers, before method calls.
 * [ ] Support flat_buffer view mode in generated code to avoid copies when serializing/deserializing from shared memory.

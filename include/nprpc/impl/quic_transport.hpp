@@ -63,6 +63,8 @@ private:
  *
  * Manages a QUIC connection to a server.
  * Uses streams for RPC calls and optionally datagrams for fire-and-forget.
+ * Supports native QUIC streams for streaming RPC - the server opens dedicated
+ * streams for each NPRPC stream, which the client accepts and routes data from.
  */
 class NPRPC_API QuicConnection
     : public std::enable_shared_from_this<QuicConnection>
@@ -70,6 +72,10 @@ class NPRPC_API QuicConnection
 public:
   using ConnectCallback = std::function<void(bool success)>;
   using ReceiveCallback = std::function<void(const uint8_t* data, size_t len)>;
+  using MessageCallback = std::function<void(std::vector<uint8_t>&&)>;
+  // Callback for data received on a dedicated streaming QUIC stream
+  // Parameters: stream_id, data
+  using DataStreamCallback = std::function<void(uint64_t, std::vector<uint8_t>&&)>;
 
   QuicConnection(boost::asio::io_context& ioc);
   ~QuicConnection();
@@ -87,11 +93,20 @@ public:
                          size_t len,
                          std::function<void(bool)> callback);
 
+  // Send data without waiting for reply (fire-and-forget)
+  bool send(const void* data, size_t len);
+
   // Send datagram (unreliable, if supported)
   bool send_datagram(const uint8_t* data, size_t len);
 
-  // Set callback for received data
+  // Set callback for received data (raw bytes)
   void set_receive_callback(ReceiveCallback callback);
+
+  // Set callback for complete assembled messages (on main RPC stream)
+  void set_message_callback(MessageCallback callback);
+
+  // Set callback for data received on dedicated streaming QUIC streams
+  void set_data_stream_callback(DataStreamCallback callback);
 
   // Close connection
   void close();
@@ -112,13 +127,30 @@ private:
                                               void* context,
                                               QUIC_STREAM_EVENT* event);
 
+  // Callback for server-opened data streams (for streaming RPC)
+  static QUIC_STATUS QUIC_API data_stream_callback(HQUIC stream,
+                                                   void* context,
+                                                   QUIC_STREAM_EVENT* event);
+
   void handle_connection_event(QUIC_CONNECTION_EVENT* event);
   void handle_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event);
+  void handle_data_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event);
+  void process_receive_buffer();
+  void process_data_stream_buffer(HQUIC stream);
 
   boost::asio::io_context& ioc_;
   HQUIC connection_ = nullptr;
   HQUIC configuration_ = nullptr;
-  HQUIC stream_ = nullptr; // Main bidirectional stream
+  HQUIC stream_ = nullptr; // Main bidirectional stream for RPC
+
+  // Server-opened data streams for streaming (QUIC stream -> receive buffer + stream_id)
+  struct DataStreamInfo {
+    std::vector<uint8_t> receive_buffer;
+    uint64_t stream_id = 0;  // NPRPC stream_id (from first message)
+    bool stream_id_known = false;
+  };
+  std::unordered_map<HQUIC, DataStreamInfo> data_streams_;
+  std::mutex data_streams_mutex_;
 
   std::atomic<bool> connected_{false};
   std::atomic<bool> datagram_send_enabled_{
@@ -126,6 +158,9 @@ private:
   uint16_t max_datagram_size_ = 0; // Maximum datagram size peer supports
   ConnectCallback connect_callback_;
   ReceiveCallback receive_callback_;
+  MessageCallback message_callback_;
+  DataStreamCallback data_stream_callback_;  // Callback for data on dedicated streams
+  std::vector<uint8_t> receive_buffer_;
 
   // For synchronous send/receive
   std::mutex mutex_;
@@ -139,6 +174,8 @@ private:
  *
  * This is similar to QuicConnection but manages the server side of an
  * accepted QUIC connection. It handles RPC request/response pairs.
+ * Supports native QUIC streams for streaming RPC - each NPRPC stream
+ * gets its own dedicated QUIC stream for zero head-of-line blocking.
  */
 class NPRPC_API QuicServerConnection
     : public std::enable_shared_from_this<QuicServerConnection>
@@ -158,8 +195,18 @@ public:
   // Set callback for datagram messages (unreliable, no response)
   void set_datagram_callback(DatagramCallback callback);
 
-  // Send response data
+  // Send response data on main RPC stream
   bool send(const void* data, size_t len);
+
+  // Native QUIC stream management for streaming RPC
+  // Opens a new dedicated QUIC stream for an NPRPC stream
+  bool open_data_stream(uint64_t stream_id);
+  
+  // Send data on a dedicated QUIC stream (for streaming)
+  bool send_on_stream(uint64_t stream_id, const void* data, size_t len);
+  
+  // Close a dedicated QUIC stream
+  void close_data_stream(uint64_t stream_id);
 
   // Get remote address for endpoint
   std::string remote_address() const { return remote_addr_; }
@@ -177,14 +224,24 @@ private:
                                               void* context,
                                               QUIC_STREAM_EVENT* event);
 
+  // Callback for dedicated data streams (different from main RPC stream)
+  static QUIC_STATUS QUIC_API data_stream_callback(HQUIC stream,
+                                                   void* context,
+                                                   QUIC_STREAM_EVENT* event);
+
   void handle_connection_event(QUIC_CONNECTION_EVENT* event);
   void handle_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event);
+  void handle_data_stream_event(HQUIC stream, uint64_t stream_id, QUIC_STREAM_EVENT* event);
   void process_receive_buffer();
 
   boost::asio::io_context& ioc_;
   HQUIC connection_;
   HQUIC configuration_;
-  HQUIC stream_ = nullptr;
+  HQUIC stream_ = nullptr;  // Main RPC stream
+
+  // Native QUIC streams for streaming RPC (stream_id -> QUIC stream handle)
+  std::unordered_map<uint64_t, HQUIC> data_streams_;
+  std::mutex data_streams_mutex_;
 
   MessageCallback message_callback_;
   DatagramCallback datagram_callback_;
