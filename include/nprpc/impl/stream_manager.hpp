@@ -24,23 +24,34 @@ namespace impl {
 class NPRPC_API StreamManager
 {
 public:
-  // Callback type for sending data back through the session
+  // Callback type for sending on main stream (control messages, always reliable)
   using SendCallback = std::function<void(flat_buffer&&)>;
+  // Callback type for sending on native QUIC stream (reliable stream data)
+  using SendNativeStreamCallback = std::function<void(flat_buffer&&)>;
+  // Callback type for sending datagrams (unreliable stream data)
+  using SendDatagramCallback = std::function<bool(flat_buffer&&)>;
   // Callback type for posting async work
   using PostCallback = std::function<void(std::function<void()>)>;
 
   explicit StreamManager(SessionContext& session);
   ~StreamManager();
 
-  // Set the callback for sending data (must be called by Session after construction)
+  // Set the callback for sending on main stream (control messages)
   void set_send_callback(SendCallback callback) { send_callback_ = std::move(callback); }
+
+  // Set the callback for sending on native QUIC streams (reliable stream data)
+  void set_send_native_stream_callback(SendNativeStreamCallback callback) { send_native_stream_callback_ = std::move(callback); }
+
+  // Set the callback for sending datagrams (unreliable stream data)
+  void set_send_datagram_callback(SendDatagramCallback callback) { send_datagram_callback_ = std::move(callback); }
 
   // Set the callback for posting async work (must be called by Session after construction)
   void set_post_callback(PostCallback callback) { post_callback_ = std::move(callback); }
 
-  // Server-side: register outgoing stream
+  // Server-side: register outgoing stream (with optional unreliable flag)
   void register_stream(uint64_t stream_id,
-                       std::unique_ptr<StreamWriterBase> writer);
+                       std::unique_ptr<StreamWriterBase> writer,
+                       bool unreliable = false);
 
   // Client-side: register incoming stream
   void register_reader(uint64_t stream_id, StreamReaderBase* reader);
@@ -67,10 +78,16 @@ public:
 private:
   SessionContext& session_;
   SendCallback send_callback_;
+  SendNativeStreamCallback send_native_stream_callback_;
+  SendDatagramCallback send_datagram_callback_;
   PostCallback post_callback_;
 
   // Active outgoing streams (server-side)
-  std::unordered_map<uint64_t, std::unique_ptr<StreamWriterBase>> writers_;
+  struct StreamInfo {
+    std::unique_ptr<StreamWriterBase> writer;
+    bool unreliable = false;
+  };
+  std::unordered_map<uint64_t, StreamInfo> writers_;
 
   // Active incoming streams (client-side)
   // Readers are owned by the client application (StreamReader<T>), so we hold
@@ -79,6 +96,9 @@ private:
 
   // Mutex for thread-safe access
   std::mutex mutex_;
+  
+  // Internal helper to determine if a stream is unreliable
+  bool is_stream_unreliable(uint64_t stream_id) const;
 };
 
 // Generate unique stream ID (client-side)

@@ -1761,7 +1761,8 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       oc << "        ctx.stream_manager->register_stream(init.stream_id(), "
             "std::make_unique<::nprpc::StreamWriter<";
       emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oc);
-      oc << ">>(std::move(writer)));\n";
+      // Pass unreliable flag: !is_reliable means unreliable
+      oc << ">>(std::move(writer)), " << (fn->is_reliable ? "false" : "true") << ");\n";
 
       oc << "        break;\n";
       oc << "      }\n";

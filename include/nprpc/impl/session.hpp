@@ -103,6 +103,14 @@ public:
     send_receive_async(std::move(buffer), std::nullopt, 0);
   }
 
+  // Send a control message on main stream (for stream control: complete/error/cancel)
+  // Default implementation is same as send_stream_message
+  // QUIC sessions override to send on main bidirectional stream, not native data streams
+  virtual void send_main_stream_message(flat_buffer&& buffer)
+  {
+    send_stream_message(std::move(buffer));
+  }
+
   virtual void shutdown()
   {
     closed_.store(true);

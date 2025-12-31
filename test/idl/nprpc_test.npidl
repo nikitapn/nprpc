@@ -159,5 +159,6 @@ interface TestUnreliable {
 }
 
 interface TestStreams {
-	stream<u8> GetByteStream(size: in u64) raises (AssertionFailed);
+	[unreliable]
+	stream<u8> GetByteStream(size: in u64);
 }

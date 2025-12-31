@@ -13,6 +13,7 @@
 #include <nprpc/common.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/session.hpp>
+#include <nprpc/impl/stream_manager.hpp>
 
 #define NPRPC_QUIC_DEBUG 0
 
@@ -366,6 +367,12 @@ void QuicConnection::set_data_stream_callback(DataStreamCallback callback)
   data_stream_callback_ = std::move(callback);
 }
 
+void QuicConnection::set_datagram_callback(DatagramCallback callback)
+{
+  std::lock_guard lock(mutex_);
+  datagram_callback_ = std::move(callback);
+}
+
 void QuicConnection::process_receive_buffer()
 {
   // NPRPC message format: first 4 bytes = payload size (not including the
@@ -488,7 +495,7 @@ void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
     if (connect_callback_) {
       bool success = QUIC_SUCCEEDED(status);
       NPRPC_QUIC_DEBUG_LOG(
-          std::format("posting callback, success={}", success));
+          "posting callback, success={}", success);
       auto cb = std::move(connect_callback_);
       boost::asio::post(ioc_, [cb, success]() {
         NPRPC_QUIC_DEBUG_LOG("callback executing");
@@ -555,16 +562,31 @@ void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
     datagram_send_enabled_ = event->DATAGRAM_STATE_CHANGED.SendEnabled;
     max_datagram_size_ = event->DATAGRAM_STATE_CHANGED.MaxSendLength;
     NPRPC_QUIC_DEBUG_LOG(
-        std::format("DATAGRAM_STATE_CHANGED: SendEnabled={}, MaxSendLength={}",
-                    (int)datagram_send_enabled_.load(), max_datagram_size_));
+        "DATAGRAM_STATE_CHANGED: SendEnabled={}, MaxSendLength={}",
+                    (int)datagram_send_enabled_.load(), max_datagram_size_);
     break;
   }
 
   case QUIC_CONNECTION_EVENT_DATAGRAM_RECEIVED: {
-    // Handle received datagram (unreliable)
+    // Handle received datagram (unreliable stream data from server)
+    NPRPC_QUIC_DEBUG_LOG("Client DATAGRAM_RECEIVED!");
     std::lock_guard lock(mutex_);
-    if (receive_callback_) {
-      auto& buf = event->DATAGRAM_RECEIVED.Buffer;
+    auto& buf = event->DATAGRAM_RECEIVED.Buffer;
+    if (datagram_callback_) {
+      std::vector<uint8_t> data(buf->Buffer, buf->Buffer + buf->Length);
+      boost::asio::post(ioc_, [this, self = shared_from_this(),
+                               data = std::move(data)]() mutable {
+        DatagramCallback cb;
+        {
+          std::lock_guard lk(mutex_);
+          cb = datagram_callback_;
+        }
+        if (cb) {
+          cb(std::move(data));
+        }
+      });
+    } else if (receive_callback_) {
+      // Fallback to raw receive callback
       receive_callback_(buf->Buffer, buf->Length);
     }
     break;
@@ -610,16 +632,16 @@ QUIC_STATUS QUIC_API QuicConnection::stream_callback(HQUIC stream,
 void QuicConnection::handle_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event)
 {
   NPRPC_QUIC_DEBUG_LOG(
-      std::format("Client stream_event type: {}", event->Type));
+      "Client stream_event type: {}", event->Type);
   switch (event->Type) {
   case QUIC_STREAM_EVENT_RECEIVE: {
-    NPRPC_QUIC_DEBUG_LOG(std::format("Client STREAM_RECEIVE, buffers: {}",
-                                     event->RECEIVE.BufferCount));
+    NPRPC_QUIC_DEBUG_LOG("Client STREAM_RECEIVE, buffers: {}",
+                                     event->RECEIVE.BufferCount);
     // Append data to receive buffer
     for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) {
       auto& buf = event->RECEIVE.Buffers[i];
       NPRPC_QUIC_DEBUG_LOG(
-          std::format("Client received {} bytes", buf.Length));
+          "Client received {} bytes", buf.Length);
       receive_buffer_.insert(receive_buffer_.end(), buf.Buffer,
                              buf.Buffer + buf.Length);
     }
@@ -666,8 +688,8 @@ void QuicConnection::handle_data_stream_event(HQUIC stream, QUIC_STREAM_EVENT* e
       
   switch (event->Type) {
   case QUIC_STREAM_EVENT_RECEIVE: {
-    NPRPC_QUIC_DEBUG_LOG(std::format("Client DATA_STREAM_RECEIVE, buffers: {}",
-                                     event->RECEIVE.BufferCount));
+    NPRPC_QUIC_DEBUG_LOG("Client DATA_STREAM_RECEIVE, buffers: {}",
+                         event->RECEIVE.BufferCount);
     // Append data to this stream's receive buffer
     {
       std::lock_guard lock(data_streams_mutex_);
@@ -722,10 +744,10 @@ void QuicConnection::process_data_stream_buffer(HQUIC stream)
     uint32_t payload_size = *reinterpret_cast<uint32_t*>(info.receive_buffer.data());
     uint32_t total_size = payload_size + 4;
     
-    NPRPC_QUIC_DEBUG_LOG(std::format("Client data stream: payload_size={}, "
+    NPRPC_QUIC_DEBUG_LOG("Client data stream: payload_size={}, "
                                      "total_size={}, buffer_size={}",
                                      payload_size, total_size,
-                                     info.receive_buffer.size()));
+                                     info.receive_buffer.size());
     
     if (info.receive_buffer.size() < total_size) {
       break; // Incomplete message
@@ -977,6 +999,52 @@ void QuicServerConnection::close_data_stream(uint64_t stream_id)
   }
 }
 
+bool QuicServerConnection::send_datagram(const uint8_t* data, size_t len)
+{
+  NPRPC_QUIC_DEBUG_LOG(std::format(
+      "QuicServerConnection::send_datagram called, len={}, datagram_enabled={}", len,
+      datagram_send_enabled_.load()));
+
+  if (!connection_) {
+    NPRPC_QUIC_DEBUG_LOG("send_datagram: no connection!");
+    return false;
+  }
+
+  if (!datagram_send_enabled_) {
+    NPRPC_QUIC_DEBUG_LOG("send_datagram: datagrams not enabled by peer!");
+    return false;
+  }
+
+  if (len > max_datagram_size_) {
+    NPRPC_QUIC_DEBUG_LOG(std::format("send_datagram: size {} exceeds max {}",
+                                     len, max_datagram_size_));
+    return false;
+  }
+
+  auto& quic = QuicApi::instance();
+
+  // Allocate buffer that will be freed on DATAGRAM_SEND_STATE_CHANGED event
+  QUIC_BUFFER* send_buf = new QUIC_BUFFER;
+  send_buf->Length = static_cast<uint32_t>(len);
+  send_buf->Buffer = new uint8_t[len];
+  std::memcpy(send_buf->Buffer, data, len);
+
+  QUIC_STATUS status =
+      quic.api()->DatagramSend(connection_, send_buf, 1, QUIC_SEND_FLAG_NONE,
+                               send_buf // Context for cleanup
+      );
+
+  if (QUIC_FAILED(status)) {
+    NPRPC_QUIC_DEBUG_LOG(std::format("DatagramSend failed, status={}", status));
+    delete[] send_buf->Buffer;
+    delete send_buf;
+    return false;
+  }
+
+  NPRPC_QUIC_DEBUG_LOG("Server DatagramSend succeeded");
+  return true;
+}
+
 QUIC_STATUS QUIC_API QuicServerConnection::data_stream_callback(
     HQUIC stream, void* context, QUIC_STREAM_EVENT* event)
 {
@@ -1066,6 +1134,37 @@ void QuicServerConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
       });
     } else {
       NPRPC_QUIC_DEBUG_LOG("Server datagram_callback_ is null!");
+    }
+    break;
+  }
+
+  case QUIC_CONNECTION_EVENT_DATAGRAM_STATE_CHANGED: {
+    // Peer has indicated whether they support receiving datagrams
+    datagram_send_enabled_ = event->DATAGRAM_STATE_CHANGED.SendEnabled;
+    max_datagram_size_ = event->DATAGRAM_STATE_CHANGED.MaxSendLength;
+    NPRPC_QUIC_DEBUG_LOG(
+        "Server DATAGRAM_STATE_CHANGED: SendEnabled={}, MaxSendLength={}",
+                    (int)datagram_send_enabled_.load(), max_datagram_size_);
+    break;
+  }
+
+  case QUIC_CONNECTION_EVENT_DATAGRAM_SEND_STATE_CHANGED: {
+    // Clean up datagram send buffer only when send is complete
+    auto state = event->DATAGRAM_SEND_STATE_CHANGED.State;
+    NPRPC_QUIC_DEBUG_LOG(
+        std::format("Server DATAGRAM_SEND_STATE_CHANGED: state={}", (int)state));
+
+    // Only free on terminal states
+    if (state == QUIC_DATAGRAM_SEND_ACKNOWLEDGED ||
+        state == QUIC_DATAGRAM_SEND_ACKNOWLEDGED_SPURIOUS ||
+        state == QUIC_DATAGRAM_SEND_LOST_DISCARDED ||
+        state == QUIC_DATAGRAM_SEND_CANCELED) {
+      auto* send_buf = static_cast<QUIC_BUFFER*>(
+          event->DATAGRAM_SEND_STATE_CHANGED.ClientContext);
+      if (send_buf && send_buf->Buffer) {
+        delete[] send_buf->Buffer;
+        delete send_buf;
+      }
     }
     break;
   }
@@ -1336,6 +1435,7 @@ public:
   {
     if (connection_) {
       connection_->set_message_callback(nullptr);
+      connection_->set_datagram_callback(nullptr);
       connection_->close();
     }
     Session::shutdown();
@@ -1401,6 +1501,22 @@ public:
     }
   }
 
+  // Override for control messages - send on main QUIC stream (always reliable)
+  virtual void send_main_stream_message(flat_buffer&& buffer) override
+  {
+    if (!connection_) {
+      NPRPC_LOG_ERROR("QuicServerSession: No connection for main stream message");
+      return;
+    }
+    
+    auto data = buffer.cdata();
+    NPRPC_LOG_INFO("QuicServerSession::send_main_stream_message: size={}", data.size());
+    
+    if (!connection_->send(data.data(), data.size())) {
+      NPRPC_LOG_ERROR("QuicServerSession: Failed to send on main stream");
+    }
+  }
+
   void on_message_received(std::vector<uint8_t>&& data)
   {
     NPRPC_QUIC_DEBUG_LOG(
@@ -1415,8 +1531,7 @@ public:
       // Dispatch the RPC request
       NPRPC_QUIC_DEBUG_LOG("calling handle_request");
       bool needs_reply = handle_request(rx_buffer_, tx_buffer_);
-      NPRPC_QUIC_DEBUG_LOG(std::format(
-          "handle_request returned, needs_reply={}", needs_reply));
+      NPRPC_QUIC_DEBUG_LOG("handle_request returned, needs_reply={}", needs_reply);
 
       // Send response back only if needed
       if (needs_reply) {
@@ -1481,6 +1596,14 @@ public:
         [this, self = shared_from_this()](std::vector<uint8_t>&& data) {
           on_datagram_received(std::move(data));
         });
+    
+    // Set up datagram callback for unreliable stream chunks
+    ctx_.stream_manager->set_send_datagram_callback(
+        [this, self = shared_from_this()](flat_buffer&& buffer) -> bool {
+          auto data = buffer.cdata();
+          return connection_->send_datagram(
+              reinterpret_cast<const uint8_t*>(data.data()), data.size());
+        });
   }
 
   ~QuicServerSession() { NPRPC_LOG_INFO("QuicServerSession destroyed"); }
@@ -1507,10 +1630,16 @@ class QuicClientSession : public Session,
           on_message_received(std::move(data));
         });
     
-    // Set up callback for data received on native QUIC streams (for streaming RPC)
+    // Set up callback for data received on native QUIC streams (for reliable streaming)
     connection_->set_data_stream_callback(
         [this, self = shared_from_this()](uint64_t stream_id, std::vector<uint8_t>&& data) {
           on_data_stream_received(stream_id, std::move(data));
+        });
+    
+    // Set up callback for datagrams (for unreliable streaming)
+    connection_->set_datagram_callback(
+        [this, self = shared_from_this()](std::vector<uint8_t>&& data) {
+          on_datagram_received(std::move(data));
         });
   }
 
@@ -1547,10 +1676,37 @@ class QuicClientSession : public Session,
     handle_request(rx_buffer_, tx_buffer_);
   }
 
+  void on_datagram_received(std::vector<uint8_t>&& data)
+  {
+    NPRPC_LOG_INFO("QuicClientSession::on_datagram_received (datagram), size={}", data.size());
+    
+    // Copy to flat_buffer for handle_request
+    rx_buffer_.consume(rx_buffer_.size());
+    auto mb = rx_buffer_.prepare(data.size());
+    std::memcpy(mb.data(), data.data(), data.size());
+    rx_buffer_.commit(data.size());
+
+    // handle_request dispatches to StreamManager for stream chunk messages
+    handle_request(rx_buffer_, tx_buffer_);
+  }
+
 public:
   virtual void timeout_action() final
   {
     // Cancel pending operations
+  }
+
+  virtual void shutdown() override
+  {
+    // Clear callbacks to break shared_ptr cycle
+    if (connection_) {
+      connection_->set_message_callback(nullptr);
+      connection_->set_data_stream_callback(nullptr);
+      connection_->set_datagram_callback(nullptr);
+      connection_->close();
+    }
+    connected_ = false;
+    Session::shutdown();
   }
 
   virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms) override

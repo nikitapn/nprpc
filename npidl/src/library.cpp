@@ -1362,10 +1362,11 @@ class Parser : public IParser
                         f->name);
         }
 
-        if (!f->is_async && !f->is_reliable)
+        // [unreliable] requires async or stream (streams are inherently async)
+        if (!f->is_async && !f->is_stream && !f->is_reliable)
           throw_error("Function '" + f->name +
                       "' can only be marked [unreliable] if declared "
-                      "as 'async'");
+                      "as 'async' or 'stream'");
 
         if (f->ex && !f->is_reliable)
           throw_error("Function' " + f->name +

@@ -76,6 +76,8 @@ public:
   // Callback for data received on a dedicated streaming QUIC stream
   // Parameters: stream_id, data
   using DataStreamCallback = std::function<void(uint64_t, std::vector<uint8_t>&&)>;
+  // Callback for received datagrams (unreliable stream data)
+  using DatagramCallback = std::function<void(std::vector<uint8_t>&&)>;
 
   QuicConnection(boost::asio::io_context& ioc);
   ~QuicConnection();
@@ -107,6 +109,9 @@ public:
 
   // Set callback for data received on dedicated streaming QUIC streams
   void set_data_stream_callback(DataStreamCallback callback);
+
+  // Set callback for received datagrams (unreliable stream data from server)
+  void set_datagram_callback(DatagramCallback callback);
 
   // Close connection
   void close();
@@ -160,6 +165,7 @@ private:
   ReceiveCallback receive_callback_;
   MessageCallback message_callback_;
   DataStreamCallback data_stream_callback_;  // Callback for data on dedicated streams
+  DatagramCallback datagram_callback_;       // Callback for received datagrams (unreliable)
   std::vector<uint8_t> receive_buffer_;
 
   // For synchronous send/receive
@@ -208,6 +214,9 @@ public:
   // Close a dedicated QUIC stream
   void close_data_stream(uint64_t stream_id);
 
+  // Send unreliable datagram (for unreliable streaming)
+  bool send_datagram(const uint8_t* data, size_t len);
+
   // Get remote address for endpoint
   std::string remote_address() const { return remote_addr_; }
   uint16_t remote_port() const { return remote_port_; }
@@ -248,6 +257,10 @@ private:
   std::vector<uint8_t> receive_buffer_;
   std::string remote_addr_;
   uint16_t remote_port_ = 0;
+  
+  // Datagram support for unreliable streams
+  std::atomic<bool> datagram_send_enabled_{false};
+  uint16_t max_datagram_size_ = 0;
 
   std::mutex mutex_;
 };

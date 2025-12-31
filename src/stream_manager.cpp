@@ -35,15 +35,16 @@ StreamManager::StreamManager(SessionContext& session)
 StreamManager::~StreamManager() { cancel_all(); }
 
 void StreamManager::register_stream(uint64_t stream_id,
-                                    std::unique_ptr<StreamWriterBase> writer)
+                                    std::unique_ptr<StreamWriterBase> writer,
+                                    bool unreliable)
 {
   StreamWriterBase* raw_writer = writer.get();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    writers_[stream_id] = std::move(writer);
+    writers_[stream_id] = StreamInfo{std::move(writer), unreliable};
   }
 
-  NPRPC_LOG_INFO("Stream registered: {}", stream_id);
+  NPRPC_LOG_INFO("Stream registered: {} (unreliable={})", stream_id, unreliable);
 
   // Post the stream pumping to run asynchronously AFTER the reply is sent
   // This ensures the client receives the StreamInit reply before any data chunks
@@ -72,6 +73,16 @@ void StreamManager::register_stream(uint64_t stream_id,
       writers_.erase(stream_id);
     }
   }
+}
+
+bool StreamManager::is_stream_unreliable(uint64_t stream_id) const
+{
+  // Note: mutex should be held by caller or this should be called from a safe context
+  auto it = writers_.find(stream_id);
+  if (it != writers_.end()) {
+    return it->second.unreliable;
+  }
+  return false;
 }
 
 void StreamManager::register_reader(uint64_t stream_id,
@@ -121,7 +132,7 @@ void StreamManager::on_stream_cancel(uint64_t stream_id)
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = writers_.find(stream_id);
   if (it != writers_.end()) {
-    it->second->cancel();
+    it->second.writer->cancel();
     writers_.erase(it);
   }
 }
@@ -130,7 +141,17 @@ void StreamManager::send_chunk(uint64_t stream_id,
                                std::span<const uint8_t> data,
                                uint64_t sequence)
 {
-  std::cerr << "[DEBUG] send_chunk called: stream_id=" << stream_id << " data.size()=" << data.size() << " sequence=" << sequence << '\n';
+  // Check if this is an unreliable stream
+  bool unreliable = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    unreliable = is_stream_unreliable(stream_id);
+  }
+  
+  std::cerr << "[DEBUG] send_chunk called: stream_id=" << stream_id 
+            << " data.size()=" << data.size() 
+            << " sequence=" << sequence 
+            << " unreliable=" << unreliable << '\n';
 
   // TODO: Shared Memory Optimization - write directly to shared ring buffer
   if (session_.shm_channel) {
@@ -173,8 +194,17 @@ void StreamManager::send_chunk(uint64_t stream_id,
   header = reinterpret_cast<flat::Header*>(fb.data().data());
   header->size = static_cast<uint32_t>(fb.size() - 4);
 
-  // Send via callback
-  if (send_callback_) {
+  // Send via appropriate callback based on reliability
+  if (unreliable && send_datagram_callback_) {
+    // Use QUIC datagram for unreliable streams (lowest latency, may drop)
+    if (!send_datagram_callback_(std::move(fb))) {
+      NPRPC_LOG_WARN("StreamManager::send_chunk: datagram send failed (may be too large)");
+    }
+  } else if (send_native_stream_callback_) {
+    // Use native QUIC stream for reliable streams (zero head-of-line blocking)
+    send_native_stream_callback_(std::move(fb));
+  } else if (send_callback_) {
+    // Fallback to main stream (for non-QUIC transports like WebSocket)
     send_callback_(std::move(fb));
   } else {
     NPRPC_LOG_ERROR("StreamManager::send_chunk: no send callback set");
@@ -279,8 +309,8 @@ void StreamManager::cancel_all()
 {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  for (auto& [id, writer] : writers_) {
-    writer->cancel();
+  for (auto& [id, info] : writers_) {
+    info.writer->cancel();
   }
   writers_.clear();
 
