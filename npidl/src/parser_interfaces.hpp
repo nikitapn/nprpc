@@ -121,6 +121,7 @@ public:
   CompilationBuilder& set_output_dir(const std::filesystem::path& output_dir);
   CompilationBuilder& with_language_cpp();
   CompilationBuilder& with_language_ts();
+  CompilationBuilder& with_language_swift();
   std::unique_ptr<ICompilation> build();
 
 private:
@@ -128,6 +129,7 @@ private:
     None = 0x00,       // LSP mode only
     Cpp = 0x01,        // C++ output
     TypeScript = 0x02, // TypeScript output
+    Swift = 0x04,      // Swift output
   };
 
   int language_flags_ = None;

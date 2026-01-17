@@ -29,6 +29,26 @@
       "request": "launch",
       "program": "${workspaceFolder}/build/tools/tool_x",
       "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:nprpc}/nprpc_swift",
+      "name": "Debug nprpc-poc (nprpc_swift)",
+      "target": "nprpc-poc",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug nprpc-poc (nprpc_swift)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:nprpc}/nprpc_swift",
+      "name": "Release nprpc-poc (nprpc_swift)",
+      "target": "nprpc-poc",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release nprpc-poc (nprpc_swift)"
     }
   ]
 }

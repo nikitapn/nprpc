@@ -18,6 +18,8 @@ add_library(npidl_core STATIC
   src/compilation.cpp
   src/ts_builder.hpp
   src/ts_builder.cpp
+  src/swift_builder.hpp
+  src/swift_builder.cpp
   src/utils.cpp
   src/utils.hpp
   src/library.cpp

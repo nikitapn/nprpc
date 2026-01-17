@@ -28,6 +28,7 @@ int main(int argc, char* argv[])
   std::vector<std::filesystem::path> input_files;
   bool generate_cpp;
   bool generate_typescript;
+  bool generate_swift;
 
   // Declare the supported options.
   po::options_description desc("Allowed options");
@@ -39,9 +40,12 @@ int main(int argc, char* argv[])
       ("cpp", po::bool_switch(&generate_cpp)->default_value(true),
        "Generate C++")(
           "ts", po::bool_switch(&generate_typescript)->default_value(false),
-          "Generate TypeScript")("output-dir",
-                                 po::value<std::filesystem::path>(&output_dir),
-                                 "Output directory for all generated files")(
+          "Generate TypeScript")(
+          "swift", po::bool_switch(&generate_swift)->default_value(false),
+          "Generate Swift")(
+          "output-dir",
+          po::value<std::filesystem::path>(&output_dir),
+          "Output directory for all generated files")(
           "input-files",
           po::value<std::vector<std::filesystem::path>>(&input_files),
           "List of input files");
@@ -84,6 +88,8 @@ int main(int argc, char* argv[])
         .with_language_cpp();
     if (generate_typescript)
       builder.with_language_ts();
+    if (generate_swift)
+      builder.with_language_swift();
 
     builder.build()->compile();
 

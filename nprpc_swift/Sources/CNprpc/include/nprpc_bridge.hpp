@@ -58,6 +58,12 @@ inline std::vector<int32_t> get_test_array() {
     return {1, 2, 3, 4, 5};
 }
 
+/// Helper to convert std::string to C string for Swift (avoids interior pointer issues)
+/// Swift can't call .c_str() due to lifetime concerns
+inline const char* string_to_cstr(const std::string& str) {
+    return str.c_str();
+}
+
 // ============================================================================
 // RpcConfig - Configuration for RPC builder (Swift-friendly)
 // ============================================================================

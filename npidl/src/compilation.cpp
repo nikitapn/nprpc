@@ -4,6 +4,7 @@
 #include "builder.hpp"
 #include "cpp_builder.hpp"
 #include "parser_factory.hpp"
+#include "swift_builder.hpp"
 #include "ts_builder.hpp"
 
 // Implementation of ICompilation and CompilationBuilder
@@ -87,6 +88,12 @@ CompilationBuilder& CompilationBuilder::with_language_ts()
   return *this;
 }
 
+CompilationBuilder& CompilationBuilder::with_language_swift()
+{
+  language_flags_ |= LanguageFlags::Swift;
+  return *this;
+}
+
 std::unique_ptr<ICompilation> CompilationBuilder::build()
 {
   builders::BuildGroup builder;
@@ -94,6 +101,8 @@ std::unique_ptr<ICompilation> CompilationBuilder::build()
     builder.add<builders::CppBuilder>(output_dir_);
   if (language_flags_ & LanguageFlags::TypeScript)
     builder.add<builders::TSBuilder>(output_dir_);
+  if (language_flags_ & LanguageFlags::Swift)
+    builder.add<builders::SwiftBuilder>(output_dir_);
 
   auto compilation = std::make_unique<ICompilation>();
   compilation->impl_ = std::make_unique<Compilation>(std::move(builder),

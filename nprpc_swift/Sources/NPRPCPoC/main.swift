@@ -36,7 +36,8 @@ print()
 
 // Test 4: EndPoint parsing
 print("Test 4: EndPoint URL parsing")
-if let ep = EndPoint.parse("ws://localhost:8080/nprpc") {
+do {
+    let ep = try EndPoint.parse("ws://localhost:8080/nprpc")
     print("  Parsed: type=\(ep.type), host=\(ep.hostname), port=\(ep.port), path=\(ep.path)")
     let url = ep.toURL()
     print("  Back to URL: \(url)")
@@ -44,39 +45,55 @@ if let ep = EndPoint.parse("ws://localhost:8080/nprpc") {
     assert(ep.hostname == "localhost", "Wrong host!")
     assert(ep.port == 8080, "Wrong port!")
     print("  ✓ PASSED")
-} else {
-    print("  ✗ FAILED: Could not parse URL")
+} catch {
+    print("  ✗ FAILED: \(error)")
 }
 print()
 
 // Test 5: RpcConfiguration
 print("Test 5: RpcConfiguration struct")
 var config = RpcConfiguration()
-config.nameserverIP = "192.168.1.100"
+config.nameserverHost = "192.168.1.100"
 config.nameserverPort = 15000
-config.listenWSPort = 8080
-config.listenQUICPort = 8443
-print("  Config: nameserver=\(config.nameserverIP):\(config.nameserverPort)")
-print("  Config: WS port=\(config.listenWSPort), QUIC port=\(config.listenQUICPort)")
+config.listenWsPort = 8080
+config.listenQuicPort = 8443
+print("  Config: nameserver=\(config.nameserverHost):\(config.nameserverPort)")
+print("  Config: WS port=\(config.listenWsPort), QUIC port=\(config.listenQuicPort)")
 print("  ✓ PASSED")
 print()
 
 // Test 6: Rpc handle (without actually connecting)
 print("Test 6: Rpc handle creation")
-let rpc = Rpc()
-print("  Created Rpc handle")
-print("  Is initialized: \(rpc.isInitialized)")
-print("  Debug info: \(rpc.debugInfo)")
 
 do {
-    try rpc.initialize(config)
-    print("  Initialized: \(rpc.isInitialized)")
+    let rpc = try Rpc.initialize(config)
+    print("  Created Rpc handle")
+    print("  Is initialized: \(rpc.isInitialized)")
+    print("  Debug info: \(rpc.debugInfo())")
     print("  ✓ PASSED")
 } catch {
     print("  ✗ FAILED: \(error)")
 }
 print()
-
+// Test 7: Fluent builder API
+print("Test 7: Fluent builder API (C++ style)")
+do {
+    let rpc = try RpcBuilder()
+        .setLogLevel(.info)
+        .setHostname("localhost")
+        .withTcp(8080)
+        .withHttp(8081)
+            .rootDir("/var/www")
+        .withQuic(8443)
+            .ssl(certFile: "cert.pem", keyFile: "key.pem")
+        .build()
+    print("  Created via fluent builder")
+    print("  Is initialized: \(rpc.isInitialized)")
+    print("  ✓ PASSED")
+} catch {
+    print("  ✗ FAILED: \(error)")
+}
+print()
 // Summary
 print("=" * 60)
 print("All tests passed! Swift C++ interop is working.")
