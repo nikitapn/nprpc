@@ -37,6 +37,7 @@ private:
   void emit_protocol(AstInterfaceDecl* ifs);
   void emit_client_proxy(AstInterfaceDecl* ifs);
   void emit_servant_base(AstInterfaceDecl* ifs);
+  void emit_swift_trampolines(AstInterfaceDecl* ifs);  // C trampolines for Swift servants
   
   // Marshalling support
   void emit_marshal_function(AstStructDecl* s);
@@ -54,6 +55,10 @@ private:
   }
 
 public:
+  // C++ bridge generation (called from CppBuilder)
+  static void emit_cpp_swift_bridge_header(AstInterfaceDecl* ifs, std::ostream& oh, Context* ctx);
+  static void emit_cpp_swift_bridge_impl(AstInterfaceDecl* ifs, std::ostream& oc, Context* ctx);
+  static void emit_cpp_marshal_functions(AstStructDecl* s, std::ostream& oc, Context* ctx);
   virtual void emit_constant(const std::string& name, AstNumber* number) override;
   virtual void emit_struct(AstStructDecl* s) override;
   virtual void emit_exception(AstStructDecl* s) override;

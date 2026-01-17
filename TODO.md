@@ -315,45 +315,96 @@ open class Calculator_Servant: NPRPCServant, ICalculator {
 * [ ] Handle `[unreliable]` attribute
 * [ ] CMake integration for Swift generation
 
-### Phase 3: Servant Dispatch Bridge (1 week)
+### Phase 3: Proxy Wrapping & Servant Dispatch (1 week)
 
-**Goal:** Allow Swift servants to handle RPC calls
+**Goal:** Bridge Swift code with generated C++ proxies/servants
 
-The tricky part - C++ runtime calls dispatch(), which needs to invoke Swift code.
+**Reality Check:** C++ builder generates inline marshalling (no separate functions). The generated code uses:
+- `Calculator::add()` - marshals inline using `_Direct` buffer classes
+- `ICalculator_Servant::dispatch()` - unmarshals inline, routes to virtual methods
 
-**Approach:** Use C++ virtual function that Swift can override:
+#### Approach A: Swift Wraps C++ Proxy (Client-side) ✅ SIMPLEST
+
+Swift delegates to existing C++ proxy class:
+
+```swift
+// Generated Swift wrapper
+public class Calculator: CalculatorProtocol {
+  private let cppProxy: Test.Calculator  // Existing C++ proxy
+  
+  public init(objectPtr: ObjectPtr) {
+    cppProxy = Test.Calculator(interface_idx: 0)
+    cppProxy.set_object_id(objectPtr.object_id)
+    // ... copy other Object fields
+  }
+  
+  public func add(a: Int32, b: Int32) async throws -> Int32 {
+    var result: Int32 = 0
+    cppProxy.add(a, b, &result)  // Call C++ proxy directly (handles marshalling)
+    return result
+  }
+}
+```
+
+**Pros:** Zero duplication, uses existing tested C++ code
+**Cons:** Swift must handle C++ out-params (via inout), async wrapping needed
+
+#### Approach B: C++ Servant Bridge (Server-side)
+
+Generate thin C++ bridge per interface using existing servant dispatch:
 
 ```cpp
-// In C++ (nprpc_swift shim)
-class SwiftServantBridge : public ObjectServant {
-  void* swift_self;  // Pointer to Swift object
-  DispatchFn dispatch_fn;  // Function pointer to Swift dispatch
+// Generated C++ bridge extends existing servant
+class Calculator_SwiftServant : public ICalculator_Servant {
+  void* swift_obj;  // Opaque Swift object
   
-  void dispatch(SessionContext& ctx, bool from_parent) override {
-    dispatch_fn(swift_self, &ctx, from_parent);
+  // Implement virtual methods - call into Swift via trampolines
+  void add(int32_t a, int32_t b, int32_t& result) override {
+    result = swift_calculator_add_trampoline(swift_obj, a, b);
+  }
+  
+  void divide(double n, double d, double& result) override {
+    result = swift_calculator_divide_trampoline(swift_obj, n, d);
   }
 };
 ```
 
 ```swift
-// In Swift
-open class NPRPCServant {
-    private var bridge: SwiftServantBridge
-    
-    // Called from C++ via function pointer
-    func dispatch(ctx: UnsafeMutablePointer<SessionContext>) {
-        // Route to appropriate method based on function_idx
-    }
+// Generated Swift servant
+open class CalculatorServant {
+  private let cppBridge: UnsafeMutablePointer<Calculator_SwiftServant>
+  
+  public init() {
+    cppBridge = Calculator_SwiftServant_create(
+      Unmanaged.passUnretained(self).toOpaque()
+    )
+  }
+  
+  // Swift methods that C++ bridge calls
+  open func add(a: Int32, b: Int32) async throws -> Int32 {
+    fatalError("Subclass must override")
+  }
+}
+
+// C trampolines called from C++ bridge
+@_cdecl("swift_calculator_add_trampoline")
+func swift_calculator_add_trampoline(_ obj: UnsafeMutableRawPointer, _ a: Int32, _ b: Int32) -> Int32 {
+  let servant = Unmanaged<CalculatorServant>.fromOpaque(obj).takeUnretainedValue()
+  // TODO: Handle async - this is the tricky part!
+  return try! await servant.add(a: a, b: b)
 }
 ```
 
+**Challenge:** C++ dispatch() is sync, Swift methods are async
+**Solution:** Bridge async using continuation + task queue (see async_bridge_helper.cpp)
+
 **Tasks:**
-* [ ] Design Swift↔C++ dispatch mechanism
-* [ ] Implement SwiftServantBridge in C++
-* [ ] Implement NPRPCServant base class in Swift
-* [ ] Generate dispatch routing code per interface
-* [ ] Handle async Swift methods from sync C++ dispatch
-* [ ] Test round-trip: Swift client → C++ → Swift servant
+* [ ] Generate C++ servant bridge classes (inherit IFoo_Servant, call Swift via trampolines)
+* [ ] Generate Swift servant wrappers (hold C++ bridge, provide async methods)
+* [ ] Generate @_cdecl trampolines per method
+* [ ] Implement async bridge: C++ sync dispatch → Swift async method → C++ callback
+* [ ] Error propagation: Swift throws → catch → C++ exception in dispatch
+* [ ] Test round-trip: Swift client → C++ transport → Swift servant
 
 ### Phase 4: Your Site Backend Port (2-3 weeks)
 
