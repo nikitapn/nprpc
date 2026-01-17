@@ -1,0 +1,9 @@
+module CNprpc {
+    // Expose specific nprpc headers to Swift
+    header "nprpc_bridge.hpp"
+    
+    // Re-export standard C++ headers needed
+    requires cplusplus
+    
+    export *
+}
