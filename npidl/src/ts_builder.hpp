@@ -79,15 +79,15 @@ private:
   }
 
 public:
-  virtual void emit_constant(const std::string& name, AstNumber* number);
-  virtual void emit_struct(AstStructDecl* s);
-  virtual void emit_exception(AstStructDecl* s);
-  virtual void emit_namespace_begin();
-  virtual void emit_namespace_end();
-  virtual void emit_interface(AstInterfaceDecl* ifs);
-  virtual void emit_using(AstAliasDecl* u);
-  virtual void emit_enum(AstEnumDecl* e);
-  virtual void finalize();
+  virtual void emit_constant(const std::string& name, AstNumber* number) override;
+  virtual void emit_struct(AstStructDecl* s) override;
+  virtual void emit_exception(AstStructDecl* s) override;
+  virtual void emit_namespace_begin() override;
+  virtual void emit_namespace_end() override;
+  virtual void emit_interface(AstInterfaceDecl* ifs) override;
+  virtual void emit_using(AstAliasDecl* u) override;
+  virtual void emit_enum(AstEnumDecl* e) override;
+  virtual void finalize() override;
   virtual Builder* clone(Context* ctx) const override
   {
     return new TSBuilder(ctx, out_dir_);

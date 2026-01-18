@@ -81,13 +81,13 @@ public:
   void start_read_loop();
   void start_write_loop();
 
-  virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms);
+  virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
 
   virtual void send_receive_async(
       flat_buffer&& buffer,
       std::optional<std::function<void(const boost::system::error_code&,
                                        flat_buffer&)>>&& completion_handler,
-      uint32_t timeout_ms);
+      uint32_t timeout_ms) override;
 
   // Override for streaming - just queue the message for writing, no response expected
   virtual void send_stream_message(flat_buffer&& buffer) override;

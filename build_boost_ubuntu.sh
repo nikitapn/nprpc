@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Building Boost in Docker container..."
-docker run --rm -v "$SCRIPT_DIR:/workspace" -w /workspace nprpc-swift-debian bash -c '
+docker run --rm -v "$SCRIPT_DIR:/workspace" -w /workspace nprpc-swift-ubuntu bash -c '
     set -e
     
     echo "=== Downloading Boost 1.89.0 ==="
@@ -23,7 +23,7 @@ docker run --rm -v "$SCRIPT_DIR:/workspace" -w /workspace nprpc-swift-debian bas
     cd third_party/boost_1_89_0
     
     echo "=== Cleaning previous build ==="
-    rm -rf .build_debian_swift/boost_install
+    rm -rf .build_ubuntu_swift/boost_install
     rm -f ./b2 ./bjam
     
     echo "=== Bootstrapping Boost ==="
@@ -40,7 +40,7 @@ EOF
         variant=release \
         link=shared \
         threading=multi \
-        --prefix=/workspace/.build_debian_swift/boost_install \
+        --prefix=/workspace/.build_ubuntu_swift/boost_install \
         --with-system \
         --with-thread \
         --with-filesystem \
@@ -50,12 +50,12 @@ EOF
     
     echo ""
     echo "=== Verifying Boost installation ==="
-    ls -la /workspace/.build_debian_swift/boost_install/include/boost/ | head -20
-    ls -la /workspace/.build_debian_swift/boost_install/lib/
+    ls -la /workspace/.build_ubuntu_swift/boost_install/include/boost/ | head -20
+    ls -la /workspace/.build_ubuntu_swift/boost_install/lib/
     
     echo ""
     echo "✅ Boost build complete!"
 '
 
 echo ""
-echo "Boost installed to: .build_debian_swift/boost_install"
+echo "Boost installed to: .build_ubuntu_swift/boost_install"

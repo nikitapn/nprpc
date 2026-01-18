@@ -16,19 +16,17 @@ function(npidl_generate_idl_files idl_files_list module_name)
         --cpp --ts
         --output-dir ${CMAKE_BINARY_DIR}/npidl_tmp
         ${file}
-      DEPENDS npidl ${file}
-      # BYPRODUCTS ${CMAKE_BINARY_DIR}/${module_name}/src/gen/js/${basename}.ts
-      COMMENT "Generating stubs from ${file}"
-      # Copy the generated files to the correct locations
-      COMMAND ${CMAKE_COMMAND} -E copy
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_BINARY_DIR}/npidl_tmp/${basename}.hpp
         ${CMAKE_BINARY_DIR}/${module_name}/src/gen/include/${basename}.hpp
-      COMMAND ${CMAKE_COMMAND} -E copy
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_BINARY_DIR}/npidl_tmp/${basename}.cpp
         ${CMAKE_BINARY_DIR}/${module_name}/src/gen/${basename}.cpp
-      COMMAND ${CMAKE_COMMAND} -E copy
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_BINARY_DIR}/npidl_tmp/${basename}.ts
         ${CMAKE_BINARY_DIR}/${module_name}/src/gen/js/${basename}.ts
+      DEPENDS npidl ${file}
+      COMMENT "Generating stubs from ${file}"
       VERBATIM
     )
     list(APPEND ${module_name}_GENERATED_SOURCES 

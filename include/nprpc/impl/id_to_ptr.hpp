@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <cstddef> // for std::byte
 
 namespace nprpc::impl {
 
@@ -30,8 +31,7 @@ template <typename T> class IdToPtr
   const uint32_t max_size_;
   std::atomic<Val> tail_ix_;
 
-  using Items = std::aligned_storage_t<sizeof(Item), alignof(Item)>*;
-  Items items_;
+  std::byte* items_;
 
   constexpr static uint32_t index(uint64_t id) noexcept
   {
@@ -132,7 +132,9 @@ public:
       : max_size_{max_size}
   {
     assert(max_size_ > 0);
-    items_ = reinterpret_cast<Items>(new char[max_size * sizeof(Item)]);
+    // Use aligned allocation to replace deprecated std::aligned_storage
+    items_ = static_cast<std::byte*>(
+        ::operator new(max_size * sizeof(Item), std::align_val_t(alignof(Item))));
     init();
   }
 };
