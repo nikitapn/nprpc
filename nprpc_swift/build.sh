@@ -17,9 +17,10 @@ if [ ! -f "$BUILD_DIR/libnprpc.so" ]; then
 fi
 
 # Set up environment for Swift build
-export CPATH="$NPRPC_ROOT/include:$BUILD_DIR/include"
-export LIBRARY_PATH="$BUILD_DIR"
-export LD_LIBRARY_PATH="$BUILD_DIR:$LD_LIBRARY_PATH"
+# Point to our Clang 17-built Boost instead of system Boost
+export CPATH="$NPRPC_ROOT/include:$BUILD_DIR/include:$BUILD_DIR/boost_install/include"
+export LIBRARY_PATH="$BUILD_DIR:$BUILD_DIR/boost_install/lib"
+export LD_LIBRARY_PATH="$BUILD_DIR:$BUILD_DIR/boost_install/lib:$LD_LIBRARY_PATH"
 
 echo "Building nprpc_swift with environment:"
 echo "  CPATH=$CPATH"

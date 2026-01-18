@@ -14,12 +14,15 @@
 #include <optional>
 #include <functional>
 
-// Include actual nprpc headers
-#include <nprpc/nprpc.hpp>
-#include <nprpc/basic.hpp>
-#include <nprpc/endpoint.hpp>
-#include <nprpc/object_ptr.hpp>
-#include <nprpc_base.hpp>
+// Forward declarations only - avoid pulling in Boost/ASIO headers
+// Swift only needs to see the types, not the full implementation
+namespace nprpc {
+    class Rpc;
+    class Poa;
+    class Object;
+    template<typename T> class ObjectPtr;
+    class flat_buffer;
+}
 
 namespace nprpc_swift {
 

@@ -27,14 +27,19 @@ let package = Package(
             path: "Sources/CNprpc",
             publicHeadersPath: "include",
             cxxSettings: [
-                .unsafeFlags(["-std=c++20"]),
+                .unsafeFlags(["-std=c++23"]),
                 // Include nprpc headers from the parent build
                 .unsafeFlags(["-I", "../include"]),
-                .unsafeFlags(["-I", "../.build_swift_clang17/include"])
+                .unsafeFlags(["-I", "../.build_swift_clang17/include"]),
+                // Include Clang 17-built Boost (not system Boost)
+                .unsafeFlags(["-I", "../.build_swift_clang17/boost_install/include"])
             ],
             linkerSettings: [
                 // Link against libnprpc.so
                 .linkedLibrary("nprpc"),
+                // Link against OpenSSL (required by NPRPC)
+                .linkedLibrary("ssl"),
+                .linkedLibrary("crypto"),
                 // Add library search path for local development
                 .unsafeFlags(["-L", "../.build_swift_clang17"]),
                 // Add rpath for runtime

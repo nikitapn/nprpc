@@ -3,6 +3,13 @@
 
 #include "include/nprpc_bridge.hpp"
 
+// Include full nprpc headers in implementation
+#include <nprpc/nprpc.hpp>
+#include <nprpc/basic.hpp>
+#include <nprpc/endpoint.hpp>
+#include <nprpc/object_ptr.hpp>
+#include <nprpc_base.hpp>
+
 #include <sstream>
 #include <regex>
 

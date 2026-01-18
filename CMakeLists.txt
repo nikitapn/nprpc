@@ -60,6 +60,14 @@ endif()
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
+# Custom Boost directory support (for Docker/CI builds with local Boost)
+if(DEFINED BOOST_DIR)
+  message(STATUS "Using custom Boost directory: ${BOOST_DIR}")
+  include_directories(${BOOST_DIR}/include)
+  link_directories(${BOOST_DIR}/lib)
+  set(CMAKE_PREFIX_PATH ${BOOST_DIR} ${CMAKE_PREFIX_PATH})
+endif()
+
 # When using Swift's Clang 17, explicitly link libstdc++
 if(CMAKE_CXX_COMPILER MATCHES "swift.*clang")
   link_libraries(stdc++)
