@@ -6,6 +6,7 @@
 #include "builder.hpp"
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 
 namespace npidl::builders {
 
@@ -117,7 +118,7 @@ public:
   virtual void emit_namespace_end();
   virtual void emit_interface(AstInterfaceDecl* ifs);
   virtual void finalize();
-  virtual Builder* clone(Context* ctx) const
+  virtual Builder* clone(Context* ctx) const override
   {
     return new CppBuilder(ctx, out_path_);
   }

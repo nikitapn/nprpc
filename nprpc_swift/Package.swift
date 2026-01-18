@@ -21,14 +21,24 @@ let package = Package(
     ],
     targets: [
         // C++ bridge module - exposes nprpc headers to Swift
-        // For POC, this is self-contained and doesn't depend on libnprpc
         .target(
             name: "CNprpc",
             dependencies: [],
             path: "Sources/CNprpc",
             publicHeadersPath: "include",
             cxxSettings: [
-                .unsafeFlags(["-std=c++20"])
+                .unsafeFlags(["-std=c++20"]),
+                // Include nprpc headers from the parent build
+                .unsafeFlags(["-I", "../include"]),
+                .unsafeFlags(["-I", "../.build_swift_clang17/include"])
+            ],
+            linkerSettings: [
+                // Link against libnprpc.so
+                .linkedLibrary("nprpc"),
+                // Add library search path for local development
+                .unsafeFlags(["-L", "../.build_swift_clang17"]),
+                // Add rpath for runtime
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "$ORIGIN/../../.build_swift_clang17"])
             ]
         ),
         

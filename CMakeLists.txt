@@ -60,6 +60,12 @@ endif()
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
+# When using Swift's Clang 17, explicitly link libstdc++
+if(CMAKE_CXX_COMPILER MATCHES "swift.*clang")
+  link_libraries(stdc++)
+  message(STATUS "Using Swift's Clang - linking libstdc++")
+endif()
+
 # MsQuic integration
 if(NPRPC_ENABLE_QUIC)
   message(STATUS "QUIC transport enabled - building MsQuic")

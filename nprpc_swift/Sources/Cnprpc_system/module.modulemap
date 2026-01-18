@@ -1,0 +1,17 @@
+module Cnprpc_system [system] {
+    // System module for libnprpc
+    // This tells Swift where to find the actual C++ library
+    
+    // Core NPRPC headers
+    header "/home/nikita/projects/nprpc/include/nprpc/nprpc.hpp"
+    header "/home/nikita/projects/nprpc/include/nprpc/basic.hpp"
+    header "/home/nikita/projects/nprpc/include/nprpc/endpoint.hpp"
+    header "/home/nikita/projects/nprpc/include/nprpc/object_ptr.hpp"
+    
+    // Base types
+    header "/home/nikita/projects/nprpc/include/nprpc_base.hpp"
+    
+    link "nprpc"
+    requires cplusplus
+    export *
+}

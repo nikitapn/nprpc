@@ -14,16 +14,12 @@
 #include <optional>
 #include <functional>
 
-// Forward declare nprpc types to avoid pulling in all headers initially
-namespace nprpc {
-    class Rpc;
-    class Poa;
-    class Object;
-    
-    namespace impl {
-        class RpcImpl;
-    }
-}
+// Include actual nprpc headers
+#include <nprpc/nprpc.hpp>
+#include <nprpc/basic.hpp>
+#include <nprpc/endpoint.hpp>
+#include <nprpc/object_ptr.hpp>
+#include <nprpc_base.hpp>
 
 namespace nprpc_swift {
 

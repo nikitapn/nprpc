@@ -3,10 +3,6 @@
 
 #include "include/nprpc_bridge.hpp"
 
-// Include actual nprpc headers for implementation
-// These are NOT exposed to Swift directly - only the bridge types are
-// #include <nprpc/nprpc.hpp>
-
 #include <sstream>
 #include <regex>
 

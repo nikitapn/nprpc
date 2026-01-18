@@ -26,6 +26,6 @@ public:
   void emit_constant(const std::string&, AstNumber*) override {}
   void emit_using(AstAliasDecl*) override {}
 
-  Builder* clone(Context* ctx) const { return new NullBuilder(ctx); }
+  Builder* clone(Context* ctx) const override { return new NullBuilder(ctx); }
 };
 } // namespace npidl::builders

@@ -1,0 +1,5 @@
+Name: nprpc
+Description: NPRPC - Multi-Transport RPC Framework
+Version: 1.0.0
+Cflags: -I${pcfiledir}/../../include
+Libs: -L${pcfiledir}/../../.build_relwith_debinfo -lnprpc -Wl,-rpath,${pcfiledir}/../../.build_relwith_debinfo

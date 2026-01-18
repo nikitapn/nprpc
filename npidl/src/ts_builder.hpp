@@ -88,7 +88,7 @@ public:
   virtual void emit_using(AstAliasDecl* u);
   virtual void emit_enum(AstEnumDecl* e);
   virtual void finalize();
-  virtual Builder* clone(Context* ctx) const
+  virtual Builder* clone(Context* ctx) const override
   {
     return new TSBuilder(ctx, out_dir_);
   }

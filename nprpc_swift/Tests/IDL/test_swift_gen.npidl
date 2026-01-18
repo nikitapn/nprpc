@@ -1,0 +1,30 @@
+// Test Swift code generation
+
+module Test;
+
+enum Color {
+  Red,
+  Green,
+  Blue
+}
+
+message Point {
+  x: i32;
+  y: i32;
+}
+
+message Rectangle {
+  topLeft: Point;
+  bottomRight: Point;
+  color: Color;
+}
+
+interface Calculator {
+  void add(a: in i32, b: in i32, result: out i32);
+  void divide(numerator: in f64, denominator: in f64, result: out f64);
+}
+
+interface ShapeService {
+  void getRectangle(id: in u32, rect: out Rectangle);
+  void setRectangle(id: in u32, rect: in Rectangle);
+}

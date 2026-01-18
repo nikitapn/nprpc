@@ -89,7 +89,25 @@ struct AstStructDecl;
 struct AstTypeDecl;
 struct AstInterfaceDecl;
 struct AstFunctionDecl;
-struct AstNumber;
+
+enum class NumberFormat { Decimal, Hex, Scientific };
+
+struct AstNumber {
+  std::variant<std::int64_t, float, double, bool> value;
+  NumberFormat format;
+  int max_size = 0;
+
+  std::int64_t decimal() const noexcept
+  {
+    assert(std::holds_alternative<std::int64_t>(value));
+    return std::get<std::int64_t>(value);
+  }
+
+  bool is_decimal() const noexcept
+  {
+    return std::holds_alternative<std::int64_t>(value);
+  }
+};
 
 class Namespace
 {
@@ -187,25 +205,6 @@ enum class FieldType {
   Alias,
   Enum,
   Stream
-};
-
-enum class NumberFormat { Decimal, Hex, Scientific };
-
-struct AstNumber {
-  std::variant<std::int64_t, float, double, bool> value;
-  NumberFormat format;
-  int max_size = 0;
-
-  std::int64_t decimal() const noexcept
-  {
-    assert(std::holds_alternative<std::int64_t>(value));
-    return std::get<std::int64_t>(value);
-  }
-
-  bool is_decimal() const noexcept
-  {
-    return std::holds_alternative<std::int64_t>(value);
-  }
 };
 
 inline bool operator==(std::int64_t x, const AstNumber& n)
