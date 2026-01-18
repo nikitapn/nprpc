@@ -30,9 +30,9 @@ let package = Package(
                 .unsafeFlags(["-std=c++23"]),
                 // Include nprpc headers from the parent build
                 .unsafeFlags(["-I", "../include"]),
-                .unsafeFlags(["-I", "../.build_swift_clang17/include"]),
+                .unsafeFlags(["-I", "../.build_debian_swift/include"]),
                 // Include Clang 17-built Boost (not system Boost)
-                .unsafeFlags(["-I", "../.build_swift_clang17/boost_install/include"])
+                .unsafeFlags(["-I", "../.build_debian_swift/boost_install/include"])
             ],
             linkerSettings: [
                 // Link against libnprpc.so
@@ -41,9 +41,9 @@ let package = Package(
                 .linkedLibrary("ssl"),
                 .linkedLibrary("crypto"),
                 // Add library search path for local development
-                .unsafeFlags(["-L", "../.build_swift_clang17"]),
+                .unsafeFlags(["-L", "../.build_debian_swift"]),
                 // Add rpath for runtime
-                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "$ORIGIN/../../.build_swift_clang17"])
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "$ORIGIN/../../.build_debian_swift"])
             ]
         ),
         

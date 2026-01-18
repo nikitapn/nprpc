@@ -1,14 +1,15 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include <iostream>
 #include <memory>
-#include <print>
 #include <unordered_map>
 
 #include <nprpc_nameserver.hpp>
 
 #include <boost/asio/signal_set.hpp>
 #include <boost/beast/core/error.hpp>
+#include <boost/format.hpp>
 
 #ifndef NPRPC_NAMESERVER_LOG
 #define NPRPC_NAMESERVER_LOG 0
@@ -22,8 +23,8 @@ public:
   void Bind(nprpc::Object* obj, nprpc::flat::Span<char> name) override
   {
     if constexpr (NPRPC_NAMESERVER_LOG) {
-      std::println("Binding object: {}", obj->object_id());
-      std::println("  Object will be bound as: {}", (std::string_view)name);
+      std::cout << boost::format("Binding object: %1%\n") % obj->object_id();
+      std::cout << boost::format("  Object will be bound as: %1%\n") % (std::string_view)name;
     }
     auto const str = std::string((std::string_view)name);
     objects_[str] = std::move(std::unique_ptr<nprpc::Object>(obj));
@@ -44,8 +45,8 @@ public:
     nprpc::detail::helpers::assign_from_cpp_ObjectId(obj, oid);
 
     if constexpr (NPRPC_NAMESERVER_LOG) {
-      std::print("Resolved object: {}", obj.object_id());
-      std::print("  Object is resolved as: {}", str);
+      std::cout << boost::format("Resolved object: %1%\n") % obj.object_id();
+      std::cout << boost::format("  Object is resolved as: %1%\n") % str;
     }
 
     return true;
@@ -84,7 +85,7 @@ int main()
     rpc->destroy();
 
   } catch (const std::exception& e) {
-    std::println(stderr, "Nameserver failed: {}", e.what());
+    std::cerr << boost::format("Nameserver failed: %1%\n") % e.what();
     return 1;
   }
 

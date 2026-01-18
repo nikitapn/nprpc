@@ -5,7 +5,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "Building Docker image with Swift on Debian..."
+echo "Building Docker image with Swift on Ubuntu..."
 docker build -f "$SCRIPT_DIR/Dockerfile.debian-swift" -t nprpc-swift-debian "$SCRIPT_DIR"
 
 echo ""
