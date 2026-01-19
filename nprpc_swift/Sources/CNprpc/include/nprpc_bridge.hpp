@@ -14,7 +14,7 @@
 #include <optional>
 #include <functional>
 
-// Forward declarations only - avoid pulling in Boost/ASIO headers
+// Forward declarations only - avoid pulling in heavy implementation headers
 // Swift only needs to see the types, not the full implementation
 namespace nprpc {
     class Rpc;
@@ -22,6 +22,13 @@ namespace nprpc {
     class Object;
     template<typename T> class ObjectPtr;
     class flat_buffer;
+    
+    // Forward declare LogLevel (defined in nprpc_base.hpp)
+    enum class LogLevel : uint32_t;
+    
+    namespace impl {
+        struct BuildConfig;
+    }
 }
 
 namespace nprpc_swift {
@@ -64,26 +71,36 @@ inline const char* string_to_cstr(const std::string& str) {
 }
 
 // ============================================================================
-// RpcConfig - Configuration for RPC builder (Swift-friendly)
+// ============================================================================
+// BuildConfig - Replicates nprpc::impl::BuildConfig for Swift access
+// We duplicate this struct to make it visible to Swift without exposing internal headers
 // ============================================================================
 
-struct RpcConfig {
-    std::string nameserver_ip = "127.0.0.1";
-    uint16_t nameserver_port = 15000;
-    uint16_t listen_tcp_port = 0;
-    uint16_t listen_ws_port = 0;
-    uint16_t listen_http_port = 0;
-    uint16_t listen_quic_port = 0;
-    uint16_t listen_udp_port = 0;
+struct RpcBuildConfig {
+    uint32_t log_level = 2;  // LogLevel::info
+    uint8_t uuid[16] = {};
+    
+    uint16_t tcp_port = 0;
+    uint16_t udp_port = 0;
+    std::string hostname;
+    
+    // HTTP/HTTPS + WebSocket/SSL WebSocket
+    uint16_t http_port = 0;
+    bool http_ssl_enabled = false;
+    bool http3_enabled = false;
+    bool ssr_enabled = false;
+    bool http_ssl_client_disable_verification = false;
+    std::string http_cert_file;
+    std::string http_key_file;
+    std::string http_dhparams_file;
     std::string http_root_dir;
-    std::string ssl_cert_file;
-    std::string ssl_key_file;
+    std::string ssr_handler_dir;
+    
+    // QUIC
+    uint16_t quic_port = 0;
     std::string quic_cert_file;
     std::string quic_key_file;
-    uint16_t thread_pool_size = 4;
-    
-    // Default constructor
-    RpcConfig() = default;
+    std::string ssl_client_self_signed_cert_path;
 };
 
 // ============================================================================
@@ -104,7 +121,7 @@ public:
     RpcHandle& operator=(RpcHandle&&) noexcept;
     
     /// Initialize the RPC system with config
-    bool initialize(const RpcConfig& config);
+    bool initialize(RpcBuildConfig* config);
     
     /// Run the io_context (blocks until stopped)
     void run();
@@ -120,6 +137,7 @@ public:
     
 private:
     bool initialized_ = false;
+    void* impl_ = nullptr;  // Opaque pointer to RpcHandleImpl
 };
 
 /// Create a new RPC handle

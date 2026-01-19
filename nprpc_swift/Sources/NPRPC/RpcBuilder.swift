@@ -9,7 +9,8 @@ import CNprpc
 class BuildConfig {
     var logLevel: LogLevel = .info
     var hostname: String = ""
-    
+    var threadPoolSize: UInt16 = 4
+
     // TCP
     var tcpPort: UInt16 = 0
     
@@ -37,15 +38,15 @@ class BuildConfig {
     var httpSslClientDisableVerification: Bool = false
 }
 
-/// Log levels matching C++ nprpc::LogLevel
-public enum LogLevel: Int32 {
-    case trace = 0
-    case debug = 1
-    case info = 2
-    case warning = 3
-    case error = 4
-    case critical = 5
-    case off = 6
+/// Log levels matching nprpc::LogLevel (nprpc_base.hpp)
+public enum LogLevel: UInt32 {
+    case off = 0
+    case critical = 1
+    case error = 2
+    case warning = 3  // 'warn' in C++
+    case info = 4
+    case debug = 5
+    case trace = 6
 }
 
 /// Base protocol for all RPC builders providing common configuration
@@ -57,6 +58,10 @@ public protocol RpcBuilderProtocol {
     /// Set hostname for advertised URLs
     @discardableResult
     func setHostname(_ hostname: String) -> Self
+
+    /// Set number of threads in io_context thread pool
+    @discardableResult
+    func setThreadPoolSize(_ size: UInt16) -> Self
     
     /// Enable client to accept self-signed server certificates
     @discardableResult
@@ -100,6 +105,12 @@ extension RpcBuilderInternal {
         config.hostname = hostname
         return self
     }
+
+    @discardableResult
+    public func setThreadPoolSize(_ size: UInt16) -> Self {
+        config.threadPoolSize = size
+        return self
+    }
     
     @discardableResult
     public func enableSslClientSelfSignedCert(_ certPath: String) -> Self {
@@ -134,26 +145,45 @@ extension RpcBuilderInternal {
     }
     
     public func build() throws -> Rpc {
-        // Convert to C++ config and build
-        // TODO: When we link against libnprpc, call actual C++ RpcBuilder
-        // For now, use the POC RpcHandle approach
-        var cxxConfig = nprpc_swift.RpcConfig()
-        cxxConfig.nameserver_ip = std.string(config.hostname)
-        cxxConfig.listen_tcp_port = config.tcpPort
-        cxxConfig.listen_ws_port = config.httpPort
-        cxxConfig.listen_http_port = config.httpPort
-        cxxConfig.listen_quic_port = config.quicPort
-        cxxConfig.listen_udp_port = config.udpPort
+        // Build RpcBuildConfig (Swift-visible struct matching nprpc::impl::BuildConfig)
+        var cxxConfig = nprpc_swift.RpcBuildConfig()
+        
+        // Log level - convert Swift enum to uint32_t matching nprpc::LogLevel order
+        // nprpc::LogLevel: off=0, critical=1, error=2, warn=3, info=4, debug=5, trace=6
+        cxxConfig.log_level = config.logLevel.rawValue
+        
+        // Hostname
+        cxxConfig.hostname = std.string(config.hostname)
+        
+        // Transport ports
+        cxxConfig.tcp_port = config.tcpPort
+        cxxConfig.udp_port = config.udpPort
+        cxxConfig.http_port = config.httpPort
+        cxxConfig.quic_port = config.quicPort
+        
+        // HTTP/WebSocket settings
+        cxxConfig.http_ssl_enabled = config.httpSslEnabled
+        cxxConfig.http3_enabled = config.http3Enabled
+        cxxConfig.ssr_enabled = config.ssrEnabled
+        cxxConfig.http_ssl_client_disable_verification = config.httpSslClientDisableVerification
+        cxxConfig.http_cert_file = std.string(config.httpCertFile)
+        cxxConfig.http_key_file = std.string(config.httpKeyFile)
+        cxxConfig.http_dhparams_file = std.string(config.httpDhparamsFile)
         cxxConfig.http_root_dir = std.string(config.httpRootDir)
-        cxxConfig.ssl_cert_file = std.string(config.httpCertFile)
-        cxxConfig.ssl_key_file = std.string(config.httpKeyFile)
+        cxxConfig.ssr_handler_dir = std.string(config.ssrHandlerDir)
+        
+        // QUIC settings
         cxxConfig.quic_cert_file = std.string(config.quicCertFile)
         cxxConfig.quic_key_file = std.string(config.quicKeyFile)
         
+        // SSL client settings
+        cxxConfig.ssl_client_self_signed_cert_path = std.string(config.sslClientSelfSignedCertPath)
+        
+        // Create RpcHandle and initialize with config (config is moved)
         let handle = UnsafeMutablePointer<nprpc_swift.RpcHandle>.allocate(capacity: 1)
         handle.initialize(to: nprpc_swift.RpcHandle())
         
-        guard handle.pointee.initialize(cxxConfig) else {
+        guard handle.pointee.initialize(&cxxConfig) else {
             handle.deinitialize(count: 1)
             handle.deallocate()
             throw RuntimeError(message: "Failed to initialize NPRPC runtime")

@@ -61,22 +61,20 @@ public struct RpcConfiguration: Sendable {
         self.threadPoolSize = threadPoolSize
     }
     
-    /// Convert to C++ RpcConfig
-    func toCxxConfig() -> nprpc_swift.RpcConfig {
-        var config = nprpc_swift.RpcConfig()
-        config.nameserver_ip = std.string(nameserverHost)
-        config.nameserver_port = nameserverPort
-        config.listen_tcp_port = listenTcpPort
-        config.listen_ws_port = listenWsPort
-        config.listen_http_port = listenHttpPort
-        config.listen_quic_port = listenQuicPort
-        config.listen_udp_port = listenUdpPort
+    /// Convert to C++ RpcBuildConfig (matches nprpc::impl::BuildConfig)
+    func toCxxConfig() -> nprpc_swift.RpcBuildConfig {
+        var config = nprpc_swift.RpcBuildConfig()
+        // Note: RpcBuildConfig matches nprpc::impl::BuildConfig structure
+        config.hostname = std.string(nameserverHost)
+        config.tcp_port = listenTcpPort
+        config.udp_port = listenUdpPort
+        config.http_port = listenHttpPort
+        config.quic_port = listenQuicPort
         config.http_root_dir = std.string(httpRootDir)
-        config.ssl_cert_file = std.string(sslCertFile)
-        config.ssl_key_file = std.string(sslKeyFile)
+        config.http_cert_file = std.string(sslCertFile)
+        config.http_key_file = std.string(sslKeyFile)
         config.quic_cert_file = std.string(quicCertFile)
         config.quic_key_file = std.string(quicKeyFile)
-        config.thread_pool_size = threadPoolSize
         return config
     }
 }
@@ -137,10 +135,10 @@ public final class Rpc {
         rpc.handle!.initialize(to: nprpc_swift.RpcHandle())
         
         // Convert Swift config to C++
-        let cxxConfig = config.toCxxConfig()
+        var cxxConfig = config.toCxxConfig()
         
-        // Initialize
-        guard rpc.handle!.pointee.initialize(cxxConfig) else {
+        // Initialize (pass pointer to config)
+        guard rpc.handle!.pointee.initialize(&cxxConfig) else {
             rpc.handle!.deinitialize(count: 1)
             rpc.handle!.deallocate()
             rpc.handle = nil

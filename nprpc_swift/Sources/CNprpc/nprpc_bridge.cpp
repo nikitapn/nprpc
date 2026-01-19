@@ -8,12 +8,42 @@
 #include <nprpc/basic.hpp>
 #include <nprpc/endpoint.hpp>
 #include <nprpc/object_ptr.hpp>
-#include <nprpc_base.hpp>
+
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/post.hpp>
+#include <boost/asio/strand.hpp>
+#include <boost/asio/thread_pool.hpp>
+#include <boost/asio/use_future.hpp>
 
 #include <sstream>
 #include <regex>
 
 namespace nprpc_swift {
+
+struct RpcHandleImpl {
+    nprpc::Rpc* rpc_instance = nullptr;
+
+    boost::asio::io_context ioc;
+    boost::asio::thread_pool pool;
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type>
+      work_guard;
+
+    RpcHandleImpl(size_t size)
+        : pool(size), work_guard(boost::asio::make_work_guard(ioc))
+    {
+        for (size_t i = 0; i < size; ++i) {
+            boost::asio::post(pool, [this] {
+                ioc.run();
+            });
+        }
+    }
+
+    ~RpcHandleImpl() {
+        ioc.stop();
+        work_guard.reset();
+        pool.join();
+    }
+};
 
 // ============================================================================
 // RpcHandle implementation
@@ -26,8 +56,9 @@ RpcHandle::~RpcHandle() {
 }
 
 RpcHandle::RpcHandle(RpcHandle&& other) noexcept 
-    : initialized_(other.initialized_) {
+    : initialized_(other.initialized_), impl_(other.impl_) {
     other.initialized_ = false;
+    other.impl_ = nullptr;
 }
 
 RpcHandle& RpcHandle::operator=(RpcHandle&& other) noexcept {
@@ -36,38 +67,109 @@ RpcHandle& RpcHandle::operator=(RpcHandle&& other) noexcept {
             stop();
         }
         initialized_ = other.initialized_;
+        impl_ = other.impl_;
         other.initialized_ = false;
+        other.impl_ = nullptr;
     }
     return *this;
 }
 
-bool RpcHandle::initialize(const RpcConfig& config) {
-    if (initialized_) {
-        return false;  // Already initialized
+bool RpcHandle::initialize(RpcBuildConfig* config) {
+    if (initialized_ || !config) {
+        return false;  // Already initialized or null config
     }
     
-    // TODO: Actually initialize nprpc::Rpc here
-    // For POC, just mark as initialized
-    // 
-    // auto builder = nprpc::Rpc::builder();
-    // builder->set_nameserver_address(config.nameserver_ip, config.nameserver_port);
-    // if (config.listen_tcp_port > 0) builder->set_listen_tcp_port(config.listen_tcp_port);
-    // ... etc
-    // builder->build();
-    
-    initialized_ = true;
-    return true;
+    try {
+        // Create implementation (with thread pool if needed)
+        impl_ = new RpcHandleImpl(4);
+        auto* impl = static_cast<RpcHandleImpl*>(impl_);
+
+        // Convert RpcBuildConfig to nprpc::impl::BuildConfig
+        nprpc::impl::BuildConfig cxxConfig;
+        cxxConfig.log_level = static_cast<nprpc::LogLevel>(config->log_level);
+        std::memcpy(&cxxConfig.uuid, config->uuid, 16);
+        cxxConfig.tcp_port = config->tcp_port;
+        cxxConfig.udp_port = config->udp_port;
+        cxxConfig.hostname = config->hostname;
+        cxxConfig.http_port = config->http_port;
+        cxxConfig.http_ssl_enabled = config->http_ssl_enabled;
+        cxxConfig.http3_enabled = config->http3_enabled;
+        cxxConfig.ssr_enabled = config->ssr_enabled;
+        cxxConfig.http_ssl_client_disable_verification = config->http_ssl_client_disable_verification;
+        cxxConfig.http_cert_file = config->http_cert_file;
+        cxxConfig.http_key_file = config->http_key_file;
+        cxxConfig.http_dhparams_file = config->http_dhparams_file;
+        cxxConfig.http_root_dir = config->http_root_dir;
+        cxxConfig.ssr_handler_dir = config->ssr_handler_dir;
+        cxxConfig.quic_port = config->quic_port;
+        cxxConfig.quic_cert_file = config->quic_cert_file;
+        cxxConfig.quic_key_file = config->quic_key_file;
+        cxxConfig.ssl_client_self_signed_cert_path = config->ssl_client_self_signed_cert_path;
+
+        // Build RpcSwift using the provided config
+        // We create a custom builder that accepts pre-configured BuildConfig
+        class RpcSwiftBuilder : public nprpc::impl::RpcBuilderBase {
+            nprpc::impl::BuildConfig cfg_;
+        public:
+            explicit RpcSwiftBuilder(nprpc::impl::BuildConfig&& cfg)
+                : nprpc::impl::RpcBuilderBase(cfg_), cfg_(std::move(cfg)) {}
+            
+            nprpc::Rpc* build(boost::asio::io_context& ioc) {
+                return nprpc::impl::RpcBuilderBase::build(ioc);
+            }
+        };
+        
+        impl->rpc_instance = RpcSwiftBuilder(std::move(cxxConfig)).build(impl->ioc);
+
+        initialized_ = true;
+        return true;
+    } catch (const std::exception& e) {
+        // Log error but don't throw to Swift (Swift runtime not built with exceptions)
+        std::cerr << "RpcHandle::initialize failed: " << e.what() << std::endl;
+        if (impl_) {
+            delete static_cast<RpcHandleImpl*>(impl_);
+            impl_ = nullptr;
+        }
+        return false;
+    } catch (...) {
+        std::cerr << "RpcHandle::initialize failed with unknown exception" << std::endl;
+        if (impl_) {
+            delete static_cast<RpcHandleImpl*>(impl_);
+            impl_ = nullptr;
+        }
+        return false;
+    }
 }
 
 void RpcHandle::run() {
-    if (!initialized_) return;
-    // TODO: Call nprpc::Rpc::run()
+    if (!initialized_ || !impl_) return;
+    try {
+        auto* impl = static_cast<RpcHandleImpl*>(impl_);
+        // Run the io_context (blocks)
+        impl->ioc.run();
+    } catch (const std::exception& e) {
+        std::cerr << "RpcHandle::run failed: " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "RpcHandle::run failed with unknown exception" << std::endl;
+    }
 }
 
 void RpcHandle::stop() {
-    if (!initialized_) return;
-    // TODO: Call nprpc::Rpc::stop()
-    initialized_ = false;
+    if (!initialized_ || !impl_) return;
+    try {
+        auto* impl = static_cast<RpcHandleImpl*>(impl_);
+        delete impl;
+        impl_ = nullptr;
+        initialized_ = false;
+    } catch (const std::exception& e) {
+        std::cerr << "RpcHandle::stop failed: " << e.what() << std::endl;
+        impl_ = nullptr;
+        initialized_ = false;
+    } catch (...) {
+        std::cerr << "RpcHandle::stop failed with unknown exception" << std::endl;
+        impl_ = nullptr;
+        initialized_ = false;
+    }
 }
 
 std::string RpcHandle::get_debug_info() const {
