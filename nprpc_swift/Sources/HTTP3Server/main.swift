@@ -106,7 +106,7 @@ do {
     
     print("✓ Created test content at \(rootDir)/index.html")
     print()
-    print("Server is starting...")
+    print("Server is running in background (4 worker threads)...")
     print("Press Ctrl+C to stop")
     print()
     
@@ -121,8 +121,9 @@ do {
     signal(SIGINT, SIG_IGN)
     signalSource.resume()
     
-    // Run the server (blocks until stop() is called)
-    try rpc.run()
+    // Keep the process alive while server runs in background thread pool
+    // (With default thread pool size of 4, rpc.run() is a no-op)
+    dispatchMain()
     
 } catch {
     print("❌ Error: \(error)")

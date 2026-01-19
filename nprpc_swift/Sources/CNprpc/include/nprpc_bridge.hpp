@@ -121,7 +121,10 @@ public:
     RpcHandle& operator=(RpcHandle&&) noexcept;
     
     /// Initialize the RPC system with config
-    bool initialize(RpcBuildConfig* config);
+    /// @param config Configuration struct (pointer, can't use rvalue ref for Swift compat)
+    /// @param thread_pool_size Number of worker threads (0 = manual mode, user must call run(); default = 4)
+    /// @return true if successful, false on error
+    bool initialize(RpcBuildConfig* config, size_t thread_pool_size = 4);
     
     /// Run the io_context (blocks until stopped)
     void run();

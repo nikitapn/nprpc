@@ -137,8 +137,9 @@ public final class Rpc {
         // Convert Swift config to C++
         var cxxConfig = config.toCxxConfig()
         
-        // Initialize (pass pointer to config)
-        guard rpc.handle!.pointee.initialize(&cxxConfig) else {
+        // Initialize (pass pointer to config and thread pool size)
+        // Use thread pool size from config (default 4)
+        guard rpc.handle!.pointee.initialize(&cxxConfig, Int(config.threadPoolSize)) else {
             rpc.handle!.deinitialize(count: 1)
             rpc.handle!.deallocate()
             rpc.handle = nil

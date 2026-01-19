@@ -179,11 +179,12 @@ extension RpcBuilderInternal {
         // SSL client settings
         cxxConfig.ssl_client_self_signed_cert_path = std.string(config.sslClientSelfSignedCertPath)
         
-        // Create RpcHandle and initialize with config (config is moved)
+        // Create RpcHandle and initialize with config
+        // Thread pool size: 0 = manual mode (must call run()), >0 = auto background threads
         let handle = UnsafeMutablePointer<nprpc_swift.RpcHandle>.allocate(capacity: 1)
         handle.initialize(to: nprpc_swift.RpcHandle())
         
-        guard handle.pointee.initialize(&cxxConfig) else {
+        guard handle.pointee.initialize(&cxxConfig, Int(config.threadPoolSize)) else {
             handle.deinitialize(count: 1)
             handle.deallocate()
             throw RuntimeError(message: "Failed to initialize NPRPC runtime")

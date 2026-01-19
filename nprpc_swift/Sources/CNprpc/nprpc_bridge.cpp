@@ -24,24 +24,31 @@ struct RpcHandleImpl {
     nprpc::Rpc* rpc_instance = nullptr;
 
     boost::asio::io_context ioc;
-    boost::asio::thread_pool pool;
+    std::unique_ptr<boost::asio::thread_pool> pool;
     boost::asio::executor_work_guard<boost::asio::io_context::executor_type>
       work_guard;
 
-    RpcHandleImpl(size_t size)
-        : pool(size), work_guard(boost::asio::make_work_guard(ioc))
+    RpcHandleImpl(size_t thread_count)
+        : work_guard(boost::asio::make_work_guard(ioc))
     {
-        for (size_t i = 0; i < size; ++i) {
-            boost::asio::post(pool, [this] {
-                ioc.run();
-            });
+        // Only create thread pool if thread_count > 0
+        // If thread_count == 0, user must call run() manually
+        if (thread_count > 0) {
+            pool = std::make_unique<boost::asio::thread_pool>(thread_count);
+            for (size_t i = 0; i < thread_count; ++i) {
+                boost::asio::post(*pool, [this] {
+                    ioc.run();
+                });
+            }
         }
     }
 
     ~RpcHandleImpl() {
         ioc.stop();
         work_guard.reset();
-        pool.join();
+        if (pool) {
+            pool->join();
+        }
     }
 };
 
@@ -74,14 +81,16 @@ RpcHandle& RpcHandle::operator=(RpcHandle&& other) noexcept {
     return *this;
 }
 
-bool RpcHandle::initialize(RpcBuildConfig* config) {
+bool RpcHandle::initialize(RpcBuildConfig* config, size_t thread_pool_size) {
     if (initialized_ || !config) {
         return false;  // Already initialized or null config
     }
     
     try {
-        // Create implementation (with thread pool if needed)
-        impl_ = new RpcHandleImpl(4);
+        // Create implementation
+        // thread_pool_size == 0: no thread pool, user must call run() manually (blocking)
+        // thread_pool_size > 0: background thread pool, run() is a no-op
+        impl_ = new RpcHandleImpl(thread_pool_size);
         auto* impl = static_cast<RpcHandleImpl*>(impl_);
 
         // Convert RpcBuildConfig to nprpc::impl::BuildConfig
@@ -145,8 +154,12 @@ void RpcHandle::run() {
     if (!initialized_ || !impl_) return;
     try {
         auto* impl = static_cast<RpcHandleImpl*>(impl_);
-        // Run the io_context (blocks)
-        impl->ioc.run();
+        // Only call run() if no thread pool (thread_count was 0)
+        // Otherwise io_context is already running in background threads
+        if (!impl->pool) {
+            impl->ioc.run();  // Blocking call for manual mode
+        }
+        // If thread pool exists, this is a no-op (already running in background)
     } catch (const std::exception& e) {
         std::cerr << "RpcHandle::run failed: " << e.what() << std::endl;
     } catch (...) {
