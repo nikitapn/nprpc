@@ -42,6 +42,8 @@ private:
   // Marshalling support
   void emit_marshal_function(AstStructDecl* s);
   void emit_unmarshal_function(AstStructDecl* s);
+  void emit_field_marshal(AstFieldDecl* f, int& offset, const std::string& data_name);
+  void emit_field_unmarshal(AstFieldDecl* f, int& offset, const std::string& result_name, bool has_endpoint = false);
   
   // Utilities
   _ns ns(Namespace* nm) const;

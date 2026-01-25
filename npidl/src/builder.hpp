@@ -104,6 +104,7 @@ protected:
   void make_arguments_structs(AstFunctionDecl* fn);
   void emit_arguments_structs(std::function<void(AstStructDecl*)> fn);
 
+  // Start a new block
   auto bb(bool newline = true)
   {
     return OstreamWrapper{[this, newline](std::ostream& os) {
@@ -113,6 +114,7 @@ protected:
     }};
   }
 
+  // End the current block
   auto eb(bool newline = true)
   {
     return OstreamWrapper{[this, newline](std::ostream& os) {
@@ -122,6 +124,7 @@ protected:
     }};
   }
 
+  // Output current block depth
   auto bl()
   {
     return OstreamWrapper{[this](std::ostream& os) { os << block_depth_; }};

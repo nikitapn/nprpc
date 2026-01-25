@@ -21,20 +21,19 @@ public struct Point: Codable, Sendable {
 
 
 // MARK: - Marshal Point
-
-func marshal_Point(buffer: UnsafeMutableRawPointer, offset: Int, data: Point) {
+public func marshal_Point(buffer: UnsafeMutableRawPointer, offset: Int, data: Point) {
   buffer.storeBytes(of: data.x, toByteOffset: offset + 0, as: Int32.self)
   buffer.storeBytes(of: data.y, toByteOffset: offset + 4, as: Int32.self)
 }
 
 // MARK: - Unmarshal Point
-
-func unmarshal_Point(buffer: UnsafeRawPointer, offset: Int) -> Point {
-  return Point(
-    x: buffer.load(fromByteOffset: offset + 0, as: Int32.self),
-    y: buffer.load(fromByteOffset: offset + 4, as: Int32.self)
-  )
+public func unmarshal_Point(buffer: UnsafeRawPointer, offset: Int) -> Point {
+  var result = Point()
+  result.x = buffer.load(fromByteOffset: offset + 0, as: Int32.self)
+  result.y = buffer.load(fromByteOffset: offset + 4, as: Int32.self)
+  return result
 }
+
 public struct Rectangle: Codable, Sendable {
   public var topLeft: Point
   public var bottomRight: Point
@@ -49,60 +48,114 @@ public struct Rectangle: Codable, Sendable {
 
 
 // MARK: - Marshal Rectangle
-
-func marshal_Rectangle(buffer: UnsafeMutableRawPointer, offset: Int, data: Rectangle) {
+public func marshal_Rectangle(buffer: UnsafeMutableRawPointer, offset: Int, data: Rectangle) {
   marshal_Point(buffer: buffer, offset: offset + 0, data: data.topLeft)
   marshal_Point(buffer: buffer, offset: offset + 8, data: data.bottomRight)
   buffer.storeBytes(of: data.color.rawValue, toByteOffset: offset + 16, as: Int32.self)
 }
 
 // MARK: - Unmarshal Rectangle
-
-func unmarshal_Rectangle(buffer: UnsafeRawPointer, offset: Int) -> Rectangle {
-  return Rectangle(
-    topLeft: unmarshal_Point(buffer: buffer, offset: offset + 0),
-    bottomRight: unmarshal_Point(buffer: buffer, offset: offset + 8),
-    color: Color(rawValue: buffer.load(fromByteOffset: offset + 16, as: Int32.self))!
-  )
+public func unmarshal_Rectangle(buffer: UnsafeRawPointer, offset: Int) -> Rectangle {
+  var result = Rectangle()
+  result.topLeft = unmarshal_Point(buffer: buffer, offset: offset + 0)
+  result.bottomRight = unmarshal_Point(buffer: buffer, offset: offset + 8)
+  result.color = Color(rawValue: buffer.load(fromByteOffset: offset + 16, as: Int32.self))!
+  return result
 }
+
 public protocol CalculatorProtocol {
   func add(a: Int32, b: Int32) throws -> Int32
   func divide(numerator: Double, denominator: Double) throws -> Double
 }
 
 // Client proxy for Calculator
-// Wraps C++ proxy and provides Swift-friendly API
+// Pure Swift implementation with direct marshalling
 public class Calculator: CalculatorProtocol {
-  private var cppProxy: Test.Calculator
+  private let object: NPRPCObject
 
-  public init(_ cppProxy: Test.Calculator)   {
-    self.cppProxy = cppProxy
-  }
-
-  public static func create(from object: nprpc.Object) -> Calculator   {
-    return Calculator(Test.Calculator(object))
+  public init(_ object: NPRPCObject)   {
+    self.object = object
   }
 
   public func add(a: Int32, b: Int32) throws -> Int32   {
-    // Call C++ proxy (handles marshalling)
-    var result: Int32 = 0
-    cppProxy.add(a, b, &result)
-    return result
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(40)
+    buffer.commit(40)
+    guard let data = buffer.data else { throw NPRPCError.bufferError }
+
+    // Write message header
+    data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    data.storeBytes(of: UInt32(1), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall
+    data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    data.storeBytes(of: object.poaIdx, toByteOffset: 16, as: UInt16.self)
+    data.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    data.storeBytes(of: UInt8(0), toByteOffset: 19, as: UInt8.self)  // function_idx
+    data.storeBytes(of: object.objectId, toByteOffset: 24, as: UInt64.self)
+
+    // Marshal input arguments
+    let inArgs = (_1: a, _2: b)
+    marshal_test_swift_gen_M1(buffer: data, offset: 32, data: inArgs)
+
+    data.storeBytes(of: UInt32(36), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try object.session.sendReceive(buffer: buffer, timeout: object.timeout)
+
+    // Handle reply
+    let stdReply = handleStandardReply(buffer: buffer)
+    if stdReply != -1 { throw NPRPCError.unexpectedReply }
+
+    guard let responseData = buffer.data else { throw NPRPCError.bufferError }
+    let out = unmarshal_test_swift_gen_M2(buffer: responseData, offset: 16)
+    return out._1
   }
 
   public func divide(numerator: Double, denominator: Double) throws -> Double   {
-    // Call C++ proxy (handles marshalling)
-    var result: Double = 0
-    cppProxy.divide(numerator, denominator, &result)
-    return result
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(48)
+    buffer.commit(48)
+    guard let data = buffer.data else { throw NPRPCError.bufferError }
+
+    // Write message header
+    data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    data.storeBytes(of: UInt32(1), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall
+    data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    data.storeBytes(of: object.poaIdx, toByteOffset: 16, as: UInt16.self)
+    data.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    data.storeBytes(of: UInt8(1), toByteOffset: 19, as: UInt8.self)  // function_idx
+    data.storeBytes(of: object.objectId, toByteOffset: 24, as: UInt64.self)
+
+    // Marshal input arguments
+    let inArgs = (_1: numerator, _2: denominator)
+    marshal_test_swift_gen_M3(buffer: data, offset: 32, data: inArgs)
+
+    data.storeBytes(of: UInt32(44), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try object.session.sendReceive(buffer: buffer, timeout: object.timeout)
+
+    // Handle reply
+    let stdReply = handleStandardReply(buffer: buffer)
+    if stdReply != -1 { throw NPRPCError.unexpectedReply }
+
+    guard let responseData = buffer.data else { throw NPRPCError.bufferError }
+    let out = unmarshal_test_swift_gen_M4(buffer: responseData, offset: 16)
+    return out._1
   }
 
 }
 
 // Servant base for Calculator
-// Subclass and implement methods. C++ bridge handles dispatch.
-open class CalculatorServant: CalculatorProtocol {
-  public init() {}
+open class CalculatorServant: NPRPCServant, CalculatorProtocol {
+  public override init() { super.init() }
 
   open func add(a: Int32, b: Int32) throws -> Int32   {
     fatalError("Subclass must implement add")
@@ -112,49 +165,67 @@ open class CalculatorServant: CalculatorProtocol {
     fatalError("Subclass must implement divide")
   }
 
+  // Dispatch incoming RPC calls
+  public override func dispatch(buffer: FlatBuffer, remoteEndpoint: NPRPCEndpoint)   {
+    guard let data = buffer.data else { return }
+
+    // Read function index
+    let functionIdx = data.load(fromByteOffset: 19, as: UInt8.self)
+
+    switch functionIdx     {
+      case 0: // add
+      {
+        
+// Unmarshal input arguments
+        let ia = unmarshal_test_swift_gen_M1(buffer: data, offset: 32)
+        
+        let _out_result = try add(a: ia._1, b: ia._2)
+        
+// Prepare output buffer
+        let obuf = buffer
+        obuf.consume(obuf.size)
+        obuf.prepare(20)
+        obuf.commit(20)
+        
+// Marshal output arguments
+        guard let outData = buffer.data else { return }
+        let out_data = (_1: _out_result)
+        marshal_test_swift_gen_M2(buffer: outData, offset: 16, data: out_data)
+        outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
+        outData.storeBytes(of: UInt32(2), toByteOffset: 4, as: UInt32.self)  // MessageId.BlockResponse
+        outData.storeBytes(of: UInt32(1), toByteOffset: 8, as: UInt32.self)  // MessageType.Answer
+      }
+      case 1: // divide
+      {
+        
+// Unmarshal input arguments
+        let ia = unmarshal_test_swift_gen_M3(buffer: data, offset: 32)
+        
+        let _out_result = try divide(numerator: ia._1, denominator: ia._2)
+        
+// Prepare output buffer
+        let obuf = buffer
+        obuf.consume(obuf.size)
+        obuf.prepare(24)
+        obuf.commit(24)
+        
+// Marshal output arguments
+        guard let outData = buffer.data else { return }
+        let out_data = (_1: _out_result)
+        marshal_test_swift_gen_M4(buffer: outData, offset: 16, data: out_data)
+        outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
+        outData.storeBytes(of: UInt32(2), toByteOffset: 4, as: UInt32.self)  // MessageId.BlockResponse
+        outData.storeBytes(of: UInt32(1), toByteOffset: 8, as: UInt32.self)  // MessageType.Answer
+      }
+      default:
+      {
+        makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error_UnknownFunctionIdx
+      }
+    }
+ // switch
+  }
+ // dispatch
 }
-
-
-// MARK: - C Trampolines for Swift Servant
-// These are called from C++ bridge (Calculator_SwiftBridge)
-
-@_cdecl("add_swift_trampoline")
-func add_swift_trampoline(
-  _ servant: UnsafeMutableRawPointer,
-  _ a: Int32,
-  _ b: Int32,
-  _ result: UnsafeMutablePointer<Int32>
-) {
-  let swiftServant = Unmanaged<CalculatorServant>.fromOpaque(servant).takeUnretainedValue()
-  do   {
-    let resultValue = try swiftServant.add(a: a, b: b)
-    result.pointee = resultValue
-  }
- catch   {
-    // TODO: Propagate Swift error to C++ exception
-    fatalError("Error in add: \(error)")
-  }
-}
-
-
-@_cdecl("divide_swift_trampoline")
-func divide_swift_trampoline(
-  _ servant: UnsafeMutableRawPointer,
-  _ numerator: Double,
-  _ denominator: Double,
-  _ result: UnsafeMutablePointer<Double>
-) {
-  let swiftServant = Unmanaged<CalculatorServant>.fromOpaque(servant).takeUnretainedValue()
-  do   {
-    let resultValue = try swiftServant.divide(numerator: numerator, denominator: denominator)
-    result.pointee = resultValue
-  }
- catch   {
-    // TODO: Propagate Swift error to C++ exception
-    fatalError("Error in divide: \(error)")
-  }
-}
-
 
 public protocol ShapeServiceProtocol {
   func getRectangle(id: UInt32) throws -> Rectangle
@@ -162,36 +233,89 @@ public protocol ShapeServiceProtocol {
 }
 
 // Client proxy for ShapeService
-// Wraps C++ proxy and provides Swift-friendly API
+// Pure Swift implementation with direct marshalling
 public class ShapeService: ShapeServiceProtocol {
-  private var cppProxy: Test.ShapeService
+  private let object: NPRPCObject
 
-  public init(_ cppProxy: Test.ShapeService)   {
-    self.cppProxy = cppProxy
-  }
-
-  public static func create(from object: nprpc.Object) -> ShapeService   {
-    return ShapeService(Test.ShapeService(object))
+  public init(_ object: NPRPCObject)   {
+    self.object = object
   }
 
   public func getRectangle(id: UInt32) throws -> Rectangle   {
-    // Call C++ proxy (handles marshalling)
-    var rect: Rectangle = 0
-    cppProxy.getRectangle(id, &rect)
-    return rect
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(36)
+    buffer.commit(36)
+    guard let data = buffer.data else { throw NPRPCError.bufferError }
+
+    // Write message header
+    data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    data.storeBytes(of: UInt32(1), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall
+    data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    data.storeBytes(of: object.poaIdx, toByteOffset: 16, as: UInt16.self)
+    data.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    data.storeBytes(of: UInt8(0), toByteOffset: 19, as: UInt8.self)  // function_idx
+    data.storeBytes(of: object.objectId, toByteOffset: 24, as: UInt64.self)
+
+    // Marshal input arguments
+    let inArgs = (_1: id)
+    marshal_test_swift_gen_M5(buffer: data, offset: 32, data: inArgs)
+
+    data.storeBytes(of: UInt32(32), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try object.session.sendReceive(buffer: buffer, timeout: object.timeout)
+
+    // Handle reply
+    let stdReply = handleStandardReply(buffer: buffer)
+    if stdReply != -1 { throw NPRPCError.unexpectedReply }
+
+    guard let responseData = buffer.data else { throw NPRPCError.bufferError }
+    let out = unmarshal_test_swift_gen_M6(buffer: responseData, offset: 16)
+    return out._1
   }
 
   public func setRectangle(id: UInt32, rect: Rectangle) throws   {
-    // Call C++ proxy (handles marshalling)
-    cppProxy.setRectangle(id, rect)
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(56)
+    buffer.commit(56)
+    guard let data = buffer.data else { throw NPRPCError.bufferError }
+
+    // Write message header
+    data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    data.storeBytes(of: UInt32(1), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall
+    data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    data.storeBytes(of: object.poaIdx, toByteOffset: 16, as: UInt16.self)
+    data.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    data.storeBytes(of: UInt8(1), toByteOffset: 19, as: UInt8.self)  // function_idx
+    data.storeBytes(of: object.objectId, toByteOffset: 24, as: UInt64.self)
+
+    // Marshal input arguments
+    let inArgs = (_1: id, _2: rect)
+    marshal_test_swift_gen_M7(buffer: data, offset: 32, data: inArgs)
+
+    data.storeBytes(of: UInt32(52), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try object.session.sendReceive(buffer: buffer, timeout: object.timeout)
+
+    // Handle reply
+    let stdReply = handleStandardReply(buffer: buffer)
+    if stdReply != 0 { throw NPRPCError.unexpectedReply }
   }
 
 }
 
 // Servant base for ShapeService
-// Subclass and implement methods. C++ bridge handles dispatch.
-open class ShapeServiceServant: ShapeServiceProtocol {
-  public init() {}
+open class ShapeServiceServant: NPRPCServant, ShapeServiceProtocol {
+  public override init() { super.init() }
 
   open func getRectangle(id: UInt32) throws -> Rectangle   {
     fatalError("Subclass must implement getRectangle")
@@ -201,45 +325,54 @@ open class ShapeServiceServant: ShapeServiceProtocol {
     fatalError("Subclass must implement setRectangle")
   }
 
+  // Dispatch incoming RPC calls
+  public override func dispatch(buffer: FlatBuffer, remoteEndpoint: NPRPCEndpoint)   {
+    guard let data = buffer.data else { return }
+
+    // Read function index
+    let functionIdx = data.load(fromByteOffset: 19, as: UInt8.self)
+
+    switch functionIdx     {
+      case 0: // getRectangle
+      {
+        
+// Unmarshal input arguments
+        let ia = unmarshal_test_swift_gen_M5(buffer: data, offset: 32)
+        
+        let _out_rect = try getRectangle(id: ia._1)
+        
+// Prepare output buffer
+        let obuf = buffer
+        obuf.consume(obuf.size)
+        obuf.prepare(36)
+        obuf.commit(36)
+        
+// Marshal output arguments
+        guard let outData = buffer.data else { return }
+        let out_data = (_1: _out_rect)
+        marshal_test_swift_gen_M6(buffer: outData, offset: 16, data: out_data)
+        outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
+        outData.storeBytes(of: UInt32(2), toByteOffset: 4, as: UInt32.self)  // MessageId.BlockResponse
+        outData.storeBytes(of: UInt32(1), toByteOffset: 8, as: UInt32.self)  // MessageType.Answer
+      }
+      case 1: // setRectangle
+      {
+        
+// Unmarshal input arguments
+        let ia = unmarshal_test_swift_gen_M7(buffer: data, offset: 32)
+        
+        try setRectangle(id: ia._1, rect: ia._2)
+        
+// Send success
+        makeSimpleAnswer(buffer: buffer, messageId: 5)  // Success
+      }
+      default:
+      {
+        makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error_UnknownFunctionIdx
+      }
+    }
+ // switch
+  }
+ // dispatch
 }
-
-
-// MARK: - C Trampolines for Swift Servant
-// These are called from C++ bridge (ShapeService_SwiftBridge)
-
-@_cdecl("getRectangle_swift_trampoline")
-func getRectangle_swift_trampoline(
-  _ servant: UnsafeMutableRawPointer,
-  _ id: UInt32,
-  _ rect: UnsafeMutableRawPointer
-) {
-  let swiftServant = Unmanaged<ShapeServiceServant>.fromOpaque(servant).takeUnretainedValue()
-  do   {
-    let rectValue = try swiftServant.getRectangle(id: id)
-    marshal_Rectangle(buffer: rect, offset: 0, data: rectValue)
-  }
- catch   {
-    // TODO: Propagate Swift error to C++ exception
-    fatalError("Error in getRectangle: \(error)")
-  }
-}
-
-
-@_cdecl("setRectangle_swift_trampoline")
-func setRectangle_swift_trampoline(
-  _ servant: UnsafeMutableRawPointer,
-  _ id: UInt32,
-  _ rect: UnsafeRawPointer
-) {
-  let swiftServant = Unmanaged<ShapeServiceServant>.fromOpaque(servant).takeUnretainedValue()
-  let rectUnmarshaled = unmarshal_Rectangle(buffer: rect, offset: 0)
-  do   {
-    try swiftServant.setRectangle(id: id, rect: rectUnmarshaled)
-  }
- catch   {
-    // TODO: Propagate Swift error to C++ exception
-    fatalError("Error in setRectangle: \(error)")
-  }
-}
-
 

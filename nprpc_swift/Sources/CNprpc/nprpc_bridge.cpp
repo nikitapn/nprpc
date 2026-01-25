@@ -265,3 +265,169 @@ std::string EndPointInfo::to_url() const {
 }
 
 } // namespace nprpc_swift
+
+// ============================================================================
+// C Bridge Functions for Swift Interop
+// ============================================================================
+
+extern "C" {
+
+// FlatBuffer operations
+void* nprpc_flatbuffer_create() {
+    return new nprpc::flat_buffer();
+}
+
+void nprpc_flatbuffer_destroy(void* fb) {
+    delete static_cast<nprpc::flat_buffer*>(fb);
+}
+
+void* nprpc_flatbuffer_data(void* fb) {
+    auto* buffer = static_cast<nprpc::flat_buffer*>(fb);
+    auto span = buffer->data();
+    return span.size() > 0 ? span.data() : nullptr;
+}
+
+const void* nprpc_flatbuffer_cdata(void* fb) {
+    auto* buffer = static_cast<nprpc::flat_buffer*>(fb);
+    auto span = buffer->cdata();
+    return span.size() > 0 ? span.data() : nullptr;
+}
+
+size_t nprpc_flatbuffer_size(void* fb) {
+    return static_cast<nprpc::flat_buffer*>(fb)->size();
+}
+
+void nprpc_flatbuffer_prepare(void* fb, size_t n) {
+    static_cast<nprpc::flat_buffer*>(fb)->prepare(n);
+}
+
+void nprpc_flatbuffer_commit(void* fb, size_t n) {
+    static_cast<nprpc::flat_buffer*>(fb)->commit(n);
+}
+
+void nprpc_flatbuffer_consume(void* fb, size_t n) {
+    static_cast<nprpc::flat_buffer*>(fb)->consume(n);
+}
+
+// Standard reply handling
+int32_t nprpc_handle_standard_reply(void* fb) {
+    auto* buffer = static_cast<nprpc::flat_buffer*>(fb);
+    return nprpc::impl::handle_standart_reply(*buffer);
+}
+
+void nprpc_make_simple_answer(void* fb, uint32_t message_id) {
+    auto* buffer = static_cast<nprpc::flat_buffer*>(fb);
+    nprpc::SessionContext fake_ctx;  // Temporary workaround
+    fake_ctx.tx_buffer = buffer;
+    nprpc::impl::make_simple_answer(fake_ctx, static_cast<nprpc::impl::MessageId>(message_id));
+}
+
+// Object operations (stub for now)
+void nprpc_object_release(void* obj) {
+    if (!obj) return;
+    auto* object = static_cast<nprpc::Object*>(obj);
+    object->release();
+}
+
+// ObjectId accessor functions for Swift
+uint64_t nprpc_objectid_get_object_id(void* oid_ptr) {
+    return static_cast<nprpc::ObjectId*>(oid_ptr)->object_id();
+}
+
+uint16_t nprpc_objectid_get_poa_idx(void* oid_ptr) {
+    return static_cast<nprpc::ObjectId*>(oid_ptr)->poa_idx();
+}
+
+uint16_t nprpc_objectid_get_flags(void* oid_ptr) {
+    return static_cast<nprpc::ObjectId*>(oid_ptr)->flags();
+}
+
+const char* nprpc_objectid_get_class_id(void* oid_ptr) {
+    return static_cast<nprpc::ObjectId*>(oid_ptr)->class_id().data();
+}
+
+const char* nprpc_objectid_get_urls(void* oid_ptr) {
+    return static_cast<nprpc::ObjectId*>(oid_ptr)->urls().data();
+}
+
+const uint8_t* nprpc_objectid_get_origin(void* oid_ptr) {
+    return static_cast<nprpc::ObjectId*>(oid_ptr)->origin().data();
+}
+
+void nprpc_objectid_destroy(void* oid_ptr) {
+    delete static_cast<nprpc::ObjectId*>(oid_ptr);
+}
+
+// Session operations
+int nprpc_session_send_receive(void* session, void* buffer, uint32_t timeout) {
+    // Note: Swift servants don't typically need this - they write response to tx_buffer
+    // This would be needed for Swift clients making outbound calls
+    // For now, return error as it's not implemented
+    return -1;
+}
+
+// Swift Servant Bridge
+class SwiftServantBridge : public nprpc::ObjectServant {
+public:
+    using DispatchFunc = void (*)(void*, void*, void*, void*);
+    
+    SwiftServantBridge(void* swift_servant, const std::string& class_name, DispatchFunc dispatch)
+        : swift_servant_(swift_servant)
+        , class_name_(class_name)
+        , dispatch_func_(dispatch)
+    {}
+    
+    ~SwiftServantBridge() override {
+        // Don't delete swift_servant_ - Swift manages its lifetime
+    }
+    
+    std::string_view get_class() const noexcept override {
+        return class_name_;
+    }
+    
+    void dispatch(nprpc::SessionContext& ctx, bool from_parent) override {
+        // Call Swift dispatch through trampoline
+        // Pass rx_buffer, tx_buffer, and endpoint
+        if (dispatch_func_ && swift_servant_) {
+            dispatch_func_(swift_servant_, ctx.rx_buffer, ctx.tx_buffer, &ctx.remote_endpoint);
+        }
+    }
+    
+private:
+    void* swift_servant_;
+    std::string class_name_;
+    DispatchFunc dispatch_func_;
+};
+
+// Activate a Swift servant in a POA
+// Returns serialized ObjectId in a new flat_buffer that Swift must destroy
+void* nprpc_poa_activate_swift_servant(
+    void* poa_handle,
+    void* swift_servant,
+    const char* class_name,
+    void (*dispatch_func)(void*, void*, void*, void*))
+{
+    auto* poa = static_cast<nprpc::Poa*>(poa_handle);
+    if (!poa || !swift_servant || !class_name || !dispatch_func) {
+        return nullptr;
+    }
+    
+    try {
+        auto bridge = std::make_unique<SwiftServantBridge>(
+            swift_servant, class_name, dispatch_func);
+        
+        auto oid = poa->activate_object(bridge.release(),
+                                        nprpc::ObjectActivationFlags::NONE);
+        
+        // Allocate and copy ObjectId to return to Swift
+        // Swift will need to free this memory
+        auto* oid_copy = new nprpc::ObjectId(oid);
+        
+        // Return pointer to ObjectId - Swift will read it and delete it
+        return oid_copy;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+} // extern "C"

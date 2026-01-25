@@ -331,30 +331,26 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
 void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 {
   const std::string class_name = swift_type_name(ifs->name);
-  const std::string cpp_class = ctx_->nm_cur()->to_ts_namespace() + "." + class_name;
   
   out << bl() << "// Client proxy for " << class_name << "\n";
-  out << bl() << "// Wraps C++ proxy and provides Swift-friendly API\n";
+  out << bl() << "// Pure Swift implementation with direct marshalling\n";
   out << bl() << "public class " << class_name << ": " << class_name << "Protocol " << bb();
-  out << bl() << "private var cppProxy: " << cpp_class << "\n\n";
+  out << bl() << "private let object: NPRPCObject\n\n";
   
-  // Constructor - takes C++ proxy directly via interop
-  out << bl() << "public init(_ cppProxy: " << cpp_class << ") " << bb();
-  out << bl() << "self.cppProxy = cppProxy\n";
+  // Constructor
+  out << bl() << "public init(_ object: NPRPCObject) " << bb();
+  out << bl() << "self.object = object\n";
   out << eb() << "\n";
   
-  // Convenience factory from Object
-  out << bl() << "public static func create(from object: nprpc.Object) -> " << class_name << " " << bb();
-  out << bl() << "return " << class_name << "(" << cpp_class << "(object))\n";
-  out << eb() << "\n";
-  
-  // Implement protocol methods - call C++ proxy
+  // Implement protocol methods with marshalling
   for (auto& fn : ifs->fns) {
+    make_arguments_structs(fn);
+    
     out << bl() << "public func " << swift_method_name(fn->name) << "(";
     
-    // Only emit 'in' parameters
+    // Emit only 'in' parameters (to match protocol)
     bool first = true;
-    for (auto& arg : fn->args) {
+    for (auto arg : fn->args) {
       if (arg->modifier == ArgumentModifier::In) {
         if (!first) out << ", ";
         first = false;
@@ -363,11 +359,11 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
       }
     }
     
-    out << ")";
+    out << ") throws";
     
-    // Return type: collect out parameters and return value
+    // Return type - match protocol (out params become return values)
     std::vector<AstFunctionArgument*> out_params;
-    for (auto& arg : fn->args) {
+    for (auto arg : fn->args) {
       if (arg->modifier == ArgumentModifier::Out) {
         out_params.push_back(arg);
       }
@@ -375,9 +371,8 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     
     bool has_return = !fn->is_void();
     if (has_return || !out_params.empty()) {
-      out << " throws -> ";
+      out << " -> ";
       
-      // If multiple return values, use tuple
       if ((has_return ? 1 : 0) + out_params.size() > 1) {
         out << "(";
         bool first_ret = true;
@@ -392,69 +387,116 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
         }
         out << ")";
       } else {
-        // Single return value
         if (has_return) {
           emit_type(fn->ret_value, out);
         } else {
           emit_type(out_params[0]->type, out);
         }
       }
-    } else {
-      out << " throws";
     }
     
     out << " " << bb();
-    out << bl() << "// Call C++ proxy (handles marshalling)\n";
     
-    // Build call to C++ proxy
-    out << bl();
-    if (!out_params.empty() || has_return) {
-      // Declare vars for out params
-      for (auto& out_param : out_params) {
-        out << "var " << out_param->name << ": ";
-        emit_type(out_param->type, out);
-        out << " = 0\n" << bl();
+    // Calculate buffer size
+    const auto fixed_size = get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
+    const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
+    
+    out << bl() << "// Prepare buffer\n";
+    out << bl() << "let buffer = FlatBuffer()\n";
+    out << bl() << "buffer.prepare(" << capacity << ")\n";
+    out << bl() << "buffer.commit(" << fixed_size << ")\n";
+    out << bl() << "guard let data = buffer.data else { throw NPRPCError.bufferError }\n\n";
+    
+    // Write message header
+    out << bl() << "// Write message header\n";
+    out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)\n";
+    out << bl() << "data.storeBytes(of: UInt32(1), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall\n";
+    out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request\n";
+    out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved\n\n";
+    
+    // Write call header
+    out << bl() << "// Write call header\n";
+    out << bl() << "data.storeBytes(of: object.poaIdx, toByteOffset: " << size_of_header << ", as: UInt16.self)\n";
+    out << bl() << "data.storeBytes(of: UInt8(0), toByteOffset: " << (size_of_header + 2) << ", as: UInt8.self)  // interface_idx\n";
+    out << bl() << "data.storeBytes(of: UInt8(" << fn->idx << "), toByteOffset: " << (size_of_header + 3) << ", as: UInt8.self)  // function_idx\n";
+    out << bl() << "data.storeBytes(of: object.objectId, toByteOffset: " << (size_of_header + 8) << ", as: UInt64.self)\n\n";
+    
+    // Marshal input arguments
+    if (fn->in_s) {
+      out << bl() << "// Marshal input arguments\n";
+      out << bl() << "let inArgs = (";
+      int ix = 0;
+      for (auto arg : fn->args) {
+        if (arg->modifier == ArgumentModifier::Out) continue;
+        if (ix > 0) out << ", ";
+        out << "_" << (ix + 1) << ": " << arg->name;
+        ++ix;
       }
-      out << "cppProxy." << fn->name << "(";
+      out << ")\n";
+      out << bl() << "marshal_" << fn->in_s->name << "(buffer: data, offset: " << get_arguments_offset() << ", data: inArgs)\n\n";
+    }
+    
+    // Set message size
+    out << bl() << "data.storeBytes(of: UInt32(" << (fixed_size - 4) << "), toByteOffset: 0, as: UInt32.self)\n\n";
+    
+    // Send/receive
+    out << bl() << "// Send and receive\n";
+    out << bl() << "try object.session.sendReceive(buffer: buffer, timeout: object.timeout)\n\n";
+    
+    // Handle reply
+    out << bl() << "// Handle reply\n";
+    out << bl() << "let stdReply = handleStandardReply(buffer: buffer)\n";
+    if (fn->ex) {
+      out << bl() << "if stdReply == 1 { throw " << ctx_->current_file() << "_throwException(buffer: buffer) }\n";
+    }
+    
+    if (!fn->out_s) {
+      out << bl() << "if stdReply != 0 { throw NPRPCError.unexpectedReply }\n";
     } else {
-      out << "cppProxy." << fn->name << "(";
-    }
-    
-    // Arguments
-    first = true;
-    for (auto& arg : fn->args) {
-      if (!first) out << ", ";
-      first = false;
-      if (arg->modifier == ArgumentModifier::Out) {
-        out << "&" << arg->name;
-      } else {
-        out << arg->name;
-      }
-    }
-    out << ")\n";
-    
-    // Return
-    if (has_return || !out_params.empty()) {
-      out << bl() << "return ";
-      if ((has_return ? 1 : 0) + out_params.size() > 1) {
-        out << "(";
-        bool first_ret = true;
-        if (has_return) {
-          out << "result";
-          first_ret = false;
+      out << bl() << "if stdReply != -1 { throw NPRPCError.unexpectedReply }\n\n";
+      
+      // Unmarshal output arguments
+      out << bl() << "guard let responseData = buffer.data else { throw NPRPCError.bufferError }\n";
+      
+      bool out_needs_endpoint = false;
+      for (auto f : fn->out_s->fields) {
+        if (contains_object(f->type)) {
+          out_needs_endpoint = true;
+          break;
         }
-        for (auto& out_param : out_params) {
+      }
+      
+      if (out_needs_endpoint) {
+        out << bl() << "let out = unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ", endpoint: object.endpoint)\n";
+      } else {
+        out << bl() << "let out = unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ")\n";
+      }
+      
+      // Return output values
+      if ((has_return ? 1 : 0) + out_params.size() > 1) {
+        // Multiple return values - use tuple
+        out << bl() << "return (";
+        bool first_ret = true;
+        int ix = 0;
+        if (has_return) {
+          out << "out._1";
+          first_ret = false;
+          ix = 1;
+        }
+        for (auto out_arg : fn->args) {
+          if (out_arg->modifier == ArgumentModifier::In) continue;
+          ++ix;
           if (!first_ret) out << ", ";
           first_ret = false;
-          out << out_param->name;
+          out << "out._" << ix;
         }
-        out << ")";
+        out << ")\n";
       } else if (has_return) {
-        out << "result";
+        out << bl() << "return out._1\n";
       } else {
-        out << out_params[0]->name;
+        // Single out parameter
+        out << bl() << "return out._1\n";
       }
-      out << "\n";
     }
     
     out << eb() << "\n";
@@ -466,21 +508,21 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
 {
   const std::string class_name = swift_type_name(ifs->name);
+  const std::string servant_name = class_name + "Servant";
   
   out << bl() << "// Servant base for " << class_name << "\n";
-  out << bl() << "// Subclass and implement methods. C++ bridge handles dispatch.\n";
-  out << bl() << "open class " << class_name << "Servant: " << class_name << "Protocol " << bb();
+  out << bl() << "open class " << servant_name << ": NPRPCServant, " << class_name << "Protocol " << bb();
   
   // Constructor
-  out << bl() << "public init() {}\n\n";
+  out << bl() << "public override init() { super.init() }\n\n";
   
   // Protocol method stubs (abstract methods to be implemented by subclass)
   for (auto& fn : ifs->fns) {
     out << bl() << "open func " << swift_method_name(fn->name) << "(";
     
-    // Only emit 'in' parameters
+    // Emit only 'in' parameters (to match protocol)
     bool first = true;
-    for (auto& arg : fn->args) {
+    for (auto arg : fn->args) {
       if (arg->modifier == ArgumentModifier::In) {
         if (!first) out << ", ";
         first = false;
@@ -489,11 +531,11 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       }
     }
     
-    out << ")";
+    out << ") throws";
     
-    // Return type
+    // Return type - match protocol
     std::vector<AstFunctionArgument*> out_params;
-    for (auto& arg : fn->args) {
+    for (auto arg : fn->args) {
       if (arg->modifier == ArgumentModifier::Out) {
         out_params.push_back(arg);
       }
@@ -501,7 +543,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
     
     bool has_return = !fn->is_void();
     if (has_return || !out_params.empty()) {
-      out << " throws -> ";
+      out << " -> ";
       
       if ((has_return ? 1 : 0) + out_params.size() > 1) {
         out << "(";
@@ -523,15 +565,193 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
           emit_type(out_params[0]->type, out);
         }
       }
-    } else {
-      out << " throws";
     }
     
     out << " " << bb();
-    out << bl() << "fatalError(\"Subclass must implement " << fn->name << "\")\n";
+    out << bl() << "fatalError(\"Subclass must implement " << swift_method_name(fn->name) << "\")\n";
     out << eb() << "\n";
   }
   
+  // Dispatch method
+  out << bl() << "// Dispatch incoming RPC calls\n";
+  out << bl() << "public override func dispatch(buffer: FlatBuffer, remoteEndpoint: NPRPCEndpoint) " << bb();
+  
+  out << bl() << "guard let data = buffer.data else { return }\n\n";
+  
+  // Read function index
+  out << bl() << "// Read function index\n";
+  out << bl() << "let functionIdx = data.load(fromByteOffset: " << (size_of_header + 3) << ", as: UInt8.self)\n\n";
+  
+  // Switch on function index
+  out << bl() << "switch functionIdx " << bb();
+  
+  for (auto& fn : ifs->fns) {
+    out << bl() << "case " << fn->idx << ": // " << fn->name << "\n";
+    out << bb();
+    
+    // Unmarshal input arguments
+    if (fn->in_s) {
+      out << bl() << "\n// Unmarshal input arguments\n";
+      bool in_needs_endpoint = false;
+      for (auto f : fn->in_s->fields) {
+        if (contains_object(f->type)) {
+          in_needs_endpoint = true;
+          break;
+        }
+      }
+      
+      if (in_needs_endpoint) {
+        out << bl() << "let ia = unmarshal_" << fn->in_s->name << "(buffer: data, offset: " << get_arguments_offset() << ", endpoint: remoteEndpoint)\n";
+      } else {
+        out << bl() << "let ia = unmarshal_" << fn->in_s->name << "(buffer: data, offset: " << get_arguments_offset() << ")\n";
+      }
+    }
+    
+    // Prepare output buffer if needed
+    if (fn->out_s && !fn->out_s->flat) {
+      const auto offset = size_of_header;
+      const auto initial_size = offset + fn->out_s->size;
+      out << bl() << "\n// Prepare output buffer\n";
+      out << bl() << "let obuf = buffer\n";
+      out << bl() << "obuf.consume(obuf.size)\n";
+      out << bl() << "obuf.prepare(" << (initial_size + 128) << ")\n";
+      out << bl() << "obuf.commit(" << initial_size << ")\n";
+    }
+    
+    // Call the implementation
+    out << bl() << "\n";
+    if (fn->ex) {
+      out << bl() << "do " << bb();
+    }
+    
+    // Call user's implementation - returns value(s)
+    std::vector<AstFunctionArgument*> out_params;
+    for (auto arg : fn->args) {
+      if (arg->modifier == ArgumentModifier::Out) {
+        out_params.push_back(arg);
+      }
+    }
+    bool has_return = !fn->is_void();
+    
+    if ((has_return ? 1 : 0) + out_params.size() > 1) {
+      // Tuple destructuring
+      out << bl() << "let (";
+      bool first_ret = true;
+      if (has_return) {
+        out << "__ret_val";
+        first_ret = false;
+      }
+      for (auto out_arg : out_params) {
+        if (!first_ret) out << ", ";
+        first_ret = false;
+        out << "_out_" << out_arg->name;
+      }
+      out << ") = try " << swift_method_name(fn->name) << "(";
+    } else if (has_return || !out_params.empty()) {
+      // Single return value
+      out << bl() << "let ";
+      if (has_return) {
+        out << "__ret_val";
+      } else {
+        out << "_out_" << out_params[0]->name;
+      }
+      out << " = try " << swift_method_name(fn->name) << "(";
+    } else {
+      // No return
+      out << bl() << "try " << swift_method_name(fn->name) << "(";
+    }
+    
+    size_t in_ix = 0, idx = 0;
+    for (auto arg : fn->args) {
+      if (arg->modifier == ArgumentModifier::In) {
+        if (idx > 0) out << ", ";
+        out << arg->name << ": ia._" << ++in_ix;
+        ++idx;
+      }
+    }
+    out << ")\n";
+    
+    // Handle exception
+    if (fn->ex) {
+      const auto offset = size_of_header;
+      const auto initial_size = offset + fn->ex->size;
+      
+      out << eb();
+      out << bl() << "catch let e as " << fn->ex->name << " " << bb();
+      out << bl() << "let obuf = buffer\n";
+      out << bl() << "obuf.consume(obuf.size)\n";
+      out << bl() << "obuf.prepare(" << initial_size << ")\n";
+      out << bl() << "obuf.commit(" << initial_size << ")\n";
+      out << bl() << "guard let exData = obuf.data else { return }\n";
+      
+      out << bl() << "let ex_data = (";
+      out << "__ex_id: " << fn->ex->exception_id;
+      for (size_t i = 1; i < fn->ex->fields.size(); ++i) {
+        auto mb = fn->ex->fields[i];
+        out << ", " << mb->name << ": e." << mb->name;
+      }
+      out << ")\n";
+      
+      out << bl() << "marshal_" << fn->ex->name << "(buffer: exData, offset: " << offset << ", data: ex_data)\n";
+      out << bl() << "exData.storeBytes(of: UInt32(obuf.size - 4), toByteOffset: 0, as: UInt32.self)\n";
+      out << bl() << "exData.storeBytes(of: UInt32(3), toByteOffset: 4, as: UInt32.self)  // MessageId.Exception\n";
+      out << bl() << "exData.storeBytes(of: UInt32(1), toByteOffset: 8, as: UInt32.self)  // MessageType.Answer\n";
+      out << bl() << "return\n";
+      out << eb();
+      out << bl() << "catch " << bb();
+      out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error\n";
+      out << bl() << "return\n";
+      out << eb();
+    }
+    
+    // Marshal output
+    if (!fn->out_s) {
+      out << bl() << "\n// Send success\n";
+      out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: 5)  // Success\n";
+    } else {
+      if (fn->out_s->flat) {
+        const auto offset = size_of_header;
+        const auto initial_size = offset + fn->out_s->size;
+        out << bl() << "\n// Prepare output buffer\n";
+        out << bl() << "let obuf = buffer\n";
+        out << bl() << "obuf.consume(obuf.size)\n";
+        out << bl() << "obuf.prepare(" << initial_size << ")\n";
+        out << bl() << "obuf.commit(" << initial_size << ")\n";
+      }
+      
+      out << bl() << "\n// Marshal output arguments\n";
+      out << bl() << "guard let outData = buffer.data else { return }\n";
+      out << bl() << "let out_data = (";
+      
+      int ix = 0;
+      if (!fn->is_void()) {
+        out << "_1: __ret_val";
+        ix = 1;
+      }
+      for (auto out_arg : out_params) {
+        if (ix > 0) out << ", ";
+        ++ix;
+        out << "_" << ix << ": _out_" << out_arg->name;
+      }
+      out << ")\n";
+      
+      out << bl() << "marshal_" << fn->out_s->name << "(buffer: outData, offset: " << size_of_header << ", data: out_data)\n";
+      out << bl() << "outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n";
+      out << bl() << "outData.storeBytes(of: UInt32(2), toByteOffset: 4, as: UInt32.self)  // MessageId.BlockResponse\n";
+      out << bl() << "outData.storeBytes(of: UInt32(1), toByteOffset: 8, as: UInt32.self)  // MessageType.Answer\n";
+    }
+    
+    out << eb();
+  }
+  
+  // Default case
+  out << bl() << "default:\n";
+  out << bb();
+  out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error_UnknownFunctionIdx\n";
+  out << eb();
+  
+  out << eb() << " // switch\n";
+  out << eb() << " // dispatch\n";
   out << eb() << "\n";
 }
 
@@ -664,101 +884,278 @@ void SwiftBuilder::emit_interface(AstInterfaceDecl* ifs)
   emit_protocol(ifs);
   emit_client_proxy(ifs);
   emit_servant_base(ifs);
-  emit_swift_trampolines(ifs);  // Generate C trampolines
+  // No longer need C trampolines - pure Swift implementation
+}
+
+void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::string& data_name)
+{
+  const std::string field_access = data_name + "." + f->name;
+  
+  switch (f->type->id) {
+  case FieldType::Fundamental: {
+    const auto token = cft(f->type)->token_id;
+    const int size = get_fundamental_size(token);
+    const int field_offset = align_offset(size, offset, size);
+    
+    out << bl() << "buffer.storeBytes(of: " << field_access << ", toByteOffset: offset + " << field_offset << ", as: ";
+    emit_fundamental_type(token, out);
+    out << ".self)\n";
+    break;
+  }
+  case FieldType::Enum: {
+    const int size = get_fundamental_size(cenum(f->type)->token_id);
+    const int field_offset = align_offset(size, offset, size);
+    out << bl() << "buffer.storeBytes(of: " << field_access << ".rawValue, toByteOffset: offset + " << field_offset << ", as: Int32.self)\n";
+    break;
+  }
+  case FieldType::String: {
+    const int field_offset = align_offset(4, offset, 8);  // ptr + length
+    out << bl() << "NPRPC.marshal_string(buffer: buffer, offset: offset + " << field_offset << ", value: " << field_access << ")\n";
+    break;
+  }
+  case FieldType::Struct: {
+    auto nested = cflat(f->type);
+    const int field_offset = align_offset(nested->align, offset, nested->size);
+    out << bl() << "marshal_" << nested->name << "(buffer: buffer, offset: offset + " << field_offset << ", data: " << field_access << ")\n";
+    break;
+  }
+  case FieldType::Object: {
+    const int field_offset = align_offset(align_of_object, offset, size_of_object);
+    out << bl() << "NPRPC.marshal_object_id(buffer: buffer, offset: offset + " << field_offset << ", objectId: " << field_access << ".data)\n";
+    break;
+  }
+  case FieldType::Array: {
+    auto wt = cwt(f->type)->real_type();
+    auto arr = static_cast<AstArrayDecl*>(f->type);
+    auto [v_size, v_align] = get_type_size_align(f->type);
+    auto [ut_size, ut_align] = get_type_size_align(wt);
+    const int field_offset = align_offset(v_align, offset, v_size);
+    
+    if (is_fundamental(wt)) {
+      out << bl() << "NPRPC.marshal_fundamental_array(buffer: buffer, offset: offset + " << field_offset << ", array: " << field_access << ")\n";
+    } else {
+      out << bl() << "for i in 0..<" << arr->length << " {\n";
+      bb();
+      out << bl() << "marshal_" << cflat(wt)->name << "(buffer: buffer, offset: offset + " << field_offset << " + i * " << ut_size << ", data: " << field_access << "[i])\n";
+      eb();
+      out << bl() << "}\n";
+    }
+    break;
+  }
+  case FieldType::Vector: {
+    auto wt = cwt(f->type)->real_type();
+    auto [v_size, v_align] = get_type_size_align(f->type);
+    auto [ut_size, ut_align] = get_type_size_align(wt);
+    const int field_offset = align_offset(v_align, offset, v_size);
+    
+    if (is_fundamental(wt)) {
+      out << bb() << "NPRPC.marshal_fundamental_vector(buffer: buffer, offset: offset + " << field_offset << ", vector: " << field_access << ")\n";
+    } else {
+      out << bb() << "NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + " << field_offset << ", vector: " << field_access << ", elementSize: " << ut_size << ") { buf, off, elem in\n";
+      bb();
+      out << bb() << "marshal_" << cflat(wt)->name << "(buffer: buf, offset: off, data: elem)\n";
+      eb();
+      out << bb() << "}\n";
+    }
+    break;
+  }
+  case FieldType::Optional: {
+    auto wt = cwt(f->type)->real_type();
+    auto [v_size, v_align] = get_type_size_align(f->type);
+    const int field_offset = align_offset(v_align, offset, v_size);
+    
+    out << bb() << "if let value = " << field_access << " {\n";
+    bb();
+    if (is_fundamental(wt)) {
+      out << bb() << "NPRPC.marshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ", value: value)\n";
+    } else {
+      out << bb() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
+      bb();
+      out << bb() << "marshal_" << cflat(wt)->name << "(buffer: buf, offset: off, data: value)\n";
+      eb();
+      out << bb() << "}\n";
+    }
+    eb();
+    out << bb() << "} else {\n";
+    bb();
+    out << bb() << "buffer.storeBytes(of: UInt32(0), toByteOffset: offset + " << field_offset << ", as: UInt32.self)\n";
+    eb();
+    out << bb() << "}\n";
+    break;
+  }
+  case FieldType::Alias: {
+    auto real_type = calias(f->type)->get_real_type();
+    auto temp_field = *f;
+    temp_field.type = real_type;
+    emit_field_marshal(&temp_field, offset, data_name);
+    return;
+  }
+  default:
+    out << bb() << "// TODO: marshal field " << f->name << " (type " << static_cast<int>(f->type->id) << ")\n";
+  }
 }
 
 void SwiftBuilder::emit_marshal_function(AstStructDecl* s)
 {
   calc_struct_size_align(s);
   
-  out << "\n// MARK: - Marshal " << s->name << "\n\n";
-  out << "func marshal_" << s->name << "(buffer: UnsafeMutableRawPointer, offset: Int, data: " << s->name << ") {\n";
+  std::string data_type = s->is_exception() ? (s->name + "_Data") : s->name;
   
+  out << "\n// MARK: - Marshal " << s->name << "\n";
+  out << "public func marshal_" << s->name << "(buffer: UnsafeMutableRawPointer, offset: Int, data: " << data_type << ") ";
+  out << bb();
+
   int current_offset = 0;
   for (auto field : s->fields) {
-    auto& f = field;
-    switch (f->type->id) {
-    case FieldType::Fundamental: {
-      const auto token = cft(f->type)->token_id;
-      const int size = get_fundamental_size(token);
-      const int field_offset = align_offset(size, current_offset, size);
-      
-      out << "  buffer.storeBytes(of: data." << f->name << ", toByteOffset: offset + " << field_offset << ", as: ";
-      emit_fundamental_type(token, out);
-      out << ".self)\n";
-      break;
-    }
-    case FieldType::Enum: {
-      const int size = get_fundamental_size(cenum(f->type)->token_id);
-      const int field_offset = align_offset(size, current_offset, size);
-      out << "  buffer.storeBytes(of: data." << f->name << ".rawValue, toByteOffset: offset + " << field_offset << ", as: Int32.self)\n";
-      break;
-    }
-    case FieldType::String:
-      out << "  // TODO: marshal string " << f->name << "\n";
-      break;
-    case FieldType::Struct: {
-      auto nested = cflat(f->type);
-      const int field_offset = align_offset(nested->align, current_offset, nested->size);
-      out << "  marshal_" << nested->name << "(buffer: buffer, offset: offset + " << field_offset << ", data: data." << f->name << ")\n";
-      break;
-    }
-    default:
-      out << "  // TODO: marshal " << f->name << " (type " << static_cast<int>(f->type->id) << ")\n";
-    }
+    emit_field_marshal(field, current_offset, "data");
   }
+
+  out << eb();
+}
+
+void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std::string& result_name, bool has_endpoint)
+{
+  const std::string field_name = result_name + "." + f->name;
   
-  out << "}\n";
+  switch (f->type->id) {
+  case FieldType::Fundamental: {
+    const auto token = cft(f->type)->token_id;
+    const int size = get_fundamental_size(token);
+    const int field_offset = align_offset(size, offset, size);
+    
+    out << bl() << field_name << " = buffer.load(fromByteOffset: offset + " << field_offset << ", as: ";
+    emit_fundamental_type(token, out);
+    out << ".self)\n";
+    break;
+  }
+  case FieldType::Enum: {
+    const int size = get_fundamental_size(cenum(f->type)->token_id);
+    const int field_offset = align_offset(size, offset, size);
+    out << bl() << field_name << " = " << cenum(f->type)->name << "(rawValue: buffer.load(fromByteOffset: offset + " << field_offset << ", as: Int32.self))!\n";
+    break;
+  }
+  case FieldType::String: {
+    const int field_offset = align_offset(4, offset, 8);
+    out << bb() << field_name << " = NPRPC.unmarshal_string(buffer: buffer, offset: offset + " << field_offset << ")\n";
+    break;
+  }
+  case FieldType::Struct: {
+    auto nested = cflat(f->type);
+    const int field_offset = align_offset(nested->align, offset, nested->size);
+    if (has_endpoint && contains_object(f->type)) {
+      out << bl() << field_name << " = unmarshal_" << nested->name << "(buffer: buffer, offset: offset + " << field_offset << ", endpoint: endpoint)\n";
+    } else {
+      out << bl() << field_name << " = unmarshal_" << nested->name << "(buffer: buffer, offset: offset + " << field_offset << ")\n";
+    }
+    break;
+  }
+  case FieldType::Object: {
+    const int field_offset = align_offset(align_of_object, offset, size_of_object);
+    if (has_endpoint) {
+      out << bl() << field_name << " = NPRPC.unmarshal_object_proxy(buffer: buffer, offset: offset + " << field_offset << ", endpoint: endpoint)\n";
+    } else {
+      out << bl() << field_name << " = NPRPC.unmarshal_object_id(buffer: buffer, offset: offset + " << field_offset << ")\n";
+    }
+    break;
+  }
+  case FieldType::Array: {
+    auto wt = cwt(f->type)->real_type();
+    auto arr = static_cast<AstArrayDecl*>(f->type);
+    auto [v_size, v_align] = get_type_size_align(f->type);
+    auto [ut_size, ut_align] = get_type_size_align(wt);
+    const int field_offset = align_offset(v_align, offset, v_size);
+    
+    if (is_fundamental(wt)) {
+      out << bl() << field_name << " = NPRPC.unmarshal_fundamental_array(buffer: buffer, offset: offset + " << field_offset << ", count: " << arr->length << ")\n";
+    } else {
+      out << bl() << field_name << " = (0..<" << arr->length << ").map { i in\n";
+      out << bb();
+      out << bl() << "unmarshal_" << cflat(wt)->name << "(buffer: buffer, offset: offset + " << field_offset << " + i * " << ut_size << ")\n";
+      out << eb();
+    }
+    break;
+  }
+  case FieldType::Vector: {
+    auto wt = cwt(f->type)->real_type();
+    auto [v_size, v_align] = get_type_size_align(f->type);
+    auto [ut_size, ut_align] = get_type_size_align(wt);
+    const int field_offset = align_offset(v_align, offset, v_size);
+    
+    if (is_fundamental(wt)) {
+      out << bb() << field_name << " = NPRPC.unmarshal_fundamental_vector(buffer: buffer, offset: offset + " << field_offset << ")\n";
+    } else {
+      out << bb() << field_name << " = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + " << field_offset << ", elementSize: " << ut_size << ") { buf, off in\n";
+      bb();
+      out << bb() << "unmarshal_" << cflat(wt)->name << "(buffer: buf, offset: off)\n";
+      eb();
+      out << bb() << "}\n";
+    }
+    break;
+  }
+  case FieldType::Optional: {
+    auto wt = cwt(f->type)->real_type();
+    auto [v_size, v_align] = get_type_size_align(f->type);
+    const int field_offset = align_offset(v_align, offset, v_size);
+    
+    out << bb() << "if buffer.load(fromByteOffset: offset + " << field_offset << ", as: UInt32.self) != 0 {\n";
+    bb();
+    if (is_fundamental(wt)) {
+      out << bb() << field_name << " = NPRPC.unmarshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ")\n";
+    } else {
+      out << bb() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
+      bb();
+      out << bb() << "unmarshal_" << cflat(wt)->name << "(buffer: buf, offset: off)\n";
+      eb();
+      out << bb() << "}\n";
+    }
+    eb();
+    out << bb() << "} else {\n";
+    bb();
+    out << bb() << field_name << " = nil\n";
+    eb();
+    out << bb() << "}\n";
+    break;
+  }
+  case FieldType::Alias: {
+    auto real_type = calias(f->type)->get_real_type();
+    auto temp_field = *f;
+    temp_field.type = real_type;
+    emit_field_unmarshal(&temp_field, offset, result_name, has_endpoint);
+    return;
+  }
+  default:
+    out << bb() << "// TODO: unmarshal field " << f->name << " (type " << static_cast<int>(f->type->id) << ")\n";
+  }
 }
 
 void SwiftBuilder::emit_unmarshal_function(AstStructDecl* s)
 {
-  out << "\n// MARK: - Unmarshal " << s->name << "\n\n";
-  out << "func unmarshal_" << s->name << "(buffer: UnsafeRawPointer, offset: Int) -> " << s->name << " {\n";
-  out << "  return " << s->name << "(\n";
-  
-  int current_offset = 0;
-  bool first = true;
+  // Check if any field contains objects
+  bool has_objects = false;
   for (auto field : s->fields) {
-    if (!first) out << ",\n";
-    first = false;
-    
-    auto& f = field;
-    out << "    " << f->name << ": ";
-    
-    switch (f->type->id) {
-    case FieldType::Fundamental: {
-      const auto token = cft(f->type)->token_id;
-      const int size = get_fundamental_size(token);
-      const int field_offset = align_offset(size, current_offset, size);
-      
-      out << "buffer.load(fromByteOffset: offset + " << field_offset << ", as: ";
-      emit_fundamental_type(token, out);
-      out << ".self)";
+    if (contains_object(field->type)) {
+      has_objects = true;
       break;
-    }
-    case FieldType::Enum: {
-      const int size = get_fundamental_size(cenum(f->type)->token_id);
-      const int field_offset = align_offset(size, current_offset, size);
-      out << cenum(f->type)->name << "(rawValue: buffer.load(fromByteOffset: offset + " << field_offset << ", as: Int32.self))!";
-      break;
-    }
-    case FieldType::String:
-      out << "\"TODO_STRING\"";
-      break;
-    case FieldType::Struct: {
-      auto nested = cflat(f->type);
-      const int field_offset = align_offset(nested->align, current_offset, nested->size);
-      out << "unmarshal_" << nested->name << "(buffer: buffer, offset: offset + " << field_offset << ")";
-      break;
-    }
-    default:
-      out << "TODO(/* type " << static_cast<int>(f->type->id) << " */)";
     }
   }
   
-  out << "\n  )\n";
-  out << "}\n";
+  out << "\n// MARK: - Unmarshal " << s->name << "\n";
+  out << "public func unmarshal_" << s->name << "(buffer: UnsafeRawPointer, offset: Int";
+  if (has_objects) {
+    out << ", endpoint: NPRPC.EndPoint";
+  }
+  out << ") -> " << s->name << " ";
+  out << bb();
+  
+  out << bl() << "var result = " << s->name << "()\n";
+  
+  int current_offset = 0;
+  for (auto field : s->fields) {
+    emit_field_unmarshal(field, current_offset, "result", has_objects);
+  }
+  
+  out << bl() << "return result\n";
+  out << eb() << "\n";
 }
 
 void SwiftBuilder::emit_namespace_begin()

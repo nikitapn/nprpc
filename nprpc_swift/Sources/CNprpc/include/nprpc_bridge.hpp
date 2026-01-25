@@ -176,3 +176,45 @@ struct EndPointInfo {
 };
 
 } // namespace nprpc_swift
+
+// ============================================================================
+// C Bridge Functions for Swift Interop
+// ============================================================================
+
+extern "C" {
+
+// FlatBuffer operations
+void* nprpc_flatbuffer_create();
+void nprpc_flatbuffer_destroy(void* fb);
+void* nprpc_flatbuffer_data(void* fb);
+const void* nprpc_flatbuffer_cdata(void* fb);
+size_t nprpc_flatbuffer_size(void* fb);
+void nprpc_flatbuffer_prepare(void* fb, size_t n);
+void nprpc_flatbuffer_commit(void* fb, size_t n);
+void nprpc_flatbuffer_consume(void* fb, size_t n);
+
+// Standard reply handling
+int32_t nprpc_handle_standard_reply(void* fb);
+void nprpc_make_simple_answer(void* fb, uint32_t message_id);
+
+// Object operations
+void nprpc_object_release(void* obj);
+
+// ObjectId accessor functions
+uint64_t nprpc_objectid_get_object_id(void* oid_ptr);
+uint16_t nprpc_objectid_get_poa_idx(void* oid_ptr);
+uint16_t nprpc_objectid_get_flags(void* oid_ptr);
+const char* nprpc_objectid_get_class_id(void* oid_ptr);
+const char* nprpc_objectid_get_urls(void* oid_ptr);
+const uint8_t* nprpc_objectid_get_origin(void* oid_ptr);
+void nprpc_objectid_destroy(void* oid_ptr);
+
+// Swift Servant activation
+// Returns pointer to nprpc::ObjectId that Swift must destroy with nprpc_objectid_destroy
+void* nprpc_poa_activate_swift_servant(
+    void* poa_handle,
+    void* swift_servant,
+    const char* class_name,
+    void (*dispatch_func)(void*, void*, void*, void*));
+
+} // extern "C"
