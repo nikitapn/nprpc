@@ -38,20 +38,9 @@ class BuildConfig {
     var httpSslClientDisableVerification: Bool = false
 }
 
-/// Log levels matching nprpc::LogLevel (nprpc_base.hpp)
-public enum LogLevel: UInt32 {
-    case off = 0
-    case critical = 1
-    case error = 2
-    case warning = 3  // 'warn' in C++
-    case info = 4
-    case debug = 5
-    case trace = 6
-}
-
 /// Base protocol for all RPC builders providing common configuration
 public protocol RpcBuilderProtocol {
-    /// Set log level
+    /// Set log level (uses LogLevel from Generated/nprpc.swift)
     @discardableResult
     func setLogLevel(_ level: LogLevel) -> Self
     
@@ -150,7 +139,7 @@ extension RpcBuilderInternal {
         
         // Log level - convert Swift enum to uint32_t matching nprpc::LogLevel order
         // nprpc::LogLevel: off=0, critical=1, error=2, warn=3, info=4, debug=5, trace=6
-        cxxConfig.log_level = config.logLevel.rawValue
+        cxxConfig.log_level = UInt32(config.logLevel.rawValue)
         
         // Hostname
         cxxConfig.hostname = std.string(config.hostname)

@@ -55,6 +55,7 @@ let package = Package(
             name: "NPRPC",
             dependencies: ["CNprpc"],
             path: "Sources/NPRPC",
+            exclude: ["Generated/nprpc_base.cpp", "Generated/nprpc_base.hpp"],
             swiftSettings: [
                 .interoperabilityMode(.Cxx)
             ]

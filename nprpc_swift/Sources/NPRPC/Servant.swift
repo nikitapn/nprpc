@@ -3,6 +3,25 @@
 
 import CNprpc
 
+/// Represents NPRPC object metadata for marshalling
+public struct NPRPCObjectData {
+    public let objectId: UInt64
+    public let poaIdx: UInt16
+    public let flags: UInt16
+    public let origin: [UInt8]  // UUID - 16 bytes
+    public let classId: String
+    public let urls: String
+    
+    public init(objectId: UInt64, poaIdx: UInt16, flags: UInt16, origin: [UInt8], classId: String, urls: String) {
+        self.objectId = objectId
+        self.poaIdx = poaIdx
+        self.flags = flags
+        self.origin = origin
+        self.classId = classId
+        self.urls = urls
+    }
+}
+
 /// Swift representation of a remote object
 public class NPRPCObject {
     internal let handle: UnsafeMutableRawPointer
@@ -12,6 +31,17 @@ public class NPRPCObject {
     public let endpoint: NPRPCEndpoint
     public let session: NPRPCSession
     public let timeout: UInt32
+    
+    public var data: NPRPCObjectData {
+        NPRPCObjectData(
+            objectId: objectId,
+            poaIdx: poaIdx,
+            flags: 0,
+            origin: [UInt8](repeating: 0, count: 16),
+            classId: "",
+            urls: ""
+        )
+    }
     
     internal init(handle: UnsafeMutableRawPointer,
                   objectId: UInt64,
@@ -42,12 +72,10 @@ public struct NPRPCEndpoint {
 public struct NPRPCSession {
     internal let handle: UnsafeMutableRawPointer
     
-    public func sendReceive(buffer: FlatBuffer, timeout: UInt32) throws {
-        let result = nprpc_session_send_receive(handle, buffer.handle, timeout)
-        if result != 0 {
-            throw NPRPCError.rpcError
-        }
-    }
+    // TODO: Implement sendReceive for client-side calls
+    // public func sendReceive(buffer: FlatBuffer, timeout: UInt32) throws {
+    //     // Not implemented yet
+    // }
 }
 
 /// Base class for Swift servants

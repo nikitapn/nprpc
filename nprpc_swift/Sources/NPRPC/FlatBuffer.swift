@@ -56,12 +56,3 @@ public class FlatBuffer {
         nprpc_flatbuffer_consume(handle, n)
     }
 }
-
-// Helper functions for standard replies
-public func handleStandardReply(buffer: FlatBuffer) -> Int32 {
-    return nprpc_handle_standard_reply(buffer.handle)
-}
-
-public func makeSimpleAnswer(buffer: FlatBuffer, messageId: UInt32) {
-    nprpc_make_simple_answer(buffer.handle, messageId)
-}

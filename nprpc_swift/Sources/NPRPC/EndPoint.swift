@@ -73,7 +73,7 @@ public struct EndPoint: Sendable {
     public static func parse(_ url: String) throws -> EndPoint {
         let cxxUrl = std.string(url)
         guard let info = nprpc_swift.EndPointInfo.parse(cxxUrl).value else {
-            throw InvalidEndpointError(message: "Failed to parse URL", url: url)
+            throw RuntimeError(message: "Failed to parse URL: \(url)")
         }
         
         return EndPoint(

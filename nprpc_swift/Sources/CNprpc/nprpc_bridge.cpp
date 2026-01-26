@@ -309,19 +309,6 @@ void nprpc_flatbuffer_consume(void* fb, size_t n) {
     static_cast<nprpc::flat_buffer*>(fb)->consume(n);
 }
 
-// Standard reply handling
-int32_t nprpc_handle_standard_reply(void* fb) {
-    auto* buffer = static_cast<nprpc::flat_buffer*>(fb);
-    return nprpc::impl::handle_standart_reply(*buffer);
-}
-
-void nprpc_make_simple_answer(void* fb, uint32_t message_id) {
-    auto* buffer = static_cast<nprpc::flat_buffer*>(fb);
-    nprpc::SessionContext fake_ctx;  // Temporary workaround
-    fake_ctx.tx_buffer = buffer;
-    nprpc::impl::make_simple_answer(fake_ctx, static_cast<nprpc::impl::MessageId>(message_id));
-}
-
 // Object operations (stub for now)
 void nprpc_object_release(void* obj) {
     if (!obj) return;

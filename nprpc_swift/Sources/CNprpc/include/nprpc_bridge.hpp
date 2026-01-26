@@ -193,10 +193,6 @@ void nprpc_flatbuffer_prepare(void* fb, size_t n);
 void nprpc_flatbuffer_commit(void* fb, size_t n);
 void nprpc_flatbuffer_consume(void* fb, size_t n);
 
-// Standard reply handling
-int32_t nprpc_handle_standard_reply(void* fb);
-void nprpc_make_simple_answer(void* fb, uint32_t message_id);
-
 // Object operations
 void nprpc_object_release(void* obj);
 
