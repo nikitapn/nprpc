@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.2
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -55,7 +55,12 @@ let package = Package(
             name: "NPRPC",
             dependencies: ["CNprpc"],
             path: "Sources/NPRPC",
-            exclude: ["Generated/nprpc_base.cpp", "Generated/nprpc_base.hpp"],
+            exclude: [
+                "Generated/nprpc_base.cpp",
+                "Generated/nprpc_base.hpp",
+                "Generated/nprpc_nameserver.cpp",
+                "Generated/nprpc_nameserver.hpp"
+            ],
             swiftSettings: [
                 .interoperabilityMode(.Cxx)
             ]
@@ -85,6 +90,10 @@ let package = Package(
         .testTarget(
             name: "NPRPCTests",
             dependencies: ["NPRPC"],
+            exclude: [
+                "Generated/basic_test.cpp",
+                "Generated/basic_test.hpp"
+            ],
             swiftSettings: [
                 .interoperabilityMode(.Cxx)
             ]

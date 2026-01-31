@@ -156,27 +156,21 @@ public func unmarshal_string(buffer: UnsafeRawPointer, offset: Int) -> String {
 
 // MARK: - ObjectId Marshalling
 
-public func marshal_object_id(buffer: UnsafeMutableRawPointer, offset: Int, objectId: NPRPCObjectData) {
-    buffer.storeBytes(of: objectId.objectId, toByteOffset: offset + 0, as: UInt64.self)
-    buffer.storeBytes(of: objectId.poaIdx, toByteOffset: offset + 8, as: UInt16.self)
-    buffer.storeBytes(of: objectId.flags, toByteOffset: offset + 10, as: UInt16.self)
-    
-    // Origin (UUID - 16 bytes)
-    objectId.origin.withUnsafeBytes { bytes in
-        buffer.advanced(by: offset + 12).copyMemory(
-            from: bytes.baseAddress!,
-            byteCount: 16
-        )
-    }
-    
-    // Class ID (string)
-    marshal_string(buffer: buffer, offset: offset + 28, string: objectId.classId)
-    
-    // URLs (string) - offset depends on class_id length
-    let classIdLen = UInt32(objectId.classId.utf8.count)
-    let urlsOffset = offset + 28 + 4 + Int(classIdLen)
-    marshal_string(buffer: buffer, offset: urlsOffset, string: objectId.urls)
-}
+/// Marshal an object ID to a buffer
+/// This is a wrapper that calls the generated detail.marshal_ObjectId
+// public func marshal_object_id(buffer: UnsafeMutableRawPointer, offset: Int, objectId: NPRPCObjectData) {
+//     let oid = detail.ObjectId(
+//         object_id: objectId.objectId,
+//         poa_idx: objectId.poaIdx,
+//         flags: objectId.flags,
+//         origin: objectId.origin,
+//         class_id: objectId.classId,
+//         urls: objectId.urls
+//     )
+//     detail.marshal_ObjectId(buffer: buffer, offset: offset, data: oid)
+// }
+
+let marshal_object_id = detail.marshal_ObjectId
 
 // MARK: - Span/View helpers for compatibility
 
@@ -188,4 +182,17 @@ public struct Span<T> {
         self.pointer = array.withUnsafeBufferPointer { $0.baseAddress! }
         self.count = array.count
     }
+}
+
+// MARK: - Object reference marshalling
+
+/// Base protocol for all NPRPC interface types
+public protocol Object {}
+
+/// Unmarshal a remote object reference
+/// TODO: Implement actual object proxy creation
+public func unmarshal_object_proxy(buffer: UnsafeRawPointer, offset: Int, endpoint: NPRPCEndpoint) -> ObjectPtr<Object> {
+    // Use the generated unmarshal function
+    let data = detail.unmarshal_ObjectId(buffer: buffer, offset: offset)
+    return ObjectPtr<Object>(data: data)
 }

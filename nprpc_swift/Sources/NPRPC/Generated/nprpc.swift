@@ -144,13 +144,13 @@ public enum detail {
 
 
   // MARK: - Marshal ObjectIdLocal
-  public func marshal_ObjectIdLocal(buffer: UnsafeMutableRawPointer, offset: Int, data: ObjectIdLocal)   {
+  public static func marshal_ObjectIdLocal(buffer: UnsafeMutableRawPointer, offset: Int, data: ObjectIdLocal)   {
     buffer.storeBytes(of: data.poa_idx, toByteOffset: offset + 0, as: UInt16.self)
     buffer.storeBytes(of: data.object_id, toByteOffset: offset + 8, as: UInt64.self)
   }
 
   // MARK: - Unmarshal ObjectIdLocal
-  public func unmarshal_ObjectIdLocal(buffer: UnsafeRawPointer, offset: Int) -> ObjectIdLocal   {
+  public static func unmarshal_ObjectIdLocal(buffer: UnsafeRawPointer, offset: Int) -> ObjectIdLocal   {
     var result = ObjectIdLocal()
     result.poa_idx = buffer.load(fromByteOffset: offset + 0, as: UInt16.self)
     result.object_id = buffer.load(fromByteOffset: offset + 8, as: UInt64.self)
@@ -184,7 +184,7 @@ public enum detail {
 
 
   // MARK: - Marshal ObjectId
-  public func marshal_ObjectId(buffer: UnsafeMutableRawPointer, offset: Int, data: ObjectId)   {
+  public static func marshal_ObjectId(buffer: UnsafeMutableRawPointer, offset: Int, data: ObjectId)   {
     buffer.storeBytes(of: data.object_id, toByteOffset: offset + 0, as: UInt64.self)
     buffer.storeBytes(of: data.poa_idx, toByteOffset: offset + 8, as: UInt16.self)
     buffer.storeBytes(of: data.flags, toByteOffset: offset + 10, as: UInt16.self)
@@ -194,7 +194,7 @@ public enum detail {
   }
 
   // MARK: - Unmarshal ObjectId
-  public func unmarshal_ObjectId(buffer: UnsafeRawPointer, offset: Int) -> ObjectId   {
+  public static func unmarshal_ObjectId(buffer: UnsafeRawPointer, offset: Int) -> ObjectId   {
     var result = ObjectId()
     result.object_id = buffer.load(fromByteOffset: offset + 0, as: UInt64.self)
     result.poa_idx = buffer.load(fromByteOffset: offset + 8, as: UInt16.self)
@@ -252,7 +252,7 @@ public enum impl {
 
 
   // MARK: - Marshal Header
-  public func marshal_Header(buffer: UnsafeMutableRawPointer, offset: Int, data: Header)   {
+  public static func marshal_Header(buffer: UnsafeMutableRawPointer, offset: Int, data: Header)   {
     buffer.storeBytes(of: data.size, toByteOffset: offset + 0, as: UInt32.self)
     buffer.storeBytes(of: data.msg_id.rawValue, toByteOffset: offset + 4, as: Int32.self)
     buffer.storeBytes(of: data.msg_type.rawValue, toByteOffset: offset + 8, as: Int32.self)
@@ -260,7 +260,7 @@ public enum impl {
   }
 
   // MARK: - Unmarshal Header
-  public func unmarshal_Header(buffer: UnsafeRawPointer, offset: Int) -> Header   {
+  public static func unmarshal_Header(buffer: UnsafeRawPointer, offset: Int) -> Header   {
     var result = Header()
     result.size = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
     result.msg_id = MessageId(rawValue: buffer.load(fromByteOffset: offset + 4, as: Int32.self))!
@@ -287,7 +287,7 @@ public enum impl {
 
 
   // MARK: - Marshal CallHeader
-  public func marshal_CallHeader(buffer: UnsafeMutableRawPointer, offset: Int, data: CallHeader)   {
+  public static func marshal_CallHeader(buffer: UnsafeMutableRawPointer, offset: Int, data: CallHeader)   {
     buffer.storeBytes(of: data.poa_idx, toByteOffset: offset + 0, as: UInt16.self)
     buffer.storeBytes(of: data.interface_idx, toByteOffset: offset + 2, as: UInt8.self)
     buffer.storeBytes(of: data.function_idx, toByteOffset: offset + 3, as: UInt8.self)
@@ -295,7 +295,7 @@ public enum impl {
   }
 
   // MARK: - Unmarshal CallHeader
-  public func unmarshal_CallHeader(buffer: UnsafeRawPointer, offset: Int) -> CallHeader   {
+  public static func unmarshal_CallHeader(buffer: UnsafeRawPointer, offset: Int) -> CallHeader   {
     var result = CallHeader()
     result.poa_idx = buffer.load(fromByteOffset: offset + 0, as: UInt16.self)
     result.interface_idx = buffer.load(fromByteOffset: offset + 2, as: UInt8.self)
@@ -332,7 +332,7 @@ public enum impl {
 
 
   // MARK: - Marshal StreamInit
-  public func marshal_StreamInit(buffer: UnsafeMutableRawPointer, offset: Int, data: StreamInit)   {
+  public static func marshal_StreamInit(buffer: UnsafeMutableRawPointer, offset: Int, data: StreamInit)   {
     buffer.storeBytes(of: data.stream_id, toByteOffset: offset + 0, as: UInt64.self)
     buffer.storeBytes(of: data.poa_idx, toByteOffset: offset + 8, as: UInt16.self)
     buffer.storeBytes(of: data.interface_idx, toByteOffset: offset + 10, as: UInt8.self)
@@ -341,7 +341,7 @@ public enum impl {
   }
 
   // MARK: - Unmarshal StreamInit
-  public func unmarshal_StreamInit(buffer: UnsafeRawPointer, offset: Int) -> StreamInit   {
+  public static func unmarshal_StreamInit(buffer: UnsafeRawPointer, offset: Int) -> StreamInit   {
     var result = StreamInit()
     result.stream_id = buffer.load(fromByteOffset: offset + 0, as: UInt64.self)
     result.poa_idx = buffer.load(fromByteOffset: offset + 8, as: UInt16.self)
@@ -369,7 +369,7 @@ public enum impl {
 
 
   // MARK: - Marshal StreamChunk
-  public func marshal_StreamChunk(buffer: UnsafeMutableRawPointer, offset: Int, data: StreamChunk)   {
+  public static func marshal_StreamChunk(buffer: UnsafeMutableRawPointer, offset: Int, data: StreamChunk)   {
     buffer.storeBytes(of: data.stream_id, toByteOffset: offset + 0, as: UInt64.self)
     buffer.storeBytes(of: data.sequence, toByteOffset: offset + 8, as: UInt64.self)
     NPRPC.marshal_fundamental_vector(buffer: buffer, offset: offset + 16, vector: data.data)
@@ -377,7 +377,7 @@ public enum impl {
   }
 
   // MARK: - Unmarshal StreamChunk
-  public func unmarshal_StreamChunk(buffer: UnsafeRawPointer, offset: Int) -> StreamChunk   {
+  public static func unmarshal_StreamChunk(buffer: UnsafeRawPointer, offset: Int) -> StreamChunk   {
     var result = StreamChunk()
     result.stream_id = buffer.load(fromByteOffset: offset + 0, as: UInt64.self)
     result.sequence = buffer.load(fromByteOffset: offset + 8, as: UInt64.self)
@@ -400,13 +400,13 @@ public enum impl {
 
 
   // MARK: - Marshal StreamComplete
-  public func marshal_StreamComplete(buffer: UnsafeMutableRawPointer, offset: Int, data: StreamComplete)   {
+  public static func marshal_StreamComplete(buffer: UnsafeMutableRawPointer, offset: Int, data: StreamComplete)   {
     buffer.storeBytes(of: data.stream_id, toByteOffset: offset + 0, as: UInt64.self)
     buffer.storeBytes(of: data.final_sequence, toByteOffset: offset + 8, as: UInt64.self)
   }
 
   // MARK: - Unmarshal StreamComplete
-  public func unmarshal_StreamComplete(buffer: UnsafeRawPointer, offset: Int) -> StreamComplete   {
+  public static func unmarshal_StreamComplete(buffer: UnsafeRawPointer, offset: Int) -> StreamComplete   {
     var result = StreamComplete()
     result.stream_id = buffer.load(fromByteOffset: offset + 0, as: UInt64.self)
     result.final_sequence = buffer.load(fromByteOffset: offset + 8, as: UInt64.self)
@@ -429,14 +429,14 @@ public enum impl {
 
 
   // MARK: - Marshal StreamError
-  public func marshal_StreamError(buffer: UnsafeMutableRawPointer, offset: Int, data: StreamError)   {
+  public static func marshal_StreamError(buffer: UnsafeMutableRawPointer, offset: Int, data: StreamError)   {
     buffer.storeBytes(of: data.stream_id, toByteOffset: offset + 0, as: UInt64.self)
     buffer.storeBytes(of: data.error_code, toByteOffset: offset + 8, as: UInt32.self)
     NPRPC.marshal_fundamental_vector(buffer: buffer, offset: offset + 12, vector: data.error_data)
   }
 
   // MARK: - Unmarshal StreamError
-  public func unmarshal_StreamError(buffer: UnsafeRawPointer, offset: Int) -> StreamError   {
+  public static func unmarshal_StreamError(buffer: UnsafeRawPointer, offset: Int) -> StreamError   {
     var result = StreamError()
     result.stream_id = buffer.load(fromByteOffset: offset + 0, as: UInt64.self)
     result.error_code = buffer.load(fromByteOffset: offset + 8, as: UInt32.self)
@@ -456,12 +456,12 @@ public enum impl {
 
 
   // MARK: - Marshal StreamCancel
-  public func marshal_StreamCancel(buffer: UnsafeMutableRawPointer, offset: Int, data: StreamCancel)   {
+  public static func marshal_StreamCancel(buffer: UnsafeMutableRawPointer, offset: Int, data: StreamCancel)   {
     buffer.storeBytes(of: data.stream_id, toByteOffset: offset + 0, as: UInt64.self)
   }
 
   // MARK: - Unmarshal StreamCancel
-  public func unmarshal_StreamCancel(buffer: UnsafeRawPointer, offset: Int) -> StreamCancel   {
+  public static func unmarshal_StreamCancel(buffer: UnsafeRawPointer, offset: Int) -> StreamCancel   {
     var result = StreamCancel()
     result.stream_id = buffer.load(fromByteOffset: offset + 0, as: UInt64.self)
     return result

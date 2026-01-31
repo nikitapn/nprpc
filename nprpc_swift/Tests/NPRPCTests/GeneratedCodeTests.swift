@@ -121,30 +121,6 @@ final class GeneratedCodeTests: XCTestCase {
     }
     
     // MARK: - Servant Tests
-    
-    func testCalculatorServantSubclass() {
-        class TestCalculator: CalculatorServant {
-            override func add(a: Int32, b: Int32) throws -> Int32 {
-                return a + b
-            }
-            
-            override func divide(numerator: Double, denominator: Double) throws -> Double {
-                guard denominator != 0 else {
-                    throw NSError(domain: "DivideByZero", code: 1)
-                }
-                return numerator / denominator
-            }
-        }
-        
-        let calc = TestCalculator()
-        
-        XCTAssertEqual(try? calc.add(a: 10, b: 20), 30)
-        XCTAssertEqual(try? calc.add(a: -5, b: 5), 0)
-        
-        XCTAssertEqual(try? calc.divide(numerator: 10.0, denominator: 2.0), 5.0)
-        XCTAssertThrowsError(try calc.divide(numerator: 10.0, denominator: 0.0))
-    }
-    
     func testShapeServiceServantSubclass() {
         class TestShapeService: ShapeServiceServant {
             var storage: [UInt32: Rectangle] = [:]

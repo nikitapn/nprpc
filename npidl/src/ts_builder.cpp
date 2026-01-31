@@ -3,7 +3,6 @@
 
 #include "ts_builder.hpp"
 #include "utils.hpp"
-#include <algorithm>
 #include <cassert>
 #include <iostream>
 #include <map>

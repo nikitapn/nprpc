@@ -41,3 +41,55 @@ public func testArray() -> [Int32] {
     }
     return result
 }
+
+// ============================================================================
+// MARK: - NPRPC Protocol Utilities
+// ============================================================================
+
+/// Create a simple answer message (for servant dispatch)
+/// Equivalent to nprpc::impl::make_simple_answer in C++
+public func makeSimpleAnswer(buffer: FlatBuffer, messageId: Int32) {
+    // Clear the buffer
+    buffer.consume(buffer.size)
+    
+    // Prepare header (16 bytes)
+    buffer.prepare(16)
+    buffer.commit(16)
+    
+    guard let data = buffer.data else { return }
+    
+    // Write header:
+    // - size (4 bytes, set to 12 = 16 - 4)
+    // - message_id (4 bytes)
+    // - message_type (4 bytes, 1 = Answer)
+    // - reserved (4 bytes)
+    data.storeBytes(of: UInt32(12), toByteOffset: 0, as: UInt32.self)
+    data.storeBytes(of: UInt32(messageId), toByteOffset: 4, as: UInt32.self)
+    data.storeBytes(of: UInt32(1), toByteOffset: 8, as: UInt32.self)  // MessageType.Answer
+    data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+}
+
+/// Handle standard RPC reply (for client proxy)
+/// Returns 0 for success, -1 for BlockResponse (has data), or error code for errors
+public func handleStandardReply(buffer: FlatBuffer) -> Int32 {
+    guard let data = buffer.constData else { return -2 }
+    
+    // Read message_id from offset 4
+    let messageId = data.load(fromByteOffset: 4, as: UInt32.self)
+    
+    // Check message type
+    // 0 = Request, 1 = Answer
+    // Success = 10, Exception = 11, BlockResponse = 2
+    // Errors: PoaNotExist = 12, ObjectNotExist = 13, etc.
+    
+    switch messageId {
+    case 10: // Success
+        return 0
+    case 2: // BlockResponse (has return data)
+        return -1
+    case 11: // Exception
+        return Int32(messageId)
+    default: // Error codes
+        return Int32(messageId)
+    }
+}

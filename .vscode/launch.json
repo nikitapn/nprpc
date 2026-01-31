@@ -49,6 +49,26 @@
       "target": "nprpc-poc",
       "configuration": "release",
       "preLaunchTask": "swift: Build Release nprpc-poc (nprpc_swift)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:nprpc}/nprpc_swift",
+      "name": "Debug http3-server (nprpc_swift)",
+      "target": "http3-server",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug http3-server (nprpc_swift)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:nprpc}/nprpc_swift",
+      "name": "Release http3-server (nprpc_swift)",
+      "target": "http3-server",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release http3-server (nprpc_swift)"
     }
   ]
 }

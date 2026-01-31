@@ -4,23 +4,8 @@
 import CNprpc
 
 /// Represents NPRPC object metadata for marshalling
-public struct NPRPCObjectData {
-    public let objectId: UInt64
-    public let poaIdx: UInt16
-    public let flags: UInt16
-    public let origin: [UInt8]  // UUID - 16 bytes
-    public let classId: String
-    public let urls: String
-    
-    public init(objectId: UInt64, poaIdx: UInt16, flags: UInt16, origin: [UInt8], classId: String, urls: String) {
-        self.objectId = objectId
-        self.poaIdx = poaIdx
-        self.flags = flags
-        self.origin = origin
-        self.classId = classId
-        self.urls = urls
-    }
-}
+/// This is a typealias to the IDL-generated detail.ObjectId
+public typealias NPRPCObjectData = detail.ObjectId
 
 /// Swift representation of a remote object
 public class NPRPCObject {
@@ -28,17 +13,17 @@ public class NPRPCObject {
     
     public let objectId: UInt64
     public let poaIdx: UInt16
-    public let endpoint: NPRPCEndpoint
+    public var endpoint: NPRPCEndpoint
     public let session: NPRPCSession
-    public let timeout: UInt32
+    public var timeout: UInt32
     
     public var data: NPRPCObjectData {
         NPRPCObjectData(
-            objectId: objectId,
-            poaIdx: poaIdx,
+            object_id: objectId,
+            poa_idx: poaIdx,
             flags: 0,
             origin: [UInt8](repeating: 0, count: 16),
-            classId: "",
+            class_id: "",
             urls: ""
         )
     }
@@ -63,6 +48,28 @@ public class NPRPCObject {
     }
 }
 
+/// Type-safe wrapper for remote object references
+/// Generic parameter T is the interface type (e.g., Nameserver)
+public struct ObjectPtr<T> {
+    public let data: NPRPCObjectData
+    
+    public init(data: NPRPCObjectData) {
+        self.data = data
+    }
+    
+    /// Default init for zero/nil object
+    public init() {
+        self.data = NPRPCObjectData(
+            object_id: 0,
+            poa_idx: 0,
+            flags: 0,
+            origin: [UInt8](repeating: 0, count: 16),
+            class_id: "",
+            urls: ""
+        )
+    }
+}
+
 /// Dummy endpoint for now
 public struct NPRPCEndpoint {
     // TODO: Implement endpoint details
@@ -72,10 +79,11 @@ public struct NPRPCEndpoint {
 public struct NPRPCSession {
     internal let handle: UnsafeMutableRawPointer
     
-    // TODO: Implement sendReceive for client-side calls
-    // public func sendReceive(buffer: FlatBuffer, timeout: UInt32) throws {
-    //     // Not implemented yet
-    // }
+    /// Send a request and receive a reply (for client-side calls)
+    /// TODO: Implement via C++ bridge
+    public func sendReceive(buffer: FlatBuffer, timeout: UInt32) throws {
+        throw RuntimeError(message: "Client-side RPC not yet implemented in Swift")
+    }
 }
 
 /// Base class for Swift servants

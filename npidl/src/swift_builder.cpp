@@ -230,8 +230,12 @@ void SwiftBuilder::emit_struct2(AstStructDecl* s, bool is_exception)
     case FieldType::Optional:
       out << " = nil";
       break;
+    case FieldType::Struct:
+      // Initialize nested struct with its default initializer
+      out << " = " << swift_type_name(cflat(actual_type)->name) << "()";
+      break;
     default:
-      // Structs and other complex types don't get defaults
+      // Other complex types don't get defaults
       break;
     }
     out << "\n";
@@ -372,15 +376,20 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
 void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 {
   const std::string class_name = swift_type_name(ifs->name);
+  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->to_ts_namespace() + '.' + ifs->name;
   
   out << bl() << "// Client proxy for " << class_name << "\n";
   out << bl() << "// Pure Swift implementation with direct marshalling\n";
-  out << bl() << "public class " << class_name << ": " << class_name << "Protocol " << bb();
-  out << bl() << "private let object: NPRPCObject\n\n";
+  out << bl() << "public class " << class_name << ": NPRPCObjectProxy, " << class_name << "Protocol " << bb();
   
   // Constructor
-  out << bl() << "public init(_ object: NPRPCObject) " << bb();
-  out << bl() << "self.object = object\n";
+  out << bl() << "public override init(_ object: NPRPCObject) " << bb();
+  out << bl() << "super.init(object)\n";
+  out << eb() << "\n";
+  
+  // Override getClass to return the class ID
+  out << bl() << "public override func getClass() -> String " << bb();
+  out << bl() << "return \"" << class_id << "\"\n";
   out << eb() << "\n";
   
   // Implement protocol methods with marshalling
@@ -446,7 +455,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     out << bl() << "let buffer = FlatBuffer()\n";
     out << bl() << "buffer.prepare(" << capacity << ")\n";
     out << bl() << "buffer.commit(" << fixed_size << ")\n";
-    out << bl() << "guard let data = buffer.data else { throw NPRPCError.bufferError }\n\n";
+    out << bl() << "guard let data = buffer.data else { throw BufferError(message: \"Failed to get buffer data\") }\n\n";
     
     // Write message header
     out << bl() << "// Write message header\n";
@@ -465,15 +474,17 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     // Marshal input arguments
     if (fn->in_s) {
       out << bl() << "// Marshal input arguments\n";
-      out << bl() << "let inArgs = (";
+      
+      // Always create struct instance
+      out << bl() << "var inArgs = " << fn->in_s->name << "()\n";
+      
       int ix = 0;
       for (auto arg : fn->args) {
         if (arg->modifier == ArgumentModifier::Out) continue;
-        if (ix > 0) out << ", ";
-        out << "_" << (ix + 1) << ": " << arg->name;
         ++ix;
+        out << bl() << "inArgs._" << ix << " = " << arg->name << "\n";
       }
-      out << ")\n";
+      
       out << bl() << "marshal_" << fn->in_s->name << "(buffer: data, offset: " << get_arguments_offset() << ", data: inArgs)\n\n";
     }
     
@@ -492,12 +503,12 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     }
     
     if (!fn->out_s) {
-      out << bl() << "if stdReply != 0 { throw NPRPCError.unexpectedReply }\n";
+      out << bl() << "if stdReply != 0 { throw UnexpectedReplyError(message: \"Unexpected reply\") }\n";
     } else {
-      out << bl() << "if stdReply != -1 { throw NPRPCError.unexpectedReply }\n\n";
+      out << bl() << "if stdReply != -1 { throw UnexpectedReplyError(message: \"Unexpected reply\") }\n\n";
       
       // Unmarshal output arguments
-      out << bl() << "guard let responseData = buffer.data else { throw NPRPCError.bufferError }\n";
+      out << bl() << "guard let responseData = buffer.data else { throw BufferError(message: \"Failed to get response data\") }\n";
       
       bool out_needs_endpoint = false;
       for (auto f : fn->out_s->fields) {
@@ -628,11 +639,11 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
   
   for (auto& fn : ifs->fns) {
     out << bl() << "case " << fn->idx << ": // " << fn->name << "\n";
-    out << bb();
+    out << bl() << "do {\n" << bb(false);
     
     // Unmarshal input arguments
     if (fn->in_s) {
-      out << bl() << "\n// Unmarshal input arguments\n";
+      out << bl() << "// Unmarshal input arguments\n";
       bool in_needs_endpoint = false;
       for (auto f : fn->in_s->fields) {
         if (contains_object(f->type)) {
@@ -652,7 +663,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
     if (fn->out_s && !fn->out_s->flat) {
       const auto offset = size_of_header;
       const auto initial_size = offset + fn->out_s->size;
-      out << bl() << "\n// Prepare output buffer\n";
+      out << bl() << "// Prepare output buffer\n";
       out << bl() << "let obuf = buffer\n";
       out << bl() << "obuf.consume(obuf.size)\n";
       out << bl() << "obuf.prepare(" << (initial_size + 128) << ")\n";
@@ -662,7 +673,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
     // Call the implementation
     out << bl() << "\n";
     if (fn->ex) {
-      out << bl() << "do " << bb();
+      out << bl() << "do {\n" << bb(false);
     }
     
     // Call user's implementation - returns value(s)
@@ -747,34 +758,33 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
     
     // Marshal output
     if (!fn->out_s) {
-      out << bl() << "\n// Send success\n";
+      out << bl() << "// Send success\n";
       out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: 5)  // Success\n";
     } else {
       if (fn->out_s->flat) {
         const auto offset = size_of_header;
         const auto initial_size = offset + fn->out_s->size;
-        out << bl() << "\n// Prepare output buffer\n";
+        out << bl() << "// Prepare output buffer\n";
         out << bl() << "let obuf = buffer\n";
         out << bl() << "obuf.consume(obuf.size)\n";
         out << bl() << "obuf.prepare(" << initial_size << ")\n";
         out << bl() << "obuf.commit(" << initial_size << ")\n";
       }
       
-      out << bl() << "\n// Marshal output arguments\n";
+      out << bl() << "// Marshal output arguments\n";
       out << bl() << "guard let outData = buffer.data else { return }\n";
-      out << bl() << "let out_data = (";
+      out << bl() << "var out_data = " << fn->out_s->name << "()\n";
       
       int ix = 0;
       if (!fn->is_void()) {
-        out << "_1: __ret_val";
+        out << bl() << "out_data._1 = __ret_val\n";
         ix = 1;
       }
       for (auto out_arg : out_params) {
-        if (ix > 0) out << ", ";
         ++ix;
-        out << "_" << ix << ": _out_" << out_arg->name;
+        out << bl() << "out_data._" << ix << " = _out_" << out_arg->name << "\n";
       }
-      out << ")\n";
+      out << "\n";
       
       out << bl() << "marshal_" << fn->out_s->name << "(buffer: outData, offset: " << size_of_header << ", data: out_data)\n";
       out << bl() << "outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n";
@@ -782,17 +792,19 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       out << bl() << "outData.storeBytes(of: UInt32(1), toByteOffset: 8, as: UInt32.self)  // MessageType.Answer\n";
     }
     
+    // Close do-catch for this case
+    out << eb();
+    out << bl() << "catch {\n" << bb(false);
+    out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error in dispatch\n";
     out << eb();
   }
   
   // Default case
   out << bl() << "default:\n";
-  out << bb();
-  out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error_UnknownFunctionIdx\n";
-  out << eb();
+  out << bl() << "  makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error_UnknownFunctionIdx\n";
   
-  out << eb() << " // switch\n";
-  out << eb() << " // dispatch\n";
+  out << eb(false) << bl() << "} // switch\n";
+  out << eb(false) << bl() << "} // dispatch\n";
   out << eb() << "\n";
 }
 
@@ -857,7 +869,7 @@ void SwiftBuilder::emit_swift_trampolines(AstInterfaceDecl* ifs)
       }
     }
     
-    out << bl() << "do " << bb();
+    out << bl() << "do {\n" << bb(false);
     
     // Call Swift method
     out << bl();
@@ -922,6 +934,128 @@ void SwiftBuilder::emit_swift_trampolines(AstInterfaceDecl* ifs)
 
 void SwiftBuilder::emit_interface(AstInterfaceDecl* ifs)
 {
+  // First emit struct definitions for auto-generated in/out parameter structs
+  for (auto& fn : ifs->fns) {
+    if (fn->in_s && fn->in_s->fields.size() > 0) {
+      out << "\n" << bl() << "public struct " << fn->in_s->name << " {\n";
+      for (size_t i = 0; i < fn->in_s->fields.size(); ++i) {
+        auto field = fn->in_s->fields[i];
+        out << bl() << "  public var _" << (i + 1) << ": ";
+        emit_type(field->type, out);
+        
+        // Add default value
+        auto actual_type = field->type;
+        if (actual_type->id == FieldType::Alias) {
+          actual_type = calias(actual_type)->get_real_type();
+        }
+        
+        switch (actual_type->id) {
+        case FieldType::Fundamental: {
+          auto token = cft(actual_type)->token_id;
+          out << " = ";
+          if (token == TokenId::Boolean) {
+            out << "false";
+          } else if (is_floating_point(token)) {
+            out << "0.0";
+          } else {
+            out << "0";
+          }
+          break;
+        }
+        case FieldType::String:
+          out << " = \"\"";
+          break;
+        case FieldType::Vector:
+        case FieldType::Array:
+          out << " = []";
+          break;
+        case FieldType::Object:
+          out << " = ObjectPtr()";
+          break;
+        case FieldType::Struct:
+          out << " = " << swift_type_name(cflat(actual_type)->name) << "()";
+          break;
+        case FieldType::Enum:
+          out << " = ." << swift_method_name(cenum(actual_type)->items.begin()->first);
+          break;
+        case FieldType::Optional:
+          out << " = nil";
+          break;
+        default:
+          break;
+        }
+        out << "\n";
+      }
+      out << bl() << "  public init() {}\n";
+      out << bl() << "}\n";
+    }
+    if (fn->out_s && fn->out_s->fields.size() > 0) {
+      out << "\n" << bl() << "public struct " << fn->out_s->name << " {\n";
+      for (size_t i = 0; i < fn->out_s->fields.size(); ++i) {
+        auto field = fn->out_s->fields[i];
+        out << bl() << "  public var _" << (i + 1) << ": ";
+        emit_type(field->type, out);
+        
+        // Add default value
+        auto actual_type = field->type;
+        if (actual_type->id == FieldType::Alias) {
+          actual_type = calias(actual_type)->get_real_type();
+        }
+        
+        switch (actual_type->id) {
+        case FieldType::Fundamental: {
+          auto token = cft(actual_type)->token_id;
+          out << " = ";
+          if (token == TokenId::Boolean) {
+            out << "false";
+          } else if (is_floating_point(token)) {
+            out << "0.0";
+          } else {
+            out << "0";
+          }
+          break;
+        }
+        case FieldType::String:
+          out << " = \"\"";
+          break;
+        case FieldType::Vector:
+        case FieldType::Array:
+          out << " = []";
+          break;
+        case FieldType::Object:
+          out << " = ObjectPtr()";
+          break;
+        case FieldType::Struct:
+          out << " = " << swift_type_name(cflat(actual_type)->name) << "()";
+          break;
+        case FieldType::Enum:
+          out << " = ." << swift_method_name(cenum(actual_type)->items.begin()->first);
+          break;
+        case FieldType::Optional:
+          out << " = nil";
+          break;
+        default:
+          break;
+        }
+        out << "\n";
+      }
+      out << bl() << "  public init() {}\n";
+      out << bl() << "}\n";
+    }
+  }
+  
+  // Then emit marshal/unmarshal functions for these structs
+  for (auto& fn : ifs->fns) {
+    if (fn->in_s) {
+      emit_marshal_function(fn->in_s);
+      emit_unmarshal_function(fn->in_s);
+    }
+    if (fn->out_s) {
+      emit_marshal_function(fn->out_s);
+      emit_unmarshal_function(fn->out_s);
+    }
+  }
+  
   emit_protocol(ifs);
   emit_client_proxy(ifs);
   emit_servant_base(ifs);
@@ -962,7 +1096,7 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
   }
   case FieldType::Object: {
     const int field_offset = align_offset(align_of_object, offset, size_of_object);
-    out << bl() << "NPRPC.marshal_object_id(buffer: buffer, offset: offset + " << field_offset << ", objectId: " << field_access << ".data)\n";
+    out << bl() << "detail.marshal_ObjectId(buffer: buffer, offset: offset + " << field_offset << ", data: " << field_access << ".data)\n";
     break;
   }
   case FieldType::Array: {
@@ -1044,8 +1178,11 @@ void SwiftBuilder::emit_marshal_function(AstStructDecl* s)
   
   std::string data_type = s->is_exception() ? (s->name + "_Data") : s->name;
   
+  // Use 'static' if inside a namespace enum (block_depth > 0 means we're inside a block)
+  bool in_namespace = block_depth_.str() != "0";
+  
   out << "\n" << bl() << "// MARK: - Marshal " << s->name << "\n";
-  out << bl() << "public func marshal_" << s->name << "(buffer: UnsafeMutableRawPointer, offset: Int, data: " << data_type << ") ";
+  out << bl() << "public " << (in_namespace ? "static " : "") << "func marshal_" << s->name << "(buffer: UnsafeMutableRawPointer, offset: Int, data: " << data_type << ") ";
   out << bb();
 
   int current_offset = 0;
@@ -1179,10 +1316,13 @@ void SwiftBuilder::emit_unmarshal_function(AstStructDecl* s)
     }
   }
   
+  // Use 'static' if inside a namespace enum (block_depth > 0 means we're inside a block)
+  bool in_namespace = block_depth_.str() != "0";
+  
   out << "\n" << bl() << "// MARK: - Unmarshal " << s->name << "\n";
-  out << bl() <<"public func unmarshal_" << s->name << "(buffer: UnsafeRawPointer, offset: Int";
+  out << bl() << "public " << (in_namespace ? "static " : "") << "func unmarshal_" << s->name << "(buffer: UnsafeRawPointer, offset: Int";
   if (has_objects) {
-    out << ", endpoint: NPRPC.EndPoint";
+    out << ", endpoint: NPRPCEndpoint";
   }
   out << ") -> " << s->name << " ";
   out << bb();
@@ -1233,10 +1373,8 @@ void SwiftBuilder::finalize()
   ofs << "// Generated by npidl compiler\n";
   ofs << "// DO NOT EDIT - all changes will be lost\n\n";
   // Only import NPRPC for non-base modules (avoid self-import)
-  if (ctx_ && ctx_->module() != "nprpc") {
-    std::cerr << "Emitting Swift module import for module: " << ctx_->module() << "\n";
+  if (ctx_ && ctx_->module() != "nprpc" && ctx_->module() != "nprpc_common")
     ofs << "import NPRPC\n\n";
-  }
 
   ofs << out.str();
   ofs.close();
