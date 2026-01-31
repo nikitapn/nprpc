@@ -16,7 +16,6 @@
 #include <boost/asio/use_future.hpp>
 
 #include <sstream>
-#include <regex>
 
 // External declaration for the free function in rpc_impl.cpp
 // This avoids including nprpc_impl.hpp which has template issues with Swift's clang
@@ -416,6 +415,28 @@ int nprpc_object_send_receive(void* obj_ptr, void* buffer_ptr, uint32_t timeout_
         // TODO: Consider passing error message back to Swift
         return -3;  // RPC call failed
     }
+}
+
+// Object string serialization (NPRPC IOR format)
+const char* nprpc_object_to_string(void* obj_ptr) {
+    if (!obj_ptr) return nullptr;
+    
+    auto* obj = static_cast<nprpc::Object*>(obj_ptr);
+    std::string str = obj->to_string();
+    
+    // Allocate a copy that Swift can own and free
+    char* result = new char[str.size() + 1];
+    std::memcpy(result, str.c_str(), str.size() + 1);
+    return result;
+}
+
+void* nprpc_object_from_string(const char* str) {
+    if (!str) return nullptr;
+    return nprpc::Object::from_string(str);
+}
+
+void nprpc_free_string(const char* str) {
+    delete[] str;
 }
 
 // Swift Servant Bridge

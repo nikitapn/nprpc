@@ -57,7 +57,10 @@ interface TestBasic {
 	boolean In(a: in u32, b: in boolean, c: in vector<u8>) raises (AssertionFailed);
 	void Out(a: out u32, b: out boolean, c: out vector<u8>) raises (AssertionFailed);
 
+	void InStruct(a: in AAA) raises (AssertionFailed);
 	void OutStruct(a: out AAA) raises (AssertionFailed);
+	void InFlatStruct(value: in u32, a: in FlatStruct) raises (AssertionFailed);
+	void OutFlatStruct(value: in u32, a: out FlatStruct) raises (AssertionFailed);
 	void OutArrayOfStructs(a: out vector<SimpleStruct>) raises (AssertionFailed);
 
 	void InException() raises (SimpleException);

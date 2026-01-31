@@ -19,6 +19,9 @@ const header_size = 16;
 const invalid_object_id = 0xFFFFFFFFFFFFFFFFn;
 const localhost_ip4 = 0x7F000001;
 
+const u8enc = new TextEncoder();
+const u8dec = new TextDecoder();
+
 type ObjectId = detail.ObjectId;
 export type { ObjectId };
 
@@ -561,6 +564,122 @@ export class ObjectProxy {
       this.endpoint_.hostname === "127.0.0.1")
     {
       this.endpoint_.hostname = remote_endpoint.hostname;
+    }
+  }
+
+  /**
+   * Serialize this object reference to a string (like CORBA IOR).
+   * Format: "NPRPC1:<base64_encoded_data>"
+   */
+  public toString(): string {
+    const oid = this.data;
+    
+    // Calculate total size
+    const class_id_bytes = u8enc.encode(oid.class_id);
+    const urls_bytes = u8enc.encode(oid.urls);
+    
+    // Binary format: object_id(8) + poa_idx(2) + flags(2) + origin(16) + 
+    //                class_id_len(4) + class_id + urls_len(4) + urls
+    const total_size = 8 + 2 + 2 + 16 + 4 + class_id_bytes.length + 4 + urls_bytes.length;
+    const buffer = new ArrayBuffer(total_size);
+    const view = new DataView(buffer);
+    const bytes = new Uint8Array(buffer);
+    
+    let offset = 0;
+    
+    // object_id (u64, little-endian)
+    view.setBigUint64(offset, oid.object_id, true);
+    offset += 8;
+    
+    // poa_idx (u16, little-endian)
+    view.setUint16(offset, oid.poa_idx, true);
+    offset += 2;
+    
+    // flags (u16, little-endian)
+    view.setUint16(offset, oid.flags, true);
+    offset += 2;
+    
+    // origin (16 bytes UUID)
+    bytes.set(oid.origin, offset);
+    offset += 16;
+    
+    // class_id_len (u32, little-endian) + class_id
+    view.setUint32(offset, class_id_bytes.length, true);
+    offset += 4;
+    bytes.set(class_id_bytes, offset);
+    offset += class_id_bytes.length;
+    
+    // urls_len (u32, little-endian) + urls
+    view.setUint32(offset, urls_bytes.length, true);
+    offset += 4;
+    bytes.set(urls_bytes, offset);
+    
+    // Base64 encode
+    const base64 = btoa(String.fromCharCode(...bytes));
+    return "NPRPC1:" + base64;
+  }
+
+  /**
+   * Create an ObjectProxy from a serialized string.
+   * @param str The string in format "NPRPC1:<base64_encoded_data>"
+   * @returns A new ObjectProxy, or null if parsing fails
+   */
+  public static fromString(str: string): ObjectProxy | null {
+    const prefix = "NPRPC1:";
+    if (!str.startsWith(prefix)) {
+      return null;
+    }
+    
+    try {
+      const base64 = str.substring(prefix.length);
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      
+      const view = new DataView(bytes.buffer);
+      let offset = 0;
+      
+      // object_id (u64, little-endian)
+      const object_id = view.getBigUint64(offset, true);
+      offset += 8;
+      
+      // poa_idx (u16, little-endian)
+      const poa_idx = view.getUint16(offset, true);
+      offset += 2;
+      
+      // flags (u16, little-endian)
+      const flags = view.getUint16(offset, true);
+      offset += 2;
+      
+      // origin (16 bytes UUID)
+      const origin = new Uint8Array(bytes.buffer, offset, 16);
+      offset += 16;
+      
+      // class_id_len (u32, little-endian) + class_id
+      const class_id_len = view.getUint32(offset, true);
+      offset += 4;
+      const class_id = u8dec.decode(new Uint8Array(bytes.buffer, offset, class_id_len));
+      offset += class_id_len;
+      
+      // urls_len (u32, little-endian) + urls
+      const urls_len = view.getUint32(offset, true);
+      offset += 4;
+      const urls = u8dec.decode(new Uint8Array(bytes.buffer, offset, urls_len));
+      
+      const oid: ObjectId = {
+        object_id,
+        poa_idx,
+        flags,
+        origin: new Uint8Array(origin), // copy to avoid detaching issues
+        class_id,
+        urls
+      };
+      
+      return new ObjectProxy(oid);
+    } catch (e) {
+      return null;
     }
   }
 }

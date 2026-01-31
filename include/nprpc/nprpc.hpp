@@ -91,6 +91,14 @@ public:
 
   auto& get_data() noexcept { return data_; }
   const auto& get_data() const noexcept { return data_; }
+
+  // Serialize ObjectId to a string (NPRPC IOR format)
+  // Format: "NPRPC1:<base64_encoded_binary_data>"
+  NPRPC_API std::string to_string() const;
+
+  // Deserialize ObjectId from string
+  // Returns true on success, false on parse error
+  NPRPC_API bool from_string(std::string_view str);
 };
 
 namespace PoaPolicy {
@@ -282,6 +290,10 @@ public:
   uint32_t get_timeout() const noexcept { return timeout_ms_; }
 
   const EndPoint& get_endpoint() const noexcept { return endpoint_; }
+
+  // Create an Object from a serialized string (NPRPC IOR format)
+  // Returns nullptr on parse error
+  NPRPC_API static Object* from_string(std::string_view str);
 
   NPRPC_API virtual ~Object() = default;
 

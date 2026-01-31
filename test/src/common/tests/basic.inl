@@ -29,8 +29,28 @@ public:
         auto span = c();
         std::iota(std::begin(span), std::end(span), 0);
     }
+    
+    void InFlatStruct (uint32_t value, nprpc::test::flat::FlatStruct_Direct a) override{
+        EXPECT_EQ(value, 42);
+        EXPECT_EQ(a.a(), 42);
+        EXPECT_EQ(a.b(), 100u);
+        EXPECT_EQ(a.c(), 3.14f);
+    }
 
-    void OutStruct (nprpc::test::flat::AAA_Direct& a) override{
+    void OutFlatStruct (uint32_t value, nprpc::test::flat::FlatStruct_Direct a) override{
+        EXPECT_EQ(value, 42);
+        a.a() = 42;
+        a.b() = 100;
+        a.c() = 3.14f;
+    }
+
+    void InStruct (nprpc::test::flat::AAA_Direct a) override{
+        EXPECT_EQ(a.a(), 12345);
+        EXPECT_EQ(std::string_view(a.b()), "Hello from InStruct");
+        EXPECT_EQ(std::string_view(a.c()), "Another string");
+    }
+
+    void OutStruct (nprpc::test::flat::AAA_Direct a) override{
         a.a() = 12345;
         a.b("Hello from OutStruct");
         a.c("Another string");

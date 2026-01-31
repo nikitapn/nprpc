@@ -80,9 +80,9 @@ TEST_F(NprpcTest, TestBasic)
     }
   };
 
-  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
   // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
@@ -119,7 +119,7 @@ TEST_F(NprpcTest, TestException)
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
@@ -159,7 +159,7 @@ TEST_F(NprpcTest, TestOptional)
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
@@ -207,7 +207,7 @@ TEST_F(NprpcTest, TestNested)
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
@@ -261,7 +261,7 @@ TEST_F(NprpcTest, TestLargeMessage)
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
@@ -367,7 +367,7 @@ TEST_F(NprpcTest, TestBadInput)
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 

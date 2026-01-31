@@ -182,8 +182,6 @@ void IShapeService_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unuse
     case 0: {
       assert(ctx.rx_buffer != nullptr);
       basic_test_M1_Direct ia(*ctx.rx_buffer, 32);
-      Rectangle _out_1;
-      getRectangle(ia._1(), _out_1);
       assert(ctx.tx_buffer != nullptr);
       auto& obuf = *ctx.tx_buffer;
       obuf.consume(obuf.size());
@@ -191,7 +189,7 @@ void IShapeService_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unuse
         obuf.prepare(36);
       obuf.commit(36);
       basic_test_M2_Direct oa(obuf,16);
-      memcpy(oa._1().__data(), &_out_1, 20);
+      getRectangle(ia._1(), oa._1());
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->size = static_cast<uint32_t>(obuf.size() - 4);
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_id = ::nprpc::impl::MessageId::BlockResponse;
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_type = ::nprpc::impl::MessageType::Answer;

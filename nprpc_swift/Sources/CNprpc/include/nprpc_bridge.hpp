@@ -218,6 +218,17 @@ void nprpc_objectid_destroy(void* oid_ptr);
 // Returns: 0 = success, -1 = null args, -2 = endpoint selection failed, -3 = RPC call failed
 int nprpc_object_send_receive(void* obj_ptr, void* buffer_ptr, uint32_t timeout_ms);
 
+// Object string serialization (NPRPC IOR format)
+// Returns: newly allocated string that caller must free with nprpc_free_string()
+const char* nprpc_object_to_string(void* obj_ptr);
+
+// Create Object from serialized string (NPRPC IOR format)
+// Returns: new Object handle or nullptr on parse error
+void* nprpc_object_from_string(const char* str);
+
+// Free a string allocated by nprpc_object_to_string
+void nprpc_free_string(const char* str);
+
 // Swift Servant activation
 // Returns pointer to nprpc::ObjectId that Swift must destroy with nprpc_objectid_destroy
 void* nprpc_poa_activate_swift_servant(

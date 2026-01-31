@@ -93,7 +93,7 @@ public:
   static std::string_view _get_class() noexcept { return "basic_test/swift.test.ShapeService"; }
   std::string_view get_class() const noexcept override { return IShapeService_Servant::_get_class(); }
   void dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) override;
-  virtual void getRectangle (uint32_t id, flat::Rectangle_Direct& rect) = 0;
+  virtual void getRectangle (uint32_t id, flat::Rectangle_Direct rect) = 0;
   virtual void setRectangle (uint32_t id, flat::Rectangle_Direct rect) = 0;
 };
 

@@ -284,3 +284,215 @@ void dump_message(flat_buffer& buffer, bool rx)
 } // namespace nprpc::impl
 
 #include <nprpc/serialization/nvp.hpp>
+
+// ============================================================================
+// ObjectId/Object string serialization (NPRPC IOR format)
+// Format: "NPRPC1:<base64_encoded_binary>"
+// Binary format (little-endian):
+//   - object_id: 8 bytes (uint64)
+//   - poa_idx: 2 bytes (uint16)
+//   - flags: 2 bytes (uint16)
+//   - origin: 16 bytes (uuid)
+//   - class_id_len: 4 bytes (uint32)
+//   - class_id: variable
+//   - urls_len: 4 bytes (uint32)
+//   - urls: variable
+// ============================================================================
+
+namespace {
+
+// Base64 encoding/decoding tables
+constexpr char base64_chars[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string base64_encode(const std::vector<uint8_t>& data)
+{
+  std::string result;
+  result.reserve(((data.size() + 2) / 3) * 4);
+
+  size_t i = 0;
+  while (i < data.size()) {
+    uint32_t octet_a = i < data.size() ? data[i++] : 0;
+    uint32_t octet_b = i < data.size() ? data[i++] : 0;
+    uint32_t octet_c = i < data.size() ? data[i++] : 0;
+
+    uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
+
+    result += base64_chars[(triple >> 18) & 0x3F];
+    result += base64_chars[(triple >> 12) & 0x3F];
+    result += (i > data.size() + 1) ? '=' : base64_chars[(triple >> 6) & 0x3F];
+    result += (i > data.size()) ? '=' : base64_chars[triple & 0x3F];
+  }
+
+  return result;
+}
+
+std::vector<uint8_t> base64_decode(std::string_view encoded)
+{
+  static constexpr uint8_t decode_table[256] = {
+      64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+      64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+      64, 64, 64, 64, 64, 64, 64, 62, 64, 64, 64, 63, 52, 53, 54, 55, 56, 57,
+      58, 59, 60, 61, 64, 64, 64, 64, 64, 64, 64, 0,  1,  2,  3,  4,  5,  6,
+      7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+      25, 64, 64, 64, 64, 64, 64, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36,
+      37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 64, 64, 64,
+      64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+      64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+      64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+      64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+      64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+      64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+      64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+      64, 64, 64, 64};
+
+  std::vector<uint8_t> result;
+  result.reserve((encoded.size() * 3) / 4);
+
+  uint32_t bits = 0;
+  int bit_count = 0;
+
+  for (char c : encoded) {
+    if (c == '=')
+      break;
+    uint8_t val = decode_table[static_cast<uint8_t>(c)];
+    if (val == 64)
+      return {};  // Invalid character
+
+    bits = (bits << 6) | val;
+    bit_count += 6;
+
+    if (bit_count >= 8) {
+      bit_count -= 8;
+      result.push_back(static_cast<uint8_t>((bits >> bit_count) & 0xFF));
+    }
+  }
+
+  return result;
+}
+
+template <typename T>
+void write_le(std::vector<uint8_t>& buf, T value)
+{
+  for (size_t i = 0; i < sizeof(T); ++i) {
+    buf.push_back(static_cast<uint8_t>(value & 0xFF));
+    value >>= 8;
+  }
+}
+
+template <typename T>
+bool read_le(const uint8_t*& ptr, const uint8_t* end, T& value)
+{
+  if (ptr + sizeof(T) > end)
+    return false;
+  value = 0;
+  for (size_t i = 0; i < sizeof(T); ++i) {
+    value |= static_cast<T>(*ptr++) << (i * 8);
+  }
+  return true;
+}
+
+bool read_string(const uint8_t*& ptr, const uint8_t* end, std::string& str)
+{
+  uint32_t len;
+  if (!read_le(ptr, end, len))
+    return false;
+  if (ptr + len > end)
+    return false;
+  str.assign(reinterpret_cast<const char*>(ptr), len);
+  ptr += len;
+  return true;
+}
+
+}  // anonymous namespace
+
+namespace nprpc {
+
+NPRPC_API std::string ObjectId::to_string() const
+{
+  std::vector<uint8_t> buf;
+  buf.reserve(64 + data_.class_id.size() + data_.urls.size());
+
+  // Write fixed fields (little-endian)
+  write_le(buf, data_.object_id);
+  write_le(buf, data_.poa_idx);
+  write_le(buf, data_.flags);
+
+  // Write origin UUID (16 bytes)
+  for (auto b : data_.origin) {
+    buf.push_back(b);
+  }
+
+  // Write class_id (length-prefixed)
+  write_le(buf, static_cast<uint32_t>(data_.class_id.size()));
+  for (char c : data_.class_id) {
+    buf.push_back(static_cast<uint8_t>(c));
+  }
+
+  // Write urls (length-prefixed)
+  write_le(buf, static_cast<uint32_t>(data_.urls.size()));
+  for (char c : data_.urls) {
+    buf.push_back(static_cast<uint8_t>(c));
+  }
+
+  return "NPRPC1:" + base64_encode(buf);
+}
+
+NPRPC_API bool ObjectId::from_string(std::string_view str)
+{
+  // Check prefix
+  constexpr std::string_view prefix = "NPRPC1:";
+  if (str.size() < prefix.size() || str.substr(0, prefix.size()) != prefix) {
+    return false;
+  }
+
+  // Decode base64
+  auto data = base64_decode(str.substr(prefix.size()));
+  if (data.empty() && str.size() > prefix.size()) {
+    return false;  // Decode error
+  }
+
+  const uint8_t* ptr = data.data();
+  const uint8_t* end = ptr + data.size();
+
+  // Read fixed fields
+  if (!read_le(ptr, end, data_.object_id))
+    return false;
+  if (!read_le(ptr, end, data_.poa_idx))
+    return false;
+  if (!read_le(ptr, end, data_.flags))
+    return false;
+
+  // Read origin (16 bytes)
+  if (ptr + 16 > end)
+    return false;
+  std::copy(ptr, ptr + 16, data_.origin.begin());
+  ptr += 16;
+
+  // Read strings
+  if (!read_string(ptr, end, data_.class_id))
+    return false;
+  if (!read_string(ptr, end, data_.urls))
+    return false;
+
+  return true;
+}
+
+NPRPC_API Object* Object::from_string(std::string_view str)
+{
+  auto* obj = new Object();
+  if (!obj->ObjectId::from_string(str)) {
+    delete obj;
+    return nullptr;
+  }
+
+  // Auto-select endpoint after parsing
+  if (!obj->select_endpoint()) {
+    delete obj;
+    return nullptr;
+  }
+
+  return obj;
+}
+
+}  // namespace nprpc

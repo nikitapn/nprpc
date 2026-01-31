@@ -139,6 +139,29 @@ public class NPRPCObject {
         self.handle = handle
     }
     
+    // MARK: - String Serialization (NPRPC IOR format)
+    
+    /// Serialize this object reference to a string (similar to CORBA IOR)
+    /// Format: "NPRPC1:<base64_encoded_data>"
+    /// This string can be shared and used to recreate the object reference elsewhere.
+    public func toString() -> String {
+        guard let cStr = nprpc_object_to_string(handle) else {
+            return ""
+        }
+        defer { nprpc_free_string(cStr) }
+        return String(cString: cStr)
+    }
+    
+    /// Create an NPRPCObject from a serialized string (NPRPC IOR format)
+    /// - Parameter str: The serialized object reference string
+    /// - Returns: A new NPRPCObject, or nil if parsing failed
+    public static func fromString(_ str: String) -> NPRPCObject? {
+        guard let handle = nprpc_object_from_string(str) else {
+            return nil
+        }
+        return NPRPCObject(handle: handle)
+    }
+    
     deinit {
         // Release our reference to C++ object
         nprpc_object_release(handle)

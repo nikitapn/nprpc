@@ -410,7 +410,7 @@ void CppBuilder::emit_parameter_type_for_servant_callback(AstFunctionArgument* a
   auto const input = (arg->modifier == ArgumentModifier::In);
   emit_parameter_type_for_servant_callback_r(arg->type, os, input);
   if (!input && (arg->type->id != FieldType::Vector && arg->type->id != FieldType::Object &&
-                 arg->type->id != FieldType::String && arg->type->id != FieldType::Optional)) {
+                 arg->type->id != FieldType::String && arg->type->id != FieldType::Optional && arg->type->id != FieldType::Struct)) {
     os << '&';
   }
 }
@@ -1886,16 +1886,52 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
               real_type->id == FieldType::Struct);
     };
 
+    // Helper to check if an argument is a Struct type (resolving aliases)
+    auto is_struct_type = [](AstFunctionArgument* arg) {
+      auto real_type = arg->type;
+      if (real_type->id == FieldType::Alias)
+        real_type = calias(real_type)->get_real_type();
+      return real_type->id == FieldType::Struct;
+    };
+
+    // For flat output structs with Struct-type outputs, we need to prepare
+    // the output buffer BEFORE calling the servant so we can pass _Direct types
+    bool flat_has_struct_out = false;
     if (fn->out_s && fn->out_s->flat) {
-      // For flat output structs, create stack variables for ALL output
-      // parameters
+      for (auto arg : fn->args) {
+        if (arg->modifier == ArgumentModifier::Out && is_struct_type(arg)) {
+          flat_has_struct_out = true;
+          break;
+        }
+      }
+    }
+
+    if (flat_has_struct_out) {
+      // Prepare output buffer early for flat structs with Struct-type outputs
+      const auto offset = size_of_header;
+      const auto initial_size = offset + fn->out_s->size;
+      oc << bd << "assert(ctx.tx_buffer != nullptr);\n"
+         << bd << "auto& obuf = *ctx.tx_buffer;\n"
+         << bd << "obuf.consume(obuf.size());\n"
+         << bd << "if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, "
+         << initial_size << "))\n"
+         << bd << "  obuf.prepare(" << initial_size << ");\n"
+         << bd << "obuf.commit(" << initial_size << ");\n"
+         << bd << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n";
+    }
+
+    if (fn->out_s && fn->out_s->flat) {
+      // For flat output structs, create stack variables for non-Struct output
+      // parameters. Struct outputs use _Direct accessors from the output buffer.
       for (auto arg : fn->args) {
         if (arg->modifier != ArgumentModifier::Out)
           continue;
         ++out_ix;
-        oc << bd;
-        emit_type(arg->type, oc);
-        oc << " _out_" << out_ix << ";\n";
+        if (!is_struct_type(arg)) {
+          oc << bd;
+          emit_type(arg->type, oc);
+          oc << " _out_" << out_ix << ";\n";
+        }
       }
     } else if (fn->out_s) {
       // For non-flat output structs, create temporary variables only for
@@ -1932,12 +1968,19 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       if (arg->modifier == ArgumentModifier::Out) {
         assert(fn->out_s);
         if (fn->out_s->flat) {
-          // For flat structs, pass stack variable reference
-          oc << "_out_" << ++out_ix;
+          ++out_ix;
+          if (is_struct_type(arg)) {
+            // For Struct types in flat output structs, pass _Direct accessor
+            oc << "oa._" << out_ix << "()";
+          } else {
+            // For non-Struct types, pass stack variable reference
+            oc << "_out_" << out_ix;
+          }
         } else if (passed_as_direct(arg)) {
           // For non-flat structs with complex types, pass temporary
           // variable
           oc << "oa_" << ++out_temp_ix;
+          ++out_ix;
         } else {
           // For non-flat structs with simple types, pass direct
           // reference
@@ -2033,26 +2076,30 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       if (fn->out_s->flat) { // it means that we are writing output data
                              // in the input buffer,
         // so we must pass stack variables first and then assign result
-        // back to the buffer
+        // back to the buffer. For Struct types, we already wrote directly
+        // via _Direct accessors.
         const auto offset = size_of_header;
         const auto initial_size = offset + fn->out_s->size;
 
-        oc << "      assert(ctx.tx_buffer != nullptr);\n"
-              "      auto& obuf = *ctx.tx_buffer;\n"
-              "      obuf.consume(obuf.size());\n"
-              "      if "
-              "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
-              "obuf, "
-           << initial_size
-           << "))\n"
-              "        obuf.prepare("
-           << initial_size
-           << ");\n"
-              "      obuf.commit("
-           << initial_size
-           << ");\n"
-              "      "
-           << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n";
+        if (!flat_has_struct_out) {
+          // Only prepare buffer here if we didn't already do it for Struct outputs
+          oc << "      assert(ctx.tx_buffer != nullptr);\n"
+                "      auto& obuf = *ctx.tx_buffer;\n"
+                "      obuf.consume(obuf.size());\n"
+                "      if "
+                "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
+                "obuf, "
+             << initial_size
+             << "))\n"
+                "        obuf.prepare("
+             << initial_size
+             << ");\n"
+                "      obuf.commit("
+             << initial_size
+             << ");\n"
+                "      "
+             << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n";
+        }
 
         int ix;
         if (!fn->is_void()) {
@@ -2065,8 +2112,12 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
         for (auto out : fn->args) {
           if (out->modifier == ArgumentModifier::In)
             continue;
-          auto n = std::to_string(++ix);
-          assign_from_cpp_type(out->type, "oa._" + n, "_out_" + n, oc);
+          ++ix;
+          // Skip Struct types - they were written directly via _Direct
+          if (!is_struct_type(out)) {
+            auto n = std::to_string(ix);
+            assign_from_cpp_type(out->type, "oa._" + n, "_out_" + n, oc);
+          }
         }
       } else if (!fn->is_void()) {
         assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val", oc);
