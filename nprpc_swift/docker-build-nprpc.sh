@@ -1,20 +1,22 @@
 #!/bin/bash
-# Build and test NPRPC with Swift in Docker (Ubuntu)
+# Build NPRPC library for Swift usage in Docker (Ubuntu + Swift's Clang)
+# Run from nprpc_swift/ directory
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "Building Docker image with Swift on Ubuntu..."
-docker build -f "$SCRIPT_DIR/Dockerfile.ubuntu-swift" \
+docker build -f "$SCRIPT_DIR/Dockerfile" \
     --build-arg USER_ID=$(id -u) \
     --build-arg GROUP_ID=$(id -g) \
     --build-arg USERNAME=$(id -un) \
-    -t nprpc-swift-ubuntu "$SCRIPT_DIR"
+    -t nprpc-swift-ubuntu "$PROJECT_ROOT"
 
 echo ""
 echo "Running build in container..."
-docker run --rm -v "$SCRIPT_DIR:/workspace" -w /workspace nprpc-swift-ubuntu bash -c '
+docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace nprpc-swift-ubuntu bash -c '
     set -e
     
     echo "=== Swift Version ==="
@@ -26,7 +28,7 @@ docker run --rm -v "$SCRIPT_DIR:/workspace" -w /workspace nprpc-swift-ubuntu bas
     
     echo ""
     if [ ! -d ".build_ubuntu_swift/boost_install/include/boost" ]; then
-        echo "⚠️  Boost not found! Run ./build_boost_ubuntu.sh first"
+        echo "⚠️  Boost not found! Run ./docker-build-boost.sh first"
         exit 1
     fi
     
@@ -63,9 +65,6 @@ docker run --rm -v "$SCRIPT_DIR:/workspace" -w /workspace nprpc-swift-ubuntu bas
     export CPATH="/workspace/include:/workspace/.build_ubuntu_swift/include:/workspace/.build_ubuntu_swift/boost_install/include"
     export LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib"
     export LD_LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib"
-    
-    # Update Package.swift to use ubuntu build dir
-    sed -i "s|../.build_swift_clang17|../.build_ubuntu_swift|g" Package.swift
     
     swift build -v
     

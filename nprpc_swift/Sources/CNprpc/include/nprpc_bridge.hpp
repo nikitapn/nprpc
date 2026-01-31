@@ -214,6 +214,10 @@ const char* nprpc_objectid_get_urls(void* oid_ptr);
 const uint8_t* nprpc_objectid_get_origin(void* oid_ptr);
 void nprpc_objectid_destroy(void* oid_ptr);
 
+// Object RPC call - sends request and receives reply via C++ runtime
+// Returns: 0 = success, -1 = null args, -2 = endpoint selection failed, -3 = RPC call failed
+int nprpc_object_send_receive(void* obj_ptr, void* buffer_ptr, uint32_t timeout_ms);
+
 // Swift Servant activation
 // Returns pointer to nprpc::ObjectId that Swift must destroy with nprpc_objectid_destroy
 void* nprpc_poa_activate_swift_servant(

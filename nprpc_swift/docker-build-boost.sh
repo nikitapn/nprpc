@@ -1,13 +1,15 @@
 #!/bin/bash
 # Build Boost 1.89.0 with Swift's Clang in Docker
-# This only needs to be run once
+# This only needs to be run once before docker-build-nprpc.sh
+# Run from nprpc_swift/ directory
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "Building Boost in Docker container..."
-docker run --rm -v "$SCRIPT_DIR:/workspace" -w /workspace nprpc-swift-ubuntu bash -c '
+docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace nprpc-swift-ubuntu bash -c '
     set -e
     
     echo "=== Downloading Boost 1.89.0 ==="

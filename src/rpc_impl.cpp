@@ -338,6 +338,14 @@ NPRPC_API void RpcImpl::call(const EndPoint& endpoint,
   get_session(endpoint)->send_receive(buffer, timeout_ms);
 }
 
+// Free function wrapper for external callers (e.g., Swift bridge)
+NPRPC_API void rpc_call(const EndPoint& endpoint,
+                        flat_buffer& buffer,
+                        uint32_t timeout_ms)
+{
+  g_rpc->call(endpoint, buffer, timeout_ms);
+}
+
 NPRPC_API void RpcImpl::send_udp(const EndPoint& endpoint, flat_buffer&& buffer)
 {
   if (endpoint.type() == EndPointType::Udp) {

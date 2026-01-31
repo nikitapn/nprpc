@@ -100,10 +100,21 @@ public class NPRPCObject {
     /// - Parameters:
     ///   - buffer: The FlatBuffer containing the request/response
     ///   - timeout: Timeout in milliseconds
-    /// - Throws: RuntimeError if client-side RPC is not yet implemented
+    /// - Throws: RpcError on communication failure
     public func sendReceive(buffer: FlatBuffer, timeout: UInt32) throws {
-        // TODO: Implement via C++ bridge (nprpc_session_send_receive or similar)
-        throw RuntimeError(message: "Client-side RPC not yet implemented in Swift")
+        let result = nprpc_object_send_receive(handle, buffer.handle, timeout)
+        switch result {
+        case 0:
+            return  // Success
+        case -1:
+            throw RuntimeError(message: "RPC call failed: invalid arguments")
+        case -2:
+            throw RuntimeError(message: "RPC call failed: could not select endpoint")
+        case -3:
+            throw RuntimeError(message: "RPC call failed: communication error")
+        default:
+            throw RuntimeError(message: "RPC call failed: unknown error (\(result))")
+        }
     }
     
     // MARK: - Data conversion for marshalling

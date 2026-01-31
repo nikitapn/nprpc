@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build script for nprpc_swift that sets up proper environment for linking
+# Convenience build script to build Swift package linking against nprpc built with Swift's Clang 17 
 
 set -e
 

@@ -29,6 +29,9 @@ bool prepare_zero_copy_buffer_grow(const EndPoint& endpoint,
                                    size_t new_size,
                                    const void* existing_data,
                                    size_t existing_size);
+
+// Free function wrapper for making RPC calls (used by Swift bridge)
+NPRPC_API void rpc_call(const EndPoint& endpoint, flat_buffer& buffer, uint32_t timeout_ms);
 } // namespace impl
 
 /**
