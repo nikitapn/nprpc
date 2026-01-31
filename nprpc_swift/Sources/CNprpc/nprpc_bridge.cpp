@@ -309,11 +309,54 @@ void nprpc_flatbuffer_consume(void* fb, size_t n) {
     static_cast<nprpc::flat_buffer*>(fb)->consume(n);
 }
 
-// Object operations (stub for now)
+// Object operations
 void nprpc_object_release(void* obj) {
     if (!obj) return;
     auto* object = static_cast<nprpc::Object*>(obj);
     object->release();
+}
+
+uint32_t nprpc_object_add_ref(void* obj) {
+    if (!obj) return 0;
+    return static_cast<nprpc::Object*>(obj)->add_ref();
+}
+
+uint32_t nprpc_object_get_timeout(void* obj) {
+    if (!obj) return 0;
+    return static_cast<nprpc::Object*>(obj)->get_timeout();
+}
+
+uint32_t nprpc_object_set_timeout(void* obj, uint32_t timeout_ms) {
+    if (!obj) return 0;
+    return static_cast<nprpc::Object*>(obj)->set_timeout(timeout_ms);
+}
+
+// Thread-local storage for hostname string to ensure lifetime
+static thread_local std::string g_endpoint_hostname;
+
+uint32_t nprpc_object_get_endpoint_type(void* obj) {
+    if (!obj) return 0;
+    const auto& ep = static_cast<nprpc::Object*>(obj)->get_endpoint();
+    return static_cast<uint32_t>(ep.type());
+}
+
+const char* nprpc_object_get_endpoint_hostname(void* obj) {
+    if (!obj) return "";
+    const auto& ep = static_cast<nprpc::Object*>(obj)->get_endpoint();
+    // Copy to thread-local to ensure lifetime
+    g_endpoint_hostname = std::string(ep.hostname());
+    return g_endpoint_hostname.c_str();
+}
+
+uint16_t nprpc_object_get_endpoint_port(void* obj) {
+    if (!obj) return 0;
+    const auto& ep = static_cast<nprpc::Object*>(obj)->get_endpoint();
+    return ep.port();
+}
+
+bool nprpc_object_select_endpoint(void* obj) {
+    if (!obj) return false;
+    return static_cast<nprpc::Object*>(obj)->select_endpoint();
 }
 
 // ObjectId accessor functions for Swift

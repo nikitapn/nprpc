@@ -48,7 +48,7 @@ public func testArray() -> [Int32] {
 
 /// Create a simple answer message (for servant dispatch)
 /// Equivalent to nprpc::impl::make_simple_answer in C++
-public func makeSimpleAnswer(buffer: FlatBuffer, messageId: Int32) {
+public func makeSimpleAnswer(buffer: FlatBuffer, messageId: impl.MessageId) {
     // Clear the buffer
     buffer.consume(buffer.size)
     
@@ -64,8 +64,8 @@ public func makeSimpleAnswer(buffer: FlatBuffer, messageId: Int32) {
     // - message_type (4 bytes, 1 = Answer)
     // - reserved (4 bytes)
     data.storeBytes(of: UInt32(12), toByteOffset: 0, as: UInt32.self)
-    data.storeBytes(of: UInt32(messageId), toByteOffset: 4, as: UInt32.self)
-    data.storeBytes(of: UInt32(1), toByteOffset: 8, as: UInt32.self)  // MessageType.Answer
+    data.storeBytes(of: messageId.rawValue, toByteOffset: 4, as: Int32.self)
+    data.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)
     data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
 }
 

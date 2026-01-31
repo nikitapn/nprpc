@@ -36,5 +36,16 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(rect.topLeft.x, 0)
         XCTAssertEqual(rect.bottomRight.x, 100)
         XCTAssertEqual(rect.color, .blue)
+
+        // let shapeService = ShapeService(
+        //     NPRPCObject(
+        //         objectId: 1,
+        //         poaIdx: 0,
+        //         flags: 0,
+        //         origin: [UInt8](repeating: 0, count: 16),
+        //         classId: "ShapeService",
+        //         urls: "tcp://localhost:12345"
+        //     ))
+
     }
 }

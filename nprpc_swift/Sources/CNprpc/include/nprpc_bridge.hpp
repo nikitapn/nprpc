@@ -195,6 +195,15 @@ void nprpc_flatbuffer_consume(void* fb, size_t n);
 
 // Object operations
 void nprpc_object_release(void* obj);
+uint32_t nprpc_object_add_ref(void* obj);
+uint32_t nprpc_object_get_timeout(void* obj);
+uint32_t nprpc_object_set_timeout(void* obj, uint32_t timeout_ms);
+
+// Object endpoint accessors
+uint32_t nprpc_object_get_endpoint_type(void* obj);  // Returns EndPointType as uint32_t
+const char* nprpc_object_get_endpoint_hostname(void* obj);  // Returns hostname string
+uint16_t nprpc_object_get_endpoint_port(void* obj);  // Returns port number
+bool nprpc_object_select_endpoint(void* obj);  // Select best endpoint
 
 // ObjectId accessor functions
 uint64_t nprpc_objectid_get_object_id(void* oid_ptr);

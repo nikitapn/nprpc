@@ -8,18 +8,19 @@ open class NPRPCObjectProxy {
     self.object = object
   }
   
-  // Reference counting
+  // Reference counting - delegates to C++ Object
+  @discardableResult
   public func addRef() -> UInt32 {
-    // TODO: Implement actual reference counting
-    return 1
+    return object.addRef()
   }
   
+  @discardableResult
   public func release() -> UInt32 {
-    // TODO: Implement actual reference counting
-    return 0
+    return object.release()
   }
   
-  // Timeout management
+  // Timeout management - delegates to C++ Object
+  @discardableResult
   public func setTimeout(_ timeoutMs: UInt32) -> UInt32 {
     let oldTimeout = object.timeout
     object.timeout = timeoutMs
@@ -30,22 +31,20 @@ open class NPRPCObjectProxy {
     return object.timeout
   }
   
-  // Endpoint access
+  // Endpoint access - delegates to C++ Object
   public func getEndpoint() -> NPRPCEndpoint {
     return object.endpoint
   }
   
-  // Select endpoint (returns true if successful)
+  // Select endpoint - delegates to C++ Object's select_endpoint()
+  @discardableResult
   public func selectEndpoint(_ remoteEndpoint: NPRPCEndpoint? = nil) -> Bool {
-    // TODO: Implement endpoint selection logic
-    if let endpoint = remoteEndpoint {
-      object.endpoint = endpoint
-      return true
-    }
-    return true
+    // TODO: Support passing a specific endpoint when C++ API supports it
+    // For now, call C++ select_endpoint() which picks the best available
+    return object.selectEndpoint()
   }
   
-  // Object ID access
+  // Object ID access - delegates to C++ ObjectId
   public func getObjectId() -> UInt64 {
     return object.objectId
   }
@@ -56,7 +55,6 @@ open class NPRPCObjectProxy {
   
   // Class ID (for type identification)
   open func getClass() -> String {
-    // Override in subclasses
-    return ""
+    return object.classId
   }
 }

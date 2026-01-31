@@ -2,31 +2,31 @@
 // DO NOT EDIT - all changes will be lost
 
 
-public struct nprpc_nameserver_M1 {
-  public var _1: ObjectPtr<Object> = ObjectPtr()
-  public var _2: String = ""
-  public init() {}
+fileprivate struct nprpc_nameserver_M1 {
+  var _1: ObjectPtr<Object> = ObjectPtr()
+  var _2: String = ""
+  init() {}
 }
 
-public struct nprpc_nameserver_M2 {
-  public var _1: String = ""
-  public init() {}
+fileprivate struct nprpc_nameserver_M2 {
+  var _1: String = ""
+  init() {}
 }
 
-public struct nprpc_nameserver_M3 {
-  public var _1: Bool = false
-  public var _2: ObjectPtr<Object> = ObjectPtr()
-  public init() {}
+fileprivate struct nprpc_nameserver_M3 {
+  var _1: Bool = false
+  var _2: ObjectPtr<Object> = ObjectPtr()
+  init() {}
 }
 
 // MARK: - Marshal nprpc_nameserver_M1
-public func marshal_nprpc_nameserver_M1(buffer: UnsafeMutableRawPointer, offset: Int, data: nprpc_nameserver_M1) {
+fileprivate func marshal_nprpc_nameserver_M1(buffer: UnsafeMutableRawPointer, offset: Int, data: nprpc_nameserver_M1) {
   detail.marshal_ObjectId(buffer: buffer, offset: offset + 0, data: data._1.data)
   NPRPC.marshal_string(buffer: buffer, offset: offset + 48, string: data._2)
 }
 
 // MARK: - Unmarshal nprpc_nameserver_M1
-public func unmarshal_nprpc_nameserver_M1(buffer: UnsafeRawPointer, offset: Int, endpoint: NPRPCEndpoint) -> nprpc_nameserver_M1 {
+fileprivate func unmarshal_nprpc_nameserver_M1(buffer: UnsafeRawPointer, offset: Int, endpoint: NPRPCEndpoint) -> nprpc_nameserver_M1 {
   var result = nprpc_nameserver_M1()
   result._1 = NPRPC.unmarshal_object_proxy(buffer: buffer, offset: offset + 0, endpoint: endpoint)
   result._2 = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 48)
@@ -35,12 +35,12 @@ public func unmarshal_nprpc_nameserver_M1(buffer: UnsafeRawPointer, offset: Int,
 
 
 // MARK: - Marshal nprpc_nameserver_M2
-public func marshal_nprpc_nameserver_M2(buffer: UnsafeMutableRawPointer, offset: Int, data: nprpc_nameserver_M2) {
+fileprivate func marshal_nprpc_nameserver_M2(buffer: UnsafeMutableRawPointer, offset: Int, data: nprpc_nameserver_M2) {
   NPRPC.marshal_string(buffer: buffer, offset: offset + 0, string: data._1)
 }
 
 // MARK: - Unmarshal nprpc_nameserver_M2
-public func unmarshal_nprpc_nameserver_M2(buffer: UnsafeRawPointer, offset: Int) -> nprpc_nameserver_M2 {
+fileprivate func unmarshal_nprpc_nameserver_M2(buffer: UnsafeRawPointer, offset: Int) -> nprpc_nameserver_M2 {
   var result = nprpc_nameserver_M2()
   result._1 = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 0)
   return result
@@ -48,13 +48,13 @@ public func unmarshal_nprpc_nameserver_M2(buffer: UnsafeRawPointer, offset: Int)
 
 
 // MARK: - Marshal nprpc_nameserver_M3
-public func marshal_nprpc_nameserver_M3(buffer: UnsafeMutableRawPointer, offset: Int, data: nprpc_nameserver_M3) {
+fileprivate func marshal_nprpc_nameserver_M3(buffer: UnsafeMutableRawPointer, offset: Int, data: nprpc_nameserver_M3) {
   buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: Bool.self)
   detail.marshal_ObjectId(buffer: buffer, offset: offset + 8, data: data._2.data)
 }
 
 // MARK: - Unmarshal nprpc_nameserver_M3
-public func unmarshal_nprpc_nameserver_M3(buffer: UnsafeRawPointer, offset: Int, endpoint: NPRPCEndpoint) -> nprpc_nameserver_M3 {
+fileprivate func unmarshal_nprpc_nameserver_M3(buffer: UnsafeRawPointer, offset: Int, endpoint: NPRPCEndpoint) -> nprpc_nameserver_M3 {
   var result = nprpc_nameserver_M3()
   result._1 = buffer.load(fromByteOffset: offset + 0, as: Bool.self)
   result._2 = NPRPC.unmarshal_object_proxy(buffer: buffer, offset: offset + 8, endpoint: endpoint)
@@ -105,7 +105,7 @@ public class Nameserver: NPRPCObjectProxy, NameserverProtocol {
     data.storeBytes(of: UInt32(84), toByteOffset: 0, as: UInt32.self)
 
     // Send and receive
-    try object.session.sendReceive(buffer: buffer, timeout: object.timeout)
+    try object.sendReceive(buffer: buffer, timeout: object.timeout)
 
     // Handle reply
     let stdReply = handleStandardReply(buffer: buffer)
@@ -139,7 +139,7 @@ public class Nameserver: NPRPCObjectProxy, NameserverProtocol {
     data.storeBytes(of: UInt32(36), toByteOffset: 0, as: UInt32.self)
 
     // Send and receive
-    try object.session.sendReceive(buffer: buffer, timeout: object.timeout)
+    try object.sendReceive(buffer: buffer, timeout: object.timeout)
 
     // Handle reply
     let stdReply = handleStandardReply(buffer: buffer)
@@ -179,10 +179,10 @@ open class NameserverServant: NPRPCServant, NameserverProtocol {
         
         try bind(obj: ia._1, name: ia._2)
         // Send success
-        makeSimpleAnswer(buffer: buffer, messageId: 5)  // Success
+        makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.success)
       }
       catch {
-        makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error in dispatch
+        makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_UnknownFunctionIdx)
       }
       case 1: // Resolve
       do {
@@ -203,14 +203,14 @@ open class NameserverServant: NPRPCServant, NameserverProtocol {
 
         marshal_nprpc_nameserver_M3(buffer: outData, offset: 16, data: out_data)
         outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
-        outData.storeBytes(of: UInt32(2), toByteOffset: 4, as: UInt32.self)  // MessageId.BlockResponse
-        outData.storeBytes(of: UInt32(1), toByteOffset: 8, as: UInt32.self)  // MessageType.Answer
+        outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: Int32.self)
+        outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)
       }
       catch {
-        makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error in dispatch
+        makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_UnknownFunctionIdx)
       }
       default:
-        makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error_UnknownFunctionIdx
+        makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_UnknownFunctionIdx)
     } // switch
   } // dispatch
 }

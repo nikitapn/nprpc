@@ -493,7 +493,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     
     // Send/receive
     out << bl() << "// Send and receive\n";
-    out << bl() << "try object.session.sendReceive(buffer: buffer, timeout: object.timeout)\n\n";
+    out << bl() << "try object.sendReceive(buffer: buffer, timeout: object.timeout)\n\n";
     
     // Handle reply
     out << bl() << "// Handle reply\n";
@@ -746,12 +746,12 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       
       out << bl() << "marshal_" << fn->ex->name << "(buffer: exData, offset: " << offset << ", data: ex_data)\n";
       out << bl() << "exData.storeBytes(of: UInt32(obuf.size - 4), toByteOffset: 0, as: UInt32.self)\n";
-      out << bl() << "exData.storeBytes(of: UInt32(3), toByteOffset: 4, as: UInt32.self)  // MessageId.Exception\n";
-      out << bl() << "exData.storeBytes(of: UInt32(1), toByteOffset: 8, as: UInt32.self)  // MessageType.Answer\n";
+      out << bl() << "exData.storeBytes(of: impl.MessageId.exception.rawValue, toByteOffset: 4, as: Int32.self)\n";
+      out << bl() << "exData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)\n";
       out << bl() << "return\n";
       out << eb();
       out << bl() << "catch " << bb();
-      out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error\n";
+      out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_UnknownFunctionIdx)\n";
       out << bl() << "return\n";
       out << eb();
     }
@@ -759,7 +759,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
     // Marshal output
     if (!fn->out_s) {
       out << bl() << "// Send success\n";
-      out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: 5)  // Success\n";
+      out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.success)\n";
     } else {
       if (fn->out_s->flat) {
         const auto offset = size_of_header;
@@ -788,20 +788,20 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       
       out << bl() << "marshal_" << fn->out_s->name << "(buffer: outData, offset: " << size_of_header << ", data: out_data)\n";
       out << bl() << "outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n";
-      out << bl() << "outData.storeBytes(of: UInt32(2), toByteOffset: 4, as: UInt32.self)  // MessageId.BlockResponse\n";
-      out << bl() << "outData.storeBytes(of: UInt32(1), toByteOffset: 8, as: UInt32.self)  // MessageType.Answer\n";
+      out << bl() << "outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: Int32.self)\n";
+      out << bl() << "outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)\n";
     }
     
     // Close do-catch for this case
     out << eb();
     out << bl() << "catch {\n" << bb(false);
-    out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error in dispatch\n";
+    out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_UnknownFunctionIdx)\n";
     out << eb();
   }
   
   // Default case
   out << bl() << "default:\n";
-  out << bl() << "  makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error_UnknownFunctionIdx\n";
+  out << bl() << "  makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_UnknownFunctionIdx)\n";
   
   out << eb(false) << bl() << "} // switch\n";
   out << eb(false) << bl() << "} // dispatch\n";
@@ -937,10 +937,11 @@ void SwiftBuilder::emit_interface(AstInterfaceDecl* ifs)
   // First emit struct definitions for auto-generated in/out parameter structs
   for (auto& fn : ifs->fns) {
     if (fn->in_s && fn->in_s->fields.size() > 0) {
-      out << "\n" << bl() << "public struct " << fn->in_s->name << " {\n";
+      // These auxiliary structs are internal implementation details for marshalling
+      out << "\n" << bl() << "fileprivate struct " << fn->in_s->name << " {\n";
       for (size_t i = 0; i < fn->in_s->fields.size(); ++i) {
         auto field = fn->in_s->fields[i];
-        out << bl() << "  public var _" << (i + 1) << ": ";
+        out << bl() << "  var _" << (i + 1) << ": ";
         emit_type(field->type, out);
         
         // Add default value
@@ -986,14 +987,14 @@ void SwiftBuilder::emit_interface(AstInterfaceDecl* ifs)
         }
         out << "\n";
       }
-      out << bl() << "  public init() {}\n";
+      out << bl() << "  init() {}\n";
       out << bl() << "}\n";
     }
     if (fn->out_s && fn->out_s->fields.size() > 0) {
-      out << "\n" << bl() << "public struct " << fn->out_s->name << " {\n";
+      out << "\n" << bl() << "fileprivate struct " << fn->out_s->name << " {\n";
       for (size_t i = 0; i < fn->out_s->fields.size(); ++i) {
         auto field = fn->out_s->fields[i];
-        out << bl() << "  public var _" << (i + 1) << ": ";
+        out << bl() << "  var _" << (i + 1) << ": ";
         emit_type(field->type, out);
         
         // Add default value
@@ -1039,7 +1040,7 @@ void SwiftBuilder::emit_interface(AstInterfaceDecl* ifs)
         }
         out << "\n";
       }
-      out << bl() << "  public init() {}\n";
+      out << bl() << "  init() {}\n";
       out << bl() << "}\n";
     }
   }
@@ -1181,8 +1182,18 @@ void SwiftBuilder::emit_marshal_function(AstStructDecl* s)
   // Use 'static' if inside a namespace enum (block_depth > 0 means we're inside a block)
   bool in_namespace = block_depth_.str() != "0";
   
+  // Check if this is an internal marshalling struct (e.g., foo_M1, foo_M2)
+  // These should be fileprivate, not public
+  bool is_internal_marshal_struct = false;
+  auto pos = s->name.rfind("_M");
+  if (pos != std::string::npos && pos + 2 < s->name.size()) {
+    is_internal_marshal_struct = std::isdigit(s->name[pos + 2]);
+  }
+  
+  const char* visibility = is_internal_marshal_struct ? "fileprivate " : "public ";
+  
   out << "\n" << bl() << "// MARK: - Marshal " << s->name << "\n";
-  out << bl() << "public " << (in_namespace ? "static " : "") << "func marshal_" << s->name << "(buffer: UnsafeMutableRawPointer, offset: Int, data: " << data_type << ") ";
+  out << bl() << visibility << (in_namespace ? "static " : "") << "func marshal_" << s->name << "(buffer: UnsafeMutableRawPointer, offset: Int, data: " << data_type << ") ";
   out << bb();
 
   int current_offset = 0;
@@ -1319,8 +1330,18 @@ void SwiftBuilder::emit_unmarshal_function(AstStructDecl* s)
   // Use 'static' if inside a namespace enum (block_depth > 0 means we're inside a block)
   bool in_namespace = block_depth_.str() != "0";
   
+  // Check if this is an internal marshalling struct (e.g., foo_M1, foo_M2)
+  // These should be fileprivate, not public
+  bool is_internal_marshal_struct = false;
+  auto pos = s->name.rfind("_M");
+  if (pos != std::string::npos && pos + 2 < s->name.size()) {
+    is_internal_marshal_struct = std::isdigit(s->name[pos + 2]);
+  }
+  
+  const char* visibility = is_internal_marshal_struct ? "fileprivate " : "public ";
+  
   out << "\n" << bl() << "// MARK: - Unmarshal " << s->name << "\n";
-  out << bl() << "public " << (in_namespace ? "static " : "") << "func unmarshal_" << s->name << "(buffer: UnsafeRawPointer, offset: Int";
+  out << bl() << visibility << (in_namespace ? "static " : "") << "func unmarshal_" << s->name << "(buffer: UnsafeRawPointer, offset: Int";
   if (has_objects) {
     out << ", endpoint: NPRPCEndpoint";
   }
@@ -1360,8 +1381,8 @@ void SwiftBuilder::finalize()
   if (out.str().empty())
     return;
   
-  // Write to output file
-  auto output_file = out_dir_ / (ctx_->module() + ".swift");
+  // Write to output file - use IDL filename (like C++) not module name
+  auto output_file = out_dir_ / (ctx_->current_file() + ".swift");
   
   std::ofstream ofs(output_file);
   if (!ofs) {
@@ -1372,8 +1393,10 @@ void SwiftBuilder::finalize()
   // Swift file header
   ofs << "// Generated by npidl compiler\n";
   ofs << "// DO NOT EDIT - all changes will be lost\n\n";
-  // Only import NPRPC for non-base modules (avoid self-import)
-  if (ctx_ && ctx_->module() != "nprpc" && ctx_->module() != "nprpc_common")
+  // Only import NPRPC for files not in the NPRPC module itself
+  // nprpc_base and nprpc_nameserver are part of NPRPC module
+  const auto& filename = ctx_->current_file();
+  if (filename != "nprpc_base" && filename != "nprpc_nameserver")
     ofs << "import NPRPC\n\n";
 
   ofs << out.str();

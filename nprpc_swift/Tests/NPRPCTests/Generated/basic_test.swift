@@ -68,29 +68,29 @@ public func unmarshal_Rectangle(buffer: UnsafeRawPointer, offset: Int) -> Rectan
 }
 
 
-public struct basic_test_M1 {
-  public var _1: UInt32 = 0
-  public init() {}
+fileprivate struct basic_test_M1 {
+  var _1: UInt32 = 0
+  init() {}
 }
 
-public struct basic_test_M2 {
-  public var _1: Rectangle = Rectangle()
-  public init() {}
+fileprivate struct basic_test_M2 {
+  var _1: Rectangle = Rectangle()
+  init() {}
 }
 
-public struct basic_test_M3 {
-  public var _1: UInt32 = 0
-  public var _2: Rectangle = Rectangle()
-  public init() {}
+fileprivate struct basic_test_M3 {
+  var _1: UInt32 = 0
+  var _2: Rectangle = Rectangle()
+  init() {}
 }
 
 // MARK: - Marshal basic_test_M1
-public func marshal_basic_test_M1(buffer: UnsafeMutableRawPointer, offset: Int, data: basic_test_M1) {
+fileprivate func marshal_basic_test_M1(buffer: UnsafeMutableRawPointer, offset: Int, data: basic_test_M1) {
   buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: UInt32.self)
 }
 
 // MARK: - Unmarshal basic_test_M1
-public func unmarshal_basic_test_M1(buffer: UnsafeRawPointer, offset: Int) -> basic_test_M1 {
+fileprivate func unmarshal_basic_test_M1(buffer: UnsafeRawPointer, offset: Int) -> basic_test_M1 {
   var result = basic_test_M1()
   result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
   return result
@@ -98,12 +98,12 @@ public func unmarshal_basic_test_M1(buffer: UnsafeRawPointer, offset: Int) -> ba
 
 
 // MARK: - Marshal basic_test_M2
-public func marshal_basic_test_M2(buffer: UnsafeMutableRawPointer, offset: Int, data: basic_test_M2) {
+fileprivate func marshal_basic_test_M2(buffer: UnsafeMutableRawPointer, offset: Int, data: basic_test_M2) {
   marshal_Rectangle(buffer: buffer, offset: offset + 0, data: data._1)
 }
 
 // MARK: - Unmarshal basic_test_M2
-public func unmarshal_basic_test_M2(buffer: UnsafeRawPointer, offset: Int) -> basic_test_M2 {
+fileprivate func unmarshal_basic_test_M2(buffer: UnsafeRawPointer, offset: Int) -> basic_test_M2 {
   var result = basic_test_M2()
   result._1 = unmarshal_Rectangle(buffer: buffer, offset: offset + 0)
   return result
@@ -111,13 +111,13 @@ public func unmarshal_basic_test_M2(buffer: UnsafeRawPointer, offset: Int) -> ba
 
 
 // MARK: - Marshal basic_test_M3
-public func marshal_basic_test_M3(buffer: UnsafeMutableRawPointer, offset: Int, data: basic_test_M3) {
+fileprivate func marshal_basic_test_M3(buffer: UnsafeMutableRawPointer, offset: Int, data: basic_test_M3) {
   buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: UInt32.self)
   marshal_Rectangle(buffer: buffer, offset: offset + 4, data: data._2)
 }
 
 // MARK: - Unmarshal basic_test_M3
-public func unmarshal_basic_test_M3(buffer: UnsafeRawPointer, offset: Int) -> basic_test_M3 {
+fileprivate func unmarshal_basic_test_M3(buffer: UnsafeRawPointer, offset: Int) -> basic_test_M3 {
   var result = basic_test_M3()
   result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
   result._2 = unmarshal_Rectangle(buffer: buffer, offset: offset + 4)
@@ -167,7 +167,7 @@ public class ShapeService: NPRPCObjectProxy, ShapeServiceProtocol {
     data.storeBytes(of: UInt32(32), toByteOffset: 0, as: UInt32.self)
 
     // Send and receive
-    try object.session.sendReceive(buffer: buffer, timeout: object.timeout)
+    try object.sendReceive(buffer: buffer, timeout: object.timeout)
 
     // Handle reply
     let stdReply = handleStandardReply(buffer: buffer)
@@ -206,7 +206,7 @@ public class ShapeService: NPRPCObjectProxy, ShapeServiceProtocol {
     data.storeBytes(of: UInt32(52), toByteOffset: 0, as: UInt32.self)
 
     // Send and receive
-    try object.session.sendReceive(buffer: buffer, timeout: object.timeout)
+    try object.sendReceive(buffer: buffer, timeout: object.timeout)
 
     // Handle reply
     let stdReply = handleStandardReply(buffer: buffer)
@@ -253,11 +253,11 @@ open class ShapeServiceServant: NPRPCServant, ShapeServiceProtocol {
 
         marshal_basic_test_M2(buffer: outData, offset: 16, data: out_data)
         outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
-        outData.storeBytes(of: UInt32(2), toByteOffset: 4, as: UInt32.self)  // MessageId.BlockResponse
-        outData.storeBytes(of: UInt32(1), toByteOffset: 8, as: UInt32.self)  // MessageType.Answer
+        outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: Int32.self)
+        outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)
       }
       catch {
-        makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error in dispatch
+        makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_UnknownFunctionIdx)
       }
       case 1: // setRectangle
       do {
@@ -266,13 +266,13 @@ open class ShapeServiceServant: NPRPCServant, ShapeServiceProtocol {
         
         try setRectangle(id: ia._1, rect: ia._2)
         // Send success
-        makeSimpleAnswer(buffer: buffer, messageId: 5)  // Success
+        makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.success)
       }
       catch {
-        makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error in dispatch
+        makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_UnknownFunctionIdx)
       }
       default:
-        makeSimpleAnswer(buffer: buffer, messageId: 10)  // Error_UnknownFunctionIdx
+        makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_UnknownFunctionIdx)
     } // switch
   } // dispatch
 }
