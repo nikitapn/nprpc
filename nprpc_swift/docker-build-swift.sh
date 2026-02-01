@@ -16,12 +16,29 @@ if [ ! -f "$BUILD_DIR/libnprpc.so" ]; then
   exit 1
 fi
 
-docker run --rm -v         \
-  "$NPRPC_ROOT:/workspace" \
-   nprpc-swift-ubuntu bash -c '
-    set -e
-    cd /workspace/nprpc_swift
-    LD_LIBRARY_PATH=/workspace/.build_ubuntu_swift
-    swift build
-   '
-echo "✅ Swift package built successfully."
+# Check for --test flag
+RUN_TESTS=false
+if [ "$1" = "--test" ]; then
+  RUN_TESTS=true
+fi
+
+if [ "$RUN_TESTS" = true ]; then
+  docker run --rm -v         \
+    "$NPRPC_ROOT:/workspace" \
+     nprpc-swift-ubuntu bash -c '
+      set -e
+      cd /workspace/nprpc_swift
+      LD_LIBRARY_PATH=/workspace/.build_ubuntu_swift swift test
+     '
+  echo "✅ Swift tests completed."
+else
+  docker run --rm -v         \
+    "$NPRPC_ROOT:/workspace" \
+     nprpc-swift-ubuntu bash -c '
+      set -e
+      cd /workspace/nprpc_swift
+      LD_LIBRARY_PATH=/workspace/.build_ubuntu_swift
+      swift build
+     '
+  echo "✅ Swift package built successfully."
+fi

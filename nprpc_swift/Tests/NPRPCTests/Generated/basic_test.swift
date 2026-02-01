@@ -149,7 +149,7 @@ public class ShapeService: NPRPCObjectProxy, ShapeServiceProtocol {
 
     // Write message header
     data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
-    data.storeBytes(of: UInt32(1), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall
+    data.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
     data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
     data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
 
@@ -187,7 +187,7 @@ public class ShapeService: NPRPCObjectProxy, ShapeServiceProtocol {
 
     // Write message header
     data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
-    data.storeBytes(of: UInt32(1), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall
+    data.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
     data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
     data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
 
@@ -218,6 +218,10 @@ public class ShapeService: NPRPCObjectProxy, ShapeServiceProtocol {
 // Servant base for ShapeService
 open class ShapeServiceServant: NPRPCServant, ShapeServiceProtocol {
   public override init() { super.init() }
+
+  public override func getClass() -> String   {
+    return "basic_test/swift.test.ShapeService"
+  }
 
   open func getRectangle(id: UInt32) throws -> Rectangle   {
     fatalError("Subclass must implement getRectangle")

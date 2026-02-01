@@ -1,51 +1,83 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
-// Integration test demonstrating Swift servant implementation
-// Note: Full RPC roundtrip testing requires servants to be activated in a POA
-// and connected to real RPC transport - that's beyond the scope of unit tests
+// Integration test demonstrating Swift servant implementation and POA activation
 
 import XCTest
 import Foundation
 @testable import NPRPC
 
 final class IntegrationTests: XCTestCase {
-    /// Document what full integration testing would look like
-    func testIntegrationTestPlan() throws {
-        // Note: ShapeService is a client proxy that requires an NPRPCObject
-        // which is obtained from the nameserver or endpoint connection.
-        // Full integration testing requires a running server.
-        // For now, we just verify the types compile correctly.
-        
-        // Test that servant can be instantiated
+    
+    /// Test servant instantiation and direct method calls
+    func testServantDirectCalls() throws {
         class TestShapeServant: ShapeServiceServant {
+            var storedRect: Rectangle?
+            
             override func getRectangle(id: UInt32) throws -> Rectangle {
-                return Rectangle(topLeft: Point(x: 0, y: 0), bottomRight: Point(x: 100, y: 100), color: .blue)
+                return Rectangle(
+                    topLeft: Point(x: 10, y: 20),
+                    bottomRight: Point(x: 110, y: 120),
+                    color: .green
+                )
             }
             
             override func setRectangle(id: UInt32, rect: Rectangle) throws {
-                // Store rectangle (no-op for test)
+                storedRect = rect
             }
         }
-        
+
+        let rpc = try RpcBuilder()
+            .setLogLevel(.trace)
+            .setHostname("127.0.0.1")
+            .withTcp(16000)
+            .build()
+
+        // Give the TCP listener time to start accepting connections
+        Thread.sleep(forTimeInterval: 0.1)
+
         let servant = TestShapeServant()
-        XCTAssertNotNil(servant)
+
+        let poa = try rpc.createPoa(maxObjects: 100)
+        let oid = try poa.activateObject(servant)
+
+        // Create ShapeService client proxy from oid
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
         
-        // Test that servant methods work
-        let rect = try servant.getRectangle(id: 1)
-        XCTAssertEqual(rect.topLeft.x, 0)
-        XCTAssertEqual(rect.bottomRight.x, 100)
-        XCTAssertEqual(rect.color, .blue)
-
-        // let shapeService = ShapeService(
-        //     NPRPCObject(
-        //         objectId: 1,
-        //         poaIdx: 0,
-        //         flags: 0,
-        //         origin: [UInt8](repeating: 0, count: 16),
-        //         classId: "ShapeService",
-        //         urls: "tcp://localhost:12345"
-        //     ))
-
+        let client = ShapeService(obj)
+        
+        // Verify the class ID matches
+        XCTAssertEqual(client.getClass(), "basic_test/swift.test.ShapeService")
+        XCTAssertEqual(oid.class_id, "basic_test/swift.test.ShapeService")
+        
+        // Actually call RPC methods through the client proxy
+        // This tests the full serialization/dispatch/deserialization cycle
+        
+        // Test getRectangle - should return the rectangle from our servant
+        let rect = try client.getRectangle(id: 42)
+        XCTAssertEqual(rect.topLeft.x, 10)
+        XCTAssertEqual(rect.topLeft.y, 20)
+        XCTAssertEqual(rect.bottomRight.x, 110)
+        XCTAssertEqual(rect.bottomRight.y, 120)
+        XCTAssertEqual(rect.color, .green)
+        
+        // Test setRectangle - should store the rectangle in our servant
+        let newRect = Rectangle(
+            topLeft: Point(x: 5, y: 15),
+            bottomRight: Point(x: 50, y: 150),
+            color: .blue
+        )
+        try client.setRectangle(id: 99, rect: newRect)
+        
+        // Verify the servant received the call
+        XCTAssertNotNil(servant.storedRect)
+        XCTAssertEqual(servant.storedRect?.topLeft.x, 5)
+        XCTAssertEqual(servant.storedRect?.topLeft.y, 15)
+        XCTAssertEqual(servant.storedRect?.color, .blue)
+        
+        print("✓ Full RPC loopback test successful!")
     }
 }

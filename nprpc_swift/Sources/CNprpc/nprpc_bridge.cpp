@@ -120,20 +120,21 @@ bool RpcHandle::initialize(RpcBuildConfig* config, size_t thread_pool_size) {
         cxxConfig.quic_key_file = config->quic_key_file;
         cxxConfig.ssl_client_self_signed_cert_path = config->ssl_client_self_signed_cert_path;
 
-        // Build RpcSwift using the provided config
-        // We create a custom builder that accepts pre-configured BuildConfig
+        // Build Rpc using the provided config
+        // Store config and use a pointer to it to avoid initialization order issues
+        auto stored_config = std::make_unique<nprpc::impl::BuildConfig>(std::move(cxxConfig));
+        
         class RpcSwiftBuilder : public nprpc::impl::RpcBuilderBase {
-            nprpc::impl::BuildConfig cfg_;
         public:
-            explicit RpcSwiftBuilder(nprpc::impl::BuildConfig&& cfg)
-                : nprpc::impl::RpcBuilderBase(cfg_), cfg_(std::move(cfg)) {}
+            explicit RpcSwiftBuilder(nprpc::impl::BuildConfig& cfg)
+                : nprpc::impl::RpcBuilderBase(cfg) {}
             
             nprpc::Rpc* build(boost::asio::io_context& ioc) {
                 return nprpc::impl::RpcBuilderBase::build(ioc);
             }
         };
         
-        impl->rpc_instance = RpcSwiftBuilder(std::move(cxxConfig)).build(impl->ioc);
+        impl->rpc_instance = RpcSwiftBuilder(*stored_config).build(impl->ioc);
 
         initialized_ = true;
         return true;
@@ -194,6 +195,34 @@ std::string RpcHandle::get_debug_info() const {
     std::ostringstream oss;
     oss << "RpcHandle { initialized: " << (initialized_ ? "true" : "false") << " }";
     return oss.str();
+}
+
+void* RpcHandle::create_poa(uint32_t max_objects, uint32_t lifespan, uint32_t id_policy) {
+    if (!initialized_ || !impl_) return nullptr;
+    
+    try {
+        auto* impl = static_cast<RpcHandleImpl*>(impl_);
+        if (!impl->rpc_instance) return nullptr;
+        
+        auto builder = impl->rpc_instance->create_poa();
+        
+        if (max_objects > 0) {
+            builder.with_max_objects(max_objects);
+        }
+        
+        builder.with_lifespan(lifespan == 0 
+            ? nprpc::PoaPolicy::Lifespan::Persistent 
+            : nprpc::PoaPolicy::Lifespan::Transient);
+        
+        builder.with_object_id_policy(id_policy == 0
+            ? nprpc::PoaPolicy::ObjectIdPolicy::SystemGenerated
+            : nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied);
+        
+        return builder.build();
+    } catch (const std::exception& e) {
+        std::cerr << "RpcHandle::create_poa failed: " << e.what() << std::endl;
+        return nullptr;
+    }
 }
 
 // ============================================================================
@@ -365,32 +394,76 @@ bool nprpc_object_select_endpoint(void* obj) {
 }
 
 // ObjectId accessor functions for Swift
-uint64_t nprpc_objectid_get_object_id(void* oid_ptr) {
-    return static_cast<nprpc::ObjectId*>(oid_ptr)->object_id();
+// NOTE: These are for raw ObjectId* from nprpc_poa_activate_swift_servant
+// Use nprpc_object_get_* for Object* from nprpc_create_object_from_components
+
+uint64_t nprpc_objectid_get_object_id(void* ptr) {
+    if (!ptr) return 0;
+    auto* oid = static_cast<nprpc::ObjectId*>(ptr);
+    return oid->object_id();
 }
 
-uint16_t nprpc_objectid_get_poa_idx(void* oid_ptr) {
-    return static_cast<nprpc::ObjectId*>(oid_ptr)->poa_idx();
+uint16_t nprpc_objectid_get_poa_idx(void* ptr) {
+    if (!ptr) return 0;
+    return static_cast<nprpc::ObjectId*>(ptr)->poa_idx();
 }
 
-uint16_t nprpc_objectid_get_flags(void* oid_ptr) {
-    return static_cast<nprpc::ObjectId*>(oid_ptr)->flags();
+uint16_t nprpc_objectid_get_flags(void* ptr) {
+    if (!ptr) return 0;
+    return static_cast<nprpc::ObjectId*>(ptr)->flags();
 }
 
-const char* nprpc_objectid_get_class_id(void* oid_ptr) {
-    return static_cast<nprpc::ObjectId*>(oid_ptr)->class_id().data();
+const char* nprpc_objectid_get_class_id(void* ptr) {
+    if (!ptr) return nullptr;
+    return static_cast<nprpc::ObjectId*>(ptr)->class_id().data();
 }
 
-const char* nprpc_objectid_get_urls(void* oid_ptr) {
-    return static_cast<nprpc::ObjectId*>(oid_ptr)->urls().data();
+const char* nprpc_objectid_get_urls(void* ptr) {
+    if (!ptr) return nullptr;
+    return static_cast<nprpc::ObjectId*>(ptr)->urls().data();
 }
 
-const uint8_t* nprpc_objectid_get_origin(void* oid_ptr) {
-    return static_cast<nprpc::ObjectId*>(oid_ptr)->origin().data();
+const uint8_t* nprpc_objectid_get_origin(void* ptr) {
+    if (!ptr) return nullptr;
+    return static_cast<nprpc::ObjectId*>(ptr)->origin().data();
 }
 
 void nprpc_objectid_destroy(void* oid_ptr) {
     delete static_cast<nprpc::ObjectId*>(oid_ptr);
+}
+
+// Object accessor functions for Swift
+// NOTE: These are for Object* from nprpc_create_object_from_components
+// Object has a vtable, so static_cast<Object*> properly handles inheritance
+
+uint64_t nprpc_object_get_object_id(void* ptr) {
+    if (!ptr) return 0;
+    return static_cast<nprpc::Object*>(ptr)->object_id();
+}
+
+uint16_t nprpc_object_get_poa_idx(void* ptr) {
+    if (!ptr) return 0;
+    return static_cast<nprpc::Object*>(ptr)->poa_idx();
+}
+
+uint16_t nprpc_object_get_flags(void* ptr) {
+    if (!ptr) return 0;
+    return static_cast<nprpc::Object*>(ptr)->flags();
+}
+
+const char* nprpc_object_get_class_id(void* ptr) {
+    if (!ptr) return nullptr;
+    return static_cast<nprpc::Object*>(ptr)->class_id().data();
+}
+
+const char* nprpc_object_get_urls(void* ptr) {
+    if (!ptr) return nullptr;
+    return static_cast<nprpc::Object*>(ptr)->urls().data();
+}
+
+const uint8_t* nprpc_object_get_origin(void* ptr) {
+    if (!ptr) return nullptr;
+    return static_cast<nprpc::Object*>(ptr)->origin().data();
 }
 
 // Object RPC call - sends request and receives reply via C++ runtime
@@ -412,7 +485,7 @@ int nprpc_object_send_receive(void* obj_ptr, void* buffer_ptr, uint32_t timeout_
         nprpc::impl::rpc_call(obj->get_endpoint(), *buffer, timeout_ms);
         return 0;  // Success
     } catch (const std::exception& e) {
-        // TODO: Consider passing error message back to Swift
+        std::cerr << "nprpc_object_send_receive exception: " << e.what() << std::endl;
         return -3;  // RPC call failed
     }
 }
@@ -437,6 +510,64 @@ void* nprpc_object_from_string(const char* str) {
 
 void nprpc_free_string(const char* str) {
     delete[] str;
+}
+
+// Create Object from ObjectId components
+void* nprpc_create_object_from_components(
+    uint64_t object_id,
+    uint16_t poa_idx,
+    uint16_t flags,
+    const uint8_t* origin,
+    const char* class_id,
+    const char* urls)
+{
+    if (!origin || !class_id || !urls) {
+        return nullptr;
+    }
+    
+    try {
+        // Create a temporary ObjectId with the data
+        nprpc::ObjectId temp_oid;
+        auto& data = temp_oid.get_data();
+        data.object_id = object_id;
+        data.poa_idx = poa_idx;
+        data.flags = flags;
+        std::memcpy(data.origin.data(), origin, 16);
+        data.class_id = class_id;
+        data.urls = urls;
+        
+        // Serialize to string and deserialize to Object
+        // This uses the existing from_string infrastructure
+        std::string oid_str = temp_oid.to_string();
+        auto* obj = nprpc::Object::from_string(oid_str);
+        return obj;
+    } catch (const std::exception& e) {
+        std::cerr << "nprpc_create_object_from_components exception: " << e.what() << std::endl;
+        return nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+// ============================================================================
+// POA operations
+// ============================================================================
+
+void* nprpc_rpc_create_poa(void* rpc_handle, uint32_t max_objects, uint32_t lifespan, uint32_t id_policy) {
+    if (!rpc_handle) return nullptr;
+    
+    auto* handle = static_cast<nprpc_swift::RpcHandle*>(rpc_handle);
+    return handle->create_poa(max_objects, lifespan, id_policy);
+}
+
+uint16_t nprpc_poa_get_index(void* poa_handle) {
+    if (!poa_handle) return 0;
+    return static_cast<nprpc::Poa*>(poa_handle)->get_index();
+}
+
+void nprpc_poa_deactivate_object(void* poa_handle, uint64_t object_id) {
+    if (!poa_handle) return;
+    static_cast<nprpc::Poa*>(poa_handle)->deactivate_object(object_id);
 }
 
 // Swift Servant Bridge
@@ -478,6 +609,7 @@ void* nprpc_poa_activate_swift_servant(
     void* poa_handle,
     void* swift_servant,
     const char* class_name,
+    uint32_t activation_flags,
     void (*dispatch_func)(void*, void*, void*, void*))
 {
     auto* poa = static_cast<nprpc::Poa*>(poa_handle);
@@ -489,8 +621,7 @@ void* nprpc_poa_activate_swift_servant(
         auto bridge = std::make_unique<SwiftServantBridge>(
             swift_servant, class_name, dispatch_func);
         
-        auto oid = poa->activate_object(bridge.release(),
-                                        nprpc::ObjectActivationFlags::NONE);
+        auto oid = poa->activate_object(bridge.release(), activation_flags);
         
         // Allocate and copy ObjectId to return to Swift
         // Swift will need to free this memory

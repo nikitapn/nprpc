@@ -14,35 +14,37 @@ public class NPRPCObject {
     internal let handle: UnsafeMutableRawPointer
     
     // MARK: - ObjectId properties (from C++ ObjectId base class)
+    // NOTE: We use nprpc_object_get_* functions because handle is Object* (not raw ObjectId*)
+    // Object has a vtable, so the accessor functions must cast to Object* not ObjectId*
     
     /// The unique object ID within its POA
     public var objectId: UInt64 {
-        nprpc_objectid_get_object_id(handle)
+        nprpc_object_get_object_id(handle)
     }
     
     /// The POA index where this object is activated
     public var poaIdx: UInt16 {
-        nprpc_objectid_get_poa_idx(handle)
+        nprpc_object_get_poa_idx(handle)
     }
     
     /// Object flags (persistence, etc.)
     public var flags: UInt16 {
-        nprpc_objectid_get_flags(handle)
+        nprpc_object_get_flags(handle)
     }
     
     /// The class ID string identifying the interface type
     public var classId: String {
-        String(cString: nprpc_objectid_get_class_id(handle))
+        String(cString: nprpc_object_get_class_id(handle))
     }
     
     /// Available endpoint URLs for this object
     public var urls: String {
-        String(cString: nprpc_objectid_get_urls(handle))
+        String(cString: nprpc_object_get_urls(handle))
     }
     
     /// The origin UUID of the process that created this object
     public var origin: [UInt8] {
-        guard let ptr = nprpc_objectid_get_origin(handle) else {
+        guard let ptr = nprpc_object_get_origin(handle) else {
             return [UInt8](repeating: 0, count: 16)
         }
         return Array(UnsafeBufferPointer(start: ptr, count: 16))
@@ -162,6 +164,35 @@ public class NPRPCObject {
         return NPRPCObject(handle: handle)
     }
     
+    /// Create an NPRPCObject from ObjectId data
+    /// - Parameter objectId: The ObjectId containing all reference data
+    /// - Returns: A new NPRPCObject, or nil if creation failed
+    public static func fromObjectId(_ objectId: detail.ObjectId) -> NPRPCObject? {
+        // Convert origin array to raw bytes
+        let originBytes = objectId.origin
+        guard originBytes.count == 16 else { return nil }
+        
+        let handle = originBytes.withUnsafeBufferPointer { originPtr -> UnsafeMutableRawPointer? in
+            guard let baseAddress = originPtr.baseAddress else { return nil }
+            return nprpc_create_object_from_components(
+                objectId.object_id,
+                objectId.poa_idx,
+                objectId.flags,
+                baseAddress,
+                objectId.class_id,
+                objectId.urls
+            )
+        }
+        
+        guard let handle = handle else { return nil }
+        let obj = NPRPCObject(handle: handle)
+        
+        // Select endpoint so the object is ready for RPC calls
+        obj.selectEndpoint()
+        
+        return obj
+    }
+    
     deinit {
         // Release our reference to C++ object
         nprpc_object_release(handle)
@@ -233,6 +264,12 @@ public struct NPRPCEndpoint {
 /// Base class for Swift servants
 open class NPRPCServant {
     public init() {}
+    
+    /// Override this to return the class name/ID of this servant
+    /// This is typically the fully qualified interface name from the IDL
+    open func getClass() -> String {
+        fatalError("Subclass must override getClass to return the interface class ID")
+    }
     
     /// Override this to handle RPC dispatch
     open func dispatch(buffer: FlatBuffer, remoteEndpoint: NPRPCEndpoint) {

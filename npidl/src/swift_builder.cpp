@@ -460,7 +460,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     // Write message header
     out << bl() << "// Write message header\n";
     out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)\n";
-    out << bl() << "data.storeBytes(of: UInt32(1), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall\n";
+    out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)\n";
     out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request\n";
     out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved\n\n";
     
@@ -567,6 +567,12 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
   
   // Constructor
   out << bl() << "public override init() { super.init() }\n\n";
+  
+  // getClass() override - return the fully qualified interface class name
+  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->to_ts_namespace() + '.' + ifs->name;
+  out << bl() << "public override func getClass() -> String " << bb();
+  out << bl() << "return \"" << class_id << "\"\n";
+  out << eb() << "\n";
   
   // Protocol method stubs (abstract methods to be implemented by subclass)
   for (auto& fn : ifs->fns) {

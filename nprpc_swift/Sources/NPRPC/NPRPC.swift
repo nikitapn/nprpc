@@ -75,19 +75,19 @@ public func handleStandardReply(buffer: FlatBuffer) -> Int32 {
     guard let data = buffer.constData else { return -2 }
     
     // Read message_id from offset 4
-    let messageId = data.load(fromByteOffset: 4, as: UInt32.self)
+    let messageId = data.load(fromByteOffset: 4, as: Int32.self)
     
-    // Check message type
-    // 0 = Request, 1 = Answer
-    // Success = 10, Exception = 11, BlockResponse = 2
-    // Errors: PoaNotExist = 12, ObjectNotExist = 13, etc.
+    // Check message type based on impl.MessageId enum values
+    // functionCall=0, streamInit=1, streamDataChunk=2, streamCompletion=3,
+    // streamError=4, streamCancellation=5, blockResponse=6, addReference=7,
+    // releaseObject=8, success=9, exception=10, error_PoaNotExist=11, etc.
     
     switch messageId {
-    case 10: // Success
+    case impl.MessageId.success.rawValue: // 9
         return 0
-    case 2: // BlockResponse (has return data)
+    case impl.MessageId.blockResponse.rawValue: // 6 - has return data
         return -1
-    case 11: // Exception
+    case impl.MessageId.exception.rawValue: // 10
         return Int32(messageId)
     default: // Error codes
         return Int32(messageId)

@@ -156,20 +156,6 @@ public func unmarshal_string(buffer: UnsafeRawPointer, offset: Int) -> String {
 
 // MARK: - ObjectId Marshalling
 
-/// Marshal an object ID to a buffer
-/// This is a wrapper that calls the generated detail.marshal_ObjectId
-// public func marshal_object_id(buffer: UnsafeMutableRawPointer, offset: Int, objectId: NPRPCObjectData) {
-//     let oid = detail.ObjectId(
-//         object_id: objectId.objectId,
-//         poa_idx: objectId.poaIdx,
-//         flags: objectId.flags,
-//         origin: objectId.origin,
-//         class_id: objectId.classId,
-//         urls: objectId.urls
-//     )
-//     detail.marshal_ObjectId(buffer: buffer, offset: offset, data: oid)
-// }
-
 let marshal_object_id = detail.marshal_ObjectId
 
 // MARK: - Span/View helpers for compatibility

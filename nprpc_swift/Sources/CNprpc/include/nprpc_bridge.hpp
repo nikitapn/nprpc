@@ -14,6 +14,11 @@
 #include <optional>
 #include <functional>
 
+// Swift interop macros
+#ifndef SWIFT_RETURNS_INDEPENDENT_VALUE
+#define SWIFT_RETURNS_INDEPENDENT_VALUE __attribute__((swift_attr("returns_independent_value")))
+#endif
+
 // Forward declarations only - avoid pulling in heavy implementation headers
 // Swift only needs to see the types, not the full implementation
 namespace nprpc {
@@ -138,6 +143,14 @@ public:
     /// Get debug info
     std::string get_debug_info() const;
     
+    /// Create a POA
+    /// @param max_objects Maximum number of objects (0 = default)
+    /// @param lifespan 0 = persistent, 1 = transient
+    /// @param id_policy 0 = system-generated, 1 = user-supplied
+    /// @return Opaque pointer to nprpc::Poa or nullptr on error
+    SWIFT_RETURNS_INDEPENDENT_VALUE
+    void* create_poa(uint32_t max_objects, uint32_t lifespan, uint32_t id_policy);
+    
 private:
     bool initialized_ = false;
     void* impl_ = nullptr;  // Opaque pointer to RpcHandleImpl
@@ -205,7 +218,7 @@ const char* nprpc_object_get_endpoint_hostname(void* obj);  // Returns hostname 
 uint16_t nprpc_object_get_endpoint_port(void* obj);  // Returns port number
 bool nprpc_object_select_endpoint(void* obj);  // Select best endpoint
 
-// ObjectId accessor functions
+// ObjectId accessor functions (for raw ObjectId* from poa_activate)
 uint64_t nprpc_objectid_get_object_id(void* oid_ptr);
 uint16_t nprpc_objectid_get_poa_idx(void* oid_ptr);
 uint16_t nprpc_objectid_get_flags(void* oid_ptr);
@@ -213,6 +226,15 @@ const char* nprpc_objectid_get_class_id(void* oid_ptr);
 const char* nprpc_objectid_get_urls(void* oid_ptr);
 const uint8_t* nprpc_objectid_get_origin(void* oid_ptr);
 void nprpc_objectid_destroy(void* oid_ptr);
+
+// Object accessor functions (for Object* from create_object_from_components)
+// These handle the vtable offset properly
+uint64_t nprpc_object_get_object_id(void* obj_ptr);
+uint16_t nprpc_object_get_poa_idx(void* obj_ptr);
+uint16_t nprpc_object_get_flags(void* obj_ptr);
+const char* nprpc_object_get_class_id(void* obj_ptr);
+const char* nprpc_object_get_urls(void* obj_ptr);
+const uint8_t* nprpc_object_get_origin(void* obj_ptr);
 
 // Object RPC call - sends request and receives reply via C++ runtime
 // Returns: 0 = success, -1 = null args, -2 = endpoint selection failed, -3 = RPC call failed
@@ -229,12 +251,49 @@ void* nprpc_object_from_string(const char* str);
 // Free a string allocated by nprpc_object_to_string
 void nprpc_free_string(const char* str);
 
+// Create an Object from ObjectId components (for local proxy creation)
+// Parameters:
+//   object_id: unique object ID within POA
+//   poa_idx: POA index
+//   flags: object flags
+//   origin: 16-byte UUID of origin process
+//   class_id: class identifier string
+//   urls: semicolon-separated endpoint URLs
+// Returns: new Object handle or nullptr on error
+void* nprpc_create_object_from_components(
+    uint64_t object_id,
+    uint16_t poa_idx,
+    uint16_t flags,
+    const uint8_t* origin,
+    const char* class_id,
+    const char* urls);
+
+// ============================================================================
+// POA operations
+// ============================================================================
+
+// Create a POA from RpcHandle
+// Parameters:
+//   rpc_handle: pointer to RpcHandle
+//   max_objects: maximum number of objects (0 = unlimited)
+//   lifespan: 0 = persistent, 1 = transient
+//   id_policy: 0 = system-generated, 1 = user-supplied
+// Returns: opaque pointer to nprpc::Poa or nullptr on error
+void* nprpc_rpc_create_poa(void* rpc_handle, uint32_t max_objects, uint32_t lifespan, uint32_t id_policy);
+
+// Get POA index
+uint16_t nprpc_poa_get_index(void* poa_handle);
+
+// Deactivate an object in a POA
+void nprpc_poa_deactivate_object(void* poa_handle, uint64_t object_id);
+
 // Swift Servant activation
 // Returns pointer to nprpc::ObjectId that Swift must destroy with nprpc_objectid_destroy
 void* nprpc_poa_activate_swift_servant(
     void* poa_handle,
     void* swift_servant,
     const char* class_name,
+    uint32_t activation_flags,
     void (*dispatch_func)(void*, void*, void*, void*));
 
 } // extern "C"

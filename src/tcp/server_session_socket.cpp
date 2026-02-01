@@ -200,6 +200,7 @@ static std::shared_ptr<Acceptor> g_tcp_acceptor;
 
 void init_socket(net::io_context& ioc)
 {
+  NPRPC_LOG_INFO("init_socket called with g_cfg.listen_tcp_port={}", g_cfg.listen_tcp_port);
   if (g_cfg.listen_tcp_port == 0) {
     NPRPC_LOG_INFO("TCP listen port is not set, skipping socket server "
                    "initialization.");
@@ -207,6 +208,7 @@ void init_socket(net::io_context& ioc)
   }
   g_tcp_acceptor = std::make_shared<Acceptor>(ioc, g_cfg.listen_tcp_port);
   g_tcp_acceptor->do_accept();
+  NPRPC_LOG_INFO("TCP listener started on port {}", g_cfg.listen_tcp_port);
 }
 
 void stop_socket_listener()

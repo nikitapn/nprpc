@@ -86,7 +86,7 @@ public class Nameserver: NPRPCObjectProxy, NameserverProtocol {
 
     // Write message header
     data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
-    data.storeBytes(of: UInt32(1), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall
+    data.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
     data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
     data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
 
@@ -121,7 +121,7 @@ public class Nameserver: NPRPCObjectProxy, NameserverProtocol {
 
     // Write message header
     data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
-    data.storeBytes(of: UInt32(1), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall
+    data.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
     data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
     data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
 
@@ -155,6 +155,10 @@ public class Nameserver: NPRPCObjectProxy, NameserverProtocol {
 // Servant base for Nameserver
 open class NameserverServant: NPRPCServant, NameserverProtocol {
   public override init() { super.init() }
+
+  public override func getClass() -> String   {
+    return "nprpc_nameserver/nprpc.common.Nameserver"
+  }
 
   open func bind(obj: ObjectPtr<Object>, name: String) throws   {
     fatalError("Subclass must implement bind")
