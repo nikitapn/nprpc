@@ -101,8 +101,16 @@ protected:
   bool always_full_namespace_ = false;
 
   void always_full_namespace(bool flag) { always_full_namespace_ = flag; }
-  void make_arguments_structs(AstFunctionDecl* fn);
-  void emit_arguments_structs(std::function<void(AstStructDecl*)> fn);
+  
+  /**
+   * @brief Emit all cached argument structs via the provided callback.
+   * 
+   * This is used by language backends to generate marshalling structs
+   * after all functions have been processed by ArgumentsStructBuilder.
+   * 
+   * @param emitter Function to call for each argument struct
+   */
+  void emit_arguments_structs(std::function<void(AstStructDecl*)> emitter);
 
   // Start a new block
   auto bb(bool newline = true)

@@ -34,10 +34,7 @@ int main(int argc, char* argv[])
   po::options_description desc("Allowed options");
   desc.add_options()("help", "produce help message")(
       "lsp", "run as Language Server Protocol server")
-      // There is no option to disable C++ generation for now, as it's the
-      // primary target And CppBuilder is implicitly required for TypeScript
-      // generation, since it generates auxiliary structs
-      ("cpp", po::bool_switch(&generate_cpp)->default_value(true),
+      ("cpp", po::bool_switch(&generate_cpp)->default_value(false),
        "Generate C++")(
           "ts", po::bool_switch(&generate_typescript)->default_value(false),
           "Generate TypeScript")(
@@ -84,8 +81,9 @@ int main(int argc, char* argv[])
   try {
     CompilationBuilder builder;
     builder.set_input_files(input_files)
-        .set_output_dir(output_dir)
-        .with_language_cpp();
+        .set_output_dir(output_dir);
+    if (generate_cpp)
+      builder.with_language_cpp();
     if (generate_typescript)
       builder.with_language_ts();
     if (generate_swift)

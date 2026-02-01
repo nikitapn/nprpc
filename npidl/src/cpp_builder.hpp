@@ -4,6 +4,7 @@
 #pragma once
 
 #include "builder.hpp"
+#include "arguments_builder.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -31,6 +32,9 @@ private:
   std::string export_macro_name_;
 
   BlockDepth bd;
+  
+  // Helper for generating argument structs
+  ArgumentsStructBuilder args_builder_;
 
   void emit_parameter_type_for_proxy_call_r(AstTypeDecl* type,
                                             std::ostream& os,

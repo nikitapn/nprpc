@@ -4,6 +4,7 @@
 #pragma once
 
 #include "builder.hpp"
+#include "arguments_builder.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -24,6 +25,9 @@ private:
   std::filesystem::path out_dir_;
   std::stringstream out;
   std::stringstream spans;
+  
+  // Helper for generating argument structs
+  ArgumentsStructBuilder args_builder_;
 
   void emit_parameter_type_for_proxy_call_r(AstTypeDecl* type,
                                             std::ostream& os,

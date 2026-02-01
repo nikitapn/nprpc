@@ -8,7 +8,7 @@
 - Benchmarks under `benchmark/src` reuse IDL from `benchmark/idl`; use them when checking regressions against gRPC/Cap'n Proto.
 - JavaScript bindings are in `nprpc_js/` (webpack build) and exercised in `test/js`; the current bundle assumes a browser global `self`, so Node-based tests need a shim or a Node flavor build.
 ## Build & Generation Workflow
-- Standard dev configure: `cmake -S . -B .build_release -DCMAKE_BUILD_TYPE=Release -DNPRPC_BUILD_TESTS=ON -DNPRPC_BUILD_TOOLS=ON -DNPRPC_BUILD_JS=ON`; add `-DNPRPC_ENABLE_QUIC=ON` to pull `third_party/msquic`. Convienience script: `./configure.sh`.
+- Standard dev configure: `cmake -S . -B .build_relwith_debinfo -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNPRPC_BUILD_TESTS=ON -DNPRPC_BUILD_TOOLS=ON -DNPRPC_BUILD_JS=ON`; add `-DNPRPC_ENABLE_QUIC=ON` to pull `third_party/msquic`. Convienience script: `./configure.sh`.
 - Build everything with `cmake --build .build_release -j$(nproc)`; npidl, npnameserver, and shared libs all come from the same tree (no separate bootstrap).
 - To regenerate stubs manually: `npidl path/to/foo.npidl --cpp --ts --output-dir gen`; in CMake, depend on the `<module>_gen` custom target exposed by `npidl_generate_idl_files`.
 - POAs are created via `nprpc::PoaBuilder` off an `Rpc`; set limits (`with_max_objects`), lifetime, and optionally `with_object_id_policy` (default system-generated, `UserSupplied` unlocks `activate_object_with_id` for deterministic IDs embedded in JS bundles) before calling the relevant activation API with explicit `ObjectActivationFlags` for allowed transports.

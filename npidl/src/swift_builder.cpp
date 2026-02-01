@@ -35,6 +35,7 @@ bool needs_marshalling(AstTypeDecl* type) {
 SwiftBuilder::SwiftBuilder(Context* ctx, std::filesystem::path out_dir)
     : Builder(ctx)
     , out_dir_(std::move(out_dir))
+    , args_builder_(ctx)
 {
 }
 
@@ -394,8 +395,6 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
   
   // Implement protocol methods with marshalling
   for (auto& fn : ifs->fns) {
-    make_arguments_structs(fn);
-    
     out << bl() << "public func " << swift_method_name(fn->name) << "(";
     
     // Emit only 'in' parameters (to match protocol)
@@ -942,6 +941,8 @@ void SwiftBuilder::emit_interface(AstInterfaceDecl* ifs)
 {
   // First emit struct definitions for auto-generated in/out parameter structs
   for (auto& fn : ifs->fns) {
+    args_builder_.make_arguments_structs(fn);
+
     if (fn->in_s && fn->in_s->fields.size() > 0) {
       // These auxiliary structs are internal implementation details for marshalling
       out << "\n" << bl() << "fileprivate struct " << fn->in_s->name << " {\n";

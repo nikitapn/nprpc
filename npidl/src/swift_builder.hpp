@@ -4,6 +4,7 @@
 #pragma once
 
 #include "builder.hpp"
+#include "arguments_builder.hpp"
 #include <filesystem>
 #include <sstream>
 
@@ -23,6 +24,9 @@ private:
 
   std::filesystem::path out_dir_;
   std::stringstream out;
+  
+  // Helper for generating argument structs
+  ArgumentsStructBuilder args_builder_;
   
   // Helper methods for type emission
   void emit_type(AstTypeDecl* type, std::ostream& os);
