@@ -171,301 +171,42 @@ Serve web clients over HTTP/3 using msh3 (Microsoft's minimal HTTP/3 on MsQuic).
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Swift Language Bindings 🚀 NEXT MAJOR PROJECT
+## Swift Language Bindings 🚀 IN PROGRESS
 
-Write business logic in Swift while reusing the C++ nprpc runtime.
+### Completed ✅
+* [x] Swift package structure (nprpc_swift)
+* [x] Swift wrappers for Rpc, Poa, ObjectPtr
+* [x] npidl `--swift` code generation
+* [x] Basic type marshalling (fundamentals, enums, structs)
+* [x] Servant base classes with dispatch
+* [x] Client proxy generation
+* [x] Basic RPC loopback tests working
 
-### Why Swift?
+### Marshalling - Type Coverage
+* [x] Fundamentals (i8, u8, i16, u16, i32, u32, i64, u64, f32, f64, bool)
+* [x] Enums
+* [x] Nested structs
+* [ ] **Strings** - Need unmarshal_string/marshal_string helpers
+* [ ] **Vectors** - Need NPRPC.unmarshal_vector/marshal_vector
+* [ ] **Arrays** - Need proper bounds checking and iteration
+* [ ] **Optionals** - Need presence flag + conditional marshalling
+* [ ] **Objects (ObjectPtr)** - Need NPRPC.unmarshal_object_proxy/marshal_object_id
+* [ ] **Bounds checking** - Swift UnsafeRawPointer doesn't validate, add explicit checks
 
-| Language | C++ Interop | Async | Safety | Linux | Ecosystem |
-|----------|-------------|-------|--------|-------|-----------|
-| **Swift** | ✅ Native (5.9+) | ✅ async/await | ✅ Strong | ✅ Full | ⚠️ Growing |
-| Rust | ⚠️ cxx crate | ✅ tokio | ✅ Strong | ✅ Full | ✅ Large |
-| Go | ❌ CGO slow | ✅ goroutines | ⚠️ GC | ✅ Full | ✅ Large |
-| Kotlin | ⚠️ JNI/Native | ✅ coroutines | ✅ Strong | ⚠️ Native | ⚠️ Server |
+### Client-Side (Proxy)
+* [ ] **Async support** - Make proxy methods actually async (currently sync)
+* [ ] **Error handling** - Map C++ exceptions to Swift errors
+* [ ] **Out parameters** - Handle multi-return (tuples)
+* [ ] **Streams** - Map stream<T> to AsyncSequence
 
-**Swift wins because:**
-- Direct C++ interop = zero FFI overhead, 100% runtime reuse
-- No bindings generator needed - Swift imports C++ headers directly
-- Modern concurrency (async/await, actors) maps well to NPRPC
-- Type-safe, memory-safe without Rust's complexity
-- Future iOS/macOS client option
+### Server-Side (Servant)  
+* [ ] **Async dispatch bridge** - C++ dispatch() is sync, Swift methods are async
+* [ ] **Error propagation** - Swift throws → C++ exception in dispatch
+* [ ] **Streams** - Servant methods returning AsyncSequence
 
-### Strategy: Swift C++ Interop (Swift 5.9+)
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Your Swift Backend                       │
-│   - Business logic in Swift                                │
-│   - async/await for RPC calls                              │
-│   - Swift types for data structures                        │
-├─────────────────────────────────────────────────────────────┤
-│                  Generated Swift Code                       │
-│   - Swift protocols matching IDL interfaces                │
-│   - Swift structs/enums for IDL types                      │
-│   - Proxy classes wrapping C++ ObjectPtr<T>                │
-├─────────────────────────────────────────────────────────────┤
-│                 nprpc_swift Package                         │
-│   - Swift wrappers for Rpc, Poa, ObjectPtr                 │
-│   - C++ interop module map                                 │
-│   - Error handling bridge                                   │
-├─────────────────────────────────────────────────────────────┤
-│              libnprpc (100% Reused C++)                     │
-│   - All transports (TCP, WS, QUIC, UDP, SharedMem)         │
-│   - Serialization (flat_buffer)                            │
-│   - POA, servants, activation                              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Phase 0: Setup & Proof of Concept (1 week)
-
-**Goal:** Verify Swift can call NPRPC C++ code on Linux
-
-* [ ] Install Swift 5.9+ on dev machine
-* [ ] Create minimal Swift package that imports a C++ header
-* [ ] Test calling `nprpc::Rpc::builder()` from Swift
-* [ ] Verify flat_buffer can be passed across boundary
-* [ ] Document any interop limitations discovered
-
-**Deliverable:** Working "Hello NPRPC" from Swift
-
-### Phase 1: nprpc_swift Package (2 weeks)
-
-**Goal:** Swift wrappers for core NPRPC types
-
-```
-nprpc_swift/
-├── Package.swift
-├── Sources/
-│   ├── NPRPC/
-│   │   ├── Rpc.swift           # Wrapper for nprpc::Rpc
-│   │   ├── Poa.swift           # Wrapper for nprpc::Poa  
-│   │   ├── ObjectPtr.swift     # Generic wrapper for ObjectPtr<T>
-│   │   ├── EndPoint.swift      # Swift-friendly endpoint
-│   │   ├── Errors.swift        # NPRPC exceptions → Swift errors
-│   │   └── FlatBuffer.swift    # Buffer bridging utilities
-│   └── CNprpc/
-│       ├── include/
-│       │   └── module.modulemap  # Exposes C++ headers to Swift
-│       └── shim.cpp              # Thin C++ helpers if needed
-└── Tests/
-    └── NPRPCTests/
-```
-
-**Tasks:**
-* [ ] Create Package.swift with C++ interop settings
-* [ ] Write module.modulemap exposing nprpc headers
-* [ ] Implement `Rpc` wrapper with builder pattern
-* [ ] Implement `Poa` wrapper for servant activation  
-* [ ] Implement generic `ObjectPtr<T>` wrapper
-* [ ] Bridge C++ exceptions to Swift errors
-* [ ] Add async/await wrappers for RPC calls
-* [ ] Unit tests for each wrapper
-
-### Phase 2: IDL Code Generator (2 weeks)
-
-**Goal:** Generate Swift code from .npidl files
-
-Add `swift_builder.cpp` to npidl:
-
-```cpp
-// npidl/src/swift_builder.cpp
-class SwiftBuilder : public Builder {
-  void emit_struct(AstStructDecl*);    // → Swift struct
-  void emit_enum(AstEnumDecl*);        // → Swift enum  
-  void emit_interface(AstInterfaceDecl*); // → Swift protocol + proxy
-  void emit_exception(AstExceptionDecl*); // → Swift Error type
-};
-```
-
-**Generated Code Example:**
-```swift
-// From: interface Calculator { i32 Add(a: in i32, b: in i32); }
-
-// Protocol for servants to implement
-public protocol ICalculator {
-    func Add(a: Int32, b: Int32) async throws -> Int32
-}
-
-// Proxy for calling remote Calculator
-public final class Calculator: NPRPCObject {
-    public func Add(a: Int32, b: Int32) async throws -> Int32 {
-        // Calls into C++ proxy code
-    }
-}
-
-// Servant base class
-open class Calculator_Servant: NPRPCServant, ICalculator {
-    open func Add(a: Int32, b: Int32) async throws -> Int32 {
-        fatalError("Must override")
-    }
-}
-```
-
-**Tasks:**
-* [ ] Add `--swift` flag to npidl CLI
-* [ ] Implement type mapping (IDL → Swift)
-* [ ] Generate Swift structs from IDL structs
-* [ ] Generate Swift enums from IDL enums
-* [ ] Generate Swift protocols from IDL interfaces
-* [ ] Generate proxy classes (client-side)
-* [ ] Generate servant base classes (server-side)
-* [ ] Generate serialization code (to/from flat_buffer)
-* [ ] Handle `stream<T>` types (AsyncSequence)
-* [ ] Handle `[unreliable]` attribute
-* [ ] CMake integration for Swift generation
-
-### Phase 3: Proxy Wrapping & Servant Dispatch (1 week)
-
-**Goal:** Bridge Swift code with generated C++ proxies/servants
-
-**Reality Check:** C++ builder generates inline marshalling (no separate functions). The generated code uses:
-- `Calculator::add()` - marshals inline using `_Direct` buffer classes
-- `ICalculator_Servant::dispatch()` - unmarshals inline, routes to virtual methods
-
-#### Approach A: Swift Wraps C++ Proxy (Client-side) ✅ SIMPLEST
-
-Swift delegates to existing C++ proxy class:
-
-```swift
-// Generated Swift wrapper
-public class Calculator: CalculatorProtocol {
-  private let cppProxy: Test.Calculator  // Existing C++ proxy
-  
-  public init(objectPtr: ObjectPtr) {
-    cppProxy = Test.Calculator(interface_idx: 0)
-    cppProxy.set_object_id(objectPtr.object_id)
-    // ... copy other Object fields
-  }
-  
-  public func add(a: Int32, b: Int32) async throws -> Int32 {
-    var result: Int32 = 0
-    cppProxy.add(a, b, &result)  // Call C++ proxy directly (handles marshalling)
-    return result
-  }
-}
-```
-
-**Pros:** Zero duplication, uses existing tested C++ code
-**Cons:** Swift must handle C++ out-params (via inout), async wrapping needed
-
-#### Approach B: C++ Servant Bridge (Server-side)
-
-Generate thin C++ bridge per interface using existing servant dispatch:
-
-```cpp
-// Generated C++ bridge extends existing servant
-class Calculator_SwiftServant : public ICalculator_Servant {
-  void* swift_obj;  // Opaque Swift object
-  
-  // Implement virtual methods - call into Swift via trampolines
-  void add(int32_t a, int32_t b, int32_t& result) override {
-    result = swift_calculator_add_trampoline(swift_obj, a, b);
-  }
-  
-  void divide(double n, double d, double& result) override {
-    result = swift_calculator_divide_trampoline(swift_obj, n, d);
-  }
-};
-```
-
-```swift
-// Generated Swift servant
-open class CalculatorServant {
-  private let cppBridge: UnsafeMutablePointer<Calculator_SwiftServant>
-  
-  public init() {
-    cppBridge = Calculator_SwiftServant_create(
-      Unmanaged.passUnretained(self).toOpaque()
-    )
-  }
-  
-  // Swift methods that C++ bridge calls
-  open func add(a: Int32, b: Int32) async throws -> Int32 {
-    fatalError("Subclass must override")
-  }
-}
-
-// C trampolines called from C++ bridge
-@_cdecl("swift_calculator_add_trampoline")
-func swift_calculator_add_trampoline(_ obj: UnsafeMutableRawPointer, _ a: Int32, _ b: Int32) -> Int32 {
-  let servant = Unmanaged<CalculatorServant>.fromOpaque(obj).takeUnretainedValue()
-  // TODO: Handle async - this is the tricky part!
-  return try! await servant.add(a: a, b: b)
-}
-```
-
-**Challenge:** C++ dispatch() is sync, Swift methods are async
-**Solution:** Bridge async using continuation + task queue (see async_bridge_helper.cpp)
-
-**Tasks:**
-* [ ] Generate C++ servant bridge classes (inherit IFoo_Servant, call Swift via trampolines)
-* [ ] Generate Swift servant wrappers (hold C++ bridge, provide async methods)
-* [ ] Generate @_cdecl trampolines per method
-* [ ] Implement async bridge: C++ sync dispatch → Swift async method → C++ callback
-* [ ] Error propagation: Swift throws → catch → C++ exception in dispatch
-* [ ] Test round-trip: Swift client → C++ transport → Swift servant
-
-### Phase 4: Your Site Backend Port (2-3 weeks)
-
-**Goal:** Rewrite site backend in Swift using NPRPC
-
-* [ ] Identify all IDL interfaces used by site
-* [ ] Generate Swift stubs for site IDL
-* [ ] Port servant implementations to Swift
-* [ ] Port any business logic to Swift
-* [ ] Integration testing
-* [ ] Performance comparison vs C++
-* [ ] Deploy!
-
-### Risks & Mitigations
-
-| Risk | Likelihood | Mitigation |
-|------|------------|------------|
-| Swift C++ interop bugs | Medium | Keep C++ shim thin, test each type |
-| Async bridging complexity | Medium | Start sync-only, add async later |
-| Linux Swift toolchain issues | Low | Use official Swift docker images |
-| Performance overhead | Low | Profile early, optimize hot paths |
-| Memory management at boundary | Medium | Clear ownership rules, use RAII |
-
-### Reuse Matrix
-
-| Component | Reuse | Work Needed |
-|-----------|-------|-------------|
-| C++ Runtime (libnprpc) | ✅ 100% | None |
-| IDL Parser (npidl_core) | ✅ 100% | None |
-| Wire format | ✅ 100% | None |
-| Transports | ✅ 100% | None |
-| npidl swift backend | 🆕 New | ~1500 LOC |
-| nprpc_swift package | 🆕 New | ~800 LOC |
-| Dispatch bridge | 🆕 New | ~300 LOC |
-
-### Timeline Estimate
-
-| Phase | Duration | Cumulative |
-|-------|----------|------------|
-| Phase 0: POC | 1 week | 1 week |
-| Phase 1: Package | 2 weeks | 3 weeks |
-| Phase 2: CodeGen | 2 weeks | 5 weeks |
-| Phase 3: Dispatch | 1 week | 6 weeks |
-| Phase 4: Port Site | 2-3 weeks | 8-9 weeks |
-
-**Total: ~2 months** to have your site running on Swift backend
-
-### Alternative: Hybrid Approach
-
-If full Swift port feels risky, consider:
-1. Keep existing C++ servants running
-2. Add new features in Swift
-3. Gradually migrate one servant at a time
-4. Both can run in same process (mixed C++/Swift)
-
-### Reuse Matrix
-| Component | Reuse | Notes |
-|-----------|-------|-------|
-| C++ Runtime (libnprpc) | ✅ 100% | All transports, serialization, POA |
-| IDL Parser (npidl_core) | ✅ 100% | Just add swift_builder backend |
-| Wire format | ✅ 100% | Binary compatible with C++ |
-| Swift types | 🆕 Generate | Structs, enums, protocols |
-| Swift proxies | 🆕 Generate | Thin wrappers calling C++ |
-| Swift package | 🆕 Create | ~500 lines of wrapper code |
+### Next Steps
+1. Complete marshalling for complex types (strings, vectors, arrays, optionals, objects)
+2. Add bounds checking to all unmarshal operations
+3. Implement async proxy calls
+4. Implement async servant dispatch bridge
+5. Add stream support (AsyncSequence)
