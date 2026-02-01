@@ -54,15 +54,6 @@ QUIC provides everything UDP fragmentation tries to do, plus more:
 - 0-RTT connection establishment
 - Connection migration (survives IP changes)
 
-### Benchmark Results (Nov 2025)
-```
-LatencyFixture/EmptyCall/0   127 us   16.6 us   43981 calls/sec   SharedMemory
-LatencyFixture/EmptyCall/1   116 us   17.7 us   39629 calls/sec   TCP
-LatencyFixture/EmptyCall/2   125 us   20.7 us   34186 calls/sec   WebSocket
-LatencyFixture/EmptyCall/3  76.1 us   26.0 us   27468 calls/sec   UDP
-LatencyFixture/EmptyCall/4   231 us   23.4 us   30361 calls/sec   QUIC
-```
-
 ### Phase 1: Core Integration ✅
 * [x] Add MsQuic as submodule/dependency in CMake
 * [x] Create `QuicConnection` class (client-side)
@@ -100,7 +91,7 @@ LatencyFixture/EmptyCall/4   231 us   23.4 us   30361 calls/sec   QUIC
 
 ## HTTP/3 Server ✅ Core Implementation Complete
 
-Serve web clients over HTTP/3 using msh3 (Microsoft's minimal HTTP/3 on MsQuic).
+Serve web clients over HTTP/3 using nghttp3/ngtcp2
 
 ### Why HTTP/3?
 - Modern web standard, shows technical credibility
@@ -138,11 +129,6 @@ Serve web clients over HTTP/3 using msh3 (Microsoft's minimal HTTP/3 on MsQuic).
 | HTTP/2 | Add HTTP/2 support via nghttp2 (between HTTP/1.1 and HTTP/3) | High |
 | sendfile() | For non-cached large files, use sendfile() syscall | Medium |
 | Cache-Control | Respect/set Cache-Control headers for browser caching | Low |
-
-### Considerations
-* msh3 is minimal (68 stars) but integrates well with MsQuic
-* For production, reverse proxy (Caddy) is more battle-tested
-* HTTP/3 mainly needed for web client compatibility
 
 ## Architecture Overview
 

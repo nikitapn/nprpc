@@ -1,2 +1,3 @@
 /.build
 /Sources/NPRPC/Generated/*
+/Tests/NPRPCTests/Generated/*

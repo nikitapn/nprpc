@@ -263,9 +263,18 @@ void SwiftBuilder::emit_struct2(AstStructDecl* s, bool is_exception)
     out << eb();
   }
   
-  // For exceptions, add the required message property
+  // For exceptions, add the required message property only if not already defined
   if (is_exception) {
-    out << "\n" << bl() << "public var message: String { \"" << s->name << "\" }\n";
+    bool has_message_field = false;
+    for (auto field : s->fields) {
+      if (field->name == "message") {
+        has_message_field = true;
+        break;
+      }
+    }
+    if (!has_message_field) {
+      out << "\n" << bl() << "public var message: String { \"" << s->name << "\" }\n";
+    }
   }
   
   out << eb() << "\n";
@@ -1152,13 +1161,39 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
     bb();
     if (is_fundamental(wt)) {
       out << bb() << "NPRPC.marshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ", value: value)\n";
-    } else {
+    } else if (wt->id == FieldType::Struct) {
       auto flat_struct = cflat(wt);
-      std::string type_name = flat_struct ? flat_struct->name : "<unknown>";
       out << bb() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
       out << bb(false);
-      out << bb() << "marshal_" << type_name << "(buffer: buf, offset: off, data: value)\n";
+      out << bb() << "marshal_" << flat_struct->name << "(buffer: buf, offset: off, data: value)\n";
       out << eb();
+    } else if (wt->id == FieldType::String) {
+      out << bb() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
+      out << bb(false);
+      out << bb() << "NPRPC.marshal_string(buffer: buf, offset: off, string: value)\n";
+      out << eb();
+    } else if (wt->id == FieldType::Enum) {
+      out << bb() << "NPRPC.marshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ", value: value.rawValue)\n";
+    } else if (wt->id == FieldType::Vector || wt->id == FieldType::Array) {
+      auto real_elem_type = cwt(wt)->real_type();
+      auto [ut_size, ut_align] = get_type_size_align(real_elem_type);
+      if (is_fundamental(real_elem_type)) {
+        out << bb() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
+        out << bb(false);
+        out << bb() << "NPRPC.marshal_typed_array(buffer: buf, offset: off, array: value, elementSize: " << ut_size << ")\n";
+        out << eb();
+      } else if (real_elem_type->id == FieldType::Struct) {
+        out << bb() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
+        out << bb(false);
+        out << bb() << "NPRPC.marshal_struct_array(buffer: buf, offset: off, array: value, elementSize: " << ut_size << ") { eb, eo, elem in\n";
+        out << bb() << "marshal_" << cflat(real_elem_type)->name << "(buffer: eb, offset: eo, data: elem)\n";
+        out << eb();
+        out << eb();
+      } else {
+        out << bb() << "// TODO: Optional vector/array of complex type\n";
+      }
+    } else {
+      out << bb() << "// TODO: Optional of type " << static_cast<int>(wt->id) << "\n";
     }
     eb();
     out << bb() << "} else {\n";
@@ -1298,11 +1333,38 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
     bb();
     if (is_fundamental(wt)) {
       out << bb() << field_name << " = NPRPC.unmarshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ")\n";
-    } else {
+    } else if (wt->id == FieldType::Struct) {
       out << bb() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
       out << bb();
       out << bb() << "unmarshal_" << cflat(wt)->name << "(buffer: buf, offset: off)\n";
       out << eb();
+    } else if (wt->id == FieldType::String) {
+      out << bb() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
+      out << bb();
+      out << bb() << "NPRPC.unmarshal_string(buffer: buf, offset: off)\n";
+      out << eb();
+    } else if (wt->id == FieldType::Enum) {
+      out << bb() << field_name << " = " << cenum(wt)->name << "(rawValue: buffer.load(fromByteOffset: offset + " << field_offset << " + 4, as: Int32.self))\n";
+    } else if (wt->id == FieldType::Vector || wt->id == FieldType::Array) {
+      auto real_elem_type = cwt(wt)->real_type();
+      auto [ut_size, ut_align] = get_type_size_align(real_elem_type);
+      if (is_fundamental(real_elem_type)) {
+        out << bb() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
+        out << bb();
+        out << bb() << "NPRPC.unmarshal_fundamental_vector(buffer: buf, offset: off)\n";
+        out << eb();
+      } else if (real_elem_type->id == FieldType::Struct) {
+        out << bb() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
+        out << bb();
+        out << bb() << "NPRPC.unmarshal_struct_vector(buffer: buf, offset: off, elementSize: " << ut_size << ") { eb, eo in\n";
+        out << bb() << "unmarshal_" << cflat(real_elem_type)->name << "(buffer: eb, offset: eo)\n";
+        out << eb();
+        out << eb();
+      } else {
+        out << bb() << "// TODO: Optional vector/array of complex type\n";
+      }
+    } else {
+      out << bb() << "// TODO: Optional of type " << static_cast<int>(wt->id) << "\n";
     }
     out << eb();
     out << bl() << "} else {\n" << bb(false);

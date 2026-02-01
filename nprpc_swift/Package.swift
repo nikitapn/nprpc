@@ -52,12 +52,7 @@ let package = Package(
             name: "NPRPC",
             dependencies: ["CNprpc"],
             path: "Sources/NPRPC",
-            exclude: [
-                "Generated/nprpc_base.cpp",
-                "Generated/nprpc_base.hpp",
-                "Generated/nprpc_nameserver.cpp",
-                "Generated/nprpc_nameserver.hpp"
-            ],
+            exclude: [ ],
             swiftSettings: [
                 .interoperabilityMode(.Cxx)
             ]
@@ -77,10 +72,7 @@ let package = Package(
         .testTarget(
             name: "NPRPCTests",
             dependencies: ["NPRPC"],
-            exclude: [
-                "Generated/basic_test.cpp",
-                "Generated/basic_test.hpp"
-            ],
+            exclude: [ ],
             swiftSettings: [
                 .interoperabilityMode(.Cxx)
             ]
