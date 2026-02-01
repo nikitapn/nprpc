@@ -188,17 +188,4 @@ void INameserver_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
   }
 }
 
-
-#ifdef NPRPC_SWIFT_BRIDGE
-// Swift bridge implementation for Nameserver
-void nprpc.common::Nameserver_SwiftBridge::Bind(int32_t obj, int32_t const& name) {
-  Bind_swift_trampoline(swift_servant_, obj, __name_buf);
-}
-
-void nprpc.common::Nameserver_SwiftBridge::Resolve(int32_t const& name, int32_t& obj) {
-  Resolve_swift_trampoline(swift_servant_, __name_buf, &obj);
-}
-
-#endif // NPRPC_SWIFT_BRIDGE
-
 } // module nprpc::common

@@ -16,9 +16,6 @@ let package = Package(
             name: "NPRPC",
             targets: ["NPRPC"]),
         .executable(
-            name: "nprpc-poc",
-            targets: ["NPRPCPoC"]),
-        .executable(
             name: "http3-server",
             targets: ["HTTP3Server"]),
     ],
@@ -65,22 +62,12 @@ let package = Package(
                 .interoperabilityMode(.Cxx)
             ]
         ),
-        
-        // Proof of Concept executable
-        .executableTarget(
-            name: "NPRPCPoC",
-            dependencies: ["NPRPC"],
-            path: "Sources/NPRPCPoC",
-            swiftSettings: [
-                .interoperabilityMode(.Cxx)
-            ]
-        ),
-        
+
         // HTTP3 Server example
         .executableTarget(
             name: "HTTP3Server",
             dependencies: ["NPRPC"],
-            path: "Sources/HTTP3Server",
+            path: "Examples/HTTP3Server",
             swiftSettings: [
                 .interoperabilityMode(.Cxx)
             ]

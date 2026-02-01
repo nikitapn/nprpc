@@ -109,24 +109,6 @@ public:
   void setRectangle (uint32_t id, const Rectangle& rect);
 };
 
-
-#ifdef NPRPC_SWIFT_BRIDGE
-// Swift servant bridge for ShapeService
-class ShapeService_SwiftBridge : public IShapeService_Servant {
-  void* swift_servant_;
-public:
-  ShapeService_SwiftBridge(void* swift_servant) : swift_servant_(swift_servant) {}
-
-  void getRectangle(uint32_t id, Rectangle& rect) override;
-  void setRectangle(uint32_t id, Rectangle const& rect) override;
-};
-
-extern "C" {
-  void getRectangle_swift_trampoline(void* swift_servant, uint32_t id, void* rect);
-  void setRectangle_swift_trampoline(void* swift_servant, uint32_t id, void* rect);
-}
-#endif // NPRPC_SWIFT_BRIDGE
-
 namespace helper {
 inline void assign_from_cpp_getRectangle_rect(::swift::test::flat::Rectangle_Direct& dest, const ::swift::test::Rectangle& src) {
   memcpy(dest.__data(), &src, 20);

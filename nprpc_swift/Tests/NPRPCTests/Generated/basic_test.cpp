@@ -76,42 +76,6 @@ public:
 
 } // 
 
-#ifdef NPRPC_SWIFT_BRIDGE
-// C++ marshal/unmarshal for Swift bridge
-static void marshal_Point(void* buffer, int offset, const Point& data) {
-  auto* ptr = static_cast<std::byte*>(buffer) + offset;
-  *reinterpret_cast<int32_t*>(ptr + 0) = data.x;
-  *reinterpret_cast<int32_t*>(ptr + 4) = data.y;
-}
-
-static Point unmarshal_Point(const void* buffer, int offset) {
-  const auto* ptr = static_cast<const std::byte*>(buffer) + offset;
-  return Point{
-    /*.x = */ *reinterpret_cast<const int32_t*>(ptr + 0),
-    /*.y = */ *reinterpret_cast<const int32_t*>(ptr + 4)
-  };
-}
-#endif // NPRPC_SWIFT_BRIDGE
-
-#ifdef NPRPC_SWIFT_BRIDGE
-// C++ marshal/unmarshal for Swift bridge
-static void marshal_Rectangle(void* buffer, int offset, const Rectangle& data) {
-  auto* ptr = static_cast<std::byte*>(buffer) + offset;
-  marshal_Point(buffer, offset + 0, data.topLeft);
-  marshal_Point(buffer, offset + 8, data.bottomRight);
-  *reinterpret_cast<int32_t*>(ptr + 16) = static_cast<int32_t>(data.color);
-}
-
-static Rectangle unmarshal_Rectangle(const void* buffer, int offset) {
-  const auto* ptr = static_cast<const std::byte*>(buffer) + offset;
-  return Rectangle{
-    /*.topLeft = */ unmarshal_Point(buffer, offset + 0),
-    /*.bottomRight = */ unmarshal_Point(buffer, offset + 8),
-    /*.color = */ static_cast<Color>(*reinterpret_cast<const int32_t*>(ptr + 16))
-  };
-}
-#endif // NPRPC_SWIFT_BRIDGE
-
 void ShapeService::getRectangle(uint32_t id, Rectangle& rect) {
   ::nprpc::flat_buffer buf;
   auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
@@ -206,22 +170,5 @@ void IShapeService_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unuse
       ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_UnknownFunctionIdx);
   }
 }
-
-
-#ifdef NPRPC_SWIFT_BRIDGE
-// Swift bridge implementation for ShapeService
-void swift.test::ShapeService_SwiftBridge::getRectangle(uint32_t id, Rectangle& rect) {
-  alignas(4) std::byte __rect_buf[20];
-  getRectangle_swift_trampoline(swift_servant_, id, __rect_buf);
-  rect = unmarshal_Rectangle(__rect_buf, 0);
-}
-
-void swift.test::ShapeService_SwiftBridge::setRectangle(uint32_t id, Rectangle const& rect) {
-  alignas(4) std::byte __rect_buf[20];
-  marshal_Rectangle(__rect_buf, 0, rect);
-  setRectangle_swift_trampoline(swift_servant_, id, __rect_buf);
-}
-
-#endif // NPRPC_SWIFT_BRIDGE
 
 } // module swift::test

@@ -1,8 +1,12 @@
 #!/bin/bash
 # Run the HTTP3 server example in Docker
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SWIFT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SWIFT_ROOT/.." && pwd)"
+
 docker run --rm -it \
-  -v "$(pwd)/..:/workspace" \
+  -v "$PROJECT_ROOT:/workspace" \
   -w /workspace/nprpc_swift \
   -p 3000:3000 \
   nprpc-swift-ubuntu \

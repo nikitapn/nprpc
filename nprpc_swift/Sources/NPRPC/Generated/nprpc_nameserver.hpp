@@ -38,24 +38,6 @@ public:
   bool Resolve (const std::string& name, Object*& obj);
 };
 
-
-#ifdef NPRPC_SWIFT_BRIDGE
-// Swift servant bridge for Nameserver
-class Nameserver_SwiftBridge : public INameserver_Servant {
-  void* swift_servant_;
-public:
-  Nameserver_SwiftBridge(void* swift_servant) : swift_servant_(swift_servant) {}
-
-  void Bind(int32_t obj, int32_t const& name) override;
-  void Resolve(int32_t const& name, int32_t& obj) override;
-};
-
-extern "C" {
-  void Bind_swift_trampoline(void* swift_servant, int32_t obj, void* name);
-  void Resolve_swift_trampoline(void* swift_servant, void* name, int32_t* obj);
-}
-#endif // NPRPC_SWIFT_BRIDGE
-
 namespace helper {
 } // namespace nprpc_nameserver::helper
 } // module nprpc::common

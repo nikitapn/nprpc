@@ -12,7 +12,6 @@
 #include <boost/container/small_vector.hpp>
 
 #include "cpp_builder.hpp"
-#include "swift_builder.hpp"
 #include "utils.hpp"
 
 // clang-format off
@@ -921,8 +920,6 @@ void CppBuilder::emit_constant(const std::string& name, AstNumber* number)
 
 void CppBuilder::emit_struct(AstStructDecl* s) { 
   emit_struct2(s, oh, Target::Regular);
-  // Generate C++ marshal/unmarshal functions for Swift bridge
-  SwiftBuilder::emit_cpp_marshal_functions(s, oc, ctx_);
 }
 
 void CppBuilder::emit_exception(AstStructDecl* s)
@@ -1628,9 +1625,6 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 
   oh << "};\n\n";
 
-  // Swift bridge generation (conditional on NPRPC_SWIFT_BRIDGE define)
-  SwiftBuilder::emit_cpp_swift_bridge_header(ifs, oh, ctx_);
-
   // .CPP file marshall/unmarshall stuff below
   // auto const nm = ctx_->nm_cur()->to_cpp17_namespace();
 
@@ -2150,9 +2144,6 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   ;
 
   oc << "}\n\n"; // dispatch
-  
-  // Swift bridge implementation (conditional on NPRPC_SWIFT_BRIDGE define)
-  SwiftBuilder::emit_cpp_swift_bridge_impl(ifs, oc, ctx_);
 }
 
 void CppBuilder::emit_using(AstAliasDecl* u)
