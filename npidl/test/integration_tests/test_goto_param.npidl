@@ -6,5 +6,5 @@ Footstep : flat {
 }
 
 interface Calculator {
-  void SendFootstep(footstep: in Footstep);
+  void SendFootstep(footstep: Footstep);
 }

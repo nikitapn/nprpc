@@ -35,8 +35,8 @@
 * [ ] Write more integration tests: increase test coverage by adding tests for edge cases and complex scenarios in the LSP server.
 
 ## Low Priority / Easy
-* [ ] Make `in` modifier optional and assume `in` by default for function parameters.
+* [x] Make `in` modifier optional and assume `in` by default for function parameters.
 
-* [ ] Change `flat` to `message` for structs and `using` to `alias` for type aliases to match common IDL terminology.
+* [x] Change `flat` to `message` for structs and `using` to `alias` for type aliases to match common IDL terminology.
 
-* [ ] Improve error messages: enhance the clarity and helpfulness of parser and semantic error messages.
+* [x] Improve error messages: enhance the clarity and helpfulness of parser and semantic error messages.

@@ -23,16 +23,16 @@ exception SyncError {
 interface GameSync {
   // Unreliable, no reply
   [unreliable]
-  async UpdatePosition(player_id: in u32, pos: in Vec3, rot: in Quaternion);
+  async UpdatePosition(player_id: u32, pos: Vec3, rot: Quaternion);
   [unreliable]
-  async FireWeapon(player_id: in u32, weapon_id: in u8, direction: in Vec3);
+  async FireWeapon(player_id: u32, weapon_id: u8, direction: Vec3);
   [unreliable]
-  async PlaySound(sound_id: in u16, position: in Vec3, volume: in f32);
+  async PlaySound(sound_id: u16, position: Vec3, volume: f32);
 
   // Reliable UDP - needs ACK, can have return value and throw
-  boolean ApplyDamage(target_id: in u32, amount: in i32) raises(SyncError);
+  boolean ApplyDamage(target_id: u32, amount: i32) raises(SyncError);
 
-  u64 SpawnEntity(entity_type: in u16, position: in Vec3);
+  u64 SpawnEntity(entity_type: u16, position: Vec3);
 
-  async SpawnEntity1(entity_type: in u16, position: in Vec3);
+  async SpawnEntity1(entity_type: u16, position: Vec3);
 }

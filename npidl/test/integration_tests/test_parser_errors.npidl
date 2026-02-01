@@ -13,10 +13,10 @@ BadStruct : flat {
 
 // Error: missing semicolon
 interface Calculator {
-  void Add(a: in i32, b: in i32)  // Missing semicolon
+  void Add(a: i32, b: i32)  // Missing semicolon
 }
 
-// Another error: unknown type in function
+// Another error: unknown type function
 interface Another {
-  void Process(data: in UnknownType);
+  void Process(data: UnknownType);
 }

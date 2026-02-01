@@ -1,5 +1,5 @@
-// Copyright (c) 2022 nikitapnn1@gmail.com
-// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MIT
 
 module nprpc.test;
 
@@ -14,15 +14,15 @@ exception AssertionFailed {
 // Simple ACK, for testing UDP unreliable delivery
 interface Ack {
 	// Simple ACK method
-	// Made it async since it will be called in io_context thread and we don't want to deadlock
-	async Confirm(what: in string);
+	// Made it async since it will be called io_context thread and we don't want to deadlock
+	async Confirm(what: string);
 }
 
 interface ServerControl {
 	// All tests performed, safe to shutdown the server
 	void Shutdown();
 	// Register ACK handler object to receive ACKs from server
-	void RegisterAckHandler(handler: in /* Ack */ object);
+	void RegisterAckHandler(handler: /* Ack */ object);
 }
 
 [force_helpers=1]
@@ -54,24 +54,24 @@ interface TestBasic {
 	IdArray ReturnIdArray() raises (AssertionFailed);
 	u32 ReturnU32() raises (AssertionFailed);
 
-	boolean In(a: in u32, b: in boolean, c: in vector<u8>) raises (AssertionFailed);
+	boolean In(a: u32, b: boolean, c: vector<u8>) raises (AssertionFailed);
 	void Out(a: out u32, b: out boolean, c: out vector<u8>) raises (AssertionFailed);
 
-	void InStruct(a: in AAA) raises (AssertionFailed);
+	void InStruct(a: AAA) raises (AssertionFailed);
 	void OutStruct(a: out AAA) raises (AssertionFailed);
-	void InFlatStruct(value: in u32, a: in FlatStruct) raises (AssertionFailed);
-	void OutFlatStruct(value: in u32, a: out FlatStruct) raises (AssertionFailed);
+	void InFlatStruct(value: u32, a: FlatStruct) raises (AssertionFailed);
+	void OutFlatStruct(value: u32, a: out FlatStruct) raises (AssertionFailed);
 	void OutArrayOfStructs(a: out vector<SimpleStruct>) raises (AssertionFailed);
 
 	void InException() raises (SimpleException);
 	
 	// Test case for flat output struct with simple scalar out parameter and exception handler
 	// This tests the fix for variable scope when output params are declared before try block
-	void OutScalarWithException(dev_addr: in u8, addr: in u16, value: out u8) raises (SimpleException);
+	void OutScalarWithException(dev_addr: u8, addr: u16, value: out u8) raises (SimpleException);
 }
 
 interface TestLargeMessage {
-	boolean In(a: in u32, b: in boolean, c: in vector<u8>);
+	boolean In(a: u32, b: boolean, c: vector<u8>);
 	void Out(a: out u32, b: out boolean, c: out vector<u8>);
 }
 
@@ -82,9 +82,9 @@ message Opt1 {
 };
 
 interface TestOptional {
-	boolean InEmpty(a?: in u32) raises (AssertionFailed);
-	boolean In(a?: in u32, b?: in AAA) raises (AssertionFailed);
-//	boolean InVec(a?: in bytestream);
+	boolean InEmpty(a?: u32) raises (AssertionFailed);
+	boolean In(a?: u32, b?: AAA) raises (AssertionFailed);
+//	boolean InVec(a?: bytestream);
 
 	void OutEmpty(a?: out u32) raises (AssertionFailed);
 	void Out(a?: out u32) raises (AssertionFailed);
@@ -93,7 +93,7 @@ interface TestOptional {
 }
 
 interface SimpleObject {
-	async SetValue(a: in u32);
+	async SetValue(a: u32);
 }
 
 message NestedObjects {
@@ -102,10 +102,10 @@ message NestedObjects {
 }
 
 interface TestObjects {
-	void SendObject(o: in /* SimpleObject */ object) raises (AssertionFailed);
+	void SendObject(o: /* SimpleObject */ object) raises (AssertionFailed);
 	void ReleaseReceivedObject() raises (AssertionFailed);
 
-	void SendNestedObjects(o: in NestedObjects) raises (AssertionFailed);
+	void SendNestedObjects(o: NestedObjects) raises (AssertionFailed);
 }
 
 [force_helpers=1]
@@ -149,19 +149,19 @@ interface TestNested {
 
 [trusted=false]
 interface TestBadInput {
-	void In(a: in vector<u8>);
+	void In(a: vector<u8>);
 }
 
 interface TestUnreliable {
 	// Unreliable, no reply
 	[unreliable]
-	async FireAndForget(a: in u32, b: in boolean, c: in vector<u8>);
+	async FireAndForget(a: u32, b: boolean, c: vector<u8>);
 
 	// Reliable UDP - needs ACK, can have return value and throw
-	boolean ReliableCall(a: in u32, b: in boolean, c: in vector<u8>) raises (AssertionFailed);
+	boolean ReliableCall(a: u32, b: boolean, c: vector<u8>) raises (AssertionFailed);
 }
 
 interface TestStreams {
 	[unreliable]
-	stream<u8> GetByteStream(size: in u64);
+	stream<u8> GetByteStream(size: u64);
 }

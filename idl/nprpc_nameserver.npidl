@@ -4,6 +4,6 @@
 module nprpc.common;
 
 interface Nameserver {
-	void Bind(obj: in object, name: in string);
-	boolean Resolve(name: in string, obj: out object);
+	void Bind(obj: object, name: string);
+	boolean Resolve(name: string, obj: out object);
 }

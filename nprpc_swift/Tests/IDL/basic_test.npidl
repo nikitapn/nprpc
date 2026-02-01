@@ -24,7 +24,7 @@ message Rectangle {
 }
 
 interface ShapeService {
-  void getRectangle(id: in u32, rect: out Rectangle);
-  void setRectangle(id: in u32, rect: in Rectangle);
+  void getRectangle(id: u32, rect: out Rectangle);
+  void setRectangle(id: u32, rect: Rectangle);
 }
 

@@ -1,4 +1,4 @@
-// Test module rejection in imports
+// Test module rejection imports
 module test_main;
 
 import '/tmp/test_bad_import.npidl';

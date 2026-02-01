@@ -29,14 +29,14 @@ message Employee {
 
 interface Benchmark {
   void Ping();
-  u32 Func1(a: in u32, b: in u32);
-  void Func2(data: in string);
+  u32 Func1(a: u32, b: u32);
+  void Func2(data: string);
 
   // Complex nested data benchmark
-  Employee ProcessEmployee(employee: in Employee);
+  Employee ProcessEmployee(employee: Employee);
 
   // Large data benchmark
-  vector<u8> ProcessLargeData(data: in vector<u8>);
+  vector<u8> ProcessLargeData(data: vector<u8>);
 }
 
 

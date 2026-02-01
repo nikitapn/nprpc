@@ -1,4 +1,4 @@
-// Test that module in imports causes error
+// Test that module imports causes error
 module bad_module;
 
 namespace test {

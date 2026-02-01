@@ -657,15 +657,15 @@ class Parser : public IParser
       if (tok == TokenId::Identifier) {
         auto value = ctx_.nm_cur()->find_constant(tok.name);
         if (!value) {
-          throw_error("Unknown variable: \"" + tok.name + "\"");
+          throw_error("Unknown constant: \"" + tok.name + "\". Make sure it's defined before use with 'const'.");
         } else if (!value->is_decimal()) {
-          throw_error("\"" + tok.name + "\" is not a decimal constant");
+          throw_error("Constant \"" + tok.name + "\" is not a decimal value. Only decimal constants can be used for array sizes.");
         }
         length = value->decimal();
       } else if (tok == TokenId::Number) {
         length = std::atoi(match(TokenId::Number).name.c_str());
       } else {
-        throw_error("Expected a number or a constant name");
+        throw_error("Expected a number literal or a constant name. Examples: 42, 3.14, MY_CONSTANT");
       }
 
       flush();
@@ -767,7 +767,7 @@ class Parser : public IParser
       flush();
       type = nm->find_type(t.name, false);
       if (!type) {
-        throw_error("Unknown type '" + t.name + "'");
+        throw_error("Unknown type '" + t.name + "'. Did you forget to import it or define it before use?");
       }
       check(&Parser::array_decl, std::ref(type));
       return true;
@@ -777,7 +777,7 @@ class Parser : public IParser
       match('<');
       if (!check(&Parser::type_decl,
                  std::ref(static_cast<AstVectorDecl*>(type)->type)))
-        throw_error("Expected a type declaration");
+        throw_error("Expected a type declaration inside vector<...>");
       match('>');
       return true;
     case TokenId::Stream:
@@ -786,7 +786,7 @@ class Parser : public IParser
       match('<');
       if (!check(&Parser::type_decl,
                  std::ref(static_cast<AstStreamDecl*>(type)->type)))
-        throw_error("Expected a type declaration");
+        throw_error("Expected a type declaration inside stream<...>");
       match('>');
       return true;
     case TokenId::String:
@@ -866,14 +866,13 @@ class Parser : public IParser
     // Save start token for position tracking
     start_token = arg_name;
 
+    // Default to 'in' if no modifier specified
     if (check(&Parser::one, TokenId::In))
       arg.modifier = ArgumentModifier::In;
     else if (check(&Parser::one, TokenId::Out))
       arg.modifier = ArgumentModifier::Out;
-    else {
-      throw_error("Expected 'in' or 'out' keywords after parameter name "
-                  "declaration.");
-    }
+    else
+      arg.modifier = ArgumentModifier::In;  // Default to 'in'
 
     if (arg.modifier == ArgumentModifier::Out &&
         check(&Parser::one, TokenId::OutDirect)) {
@@ -903,7 +902,7 @@ class Parser : public IParser
     auto vn = match(TokenId::Number);
 
     if (s->version != -1) {
-      throw_error("version redefinition.");
+      throw_error("Version already defined for this message/exception. Only one #version directive is allowed per type.");
     }
 
     s->version = std::atoi(vn.name.c_str());
@@ -961,7 +960,7 @@ class Parser : public IParser
       } else if (check(&Parser::version_decl, s)) {
         // ok
       } else {
-        throw_error("Syntax error");
+        throw_error("Expected field declaration or '}'. Field syntax: fieldName: Type");
       }
     }
 
@@ -1009,7 +1008,7 @@ class Parser : public IParser
     // Option 4: Module is only allowed in main file, not in imports
     if (ctx_.is_in_import()) {
       auto tok = peek();
-      throw_error("Module declaration not allowed in imported files");
+      throw_error("Module declaration not allowed in imported files. Only the main file can declare a module.");
     }
 
     flush();
@@ -1023,13 +1022,13 @@ class Parser : public IParser
     }
 
     if (tok == '.')
-      throw_error("Expected module name after '.'");
+      throw_error("Expected module name after '.'. Module names cannot end with a dot.");
 
     if (tok != TokenId::Semicolon)
-      throw_error("Expected ';' at the end of module declaration");
+      throw_error("Expected ';' at the end of module declaration. Example: module my.package.name;");
 
     if (module_parts.empty())
-      throw_error("Expected module name");
+      throw_error("Expected module name. Example: module my.package.name;");
 
     flush();
 
@@ -1057,7 +1056,7 @@ class Parser : public IParser
         break;
       }
       if (!check(&Parser::stmt_decl)) {
-        throw_error("expected statement declaration inside namespace");
+        throw_error("Expected statement declaration inside namespace. Valid statements: interface, message, exception, enum, alias, const, or nested namespace.");
       }
     }
     return true;
@@ -1177,7 +1176,7 @@ class Parser : public IParser
       for (;;) {
         if (!check(&Parser::arg_decl, std::ref(arg), std::ref(arg_start),
                    std::ref(arg_type_token))) {
-          throw_error("Expected tokens: argument declaration");
+          throw_error("Expected argument declaration. Syntax: name: Type or name out: Type");
         }
         auto* arg_ptr = new AstFunctionArgument(std::move(arg));
         // Set position for just the argument name
@@ -1211,7 +1210,7 @@ class Parser : public IParser
       flush();
     } else if (tok == TokenId::Raises) {
       if (f->is_async)
-        throw_error("function declared as async cannot throw exceptions");
+        throw_error("Function declared as async cannot throw exceptions. Remove 'async' or 'raises' clause.");
 
       flush();
       match('(');
@@ -1219,10 +1218,10 @@ class Parser : public IParser
       auto type =
           ctx_.nm_cur()->find_type(match(TokenId::Identifier).name, false);
       if (!type)
-        throw_error("unknown exception type");
+        throw_error("Unknown exception type. The type specified in 'raises(...)' must be defined as an exception.");
 
       if (type->id != FieldType::Struct && cflat(type)->is_exception()) {
-        throw_error("class is not an exception");
+        throw_error("Type is not an exception. Use 'exception TypeName { ... }' to define an exception type.");
       }
 
       f->ex = cflat(type);
@@ -1269,7 +1268,7 @@ class Parser : public IParser
           pg2.flush();
           Token value = peek();
           if (!(value == TokenId::Identifier || value == TokenId::Number)) {
-            throw_error("Expected identifier or number");
+            throw_error("Expected attribute value (identifier or number). Syntax: [name = value]");
           }
           flush();
           match(']');
@@ -1327,7 +1326,7 @@ class Parser : public IParser
               type && type->id == FieldType::Interface) {
             ifs->plist.push_back(cifs(type));
           } else {
-            throw_error("Unknown interface");
+            throw_error("Unknown interface '" + name + "'. Make sure the interface is defined before being used as a base interface.");
           }
           {
             PeekGuard pg(*this);
@@ -1375,7 +1374,7 @@ class Parser : public IParser
         ifs->fns.emplace_back(f);
         continue;
       }
-      throw_error("Expected tokens: function declaration, '}' ");
+      throw_error("Expected function declaration or '}'. Function syntax: functionName(...): ReturnType;");
     }
 
     for (uint16_t idx = 0; idx < ifs->fns.size(); ++idx) {
@@ -1426,7 +1425,7 @@ class Parser : public IParser
 
     AstTypeDecl* right;
     if (!check(&Parser::type_decl, std::ref(right))) {
-      throw_error("Expected a type declaration after using");
+      throw_error("Expected a type declaration after 'alias'. Example: alias MyInt = u32;");
     }
 
     auto a = new AstAliasDecl(std::move(left.name), ctx_.nm_cur(), right);
@@ -1463,7 +1462,7 @@ class Parser : public IParser
         tok = peek();
         if (tok.is_fundamental_type() == false || tok == TokenId::Float32 ||
             tok == TokenId::Float64 || tok == TokenId::Boolean) {
-          throw_error("expected a numeric type");
+          throw_error("Expected an integer type for enum. Valid types: i8, u8, i16, u16, i32, u32, i64, u64");
         }
         e->token_id = tok.id;
         g.flush();
@@ -1634,7 +1633,7 @@ public:
       // Original behavior - throw on first error
       while (!done_) {
         if (!(check(&Parser::stmt_decl) || check(&Parser::eof))) {
-          throw_error("Expected tokens: statement, eof");
+          throw_error("Expected a declaration or end of file. Valid declarations: interface, message, exception, enum, alias, const, namespace, module, or import.");
         }
       }
     } else {
@@ -1645,7 +1644,7 @@ public:
               if (check(&Parser::stmt_decl) || check(&Parser::eof)) {
                 return true;
               }
-              throw_error("Expected tokens: statement, eof");
+              throw_error("Expected a declaration or end of file. Valid declarations: interface, message, exception, enum, alias, const, namespace, module, or import.");
               return false;
             },
             "Statement parsing failed");
