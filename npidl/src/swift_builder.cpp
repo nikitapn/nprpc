@@ -493,11 +493,12 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
         out << bl() << "inArgs._" << ix << " = " << arg->name << "\n";
       }
       
-      out << bl() << "marshal_" << fn->in_s->name << "(buffer: data, offset: " << get_arguments_offset() << ", data: inArgs)\n\n";
+      out << bl() << "marshal_" << fn->in_s->name << "(buffer: buffer, offset: " << get_arguments_offset() << ", data: inArgs)\n\n";
     }
     
-    // Set message size
-    out << bl() << "data.storeBytes(of: UInt32(" << (fixed_size - 4) << "), toByteOffset: 0, as: UInt32.self)\n\n";
+    // Set message size (must be done after marshalling as optionals/vectors may extend buffer)
+    out << bl() << "guard let finalData = buffer.data else { throw BufferError(message: \"Failed to get buffer data\") }\n";
+    out << bl() << "finalData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n\n";
     
     // Send/receive
     out << bl() << "// Send and receive\n";
@@ -758,7 +759,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       }
       out << ")\n";
       
-      out << bl() << "marshal_" << fn->ex->name << "(buffer: exData, offset: " << offset << ", data: ex_data)\n";
+      out << bl() << "marshal_" << fn->ex->name << "(buffer: obuf, offset: " << offset << ", data: ex_data)\n";
       out << bl() << "exData.storeBytes(of: UInt32(obuf.size - 4), toByteOffset: 0, as: UInt32.self)\n";
       out << bl() << "exData.storeBytes(of: impl.MessageId.exception.rawValue, toByteOffset: 4, as: Int32.self)\n";
       out << bl() << "exData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)\n";
@@ -800,7 +801,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       }
       out << "\n";
       
-      out << bl() << "marshal_" << fn->out_s->name << "(buffer: outData, offset: " << size_of_header << ", data: out_data)\n";
+      out << bl() << "marshal_" << fn->out_s->name << "(buffer: buffer, offset: " << size_of_header << ", data: out_data)\n";
       out << bl() << "outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n";
       out << bl() << "outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: Int32.self)\n";
       out << bl() << "outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)\n";
@@ -1089,7 +1090,7 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
     const int size = get_fundamental_size(token);
     const int field_offset = align_offset(size, offset, size);
     
-    out << bl() << "buffer.storeBytes(of: " << field_access << ", toByteOffset: offset + " << field_offset << ", as: ";
+    out << bl() << "buf.storeBytes(of: " << field_access << ", toByteOffset: offset + " << field_offset << ", as: ";
     emit_fundamental_type(token, out);
     out << ".self)\n";
     break;
@@ -1097,7 +1098,7 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
   case FieldType::Enum: {
     const int size = get_fundamental_size(cenum(f->type)->token_id);
     const int field_offset = align_offset(size, offset, size);
-    out << bl() << "buffer.storeBytes(of: " << field_access << ".rawValue, toByteOffset: offset + " << field_offset << ", as: Int32.self)\n";
+    out << bl() << "buf.storeBytes(of: " << field_access << ".rawValue, toByteOffset: offset + " << field_offset << ", as: Int32.self)\n";
     break;
   }
   case FieldType::String: {
@@ -1124,7 +1125,7 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
     const int field_offset = align_offset(v_align, offset, v_size);
     
     if (is_fundamental(wt)) {
-      out << bl() << "NPRPC.marshal_fundamental_array(buffer: buffer, offset: offset + " << field_offset << ", array: " << field_access << ")\n";
+      out << bl() << "NPRPC.marshal_fundamental_array(buffer: buf, offset: offset + " << field_offset << ", array: " << field_access << ")\n";
     } else {
       auto flat_struct = cflat(wt);
       std::string type_name = flat_struct ? flat_struct->name : "<unknown>";
@@ -1145,10 +1146,9 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
     } else {
       auto flat_struct = cflat(wt);
       std::string type_name = flat_struct ? flat_struct->name : "<unknown>";
-      out << bb();
-      out << bl() << "NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + " << field_offset << ", vector: " << field_access << ", elementSize: " << ut_size << ") { buf, off, elem in\n";
-      out << bl() << "marshal_" << type_name << "(buffer: buf, offset: off, data: elem)\n";
-      out << eb();
+      out << bl() << "NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + " << field_offset << ", vector: " << field_access << ", elementSize: " << ut_size << ", elementAlignment: " << ut_align << ") { buf, off, elem in\n";
+      out << bl() << "  marshal_" << type_name << "(buffer: buf, offset: off, data: elem)\n";
+      out << bl() << "}\n";
     }
     break;
   }
@@ -1156,51 +1156,47 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
     auto wt = cwt(f->type)->real_type();
     auto [v_size, v_align] = get_type_size_align(f->type);
     const int field_offset = align_offset(v_align, offset, v_size);
-    
-    out << bb() << "if let value = " << field_access << " {\n";
-    bb();
+
+    out << bl() << "if let value = " << field_access << " {\n" << bb(false);
+
     if (is_fundamental(wt)) {
-      out << bb() << "NPRPC.marshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ", value: value)\n";
+      out << bl() << "NPRPC.marshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ", value: value)\n";
     } else if (wt->id == FieldType::Struct) {
       auto flat_struct = cflat(wt);
-      out << bb() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
+      out << bl() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
       out << bb(false);
-      out << bb() << "marshal_" << flat_struct->name << "(buffer: buf, offset: off, data: value)\n";
+      out << bl() << "marshal_" << flat_struct->name << "(buffer: buf, offset: off, data: value)\n";
       out << eb();
     } else if (wt->id == FieldType::String) {
-      out << bb() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
+      out << bl() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
       out << bb(false);
-      out << bb() << "NPRPC.marshal_string(buffer: buf, offset: off, string: value)\n";
+      out << bl() << "NPRPC.marshal_string(buffer: buf, offset: off, string: value)\n";
       out << eb();
     } else if (wt->id == FieldType::Enum) {
-      out << bb() << "NPRPC.marshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ", value: value.rawValue)\n";
+      out << bl() << "NPRPC.marshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ", value: value.rawValue)\n";
     } else if (wt->id == FieldType::Vector || wt->id == FieldType::Array) {
       auto real_elem_type = cwt(wt)->real_type();
       auto [ut_size, ut_align] = get_type_size_align(real_elem_type);
       if (is_fundamental(real_elem_type)) {
-        out << bb() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
+        out << bl() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
         out << bb(false);
-        out << bb() << "NPRPC.marshal_typed_array(buffer: buf, offset: off, array: value, elementSize: " << ut_size << ")\n";
+        out << bl() << "NPRPC.marshal_typed_array(buffer: buf, offset: off, array: value, elementSize: " << ut_size << ")\n";
         out << eb();
       } else if (real_elem_type->id == FieldType::Struct) {
-        out << bb() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
+        out << bl() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ", value: value) { buf, off in\n";
         out << bb(false);
-        out << bb() << "NPRPC.marshal_struct_array(buffer: buf, offset: off, array: value, elementSize: " << ut_size << ") { eb, eo, elem in\n";
-        out << bb() << "marshal_" << cflat(real_elem_type)->name << "(buffer: eb, offset: eo, data: elem)\n";
-        out << eb();
+        out << bl() << "NPRPC.marshal_struct_array(buffer: buf, offset: off, array: value, elementSize: " << ut_size << ") { eb, eo, elem in\n";
+        out << bl() << "marshal_" << cflat(real_elem_type)->name << "(buffer: eb, offset: eo, data: elem)\n";
         out << eb();
       } else {
-        out << bb() << "// TODO: Optional vector/array of complex type\n";
+        out << bl() << "// TODO: Optional vector/array of complex type\n";
       }
     } else {
-      out << bb() << "// TODO: Optional of type " << static_cast<int>(wt->id) << "\n";
+      out << bl() << "// TODO: Optional of type " << static_cast<int>(wt->id) << "\n";
     }
-    eb();
-    out << bb() << "} else {\n";
-    bb();
-    out << bb() << "buffer.storeBytes(of: UInt32(0), toByteOffset: offset + " << field_offset << ", as: UInt32.self)\n";
-    eb();
-    out << bb() << "}\n";
+    out << eb(false) << bl() << "} else {\n" << bb(false);
+    out << bl() << "buf.storeBytes(of: UInt32(0), toByteOffset: offset + " << field_offset << ", as: UInt32.self)\n";
+    out << eb();
     break;
   }
   case FieldType::Alias: {
@@ -1235,8 +1231,9 @@ void SwiftBuilder::emit_marshal_function(AstStructDecl* s)
   const char* visibility = is_internal_marshal_struct ? "fileprivate " : "public ";
   
   out << "\n" << bl() << "// MARK: - Marshal " << s->name << "\n";
-  out << bl() << visibility << (in_namespace ? "static " : "") << "func marshal_" << s->name << "(buffer: UnsafeMutableRawPointer, offset: Int, data: " << data_type << ") ";
+  out << bl() << visibility << (in_namespace ? "static " : "") << "func marshal_" << s->name << "(buffer: FlatBuffer, offset: Int, data: " << data_type << ") ";
   out << bb();
+  out << bl() << "guard let buf = buffer.data else { return }\n";
 
   int current_offset = 0;
   for (auto field : s->fields) {
@@ -1318,9 +1315,8 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
       out << bl() << field_name << " = NPRPC.unmarshal_fundamental_vector(buffer: buffer, offset: offset + " << field_offset << ")\n";
     } else {
       out << bl() << field_name << " = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + " << field_offset << ", elementSize: " << ut_size << ") { buf, off in\n";
-      out << bb();
-      out << bl() << "unmarshal_" << cflat(wt)->name << "(buffer: buf, offset: off)\n";
-      out << eb();
+      out << bl() << "  unmarshal_" << cflat(wt)->name << "(buffer: buf, offset: off)\n";
+      out << bl() << "}\n";
     }
     break;
   }
@@ -1329,22 +1325,17 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
     auto [v_size, v_align] = get_type_size_align(f->type);
     const int field_offset = align_offset(v_align, offset, v_size);
     
-    out << bb() << "if buffer.load(fromByteOffset: offset + " << field_offset << ", as: UInt32.self) != 0 {\n";
-    bb();
+    out << bl() << "if buffer.load(fromByteOffset: offset + " << field_offset << ", as: UInt32.self) != 0 {\n" << bb(false);
     if (is_fundamental(wt)) {
-      out << bb() << field_name << " = NPRPC.unmarshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ")\n";
+      out << bl() << field_name << " = NPRPC.unmarshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ")\n";
     } else if (wt->id == FieldType::Struct) {
-      out << bb() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
-      out << bb();
-      out << bb() << "unmarshal_" << cflat(wt)->name << "(buffer: buf, offset: off)\n";
-      out << eb();
+      out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
+      out << bl() << "unmarshal_" << cflat(wt)->name << "(buffer: buf, offset: off)\n";
     } else if (wt->id == FieldType::String) {
-      out << bb() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
-      out << bb();
-      out << bb() << "NPRPC.unmarshal_string(buffer: buf, offset: off)\n";
-      out << eb();
+      out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
+      out << bl() << "NPRPC.unmarshal_string(buffer: buf, offset: off)\n";
     } else if (wt->id == FieldType::Enum) {
-      out << bb() << field_name << " = " << cenum(wt)->name << "(rawValue: buffer.load(fromByteOffset: offset + " << field_offset << " + 4, as: Int32.self))\n";
+      out << bl() << field_name << " = " << cenum(wt)->name << "(rawValue: buffer.load(fromByteOffset: offset + " << field_offset << " + 4, as: Int32.self))\n";
     } else if (wt->id == FieldType::Vector || wt->id == FieldType::Array) {
       auto real_elem_type = cwt(wt)->real_type();
       auto [ut_size, ut_align] = get_type_size_align(real_elem_type);
@@ -1366,11 +1357,10 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
     } else {
       out << bb() << "// TODO: Optional of type " << static_cast<int>(wt->id) << "\n";
     }
-    out << eb();
+    out << eb(false);
     out << bl() << "} else {\n" << bb(false);
     out << bl() << field_name << " = nil\n";
     out << eb();
-    out << bl() << "}\n";
     break;
   }
   case FieldType::Alias: {
@@ -1472,38 +1462,6 @@ void SwiftBuilder::finalize()
   ofs.close();
   
   std::cout << "Generated: " << output_file << "\n";
-}
-
-// Static methods for generating C++ bridge code (called from CppBuilder)
-// Helper to emit C++ types for bridge
-static void emit_cpp_type(AstTypeDecl* type, std::ostream& os, Context* ctx) {
-  switch (type->id) {
-  case FieldType::Fundamental:
-    switch (cft(type)->token_id) {
-    case TokenId::Boolean: os << "bool"; break;
-    case TokenId::Int8: os << "int8_t"; break;
-    case TokenId::UInt8: os << "uint8_t"; break;
-    case TokenId::Int16: os << "int16_t"; break;
-    case TokenId::UInt16: os << "uint16_t"; break;
-    case TokenId::Int32: os << "int32_t"; break;
-    case TokenId::UInt32: os << "uint32_t"; break;
-    case TokenId::Int64: os << "int64_t"; break;
-    case TokenId::UInt64: os << "uint64_t"; break;
-    case TokenId::Float32: os << "float"; break;
-    case TokenId::Float64: os << "double"; break;
-    default: os << "int32_t"; break;
-    }
-    break;
-  case FieldType::Struct:
-    os << cflat(type)->name;
-    break;
-  case FieldType::Enum:
-    os << cenum(type)->name;
-    break;
-  default:
-    os << "int32_t"; // fallback
-    break;
-  }
 }
 
 } // namespace npidl::builders

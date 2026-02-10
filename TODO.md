@@ -192,6 +192,9 @@ Serve web clients over HTTP/3 using nghttp3/ngtcp2
 
 ### Next Steps
 1. Complete marshalling for complex types (strings, vectors, arrays, optionals, objects)
+ - [x] fundamental optional
+ - [x] strings
+ - [x] vector of structs
 2. Add bounds checking to all unmarshal operations
 3. Implement async proxy calls
 4. Implement async servant dispatch bridge

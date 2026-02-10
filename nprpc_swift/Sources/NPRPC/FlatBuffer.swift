@@ -56,3 +56,57 @@ public class FlatBuffer {
         nprpc_flatbuffer_consume(handle, n)
     }
 }
+
+/// Allocate space in buffer for vectors and strings
+/// Writes relative offset and count at vectorOffset, returns absolute data offset
+func _alloc(buffer: FlatBuffer, vectorOffset: Int, count: Int, elementSize: Int, align: Int) -> Int {
+    if count == 0 {
+        guard let data = buffer.data else {
+            fatalError("Buffer data is nil")
+        }
+        data.storeBytes(of: UInt32(0), toByteOffset: vectorOffset, as: UInt32.self)
+        data.storeBytes(of: UInt32(0), toByteOffset: vectorOffset + 4, as: UInt32.self)
+        return 0
+    }
+    
+    let currentOffset = buffer.size
+    let alignedOffset = (currentOffset + align - 1) & ~(align - 1)
+    
+    let addedSize = count * elementSize + (alignedOffset - currentOffset)
+    buffer.prepare(addedSize)
+    buffer.commit(addedSize)
+    
+    // Get fresh data pointer after potential reallocation
+    guard let data = buffer.data else {
+        fatalError("Buffer data is nil")
+    }
+    
+    // Write relative offset and count
+    let relativeOffset = UInt32(alignedOffset - vectorOffset)
+    data.storeBytes(of: relativeOffset, toByteOffset: vectorOffset, as: UInt32.self)
+    data.storeBytes(of: UInt32(count), toByteOffset: vectorOffset + 4, as: UInt32.self)
+    
+    return alignedOffset
+}
+
+/// Allocate space in buffer for Optional values
+/// Writes relative offset at flat_offset, returns absolute data offset
+func _alloc1(buffer: FlatBuffer, flatOffset: Int, elementSize: Int, align: Int) -> Int {
+    let currentOffset = buffer.size
+    let alignedOffset = (currentOffset + align - 1) & ~(align - 1)
+
+    let addedSize = elementSize + (alignedOffset - currentOffset)
+    buffer.prepare(addedSize)
+    buffer.commit(addedSize)
+
+    // Get fresh data pointer after potential reallocation
+    guard let data = buffer.data else {
+        fatalError("Buffer data is nil")
+    }
+
+    // Write relative offset (from flatOffset to data location)
+    let relativeOffset = UInt32(alignedOffset - flatOffset)
+    data.storeBytes(of: relativeOffset, toByteOffset: flatOffset, as: UInt32.self)
+
+    return alignedOffset
+}

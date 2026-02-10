@@ -7,34 +7,34 @@ import Foundation
 
 // MARK: - Vector Marshalling
 
-public func marshal_fundamental_vector<T>(buffer: UnsafeMutableRawPointer, offset: Int, vector: [T]) {
-    let count = UInt32(vector.count)
-    buffer.storeBytes(of: count, toByteOffset: offset, as: UInt32.self)
+public func marshal_fundamental_vector<T>(buffer: FlatBuffer, offset: Int, vector: [T]) {
+    let elementSize = MemoryLayout<T>.stride
+    let alignment = MemoryLayout<T>.alignment
+    let dataOffset = _alloc(buffer: buffer, vectorOffset: offset, count: vector.count, elementSize: elementSize, align: alignment)
     
-    if count > 0 {
-        let elementSize = MemoryLayout<T>.stride
-        let dataOffset = offset + 4
+    if vector.count > 0 {
+        // Get fresh pointer after allocation
+        guard let data = buffer.data else { return }
         vector.withUnsafeBytes { bytes in
-            buffer.advanced(by: dataOffset).copyMemory(
+            data.advanced(by: dataOffset).copyMemory(
                 from: bytes.baseAddress!,
-                byteCount: Int(count) * elementSize
+                byteCount: vector.count * elementSize
             )
         }
     }
 }
 
 public func marshal_struct_vector<T>(
-    buffer: UnsafeMutableRawPointer,
+    buffer: FlatBuffer,
     offset: Int,
     vector: [T],
     elementSize: Int,
-    marshalElement: (UnsafeMutableRawPointer, Int, T) -> Void
+    elementAlignment: Int,
+    marshalElement: (FlatBuffer, Int, T) -> Void
 ) {
-    let count = UInt32(vector.count)
-    buffer.storeBytes(of: count, toByteOffset: offset, as: UInt32.self)
-    
-    if count > 0 {
-        let dataOffset = offset + 4
+    let dataOffset = _alloc(buffer: buffer, vectorOffset: offset, count: vector.count, elementSize: elementSize, align: elementAlignment)
+
+    if vector.count > 0 {
         for (index, element) in vector.enumerated() {
             marshalElement(buffer, dataOffset + index * elementSize, element)
         }
@@ -64,18 +64,19 @@ public func unmarshal_struct_vector<T>(
     elementSize: Int,
     unmarshalElement: (UnsafeRawPointer, Int) -> T
 ) -> [T] {
-    let count = buffer.load(fromByteOffset: offset, as: UInt32.self)
-    guard count > 0 else { return [] }
-    
-    let dataOffset = offset + 4
+    let relativeOffset = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+    let n = buffer.load(fromByteOffset: offset + 4, as: UInt32.self)
+    guard n != 0 else { return [] }
+
+    let dataOffset = offset + Int(relativeOffset)
     var result: [T] = []
-    result.reserveCapacity(Int(count))
+    result.reserveCapacity(Int(n))
     
-    for i in 0..<Int(count) {
+    for i in 0..<Int(n) {
         let element = unmarshalElement(buffer, dataOffset + i * elementSize)
         result.append(element)
     }
-    
+
     return result
 }
 
@@ -97,25 +98,38 @@ public func unmarshal_fundamental_array<T>(buffer: UnsafeRawPointer, offset: Int
 
 // MARK: - Optional Marshalling
 
-public func marshal_optional_fundamental<T>(buffer: UnsafeMutableRawPointer, offset: Int, value: T) {
-    buffer.storeBytes(of: UInt32(1), toByteOffset: offset, as: UInt32.self)
-    buffer.storeBytes(of: value, toByteOffset: offset + 4, as: T.self)
+public func marshal_optional_fundamental<T>(buffer: FlatBuffer, offset: Int, value: T) {
+    let elementSize = MemoryLayout<T>.stride
+    let alignment = MemoryLayout<T>.alignment
+
+    // Allocate space and get absolute offset where value will be stored
+    let dataOffset = _alloc1(buffer: buffer, flatOffset: offset, elementSize: elementSize, align: alignment)
+
+    // Write the value at the allocated location - get fresh pointer after allocation
+    guard let data = buffer.data else { return }
+    data.storeBytes(of: value, toByteOffset: dataOffset, as: T.self)
 }
 
 public func marshal_optional_struct<T>(
-    buffer: UnsafeMutableRawPointer,
+    buffer: FlatBuffer,
     offset: Int,
     value: T,
-    marshalFunc: (UnsafeMutableRawPointer, Int) -> Void
+    marshalFunc: (FlatBuffer, Int) -> Void
 ) {
-    buffer.storeBytes(of: UInt32(1), toByteOffset: offset, as: UInt32.self)
-    marshalFunc(buffer, offset + 4)
+    // For structs, estimate size - the marshal function will extend if needed
+    let dataOffset = _alloc1(buffer: buffer, flatOffset: offset, elementSize: 128, align: 4)
+
+    marshalFunc(buffer, dataOffset)
 }
 
 public func unmarshal_optional_fundamental<T>(buffer: UnsafeRawPointer, offset: Int) -> T? {
-    let hasValue = buffer.load(fromByteOffset: offset, as: UInt32.self)
-    guard hasValue != 0 else { return nil }
-    return buffer.load(fromByteOffset: offset + 4, as: T.self)
+    // Read the relative offset
+    let relativeOffset = buffer.load(fromByteOffset: offset, as: UInt32.self)
+    guard relativeOffset != 0 else { return nil }
+
+    // Calculate absolute offset and read value
+    let dataOffset = offset + Int(relativeOffset)
+    return buffer.load(fromByteOffset: dataOffset, as: T.self)
 }
 
 public func unmarshal_optional_struct<T>(
@@ -123,33 +137,40 @@ public func unmarshal_optional_struct<T>(
     offset: Int,
     unmarshalFunc: (UnsafeRawPointer, Int) -> T
 ) -> T? {
-    let hasValue = buffer.load(fromByteOffset: offset, as: UInt32.self)
-    guard hasValue != 0 else { return nil }
-    return unmarshalFunc(buffer, offset + 4)
+    // Read the relative offset
+    let relativeOffset = buffer.load(fromByteOffset: offset, as: UInt32.self)
+    guard relativeOffset != 0 else { return nil }
+    
+    // Calculate absolute offset and unmarshal
+    let dataOffset = offset + Int(relativeOffset)
+    return unmarshalFunc(buffer, dataOffset)
 }
 
 // MARK: - String Marshalling
 
-public func marshal_string(buffer: UnsafeMutableRawPointer, offset: Int, string: String) {
+public func marshal_string(buffer: FlatBuffer, offset: Int, string: String) {
     let utf8 = Array(string.utf8)
-    let count = UInt32(utf8.count)
-    buffer.storeBytes(of: count, toByteOffset: offset, as: UInt32.self)
-    
-    if count > 0 {
+    let dataOffset = _alloc(buffer: buffer, vectorOffset: offset, count: utf8.count, elementSize: 1, align: 1)
+
+    if utf8.count > 0 {
+        guard let data = buffer.data else { return }
         utf8.withUnsafeBytes { bytes in
-            buffer.advanced(by: offset + 4).copyMemory(
+            data.advanced(by: dataOffset).copyMemory(
                 from: bytes.baseAddress!,
-                byteCount: Int(count)
+                byteCount: utf8.count
             )
         }
     }
 }
 
 public func unmarshal_string(buffer: UnsafeRawPointer, offset: Int) -> String {
-    let count = buffer.load(fromByteOffset: offset, as: UInt32.self)
+    let relativeOffset = buffer.load(fromByteOffset: offset, as: UInt32.self)
+    guard relativeOffset != 0 else { return "" }
+
+    let count = buffer.load(fromByteOffset: offset + 4, as: UInt32.self)
     guard count > 0 else { return "" }
-    
-    let dataPtr = buffer.advanced(by: offset + 4)
+
+    let dataPtr = buffer.advanced(by: offset + Int(relativeOffset))
     let data = Data(bytes: dataPtr, count: Int(count))
     return String(data: data, encoding: .utf8) ?? ""
 }

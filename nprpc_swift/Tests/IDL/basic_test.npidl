@@ -15,6 +15,8 @@ enum Color {
 message Point {
   x: i32;
   y: i32;
+  z?: i32;
+  symbol: string;
 }
 
 message Rectangle {
@@ -26,5 +28,6 @@ message Rectangle {
 interface ShapeService {
   void getRectangle(id: u32, rect: out Rectangle);
   void setRectangle(id: u32, rect: Rectangle);
+  void getRectangles(rects: out vector<Rectangle>);
 }
 
