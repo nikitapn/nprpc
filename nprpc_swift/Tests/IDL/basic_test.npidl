@@ -29,5 +29,6 @@ interface ShapeService {
   void getRectangle(id: u32, rect: out Rectangle);
   void setRectangle(id: u32, rect: Rectangle);
   void getRectangles(rects: out vector<Rectangle>);
+  void getNumbers(nums: out vector<i32>);
 }
 

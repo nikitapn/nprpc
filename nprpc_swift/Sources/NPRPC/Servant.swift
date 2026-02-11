@@ -201,7 +201,7 @@ public class NPRPCObject {
 
 /// Type-safe wrapper for remote object references
 /// Generic parameter T is the interface type (e.g., Nameserver)
-public struct ObjectPtr<T> {
+public struct ObjectPtr<T>: Codable, Sendable {
     public let data: NPRPCObjectData
     
     public init(data: NPRPCObjectData) {

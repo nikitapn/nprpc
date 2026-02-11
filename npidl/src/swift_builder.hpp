@@ -25,8 +25,7 @@ private:
   std::filesystem::path out_dir_;
   std::stringstream out;
   
-  // Helper for generating argument structs
-  ArgumentsStructBuilder args_builder_;
+
   
   // Helper methods for type emission
   void emit_type(AstTypeDecl* type, std::ostream& os);
@@ -34,7 +33,7 @@ private:
   void emit_parameter_type(AstFunctionArgument* arg, std::ostream& os);
   
   // Struct/Exception generation
-  void emit_struct2(AstStructDecl* s, bool is_exception);
+  void emit_struct2(AstStructDecl* s, Target target);
   void emit_field(AstFieldDecl* f, std::ostream& os);
   
   // Interface/Protocol generation

@@ -514,7 +514,6 @@ struct AstFunctionDecl : AstNodeWithPosition {
   AstTypeDecl* ret_value;
   AstStructDecl* in_s = nullptr;
   AstStructDecl* out_s = nullptr;
-  bool arguments_structs_have_been_made = false;
   AstStructDecl* ex = nullptr;
   std::vector<AstFunctionArgument*> args, in_args, out_args;
   bool is_async;

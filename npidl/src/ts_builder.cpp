@@ -748,7 +748,6 @@ void TSBuilder::finalize()
         ;
   }
 
-  // other
   emit_arguments_structs([this](AstStructDecl* s) {
     emit_struct2(s, false);
     emit_marshal_function(s);
@@ -882,7 +881,6 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   // proxy object functions definitions
   out << '\n';
   for (auto& fn : ifs->fns) {
-    args_builder_.make_arguments_structs(fn);
     out << bl() << "public async " << fn->name;
     emit_function_arguments(
         true, fn, out,
@@ -2117,7 +2115,6 @@ void TSBuilder::emit_unmarshal_function(AstStructDecl* s)
 TSBuilder::TSBuilder(Context* ctx, std::filesystem::path out_dir)
     : Builder(ctx)
     , out_dir_(out_dir)
-    , args_builder_(ctx)
 {
 }
 

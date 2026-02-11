@@ -6,11 +6,10 @@
 #include <ios>
 #include <iostream>
 #include <set>
-#include <sstream>
+#include <fstream>
 #include <string_view>
 
 #include <boost/container/small_vector.hpp>
-
 
 #include "cpp_builder.hpp"
 #include "arguments_builder.hpp"
@@ -1538,7 +1537,6 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 
   // functions definitions
   for (auto& fn : ifs->fns) {
-    args_builder_.make_arguments_structs(fn);
     oh << "  ";
     if (fn->is_stream) {
       oh << "::nprpc::StreamReader<";
@@ -2103,7 +2101,6 @@ void CppBuilder::emit_enum(AstEnumDecl* e)
 CppBuilder::CppBuilder(Context* ctx, std::filesystem::path out_path)
     : Builder(ctx)
     , out_path_(out_path)
-    , args_builder_(ctx)
 {
   if (!ctx)
     return;

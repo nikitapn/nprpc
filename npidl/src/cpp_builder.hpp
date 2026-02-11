@@ -6,7 +6,6 @@
 #include "builder.hpp"
 #include "arguments_builder.hpp"
 #include <filesystem>
-#include <fstream>
 #include <sstream>
 
 namespace npidl::builders {
@@ -32,9 +31,6 @@ private:
   std::string export_macro_name_;
 
   BlockDepth bd;
-  
-  // Helper for generating argument structs
-  ArgumentsStructBuilder args_builder_;
 
   void emit_parameter_type_for_proxy_call_r(AstTypeDecl* type,
                                             std::ostream& os,
@@ -70,7 +66,6 @@ private:
                       AstFieldDecl* f,
                       std::ostream& os);
 
-  enum class Target { Regular, Exception, FunctionArgument };
   void emit_struct2(AstStructDecl* s, std::ostream& os, Target target);
   void emit_helpers();
   void emit_struct_helpers();

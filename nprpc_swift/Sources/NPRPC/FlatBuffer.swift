@@ -68,24 +68,24 @@ func _alloc(buffer: FlatBuffer, vectorOffset: Int, count: Int, elementSize: Int,
         data.storeBytes(of: UInt32(0), toByteOffset: vectorOffset + 4, as: UInt32.self)
         return 0
     }
-    
+
     let currentOffset = buffer.size
     let alignedOffset = (currentOffset + align - 1) & ~(align - 1)
-    
+
     let addedSize = count * elementSize + (alignedOffset - currentOffset)
     buffer.prepare(addedSize)
     buffer.commit(addedSize)
-    
+
     // Get fresh data pointer after potential reallocation
     guard let data = buffer.data else {
         fatalError("Buffer data is nil")
     }
-    
+
     // Write relative offset and count
     let relativeOffset = UInt32(alignedOffset - vectorOffset)
     data.storeBytes(of: relativeOffset, toByteOffset: vectorOffset, as: UInt32.self)
     data.storeBytes(of: UInt32(count), toByteOffset: vectorOffset + 4, as: UInt32.self)
-    
+
     return alignedOffset
 }
 

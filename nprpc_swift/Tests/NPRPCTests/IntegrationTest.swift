@@ -40,6 +40,10 @@ final class IntegrationTests: XCTestCase {
                     )
                 ]
             }
+
+            override func getNumbers() throws -> [Int32] {
+                return [42, 99, -7]
+            }
         }
 
         let rpc = try RpcBuilder()
@@ -120,5 +124,9 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(rects[1].bottomRight.z, nil)
         XCTAssertEqual(rects[1].bottomRight.symbol, "abcd")
         XCTAssertEqual(rects[1].color, .blue)
+
+        // Test getNumbers - should return the array of integers from our servant
+        let nums = try client.getNumbers()
+        XCTAssertEqual(nums, [42, 99, -7])
     }
 }

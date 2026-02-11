@@ -9,9 +9,6 @@ namespace npidl::builders {
 
 void ArgumentsStructBuilder::make_arguments_structs(AstFunctionDecl* fn)
 {
-  if (fn->arguments_structs_have_been_made)
-    return;
-
   auto& in_args = fn->in_args;
   auto& out_args = fn->out_args;
 
@@ -34,8 +31,6 @@ void ArgumentsStructBuilder::make_arguments_structs(AstFunctionDecl* fn)
 
   fn->in_s = make_struct(fn, in_args);
   fn->out_s = make_struct(fn, out_args);
-
-  fn->arguments_structs_have_been_made = true;
 }
 
 AstStructDecl* ArgumentsStructBuilder::make_struct(

@@ -490,6 +490,7 @@ class Parser : public IParser
   builders::BuildGroup& builder_;
   IImportResolver& import_resolver_;
   IErrorHandler& error_handler_;
+  bool lsp_mode_ = false;
 
   // Error recovery support (no longer stores errors - delegated to
   // error_handler_)
@@ -1386,6 +1387,9 @@ class Parser : public IParser
 
     ctx_.interfaces.push_back(ifs);
     ctx_.nm_cur()->add(ifs->name, ifs);
+
+    if (!lsp_mode_)
+      builder_.generate_argument_structs(ifs);
     builder_.emit(&builders::Builder::emit_interface, ifs);
 
     return true;
@@ -1618,12 +1622,14 @@ public:
          Context& ctx,
          builders::BuildGroup& builder,
          IImportResolver& import_resolver,
-         IErrorHandler& error_handler)
+         IErrorHandler& error_handler,
+         bool lsp_mode = false)
       : lex_(lex)
       , ctx_(ctx)
       , builder_(builder)
       , import_resolver_(import_resolver)
       , error_handler_(error_handler)
+      , lsp_mode_(lsp_mode)
   {
   }
 
@@ -1743,7 +1749,7 @@ ParserFactory::create_compiler_parser(Context& ctx,
 
   auto lexer = std::make_unique<Lexer>(*source_provider, ctx);
   auto parser = std::make_unique<Parser>(*lexer, ctx, builder, *import_resolver,
-                                         *error_handler);
+                                         *error_handler, false);
 
   return {std::move(source_provider), std::move(import_resolver),
           std::move(error_handler), std::move(lexer), std::move(parser)};
@@ -1768,7 +1774,7 @@ ParserFactory::create_lsp_parser(
 
   auto lexer = std::make_unique<Lexer>(*source_provider, ctx);
   auto parser = std::make_unique<Parser>(*lexer, ctx, builder, *import_resolver,
-                                         *error_handler);
+                                         *error_handler, true);
 
   return {source_provider, std::move(import_resolver), std::move(error_handler),
           std::move(lexer), std::move(parser)};
@@ -1790,7 +1796,7 @@ ParserFactory::create_test_parser(Context& ctx,
 
   auto lexer = std::make_unique<Lexer>(*source_provider, ctx);
   auto parser = std::make_unique<Parser>(*lexer, ctx, builder, *import_resolver,
-                                         *error_handler);
+                                         *error_handler, false);
 
   return {source_provider, std::move(import_resolver), std::move(error_handler),
           std::move(lexer), std::move(parser)};

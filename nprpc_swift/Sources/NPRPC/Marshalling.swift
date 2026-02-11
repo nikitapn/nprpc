@@ -11,7 +11,7 @@ public func marshal_fundamental_vector<T>(buffer: FlatBuffer, offset: Int, vecto
     let elementSize = MemoryLayout<T>.stride
     let alignment = MemoryLayout<T>.alignment
     let dataOffset = _alloc(buffer: buffer, vectorOffset: offset, count: vector.count, elementSize: elementSize, align: alignment)
-    
+
     if vector.count > 0 {
         // Get fresh pointer after allocation
         guard let data = buffer.data else { return }
@@ -42,19 +42,19 @@ public func marshal_struct_vector<T>(
 }
 
 public func unmarshal_fundamental_vector<T>(buffer: UnsafeRawPointer, offset: Int) -> [T] {
-    let count = buffer.load(fromByteOffset: offset, as: UInt32.self)
+    let dataOffset = Int(buffer.load(fromByteOffset: offset + 0, as: UInt32.self)) + offset
+    let count = Int(buffer.load(fromByteOffset: offset + 4, as: UInt32.self))
     guard count > 0 else { return [] }
-    
+
     let elementSize = MemoryLayout<T>.stride
-    let dataOffset = offset + 4
     var result: [T] = []
-    result.reserveCapacity(Int(count))
-    
-    for i in 0..<Int(count) {
+    result.reserveCapacity(count)
+
+    for i in 0..<count {
         let element = buffer.load(fromByteOffset: dataOffset + i * elementSize, as: T.self)
         result.append(element)
     }
-    
+
     return result
 }
 
@@ -64,11 +64,10 @@ public func unmarshal_struct_vector<T>(
     elementSize: Int,
     unmarshalElement: (UnsafeRawPointer, Int) -> T
 ) -> [T] {
-    let relativeOffset = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+    let dataOffset = Int(buffer.load(fromByteOffset: offset + 0, as: UInt32.self)) + offset
     let n = buffer.load(fromByteOffset: offset + 4, as: UInt32.self)
     guard n != 0 else { return [] }
 
-    let dataOffset = offset + Int(relativeOffset)
     var result: [T] = []
     result.reserveCapacity(Int(n))
     
@@ -164,14 +163,12 @@ public func marshal_string(buffer: FlatBuffer, offset: Int, string: String) {
 }
 
 public func unmarshal_string(buffer: UnsafeRawPointer, offset: Int) -> String {
-    let relativeOffset = buffer.load(fromByteOffset: offset, as: UInt32.self)
-    guard relativeOffset != 0 else { return "" }
-
-    let count = buffer.load(fromByteOffset: offset + 4, as: UInt32.self)
+    let dataOffset = Int(buffer.load(fromByteOffset: offset, as: UInt32.self)) + offset
+    let count = Int(buffer.load(fromByteOffset: offset + 4, as: UInt32.self))
     guard count > 0 else { return "" }
 
-    let dataPtr = buffer.advanced(by: offset + Int(relativeOffset))
-    let data = Data(bytes: dataPtr, count: Int(count))
+    let dataPtr = buffer.advanced(by: dataOffset)
+    let data = Data(bytes: dataPtr, count: count)
     return String(data: data, encoding: .utf8) ?? ""
 }
 

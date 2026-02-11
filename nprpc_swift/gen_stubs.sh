@@ -20,7 +20,7 @@ $NPIDL --swift --ts \
   nprpc_swift/Tests/IDL/basic_test.npidl \
   --output-dir nprpc_swift/Tests/NPRPCTests/Generated
 
-# $NPIDL --swift \
+# $NPIDL --swift --ts \
 #   nprpc_swift/Tests/IDL/nprpc_test.npidl \
 #   --output-dir nprpc_swift/Tests/NPRPCTests/Generated
 

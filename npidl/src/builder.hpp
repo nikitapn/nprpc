@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ast.hpp"
+#include "arguments_builder.hpp"
 #include <functional>
 #include <memory>
 
@@ -96,12 +97,16 @@ inline std::ostream& operator<<(std::ostream& os, const BlockDepth& block)
 class Builder
 {
 protected:
+  // Argument for emint_struct2 to determine what kind of struct we're emitting
+  // (regular struct, exception struct, or argument struct for proxy/servant)
+  enum class Target { Regular, Exception, FunctionArgument };
+
   Context* ctx_;
   BlockDepth block_depth_;
   bool always_full_namespace_ = false;
 
   void always_full_namespace(bool flag) { always_full_namespace_ = flag; }
-  
+
   /**
    * @brief Emit all cached argument structs via the provided callback.
    * 
@@ -166,6 +171,9 @@ class BuildGroup
   Context* ctx_;
   std::vector<std::unique_ptr<Builder>> builders_;
 
+  // Helper for generating argument structs
+  ArgumentsStructBuilder args_builder_;
+
 public:
   template <typename F, typename... Args> void emit(F fptr, Args&&... args)
   {
@@ -181,10 +189,12 @@ public:
         std::make_unique<T>(ctx_, std::forward<Args>(args)...));
   }
 
+  void generate_argument_structs(AstInterfaceDecl* ifs);
+
   void finalize() { emit(&Builder::finalize); }
 
   BuildGroup(const BuildGroup& other, Context* ctx)
-      : ctx_{ctx}
+      : ctx_{ctx}, args_builder_(ctx)
   {
     for (auto& other_builder : other.builders_) {
       builders_.emplace_back(other_builder->clone(ctx));
@@ -192,7 +202,7 @@ public:
   }
 
   BuildGroup(Context* ctx = nullptr)
-      : ctx_{ctx}
+      : ctx_{ctx}, args_builder_(ctx)
   {
   }
 };
