@@ -199,4 +199,149 @@ final class IntegrationTests: XCTestCase {
             XCTFail("Expected TestException but got: \(error)")
         }
     }
+
+    func testBasicTypes() throws {
+        // nprpc_test.npidl defines a TestBasic interface with methods that use various basic types and arrays.
+        class TestBasicServantImpl: TestBasicServant {
+            var in_receivedA: UInt32 = 0
+            var in_receivedB: Bool = false
+            var in_receivedC: [UInt8] = []
+            var inStruct_receivedA: AAA = AAA()
+            var inFlatStruct_receivedValue: UInt32 = 0
+            var inFlatStruct_receivedA: FlatStruct = FlatStruct()
+            var outFlatStruct_receivedValue: UInt32 = 0
+            var outScalarWithException_receivedDevAddr: UInt8 = 0
+            var outScalarWithException_receivedAddr: UInt16 = 0
+            
+            override func returnBoolean() throws -> Bool {
+                return true
+            }
+
+            override func returnIdArray() throws -> IdArray {
+                return [1, 2, 3, 4, 5]
+            }
+
+            override func returnU32() throws -> UInt32 {
+                return 123456789
+            }
+
+            override func in_(a: UInt32, b: Bool, c: [UInt8]) throws -> Bool {
+                in_receivedA = a
+                in_receivedB = b
+                in_receivedC = c
+                return true
+            }
+
+            override func out() throws -> (UInt32, Bool, [UInt8]) {
+                return (123456789, true, [1, 2, 3, 4, 5])
+            }
+
+            override func inStruct(a: AAA) throws {
+                inStruct_receivedA = a
+            }
+
+            override func outStruct() throws -> AAA {
+                return AAA(a: 1234, b: "Hello world", c: "Another string")
+            }
+
+            override func inFlatStruct(value: UInt32, a: FlatStruct) throws {
+                inFlatStruct_receivedValue = value
+                inFlatStruct_receivedA = a
+            }
+
+            override func outFlatStruct(value: UInt32) throws -> FlatStruct {
+                outFlatStruct_receivedValue = value
+                return FlatStruct(a: 42, b: 99, c: 1.2)
+            }
+
+            override func outArrayOfStructs() throws -> [SimpleStruct] {
+                return [
+                    SimpleStruct(id: 1),
+                    SimpleStruct(id: 2),
+                    SimpleStruct(id: 3)
+                ]
+            }
+
+            override func inException() throws {
+                throw SimpleException(__ex_id: 0, message: "This is a test exception", code: 42)
+            }
+
+            override func outScalarWithException(dev_addr: UInt8, addr: UInt16) throws -> UInt8   {
+                outScalarWithException_receivedDevAddr = dev_addr
+                outScalarWithException_receivedAddr = addr
+                return 32
+            }
+        }
+
+        let servant = TestBasicServantImpl()
+        let oid = try Self.poa!.activateObject(servant)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+
+        let client = TestBasic(obj)
+        // Returning a boolean value to test basic marshalling of fundamental types
+        XCTAssertEqual(try client.returnBoolean(), true)
+        // Returning an IdArray to test marshalling of array types
+        XCTAssertEqual(try client.returnIdArray(), [1, 2, 3, 4, 5])
+        // Returning a UInt32 to test marshalling of unsigned integers
+        XCTAssertEqual(try client.returnU32(), 123456789)
+        // Testing the in_ method to verify marshalling of input parameters
+        XCTAssertEqual(try client.in_(a: 123456789, b: true, c: [1, 2, 3, 4, 5]), true)
+        // Verifying that the servant received the correct input parameters
+        XCTAssertEqual(servant.in_receivedA, 123456789)
+        XCTAssertEqual(servant.in_receivedB, true)
+        XCTAssertEqual(servant.in_receivedC, [1, 2, 3, 4, 5])
+        // Testing the out method to verify marshalling of output parameters
+        let (outA, outB, outC) = try client.out()
+        XCTAssertEqual(outA, 123456789)
+        XCTAssertEqual(outB, true)
+        XCTAssertEqual(outC, [1, 2, 3, 4, 5])
+        // Testing marshalling of input structs
+        let aaa = AAA(a: 1234, b: "Hello world", c: "Another string")
+        try client.inStruct(a: aaa)
+        XCTAssertEqual(servant.inStruct_receivedA.a, 1234)
+        XCTAssertEqual(servant.inStruct_receivedA.b, "Hello world")
+        XCTAssertEqual(servant.inStruct_receivedA.c, "Another string")
+        // Testing marshalling of output structs
+        let outStruct = try client.outStruct()
+        XCTAssertEqual(outStruct.a, 1234)
+        XCTAssertEqual(outStruct.b, "Hello world")
+        XCTAssertEqual(outStruct.c, "Another string")
+        // Testing marshalling of input flat structs
+        let flatStruct = FlatStruct(a: 42, b: 99, c: 1.2)
+        try client.inFlatStruct(value: 123456789, a: flatStruct)
+        XCTAssertEqual(servant.inFlatStruct_receivedValue, 123456789)
+        XCTAssertEqual(servant.inFlatStruct_receivedA.a, 42)
+        XCTAssertEqual(servant.inFlatStruct_receivedA.b, 99)
+        XCTAssertEqual(servant.inFlatStruct_receivedA.c, 1.2)
+        // Testing marshalling of output flat structs
+        let outFlatStruct = try client.outFlatStruct(value: 123456789)
+        XCTAssertEqual(servant.outFlatStruct_receivedValue, 123456789)
+        XCTAssertEqual(outFlatStruct.a, 42)
+        XCTAssertEqual(outFlatStruct.b, 99)
+        XCTAssertEqual(outFlatStruct.c, 1.2)
+        // Testing marshalling of array of structs
+        let arrayOfStructs = try client.outArrayOfStructs()
+        XCTAssertEqual(arrayOfStructs.count, 3)
+        XCTAssertEqual(arrayOfStructs[0].id, 1)
+        XCTAssertEqual(arrayOfStructs[1].id, 2)
+        XCTAssertEqual(arrayOfStructs[2].id, 3)
+        // Testing exception handling
+        do {
+            try client.inException()
+            XCTFail("Expected SimpleException to be thrown")
+        } catch let e as SimpleException {
+            XCTAssertEqual(e.code, 42)
+            XCTAssertEqual(e.message, "This is a test exception")
+        } catch {
+            XCTFail("Expected SimpleException but got: \(error)")
+        }
+        // Testing marshalling of output scalar with exception
+        let result = try client.outScalarWithException(dev_addr: 10, addr: 783)
+        XCTAssertEqual(servant.outScalarWithException_receivedDevAddr, 10)
+        XCTAssertEqual(servant.outScalarWithException_receivedAddr, 783)
+        XCTAssertEqual(result, 32)
+    }
 }
