@@ -527,6 +527,7 @@ struct AstFunctionDecl : AstNodeWithPosition {
   bool is_stream;
 
   bool is_void() const noexcept { return ret_value->id == FieldType::Void; }
+  bool is_throwing() const noexcept { return ex != nullptr; }
 };
 
 template <typename IdType, typename T> class List

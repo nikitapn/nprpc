@@ -46,7 +46,7 @@ final class IntegrationTests: XCTestCase {
         class TestShapeServant: ShapeServiceServant {
             var storedRect: Rectangle?
             
-            override func getRectangle(id: UInt32) throws -> Rectangle {
+            override func getRectangle(id: UInt32) -> Rectangle {
                 return Rectangle(
                     topLeft: Point(x: 10, y: 20, z: nil, symbol: ""),
                     bottomRight: Point(x: 110, y: 120, z: nil, symbol: ""),
@@ -54,11 +54,11 @@ final class IntegrationTests: XCTestCase {
                 )
             }
             
-            override func setRectangle(id: UInt32, rect: Rectangle) throws {
+            override func setRectangle(id: UInt32, rect: Rectangle) {
                 storedRect = rect
             }
 
-            override func getRectangles() throws -> [Rectangle] {
+            override func getRectangles() -> [Rectangle] {
                 return [
                     Rectangle(
                         topLeft: Point(x: 1, y: 2, z: nil, symbol: "a"),
@@ -73,7 +73,7 @@ final class IntegrationTests: XCTestCase {
                 ]
             }
 
-            override func getNumbers() throws -> [Int32] {
+            override func getNumbers() -> [Int32] {
                 return [42, 99, -7]
             }
 
@@ -158,12 +158,12 @@ final class IntegrationTests: XCTestCase {
     /// Test exception handling through RPC
     func testExceptionHandling() throws {
         class ExceptionServant: ShapeServiceServant {
-            override func getRectangle(id: UInt32) throws -> Rectangle {
+            override func getRectangle(id: UInt32) -> Rectangle {
                 return Rectangle()
             }
-            override func setRectangle(id: UInt32, rect: Rectangle) throws {}
-            override func getRectangles() throws -> [Rectangle] { return [] }
-            override func getNumbers() throws -> [Int32] { return [] }
+            override func setRectangle(id: UInt32, rect: Rectangle) {}
+            override func getRectangles() -> [Rectangle] { return [] }
+            override func getNumbers() -> [Int32] { return [] }
             override func throwingMethod(code: UInt32) throws {
                 throw TestException(__ex_id: 0, message: "Error with code \(code)", code: code)
             }

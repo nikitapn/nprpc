@@ -135,7 +135,9 @@ enum MessageId: u32 {
   // Attempt to access secured object from a different session
   Error_BadAccess,
   // Invalid input data (an array out of bounds, etc)
-  Error_BadInput
+  Error_BadInput,
+  // Unknown Exception (for which no specific error code is defined)
+  Error_Unknown,
 }
 
 enum MessageType: u32 {

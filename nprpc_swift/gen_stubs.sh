@@ -16,13 +16,13 @@ $NPIDL --swift \
   idl/nprpc_nameserver.npidl \
   --output-dir nprpc_swift/Sources/NPRPC/Generated
 
-$NPIDL --swift --ts \
+$NPIDL --swift \
   nprpc_swift/Tests/IDL/basic_test.npidl \
   --output-dir nprpc_swift/Tests/NPRPCTests/Generated
 
-# $NPIDL --swift --ts \
-#   nprpc_swift/Tests/IDL/nprpc_test.npidl \
-#   --output-dir nprpc_swift/Tests/NPRPCTests/Generated
+$NPIDL --swift \
+  nprpc_swift/Tests/IDL/nprpc_test.npidl \
+  --output-dir nprpc_swift/Tests/NPRPCTests/Generated
 
 # gdb --batch \
 #   --ex "set confirm off" \
