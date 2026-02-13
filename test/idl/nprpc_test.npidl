@@ -54,7 +54,7 @@ interface TestBasic {
 	IdArray ReturnIdArray() raises (AssertionFailed);
 	u32 ReturnU32() raises (AssertionFailed);
 
-	boolean In(a: u32, b: boolean, c: vector<u8>) raises (AssertionFailed);
+	boolean In_(a: u32, b: boolean, c: vector<u8>) raises (AssertionFailed);
 	void Out(a: out u32, b: out boolean, c: out vector<u8>) raises (AssertionFailed);
 
 	void InStruct(a: AAA) raises (AssertionFailed);
@@ -71,7 +71,7 @@ interface TestBasic {
 }
 
 interface TestLargeMessage {
-	boolean In(a: u32, b: boolean, c: vector<u8>);
+	boolean In_(a: u32, b: boolean, c: vector<u8>);
 	void Out(a: out u32, b: out boolean, c: out vector<u8>);
 }
 
@@ -83,7 +83,7 @@ message Opt1 {
 
 interface TestOptional {
 	boolean InEmpty(a?: u32) raises (AssertionFailed);
-	boolean In(a?: u32, b?: AAA) raises (AssertionFailed);
+	boolean In_(a?: u32, b?: AAA) raises (AssertionFailed);
 //	boolean InVec(a?: bytestream);
 
 	void OutEmpty(a?: out u32) raises (AssertionFailed);
@@ -149,7 +149,7 @@ interface TestNested {
 
 [trusted=false]
 interface TestBadInput {
-	void In(a: vector<u8>);
+	void In_(a: vector<u8>);
 }
 
 interface TestUnreliable {
@@ -161,7 +161,7 @@ interface TestUnreliable {
 	boolean ReliableCall(a: u32, b: boolean, c: vector<u8>) raises (AssertionFailed);
 }
 
-interface TestStreams {
-	[unreliable]
-	stream<u8> GetByteStream(size: u64);
-}
+// interface TestStreams {
+// 	[unreliable]
+// 	stream<u8> GetByteStream(size: u64);
+// }

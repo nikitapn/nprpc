@@ -89,6 +89,7 @@ struct AstStructDecl;
 struct AstTypeDecl;
 struct AstInterfaceDecl;
 struct AstFunctionDecl;
+class Context;
 
 enum class NumberFormat { Decimal, Hex, Scientific };
 
@@ -157,12 +158,19 @@ public:
     return len;
   }
 
+  bool is_root(const Context& ctx) const noexcept;
+
   std::string to_cpp17_namespace(int level = -1) const noexcept
   {
     return construct_path(std::string(2, ':'), level);
   }
 
   std::string to_ts_namespace(int level = -1) const noexcept
+  {
+    return construct_path(std::string(1, '.'), level);
+  }
+
+  std::string to_swift_namespace(int level = -1) const noexcept
   {
     return construct_path(std::string(1, '.'), level);
   }
@@ -215,16 +223,13 @@ inline bool operator==(std::int64_t x, const AstNumber& n)
 
 inline bool operator!=(std::int64_t x, const AstNumber& n) { return !(x == n); }
 
-// helper type for the visitor #4
-template <class... Ts> struct overloaded : Ts... {
-  using Ts::operator()...;
-};
-// explicit deduction guide (not needed as of C++20)
-// template<class... Ts> overloaded(Ts...)->overloaded<Ts...>;
+template<class... Ts>
+struct overloads : Ts... { using Ts::operator()...; };
 
 inline std::ostream& operator<<(std::ostream& os, const AstNumber& n)
 {
-  std::visit(overloaded{
+  std::visit(overloads
+              {
                  [&](int64_t x) {
                    if (n.format == NumberFormat::Hex) {
                      os << "0x" << std::hex;
@@ -386,14 +391,14 @@ struct AstImportDecl {
 
 struct AstStructDecl : AstTypeDecl, AstNodeWithPosition {
   int version = -1;
-  Namespace* nm;
+  Namespace* nm = nullptr;
   struct_id_t unique_id;
   std::vector<AstFieldDecl*> fields;
   int size = -1;
   int align = -1;
+  int exception_id = -1;
   bool flat = true;
-  bool has_span_class = false;
-  int exception_id;
+  bool internal = false;
 
   bool is_exception() const noexcept { return exception_id != -1; }
   const struct_id_t& get_function_struct_id();
@@ -517,8 +522,8 @@ struct AstFunctionDecl : AstNodeWithPosition {
   AstStructDecl* ex = nullptr;
   std::vector<AstFunctionArgument*> args, in_args, out_args;
   bool is_async;
-  bool is_reliable =
-      true; // [unreliable] attribute maybe used for UDP and quic methods
+  // [unreliable] attribute maybe used for UDP and quic methods
+  bool is_reliable = true;
   bool is_stream;
 
   bool is_void() const noexcept { return ret_value->id == FieldType::Void; }
@@ -620,7 +625,8 @@ public:
 
   Namespace* nm_cur() { return nm_cur_; }
 
-  Namespace* nm_root() { return nm_root_; }
+  template<typename Self>
+  auto nm_root(this Self&& self) { return self.nm_root_; }
 
   Namespace* set_namespace(Namespace* nm)
   {
@@ -713,7 +719,14 @@ public:
         .namespace_at_entry = nm_root_ // Main file starts at root namespace
     });
   }
-};
+}; // Context
+
+
+inline bool Namespace::is_root(const Context& ctx) const noexcept
+{
+  // A namespace is considered root if it's the root namespace of the current file
+  return this == ctx.nm_root();
+}
 
 // RAII guard for file context - ensures pop_file() is called even on exception
 class FileContextGuard

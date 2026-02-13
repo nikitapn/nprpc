@@ -40,10 +40,9 @@ SwiftBuilder::SwiftBuilder(Context* ctx, std::filesystem::path out_dir)
 
 std::ostream& operator<<(std::ostream& os, const SwiftBuilder::_ns& ns)
 {
-  if (!ns.nm->name().empty()) {
-    // Swift uses nested enums for namespaces
-    os << ns.nm->name();
-  }
+  auto [sub, level] = Namespace::substract(ns.builder.ctx_->nm_cur(), ns.nm);
+  if (sub)
+    os << sub->to_swift_namespace(level) << '.';
   return os;
 }
 
@@ -117,8 +116,7 @@ void SwiftBuilder::emit_type(AstTypeDecl* type, std::ostream& os)
     emit_fundamental_type(cft(type)->token_id, os);
     break;
   case FieldType::Struct:
-    // In Swift, don't prefix with namespace if it's in the same module
-    os << swift_type_name(cflat(type)->name);
+    os << ns(cflat(type)->nm) << swift_type_name(cflat(type)->name);
     break;
   case FieldType::Vector:
   case FieldType::Array:
@@ -292,6 +290,8 @@ void SwiftBuilder::emit_struct(AstStructDecl* s)
 void SwiftBuilder::emit_exception(AstStructDecl* s)
 {
   emit_struct2(s, Target::Exception);
+  emit_marshal_function(s);
+  emit_unmarshal_function(s);
 }
 
 void SwiftBuilder::emit_enum(AstEnumDecl* e)
@@ -486,7 +486,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
       out << bl() << "// Marshal input arguments\n";
 
       // Always create struct instance
-      out << bl() << "var inArgs = " << fn->in_s->name << "()\n";
+      out << bl() << "var inArgs = " << ns(fn->in_s->nm) << fn->in_s->name << "()\n";
 
       int ix = 0;
       for (auto arg : fn->args) {
@@ -495,7 +495,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
         out << bl() << "inArgs._" << ix << " = " << arg->name << "\n";
       }
 
-      out << bl() << "marshal_" << fn->in_s->name << "(buffer: buffer, offset: " << get_arguments_offset() << ", data: inArgs)\n\n";
+      out << bl() << ns(fn->in_s->nm) << "marshal_" << fn->in_s->name << "(buffer: buffer, offset: " << get_arguments_offset() << ", data: inArgs)\n\n";
     }
 
     // Set message size (must be done after marshalling as optionals/vectors may extend buffer)
@@ -508,7 +508,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
     // Handle reply
     out << bl() << "// Handle reply\n";
-    out << bl() << "let stdReply = handleStandardReply(buffer: buffer)\n";
+    out << bl() << "let stdReply = try handleStandardReply(buffer: buffer)\n";
     if (fn->ex) {
       out << bl() << "if stdReply == 1 { throw " << ctx_->current_file() << "_throwException(buffer: buffer) }\n";
     }
@@ -530,9 +530,9 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
       }
 
       if (out_needs_endpoint) {
-        out << bl() << "let out = unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ", endpoint: object.endpoint)\n";
+        out << bl() << "let out = " << ns(fn->out_s->nm) << "unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ", endpoint: object.endpoint)\n";
       } else {
-        out << bl() << "let out = unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ")\n";
+        out << bl() << "let out = " << ns(fn->out_s->nm) << "unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ")\n";
       }
 
       // Return output values
@@ -670,9 +670,9 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       }
 
       if (in_needs_endpoint) {
-        out << bl() << "let ia = unmarshal_" << fn->in_s->name << "(buffer: data, offset: " << get_arguments_offset() << ", endpoint: remoteEndpoint)\n";
+        out << bl() << "let ia = " << ns(fn->in_s->nm) << "unmarshal_" << fn->in_s->name << "(buffer: data, offset: " << get_arguments_offset() << ", endpoint: remoteEndpoint)\n";
       } else {
-        out << bl() << "let ia = unmarshal_" << fn->in_s->name << "(buffer: data, offset: " << get_arguments_offset() << ")\n";
+        out << bl() << "let ia = " << ns(fn->in_s->nm) << "unmarshal_" << fn->in_s->name << "(buffer: data, offset: " << get_arguments_offset() << ")\n";
       }
     }
 
@@ -753,8 +753,8 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       out << bl() << "obuf.commit(" << initial_size << ")\n";
       out << bl() << "guard let exData = obuf.data else { return }\n";
 
-      out << bl() << "let ex_data = (";
-      out << "__ex_id: " << fn->ex->exception_id;
+      // Construct exception struct with correct __ex_id
+      out << bl() << "let ex_data = " << fn->ex->name << "(__ex_id: " << fn->ex->exception_id;
       for (size_t i = 1; i < fn->ex->fields.size(); ++i) {
         auto mb = fn->ex->fields[i];
         out << ", " << mb->name << ": e." << mb->name;
@@ -803,7 +803,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       }
       out << "\n";
 
-      out << bl() << "marshal_" << fn->out_s->name << "(buffer: buffer, offset: " << size_of_header << ", data: out_data)\n";
+      out << bl() << ns(fn->out_s->nm) << "marshal_" << fn->out_s->name << "(buffer: buffer, offset: " << size_of_header << ", data: out_data)\n";
       out << bl() << "outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n";
       out << bl() << "outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: Int32.self)\n";
       out << bl() << "outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)\n";
@@ -951,6 +951,15 @@ void SwiftBuilder::emit_swift_trampolines(AstInterfaceDecl* ifs)
 
 void SwiftBuilder::emit_interface(AstInterfaceDecl* ifs)
 {
+  // Emit protocol and client/servant classes under the current namespace
+  emit_arguments_structs([this](AstStructDecl* s) {
+    auto [ _, inserted ] = emitted_marshal_structs_.insert(s);
+    if (inserted) {
+      emit_struct2(s, Target::FunctionArgument);
+      emit_marshal_function(s);
+      emit_unmarshal_function(s);
+    }
+  });
   emit_protocol(ifs);
   emit_client_proxy(ifs);
   emit_servant_base(ifs);
@@ -1105,27 +1114,20 @@ bool needs_buf_for_marshal(AstTypeDecl* type) {
 
 void SwiftBuilder::emit_marshal_function(AstStructDecl* s)
 {
-  calc_struct_size_align(s);
+  // In Swift, exception structs already include __ex_id, so we use the struct name directly
+  std::string data_type = s->name;
 
-  std::string data_type = s->is_exception() ? (s->name + "_Data") : s->name;
-
-  // Use 'static' if inside a namespace enum (block_depth > 0 means we're inside a block)
-  bool in_namespace = block_depth_.str() != "0";
+  assert(s->nm);
+  const bool in_namespace = !s->nm->is_root(*ctx_);
 
   // Check if this is an internal marshalling struct (e.g., foo_M1, foo_M2)
   // These should be fileprivate, not public
-  bool is_internal_marshal_struct = false;
-  auto pos = s->name.rfind("_M");
-  if (pos != std::string::npos && pos + 2 < s->name.size()) {
-    is_internal_marshal_struct = std::isdigit(s->name[pos + 2]);
-  }
-
-  const char* visibility = is_internal_marshal_struct ? "fileprivate " : "public ";
+  const char* visibility = s->internal ? "fileprivate " : "public ";
 
   out << "\n" << bl() << "// MARK: - Marshal " << s->name << "\n";
   out << bl() << visibility << (in_namespace ? "static " : "") << "func marshal_" << s->name << "(buffer: FlatBuffer, offset: Int, data: " << data_type << ") ";
   out << bb();
-  
+
   // Only emit buf variable if any field needs direct byte access
   bool needs_buf = false;
   for (auto field : s->fields) {
@@ -1233,33 +1235,33 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
     if (is_fundamental(wt)) {
       out << bl() << field_name << " = NPRPC.unmarshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ")\n";
     } else if (wt->id == FieldType::Struct) {
-      out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
+      out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n" << bb(false);
       out << bl() << "unmarshal_" << cflat(wt)->name << "(buffer: buf, offset: off)\n";
-    } else if (wt->id == FieldType::String) {
-      out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
       out << bl() << "NPRPC.unmarshal_string(buffer: buf, offset: off)\n";
+      out << eb();
+    } else if (wt->id == FieldType::String) {
+      out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n" << bb(false);
+      out << bl() << "NPRPC.unmarshal_string(buffer: buf, offset: off)\n";
+      out << eb();
     } else if (wt->id == FieldType::Enum) {
       out << bl() << field_name << " = " << cenum(wt)->name << "(rawValue: buffer.load(fromByteOffset: offset + " << field_offset << " + 4, as: Int32.self))\n";
     } else if (wt->id == FieldType::Vector || wt->id == FieldType::Array) {
       auto real_elem_type = cwt(wt)->real_type();
       auto [ut_size, ut_align] = get_type_size_align(real_elem_type);
       if (is_fundamental(real_elem_type)) {
-        out << bb() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
-        out << bb();
-        out << bb() << "NPRPC.unmarshal_fundamental_vector(buffer: buf, offset: off)\n";
+        out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n" << bb(false);
+        out << bl() << "NPRPC.unmarshal_fundamental_vector(buffer: buf, offset: off)\n";
         out << eb();
       } else if (real_elem_type->id == FieldType::Struct) {
-        out << bb() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n";
-        out << bb();
-        out << bb() << "NPRPC.unmarshal_struct_vector(buffer: buf, offset: off, elementSize: " << ut_size << ") { eb, eo in\n";
-        out << bb() << "unmarshal_" << cflat(real_elem_type)->name << "(buffer: eb, offset: eo)\n";
-        out << eb();
+        out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n" << bb(false);
+        out << bl() << "NPRPC.unmarshal_struct_vector(buffer: buf, offset: off, elementSize: " << ut_size << ") { eb, eo in\n";
+        out << bl() << "unmarshal_" << cflat(real_elem_type)->name << "(buffer: eb, offset: eo)\n";
         out << eb();
       } else {
-        out << bb() << "// TODO: Optional vector/array of complex type\n";
+        out << bl() << "// TODO: Optional vector/array of complex type\n";
       }
     } else {
-      out << bb() << "// TODO: Optional of type " << static_cast<int>(wt->id) << "\n";
+      out << bl() << "// TODO: Optional of type " << static_cast<int>(wt->id) << "\n";
     }
     out << eb(false);
     out << bl() << "} else {\n" << bb(false);
@@ -1290,18 +1292,9 @@ void SwiftBuilder::emit_unmarshal_function(AstStructDecl* s)
     }
   }
 
-  // Use 'static' if inside a namespace enum (block_depth > 0 means we're inside a block)
-  bool in_namespace = block_depth_.str() != "0";
-
-  // Check if this is an internal marshalling struct (e.g., foo_M1, foo_M2)
-  // These should be fileprivate, not public
-  bool is_internal_marshal_struct = false;
-  auto pos = s->name.rfind("_M");
-  if (pos != std::string::npos && pos + 2 < s->name.size()) {
-    is_internal_marshal_struct = std::isdigit(s->name[pos + 2]);
-  }
-
-  const char* visibility = is_internal_marshal_struct ? "fileprivate " : "public ";
+  assert(s->nm);
+  const bool in_namespace = !s->nm->is_root(*ctx_);
+  const char* visibility = s->internal ? "fileprivate " : "public ";
 
   out << "\n" << bl() << "// MARK: - Unmarshal " << s->name << "\n";
   out << bl() << visibility << (in_namespace ? "static " : "") << "func unmarshal_" << s->name << "(buffer: UnsafeRawPointer, offset: Int";
@@ -1362,18 +1355,32 @@ void SwiftBuilder::finalize()
   if (filename != "nprpc_base" && filename != "nprpc_nameserver")
     ofs << "import NPRPC\n\n";
 
-  auto code = out.str();
-  out.str("");
+  ofs << out.str();
 
-  emit_arguments_structs([this](AstStructDecl* s) {
-    emit_struct2(s, Target::FunctionArgument);
-    emit_marshal_function(s);
-    out << '\n';
-    emit_unmarshal_function(s);
-    out << '\n';
-  });
+  // Emit throwException function at file scope (outside any namespace enum)
+  auto& exs = ctx_->exceptions;
+  if (!exs.empty()) {
+    ofs << "\n// MARK: - Exception Handling\n";
+    ofs << "fileprivate func " << ctx_->current_file()
+        << "_throwException(buffer: FlatBuffer) -> any Error {\n";
+    ofs << "  guard let data = buffer.constData else {\n";
+    ofs << "    return RuntimeError(message: \"Failed to read exception data\")\n";
+    ofs << "  }\n";
+    ofs << "  let exId = data.load(fromByteOffset: " << size_of_header
+        << ", as: UInt32.self)\n";
+    ofs << "  switch exId {\n";
 
-  ofs << out.str() << code;
+    for (auto ex : exs) {
+      ofs << "  case " << ex->exception_id << ":\n";
+      ofs << "    return " << ns(ex->nm) << "unmarshal_" << ex->name
+          << "(buffer: data, offset: " << size_of_header << ")\n";
+    }
+
+    ofs << "  default:\n";
+    ofs << "    return RuntimeError(message: \"Unknown exception id: \\(exId)\")\n";
+    ofs << "  }\n";
+    ofs << "}\n";
+  }
 }
 
 } // namespace npidl::builders

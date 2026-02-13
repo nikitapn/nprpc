@@ -198,11 +198,6 @@ static std::ostream& operator<<(std::ostream& os, const TokenId& token_id)
 
 std::ostream& operator<<(std::ostream& os, const TSBuilder::_ns& ns)
 {
-  // if (ns.builder.always_full_namespace_) {
-  //   os << ns.nm->to_ts_namespace() << '.';
-  //   return os;
-  // }
-
   auto [sub, level] = Namespace::substract(ns.builder.ctx_->nm_cur(), ns.nm);
   if (sub)
     os << sub->to_ts_namespace(level) << '.';
@@ -615,8 +610,6 @@ void TSBuilder::assign_from_flat_type(AstTypeDecl* type,
 
 void TSBuilder::emit_struct2(AstStructDecl* s, bool is_exception)
 {
-  calc_struct_size_align(s);
-
   // native typescript
   if (!is_exception) {
     out << "export interface " << s->name << " {\n";
@@ -660,8 +653,8 @@ void TSBuilder::emit_struct2(AstStructDecl* s, bool is_exception)
 void TSBuilder::emit_constant(const std::string& name, AstNumber* number)
 {
   out << bl() << "export const " << name << " = ";
-  std::visit(
-      overloaded{
+  std::visit(overloads
+      {
           [&](int64_t x) { out << x; },
           [&](float x) { out << x; },
           [&](double x) { out << x; },
@@ -2013,8 +2006,6 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
 
 void TSBuilder::emit_marshal_function(AstStructDecl* s)
 {
-  calc_struct_size_align(s);
-
   // For exceptions, use the _Data interface that includes __ex_id
   std::string data_type = s->is_exception() ? (s->name + "_Data") : s->name;
 

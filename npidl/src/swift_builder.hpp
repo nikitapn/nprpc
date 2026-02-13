@@ -24,9 +24,9 @@ private:
 
   std::filesystem::path out_dir_;
   std::stringstream out;
-  
 
-  
+  std::unordered_set<AstStructDecl*> emitted_marshal_structs_;
+
   // Helper methods for type emission
   void emit_type(AstTypeDecl* type, std::ostream& os);
   void emit_fundamental_type(TokenId id, std::ostream& os);

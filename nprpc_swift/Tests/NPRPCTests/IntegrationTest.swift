@@ -8,6 +8,38 @@ import Foundation
 @testable import NPRPC
 
 final class IntegrationTests: XCTestCase {
+    nonisolated(unsafe) static var rpc: Rpc?
+    nonisolated(unsafe) static var poa: Poa?
+
+    override class func setUp() {
+        super.setUp()
+        print("Setting up integration tests (class-wide)...")
+        do {
+            rpc = try RpcBuilder()
+                .setLogLevel(.trace)
+                .setHostname("127.0.0.1")
+                .withTcp(16000)
+                .build()
+            // Give the TCP listener time to start accepting connections
+            Thread.sleep(forTimeInterval: 0.1)
+            poa = try rpc!.createPoa(maxObjects: 100)
+        } catch {
+            fatalError("Failed to set up test environment: \(error)")
+        }
+    }
+
+    override class func tearDown() {
+        print("Tearing down integration tests (class-wide)...")
+        // Rpc/Poa will be cleaned up when deinit is called
+        rpc = nil
+        poa = nil
+        super.tearDown()
+    }
+
+    func test1() throws {
+        // Placeholder test to ensure test discovery works
+        XCTAssertTrue(true)
+    }
     
     /// Test servant instantiation and direct method calls
     func testServantDirectCalls() throws {
@@ -44,21 +76,14 @@ final class IntegrationTests: XCTestCase {
             override func getNumbers() throws -> [Int32] {
                 return [42, 99, -7]
             }
+
+            override func throwingMethod(code: UInt32) throws {
+                throw TestException(__ex_id: 0, message: "Test error \(code)", code: code)
+            }
         }
 
-        let rpc = try RpcBuilder()
-            .setLogLevel(.trace)
-            .setHostname("127.0.0.1")
-            .withTcp(16000)
-            .build()
-
-        // Give the TCP listener time to start accepting connections
-        Thread.sleep(forTimeInterval: 0.1)
-
         let servant = TestShapeServant()
-
-        let poa = try rpc.createPoa(maxObjects: 100)
-        let oid = try poa.activateObject(servant)
+        let oid = try Self.poa!.activateObject(servant)
 
         // Create ShapeService client proxy from oid
         guard let obj = NPRPCObject.fromObjectId(oid) else {
@@ -128,5 +153,50 @@ final class IntegrationTests: XCTestCase {
         // Test getNumbers - should return the array of integers from our servant
         let nums = try client.getNumbers()
         XCTAssertEqual(nums, [42, 99, -7])
+    }
+
+    /// Test exception handling through RPC
+    func testExceptionHandling() throws {
+        class ExceptionServant: ShapeServiceServant {
+            override func getRectangle(id: UInt32) throws -> Rectangle {
+                return Rectangle()
+            }
+            override func setRectangle(id: UInt32, rect: Rectangle) throws {}
+            override func getRectangles() throws -> [Rectangle] { return [] }
+            override func getNumbers() throws -> [Int32] { return [] }
+            override func throwingMethod(code: UInt32) throws {
+                throw TestException(__ex_id: 0, message: "Error with code \(code)", code: code)
+            }
+        }
+
+        let servant = ExceptionServant()
+        let oid = try Self.poa!.activateObject(servant)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+        let client = ShapeService(obj)
+
+        // Calling throwingMethod should throw a TestException
+        do {
+            try client.throwingMethod(code: 42)
+            XCTFail("Expected TestException to be thrown")
+        } catch let e as TestException {
+            XCTAssertEqual(e.code, 42)
+            XCTAssertEqual(e.message, "Error with code 42")
+        } catch {
+            XCTFail("Expected TestException but got: \(error)")
+        }
+
+        // Test with different code
+        do {
+            try client.throwingMethod(code: 99)
+            XCTFail("Expected TestException to be thrown")
+        } catch let e as TestException {
+            XCTAssertEqual(e.code, 99)
+            XCTAssertEqual(e.message, "Error with code 99")
+        } catch {
+            XCTFail("Expected TestException but got: \(error)")
+        }
     }
 }

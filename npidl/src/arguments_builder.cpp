@@ -43,6 +43,8 @@ AstStructDecl* ArgumentsStructBuilder::make_struct(
   auto s = new AstStructDecl();
   s->name = ctx_->current_file() + "_M" + std::to_string(++ctx_->m_struct_n_);
   s->exception_id = -1; // Mark as non-exception
+  s->internal = true; // Mark as internal (not user-defined)
+  s->nm = ctx_->nm_cur(); // Set namespace to current namespace
 
   std::transform(args.begin(), args.end(), std::back_inserter(s->fields),
                  [ix = 0, s, fn](AstFunctionArgument* arg) mutable {

@@ -71,7 +71,7 @@ public func makeSimpleAnswer(buffer: FlatBuffer, messageId: impl.MessageId) {
 
 /// Handle standard RPC reply (for client proxy)
 /// Returns 0 for success, -1 for BlockResponse (has data), or error code for errors
-public func handleStandardReply(buffer: FlatBuffer) -> Int32 {
+public func handleStandardReply(buffer: FlatBuffer) throws -> Int32 {
     guard let data = buffer.constData else { return -2 }
     
     // Read message_id from offset 4
@@ -83,13 +83,25 @@ public func handleStandardReply(buffer: FlatBuffer) -> Int32 {
     // releaseObject=8, success=9, exception=10, error_PoaNotExist=11, etc.
     
     switch messageId {
-    case impl.MessageId.success.rawValue: // 9
+    case impl.MessageId.success.rawValue:
         return 0
-    case impl.MessageId.blockResponse.rawValue: // 6 - has return data
+    case impl.MessageId.exception.rawValue:
+        return 1
+    case impl.MessageId.blockResponse.rawValue:
         return -1
-    case impl.MessageId.exception.rawValue: // 10
-        return Int32(messageId)
-    default: // Error codes
-        return Int32(messageId)
+    case impl.MessageId.error_ObjectNotExist.rawValue:
+        throw ExceptionObjectNotExist()
+    case impl.MessageId.error_CommFailure.rawValue:
+        throw ExceptionCommFailure()
+    case impl.MessageId.error_UnknownFunctionIdx.rawValue:
+        throw ExceptionUnknownFunctionIndex()
+    case impl.MessageId.error_UnknownMessageId.rawValue:
+        throw ExceptionUnknownMessageId()
+    case impl.MessageId.error_BadAccess.rawValue:
+        throw ExceptionBadAccess()
+    case impl.MessageId.error_BadInput.rawValue:
+        throw ExceptionBadInput()
+    default:
+        return -1
     }
 }

@@ -1,10 +1,17 @@
 // Simple test IDL for Swift bindings
 module swift.test;
 
-// exception TestException {
-//     message: string;
-//     code: u32;
-// }
+exception TestException {
+    message: string;
+    code: u32;
+}
+
+
+namespace TestNamespace {
+  interface TestInterface {
+    void testMethod1(arg1: f32);
+  }
+}
 
 enum Color {
   Red,
@@ -30,5 +37,17 @@ interface ShapeService {
   void setRectangle(id: u32, rect: Rectangle);
   void getRectangles(rects: out vector<Rectangle>);
   void getNumbers(nums: out vector<i32>);
+  void throwingMethod(code: u32) raises (TestException);
 }
 
+namespace Namespace1 {
+  message Message1 {
+    field1: string;
+    field2: i32;
+  }
+
+  interface Service1 {
+    void method1(msg: Message1);
+    void method2(arg1: f32);
+  }
+}

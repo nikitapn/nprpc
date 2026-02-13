@@ -835,7 +835,9 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
 void CppBuilder::emit_constant(const std::string& name, AstNumber* number)
 {
   oh << "constexpr auto " << name << " = ";
-  std::visit(overloaded{
+  std::visit(overloads
+             {
+                 [&](int32_t x) { oh << x; },
                  [&](int64_t x) { oh << x; },
                  [&](float x) { oh << x << 'f'; },
                  [&](double x) { oh << x; },

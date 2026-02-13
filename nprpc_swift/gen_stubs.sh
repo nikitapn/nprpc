@@ -33,3 +33,5 @@ $NPIDL --swift --ts \
 #   --args $NPIDL --swift \
 #     nprpc_swift/Tests/IDL/nprpc_test.npidl \
 #     --output-dir nprpc_swift/Tests/NPRPCTests/Generated | tee gen_stubs.log
+
+echo "Generated Swift stubs for NPRPC"
