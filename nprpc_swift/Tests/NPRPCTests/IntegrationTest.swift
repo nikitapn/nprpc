@@ -40,12 +40,12 @@ final class IntegrationTests: XCTestCase {
         // Placeholder test to ensure test discovery works
         XCTAssertTrue(true)
     }
-    
+
     /// Test servant instantiation and direct method calls
     func testServantDirectCalls() throws {
         class TestShapeServant: ShapeServiceServant {
             var storedRect: Rectangle?
-            
+
             override func getRectangle(id: UInt32) -> Rectangle {
                 return Rectangle(
                     topLeft: Point(x: 10, y: 20, z: nil, symbol: ""),
@@ -53,7 +53,7 @@ final class IntegrationTests: XCTestCase {
                     color: .green
                 )
             }
-            
+
             override func setRectangle(id: UInt32, rect: Rectangle) {
                 storedRect = rect
             }
@@ -90,16 +90,15 @@ final class IntegrationTests: XCTestCase {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
         }
-        
-        let client = ShapeService(obj)
-        
+        let client = narrow(obj, to: ShapeService.self)!
+
         // Verify the class ID matches
-        XCTAssertEqual(client.getClass(), "basic_test/swift.test.ShapeService")
+        XCTAssertEqual(client.classId, "basic_test/swift.test.ShapeService")
         XCTAssertEqual(oid.class_id, "basic_test/swift.test.ShapeService")
-        
+
         // Actually call RPC methods through the client proxy
         // This tests the full serialization/dispatch/deserialization cycle
-        
+
         // Test getRectangle - should return the rectangle from our servant
         let rect = try client.getRectangle(id: 42)
         XCTAssertEqual(rect.topLeft.x, 10)
@@ -107,7 +106,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(rect.bottomRight.x, 110)
         XCTAssertEqual(rect.bottomRight.y, 120)
         XCTAssertEqual(rect.color, .green)
-        
+
         // Test setRectangle - should store the rectangle in our servant
         let newRect = Rectangle(
             topLeft: Point(x: 5, y: 15, z: 33, symbol: "Abcd"),
@@ -175,7 +174,7 @@ final class IntegrationTests: XCTestCase {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
         }
-        let client = ShapeService(obj)
+        let client = narrow(obj, to: ShapeService.self)!
 
         // Calling throwingMethod should throw a TestException
         do {
@@ -212,7 +211,7 @@ final class IntegrationTests: XCTestCase {
             var outFlatStruct_receivedValue: UInt32 = 0
             var outScalarWithException_receivedDevAddr: UInt8 = 0
             var outScalarWithException_receivedAddr: UInt16 = 0
-            
+
             override func returnBoolean() throws -> Bool {
                 return true
             }
@@ -280,7 +279,7 @@ final class IntegrationTests: XCTestCase {
             return
         }
 
-        let client = TestBasic(obj)
+        let client = narrow(obj, to: TestBasic.self)!
         // Returning a boolean value to test basic marshalling of fundamental types
         XCTAssertEqual(try client.returnBoolean(), true)
         // Returning an IdArray to test marshalling of array types
@@ -371,8 +370,7 @@ final class IntegrationTests: XCTestCase {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
         }
-
-        let client = TestLargeMessage(obj)
+        let client = narrow(obj, to: TestLargeMessage.self)!
 
         // Test with a moderately large array (64KB)
         let largeInput = [UInt8](repeating: 0x42, count: 64 * 1024)
@@ -428,8 +426,7 @@ final class IntegrationTests: XCTestCase {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
         }
-
-        let client = TestOptional(obj)
+        let client = narrow(obj, to: TestOptional.self)!
 
         // Test InEmpty with nil
         XCTAssertEqual(try client.inEmpty(a: nil), true)
@@ -506,8 +503,7 @@ final class IntegrationTests: XCTestCase {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
         }
-
-        let client = TestNested(obj)
+        let client = narrow(obj, to: TestNested.self)!
 
         // Test Out - optional nested struct
         let bbb = try client.out()
@@ -535,5 +531,22 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(nested.y.y.x, "level2")
         XCTAssertEqual(nested.y.y.y, [10, 20, 30, 40, 50])
         XCTAssertEqual(nested.y.y.z, 0xDEADBEEFCAFEBABE)
+    }
+
+    func testObjects() throws {
+        class TestObjectsServantImpl: TestObjectsServant {
+
+            override func sendObject(o: NPRPCObject) throws {
+
+            }
+
+            override func releaseReceivedObject() throws {
+
+            }
+
+            override func sendNestedObjects(o: NestedObjects) throws {
+
+            }
+        }
     }
 }

@@ -132,7 +132,7 @@ void SwiftBuilder::emit_type(AstTypeDecl* type, std::ostream& os)
     os << "Void";
     break;
   case FieldType::Object:
-    os << "ObjectPtr<Object>";
+    os << "NPRPCObject";
     break;
   case FieldType::Alias:
     // In Swift, don't prefix with namespace if it's in the same module
@@ -226,7 +226,7 @@ void SwiftBuilder::emit_struct2(AstStructDecl* s, Target target)
       out << " = []";
       break;
     case FieldType::Object:
-      out << " = ObjectPtr()";
+      out << " = NPRPCObject()";
       break;
     case FieldType::Enum:
       // Use first enum value as default
@@ -406,16 +406,21 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
   out << bl() << "// Client proxy for " << class_name << "\n";
   out << bl() << "// Pure Swift implementation with direct marshalling\n";
-  out << bl() << "public class " << class_name << ": NPRPCObjectProxy, " << class_name << "Protocol " << bb();
+  out << bl() << "final public class " << class_name << ": NPRPCObject, " << class_name << "Protocol, @unchecked Sendable " << bb();
 
-  // Constructor
-  out << bl() << "public override init(_ object: NPRPCObject) " << bb();
-  out << bl() << "super.init(object)\n";
+  // Static getClass to return the class ID
+  out << bl() << "public override class var classId: String {\n" << bb(false);
+  out << bl() << "\"" << class_id << "\"\n";
   out << eb() << "\n";
 
-  // Override getClass to return the class ID
-  out << bl() << "public override func getClass() -> String " << bb();
-  out << bl() << "return \"" << class_id << "\"\n";
+  // Constructor (required, so no override keyword)
+  out << bl() << "public required init(handle: UnsafeMutableRawPointer) " << bb();
+  out << bl() << "super.init(handle: handle)\n";
+  out << eb() << "\n";
+
+  // Required Codable initializer (inherited from NPRPCObject)
+  out << bl() << "public required init(from decoder: Decoder) throws " << bb();
+  out << bl() << "try super.init(from: decoder)\n";
   out << eb() << "\n";
 
   // Implement protocol methods with marshalling
@@ -490,10 +495,10 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
     // Write call header
     out << bl() << "// Write call header\n";
-    out << bl() << "data.storeBytes(of: object.poaIdx, toByteOffset: " << size_of_header << ", as: UInt16.self)\n";
+    out << bl() << "data.storeBytes(of: poaIdx, toByteOffset: " << size_of_header << ", as: UInt16.self)\n";
     out << bl() << "data.storeBytes(of: UInt8(0), toByteOffset: " << (size_of_header + 2) << ", as: UInt8.self)  // interface_idx\n";
     out << bl() << "data.storeBytes(of: UInt8(" << fn->idx << "), toByteOffset: " << (size_of_header + 3) << ", as: UInt8.self)  // function_idx\n";
-    out << bl() << "data.storeBytes(of: object.objectId, toByteOffset: " << (size_of_header + 8) << ", as: UInt64.self)\n\n";
+    out << bl() << "data.storeBytes(of: objectId, toByteOffset: " << (size_of_header + 8) << ", as: UInt64.self)\n\n";
 
     // Marshal input arguments
     if (fn->in_s) {
@@ -518,7 +523,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
     // Send/receive
     out << bl() << "// Send and receive\n";
-    out << bl() << "try object.sendReceive(buffer: buffer, timeout: object.timeout)\n\n";
+    out << bl() << "try sendReceive(buffer: buffer, timeout: timeout)\n\n";
 
     // Handle reply
     out << bl() << "// Handle reply\n";
@@ -544,7 +549,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
       }
 
       if (out_needs_endpoint) {
-        out << bl() << "let out = " << ns(fn->out_s->nm) << "unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ", endpoint: object.endpoint)\n";
+        out << bl() << "let out = " << ns(fn->out_s->nm) << "unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ", endpoint: endpoint)\n";
       } else {
         out << bl() << "let out = " << ns(fn->out_s->nm) << "unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ")\n";
       }

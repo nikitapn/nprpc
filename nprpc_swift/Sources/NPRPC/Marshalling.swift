@@ -188,15 +188,11 @@ public struct Span<T> {
     }
 }
 
-// MARK: - Object reference marshalling
-
-/// Base protocol for all NPRPC interface types
-public protocol Object {}
+// MARK: - NPRPCObject marshalling
 
 /// Unmarshal a remote object reference
-/// TODO: Implement actual object proxy creation
-public func unmarshal_object_proxy(buffer: UnsafeRawPointer, offset: Int, endpoint: NPRPCEndpoint) -> ObjectPtr<Object> {
+public func unmarshal_object_proxy(buffer: UnsafeRawPointer, offset: Int, endpoint: NPRPCEndpoint) -> NPRPCObject {
     // Use the generated unmarshal function
     let data = detail.unmarshal_ObjectId(buffer: buffer, offset: offset)
-    return ObjectPtr<Object>(data: data)
+    return NPRPCObject.fromObjectId(data)!
 }
