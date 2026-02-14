@@ -195,7 +195,7 @@ Serve web clients over HTTP/3 using nghttp3/ngtcp2
  - [x] fundamental optional
  - [x] strings
  - [x] vector of structs
- - [ ] Exceptions: fix manual __ex_id assignment in test servant (use auto-generated id)
+ - [x] Exceptions: fix manual __ex_id assignment in test servant (use auto-generated id)
 2. Add bounds checking to all unmarshal operations
 3. Implement async proxy calls
 4. Implement async servant dispatch bridge

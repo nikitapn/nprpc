@@ -16,7 +16,7 @@ final class IntegrationTests: XCTestCase {
         print("Setting up integration tests (class-wide)...")
         do {
             rpc = try RpcBuilder()
-                .setLogLevel(.trace)
+                .setLogLevel(.warn)
                 .setHostname("127.0.0.1")
                 .withTcp(16000)
                 .build()
@@ -78,7 +78,7 @@ final class IntegrationTests: XCTestCase {
             }
 
             override func throwingMethod(code: UInt32) throws {
-                throw TestException(__ex_id: 0, message: "Test error \(code)", code: code)
+                throw TestException(message: "Test error \(code)", code: code)
             }
         }
 
@@ -165,7 +165,7 @@ final class IntegrationTests: XCTestCase {
             override func getRectangles() -> [Rectangle] { return [] }
             override func getNumbers() -> [Int32] { return [] }
             override func throwingMethod(code: UInt32) throws {
-                throw TestException(__ex_id: 0, message: "Error with code \(code)", code: code)
+                throw TestException(message: "Error with code \(code)", code: code)
             }
         }
 
@@ -263,7 +263,7 @@ final class IntegrationTests: XCTestCase {
             }
 
             override func inException() throws {
-                throw SimpleException(__ex_id: 0, message: "This is a test exception", code: 42)
+                throw SimpleException(message: "This is a test exception", code: 42)
             }
 
             override func outScalarWithException(dev_addr: UInt8, addr: UInt16) throws -> UInt8   {
@@ -343,5 +343,197 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(servant.outScalarWithException_receivedDevAddr, 10)
         XCTAssertEqual(servant.outScalarWithException_receivedAddr, 783)
         XCTAssertEqual(result, 32)
+    }
+
+    func testLargeMessage() throws {
+        class TestLargeMessageServantImpl: TestLargeMessageServant {
+            var in_receivedA: UInt32 = 0
+            var in_receivedB: Bool = false
+            var in_receivedC: [UInt8] = []
+
+            override func in_(a: UInt32, b: Bool, c: [UInt8]) -> Bool {
+                in_receivedA = a
+                in_receivedB = b
+                in_receivedC = c
+                return true
+            }
+
+            override func out() -> (UInt32, Bool, [UInt8]) {
+                // Return a large array (1MB)
+                let largeArray = [UInt8](repeating: 0xAB, count: 1024 * 1024)
+                return (0xDEADBEEF, true, largeArray)
+            }
+        }
+
+        let servant = TestLargeMessageServantImpl()
+        let oid = try Self.poa!.activateObject(servant)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+
+        let client = TestLargeMessage(obj)
+
+        // Test with a moderately large array (64KB)
+        let largeInput = [UInt8](repeating: 0x42, count: 64 * 1024)
+        XCTAssertEqual(try client.in_(a: 0xCAFEBABE, b: false, c: largeInput), true)
+        XCTAssertEqual(servant.in_receivedA, 0xCAFEBABE)
+        XCTAssertEqual(servant.in_receivedB, false)
+        XCTAssertEqual(servant.in_receivedC.count, 64 * 1024)
+        XCTAssertEqual(servant.in_receivedC.first, 0x42)
+        XCTAssertEqual(servant.in_receivedC.last, 0x42)
+
+        // Test output with large array
+        let (outA, outB, outC) = try client.out()
+        XCTAssertEqual(outA, 0xDEADBEEF)
+        XCTAssertEqual(outB, true)
+        XCTAssertEqual(outC.count, 1024 * 1024)
+        XCTAssertEqual(outC.first, 0xAB)
+        XCTAssertEqual(outC.last, 0xAB)
+    }
+
+    func testOptional() throws {
+        class TestOptionalServantImpl: TestOptionalServant {
+            var inEmpty_receivedA: UInt32? = nil
+            var in_receivedA: UInt32? = nil
+            var in_receivedB: AAA? = nil
+
+            override func inEmpty(a: UInt32?) throws -> Bool {
+                inEmpty_receivedA = a
+                return a == nil
+            }
+
+            override func in_(a: UInt32?, b: AAA?) throws -> Bool {
+                in_receivedA = a
+                in_receivedB = b
+                return a != nil && b != nil
+            }
+
+            override func outEmpty() throws -> UInt32? {
+                return nil
+            }
+
+            override func out() throws -> UInt32? {
+                return 42
+            }
+
+            override func returnOpt1() throws -> Opt1 {
+                return Opt1(str: "Hello", data: [1, 2, 3, 4, 5])
+            }
+        }
+
+        let servant = TestOptionalServantImpl()
+        let oid = try Self.poa!.activateObject(servant)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+
+        let client = TestOptional(obj)
+
+        // Test InEmpty with nil
+        XCTAssertEqual(try client.inEmpty(a: nil), true)
+        XCTAssertNil(servant.inEmpty_receivedA)
+
+        // Test InEmpty with value
+        XCTAssertEqual(try client.inEmpty(a: 123), false)
+        XCTAssertEqual(servant.inEmpty_receivedA, 123)
+
+        // Test In_ with both values
+        let aaa = AAA(a: 999, b: "Test", c: "Data")
+        XCTAssertEqual(try client.in_(a: 456, b: aaa), true)
+        XCTAssertEqual(servant.in_receivedA, 456)
+        XCTAssertNotNil(servant.in_receivedB)
+        XCTAssertEqual(servant.in_receivedB?.a, 999)
+        XCTAssertEqual(servant.in_receivedB?.b, "Test")
+        XCTAssertEqual(servant.in_receivedB?.c, "Data")
+
+        // Test In_ with nil values
+        XCTAssertEqual(try client.in_(a: nil, b: nil), false)
+        XCTAssertNil(servant.in_receivedA)
+        XCTAssertNil(servant.in_receivedB)
+
+        // Test OutEmpty - returns nil
+        let outEmpty = try client.outEmpty()
+        XCTAssertNil(outEmpty)
+
+        // Test Out - returns value
+        let outVal = try client.out()
+        XCTAssertEqual(outVal, 42)
+
+        // Test ReturnOpt1 - returns struct with optional field populated
+        let opt1 = try client.returnOpt1()
+        XCTAssertEqual(opt1.str, "Hello")
+        XCTAssertEqual(opt1.data, [1, 2, 3, 4, 5])
+    }
+
+    func testNested() throws {
+        class TestNestedServantImpl: TestNestedServant {
+            override func out() throws -> BBB? {
+                return BBB(
+                    a: [
+                        AAA(a: 1, b: "first", c: "one"),
+                        AAA(a: 2, b: "second", c: "two")
+                    ],
+                    b: [
+                        CCC(a: "a1", b: "b1", c: true),
+                        CCC(a: "a2", b: "b2", c: false),
+                        CCC(a: "a3", b: "b3", c: nil)
+                    ]
+                )
+            }
+
+            override func returnNested() throws -> TopLevel {
+                return TopLevel(
+                    x: "top",
+                    y: Level1(
+                        x: "level1",
+                        y: Level2(
+                            x: "level2",
+                            y: [10, 20, 30, 40, 50],
+                            z: 0xDEADBEEFCAFEBABE
+                        ),
+                        z: 12345678901234
+                    ),
+                    z: 99999999999
+                )
+            }
+        }
+
+        let servant = TestNestedServantImpl()
+        let oid = try Self.poa!.activateObject(servant)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+
+        let client = TestNested(obj)
+
+        // Test Out - optional nested struct
+        let bbb = try client.out()
+        XCTAssertNotNil(bbb)
+        XCTAssertEqual(bbb?.a.count, 2)
+        XCTAssertEqual(bbb?.a[0].a, 1)
+        XCTAssertEqual(bbb?.a[0].b, "first")
+        XCTAssertEqual(bbb?.a[0].c, "one")
+        XCTAssertEqual(bbb?.a[1].a, 2)
+        XCTAssertEqual(bbb?.a[1].b, "second")
+        XCTAssertEqual(bbb?.a[1].c, "two")
+        XCTAssertEqual(bbb?.b.count, 3)
+        XCTAssertEqual(bbb?.b[0].a, "a1")
+        XCTAssertEqual(bbb?.b[0].b, "b1")
+        XCTAssertEqual(bbb?.b[0].c, true)
+        XCTAssertEqual(bbb?.b[1].c, false)
+        XCTAssertNil(bbb?.b[2].c)
+
+        // Test ReturnNested - deeply nested struct
+        let nested = try client.returnNested()
+        XCTAssertEqual(nested.x, "top")
+        XCTAssertEqual(nested.z, 99999999999)
+        XCTAssertEqual(nested.y.x, "level1")
+        XCTAssertEqual(nested.y.z, 12345678901234)
+        XCTAssertEqual(nested.y.y.x, "level2")
+        XCTAssertEqual(nested.y.y.y, [10, 20, 30, 40, 50])
+        XCTAssertEqual(nested.y.y.z, 0xDEADBEEFCAFEBABE)
     }
 }

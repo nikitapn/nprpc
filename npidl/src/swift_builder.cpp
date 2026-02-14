@@ -192,6 +192,10 @@ void SwiftBuilder::emit_struct2(AstStructDecl* s, Target target)
 
   // Emit fields with default values to allow var result: StructName declarations
   for (auto field : s->fields) {
+    if (target == Target::Exception && field->name == "__ex_id") {
+      // Skip __ex_id for exceptions, it's only used for marshalling and should not be part of the public API
+      continue;
+    }
     out << bl() << "public var " << field->name << ": ";
     emit_type(field->type, out);
 
@@ -247,20 +251,30 @@ void SwiftBuilder::emit_struct2(AstStructDecl* s, Target target)
     // First, generate no-argument init (for unmarshal)
     out << "\n" << bl() << "public init() {}\n";
 
-    // Then, generate memberwise initializer
-    out << "\n" << bl() << "public init(";
-    bool first = true;
-    for (auto field : s->fields) {
-      if (!first) out << ", ";
-      first = false;
-      out << field->name << ": ";
-      emit_type(field->type, out);
+    if (s->is_exception() && s->fields.size() == 1) {
+      // For exceptions with only __ex_id, we can skip generating the memberwise initializer
+      // since it doesn't make sense to initialize an exception with just an ID
+    } else {
+      // For other structs and exceptions with more fields, generate the memberwise initializer
+      // Then, generate memberwise initializer
+      out << "\n" << bl() << "public init(";
+      bool first = true;
+      for (auto field : s->fields) {
+        if (target == Target::Exception && field->name == "__ex_id")
+          continue;
+        if (!first) out << ", ";
+        first = false;
+        out << field->name << ": ";
+        emit_type(field->type, out);
+      }
+      out << ") " << bb();
+      for (auto field : s->fields) {
+        if (target == Target::Exception && field->name == "__ex_id")
+          continue;
+        out << bl() << "self." << field->name << " = " << field->name << "\n";
+      }
+      out << eb();
     }
-    out << ") " << bb();
-    for (auto field : s->fields) {
-      out << bl() << "self." << field->name << " = " << field->name << "\n";
-    }
-    out << eb();
   }
 
   // For exceptions, add the required message property only if not already defined
@@ -756,7 +770,6 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       }
 
       out << bl() << "// Marshal output arguments\n";
-      out << bl() << "guard let outData = buffer.data else { return }\n";
       out << bl() << "var out_data = " << fn->out_s->name << "()\n";
 
       int ix = 0;
@@ -771,6 +784,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       out << "\n";
 
       out << bl() << ns(fn->out_s->nm) << "marshal_" << fn->out_s->name << "(buffer: buffer, offset: " << size_of_header << ", data: out_data)\n";
+      out << bl() << "guard let outData = buffer.data else { return }\n";
       out << bl() << "outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n";
       out << bl() << "outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: Int32.self)\n";
       out << bl() << "outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)\n";
@@ -788,16 +802,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       out << bl() << "obuf.prepare(" << initial_size << ")\n";
       out << bl() << "obuf.commit(" << initial_size << ")\n";
       out << bl() << "guard let exData = obuf.data else { return }\n";
-
-      // Construct exception struct with correct __ex_id
-      out << bl() << "let ex_data = " << fn->ex->name << "(__ex_id: " << fn->ex->exception_id;
-      for (size_t i = 1; i < fn->ex->fields.size(); ++i) {
-        auto mb = fn->ex->fields[i];
-        out << ", " << mb->name << ": e." << mb->name;
-      }
-      out << ")\n";
-
-      out << bl() << "marshal_" << fn->ex->name << "(buffer: obuf, offset: " << offset << ", data: ex_data)\n";
+      out << bl() << "marshal_" << fn->ex->name << "(buffer: obuf, offset: " << offset << ", data: e)\n";
       out << bl() << "exData.storeBytes(of: UInt32(obuf.size - 4), toByteOffset: 0, as: UInt32.self)\n";
       out << bl() << "exData.storeBytes(of: impl.MessageId.exception.rawValue, toByteOffset: 4, as: Int32.self)\n";
       out << bl() << "exData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)\n";
@@ -1138,6 +1143,12 @@ void SwiftBuilder::emit_marshal_function(AstStructDecl* s)
 
   int current_offset = 0;
   for (auto field : s->fields) {
+    if (s->is_exception() && field->name == "__ex_id") {
+      // Special handling for exception ID field - write the exception ID instead of marshaling from data
+      out << bl() << "buf.storeBytes(of: UInt32(" << s->exception_id << "), toByteOffset: offset + " << current_offset << ", as: UInt32.self)\n";
+      current_offset += 4; // __ex_id is always a UInt32
+      continue;
+    }
     emit_field_marshal(field, current_offset, "data");
   }
 
@@ -1299,10 +1310,19 @@ void SwiftBuilder::emit_unmarshal_function(AstStructDecl* s)
   out << bb();
 
   // Create struct with default values (fields have defaults from emit_struct2)
-  out << bl() << "var result = " << s->name << "()\n";
+  if (s->is_exception() && s->fields.size() == 1) {
+    out << bl() << "return " << s->name << "()\n";
+    out << eb() << "\n";
+    return;
+  }
 
-  int current_offset = 0;
+  out << bl() << "var result = " << s->name << "()\n";
+  int current_offset = s->is_exception() ? 4 : 0; // Start after __ex_id for exceptions
   for (auto field : s->fields) {
+    if (s->is_exception() && field->name == "__ex_id") {
+      // Skip __ex_id field for exceptions - it's handled separately
+      continue;
+    }
     emit_field_unmarshal(field, current_offset, "result", has_objects);
   }
 
