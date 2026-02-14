@@ -346,6 +346,16 @@ NPRPC_API void rpc_call(const EndPoint& endpoint,
   g_rpc->call(endpoint, buffer, timeout_ms);
 }
 
+// Free function wrapper for async calls with callback (e.g., Swift bridge)
+NPRPC_API void rpc_call_async(
+    const EndPoint& endpoint,
+    flat_buffer&& buffer,
+    std::function<void(const boost::system::error_code&, flat_buffer&)>&& completion_handler,
+    uint32_t timeout_ms)
+{
+  g_rpc->call_async(endpoint, std::move(buffer), std::make_optional(std::move(completion_handler)), timeout_ms);
+}
+
 NPRPC_API void RpcImpl::send_udp(const EndPoint& endpoint, flat_buffer&& buffer)
 {
   if (endpoint.type() == EndPointType::Udp) {

@@ -364,8 +364,11 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
     }
 
     bool has_return = !fn->is_void();
+    // Note: IDL async methods are not marked async in protocol - async is a client-side concern
+    // Only add throws if the function has raises(...)
+    const char* throws_kw = fn->is_throwing() ? " throws" : "";
     if (has_return || !out_params.empty()) {
-      out << " throws -> ";
+      out << throws_kw << " -> ";
 
       // If multiple return values, use tuple
       if ((has_return ? 1 : 0) + out_params.size() > 1) {
@@ -390,7 +393,7 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
         }
       }
     } else {
-      out << " throws";
+      out << throws_kw;
     }
 
     out << "\n";
@@ -404,9 +407,25 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
   const std::string class_name = swift_type_name(ifs->name);
   const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->to_ts_namespace() + '.' + ifs->name;
 
+  // Check if client proxy can conform to protocol
+  // A method causes non-conformance if:
+  // - It's async (protocol is sync, proxy is async)
+  // - It's non-async without raises() (protocol has no throws, proxy has throws)
+  bool can_conform = true;
+  for (auto& fn : ifs->fns) {
+    if (fn->is_async || !fn->is_throwing()) {
+      can_conform = false;
+      break;
+    }
+  }
+
   out << bl() << "// Client proxy for " << class_name << "\n";
   out << bl() << "// Pure Swift implementation with direct marshalling\n";
-  out << bl() << "final public class " << class_name << ": NPRPCObject, " << class_name << "Protocol, @unchecked Sendable " << bb();
+  if (can_conform) {
+    out << bl() << "final public class " << class_name << ": NPRPCObject, " << class_name << "Protocol, @unchecked Sendable " << bb();
+  } else {
+    out << bl() << "final public class " << class_name << ": NPRPCObject, @unchecked Sendable " << bb();
+  }
 
   // Static getClass to return the class ID
   out << bl() << "public override class var classId: String {\n" << bb(false);
@@ -438,7 +457,18 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
       }
     }
 
-    out << ") throws";
+    // Client proxy method signatures:
+    // - Async without raises(): `func foo() async` (fire-and-forget, errors ignored)
+    // - Async with raises(): `func foo() async throws` (can throw app exceptions)
+    // - Non-async: `func foo() throws` (always throws - communication can fail)
+    if (fn->is_async && fn->is_throwing()) {
+      out << ") async throws";
+    } else if (fn->is_async) {
+      out << ") async";
+    } else {
+      // Non-async methods always throw (communication errors)
+      out << ") throws";
+    }
 
     // Return type - match protocol (out params become return values)
     std::vector<AstFunctionArgument*> out_params;
@@ -476,6 +506,10 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
     out << " " << bb();
 
+    // For async methods without throws, we use return instead of throw for errors
+    const bool can_throw = fn->is_throwing() || !fn->is_async;
+    const char* error_stmt = can_throw ? "throw" : "return";
+
     // Calculate buffer size
     const auto fixed_size = get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
     const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
@@ -484,7 +518,11 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     out << bl() << "let buffer = FlatBuffer()\n";
     out << bl() << "buffer.prepare(" << capacity << ")\n";
     out << bl() << "buffer.commit(" << fixed_size << ")\n";
-    out << bl() << "guard let data = buffer.data else { throw BufferError(message: \"Failed to get buffer data\") }\n\n";
+    out << bl() << "guard let data = buffer.data else { " << error_stmt << " "; 
+    if (can_throw) {
+      out << "BufferError(message: \"Failed to get buffer data\")";
+    }
+    out << " }\n\n";
 
     // Write message header
     out << bl() << "// Write message header\n";
@@ -518,68 +556,88 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     }
 
     // Set message size (must be done after marshalling as optionals/vectors may extend buffer)
-    out << bl() << "guard let finalData = buffer.data else { throw BufferError(message: \"Failed to get buffer data\") }\n";
+    out << bl() << "guard let finalData = buffer.data else { " << error_stmt << " ";
+    if (can_throw) {
+      out << "BufferError(message: \"Failed to get buffer data\")";
+    }
+    out << " }\n";
     out << bl() << "finalData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n\n";
 
-    // Send/receive
-    out << bl() << "// Send and receive\n";
-    out << bl() << "try sendReceive(buffer: buffer, timeout: timeout)\n\n";
-
-    // Handle reply
-    out << bl() << "// Handle reply\n";
-    out << bl() << "let stdReply = try handleStandardReply(buffer: buffer)\n";
-    if (fn->ex) {
-      out << bl() << "if stdReply == 1 { throw " << ctx_->current_file() << "_throwException(buffer: buffer) }\n";
-    }
-
-    if (!fn->out_s) {
-      out << bl() << "if stdReply != 0 { throw UnexpectedReplyError(message: \"Unexpected reply\") }\n";
+    // Send request
+    if (fn->is_async) {
+      // Async method - use sendAsync with await
+      out << bl() << "// Send async (no reply expected)\n";
+      if (fn->is_throwing()) {
+        out << bl() << "try await sendAsync(buffer: buffer, timeout: timeout)\n";
+      } else {
+        // Fire-and-forget: wrap in do/catch since sendAsync can throw
+        out << bl() << "do {\n";
+        out << bl() << "  try await sendAsync(buffer: buffer, timeout: timeout)\n";
+        out << bl() << "} catch {\n";
+        out << bl() << "  // Fire-and-forget: ignore communication errors\n";
+        out << bl() << "}\n";
+      }
     } else {
-      out << bl() << "if stdReply != -1 { throw UnexpectedReplyError(message: \"Unexpected reply\") }\n\n";
+      // Synchronous method - send and wait for reply
+      out << bl() << "// Send and receive\n";
+      out << bl() << "try sendReceive(buffer: buffer, timeout: timeout)\n\n";
 
-      // Unmarshal output arguments
-      out << bl() << "guard let responseData = buffer.data else { throw BufferError(message: \"Failed to get response data\") }\n";
-
-      bool out_needs_endpoint = false;
-      for (auto f : fn->out_s->fields) {
-        if (contains_object(f->type)) {
-          out_needs_endpoint = true;
-          break;
-        }
+      // Handle reply
+      out << bl() << "// Handle reply\n";
+      out << bl() << "let stdReply = try handleStandardReply(buffer: buffer)\n";
+      if (fn->ex) {
+        out << bl() << "if stdReply == 1 { throw " << ctx_->current_file() << "_throwException(buffer: buffer) }\n";
       }
 
-      if (out_needs_endpoint) {
-        out << bl() << "let out = " << ns(fn->out_s->nm) << "unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ", endpoint: endpoint)\n";
+      if (!fn->out_s) {
+        out << bl() << "if stdReply != 0 { throw UnexpectedReplyError(message: \"Unexpected reply\") }\n";
       } else {
-        out << bl() << "let out = " << ns(fn->out_s->nm) << "unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ")\n";
-      }
+        out << bl() << "if stdReply != -1 { throw UnexpectedReplyError(message: \"Unexpected reply\") }\n\n";
 
-      // Return output values
-      if ((has_return ? 1 : 0) + out_params.size() > 1) {
-        // Multiple return values - use tuple
-        out << bl() << "return (";
-        bool first_ret = true;
-        int ix = 0;
-        if (has_return) {
-          out << "out._1";
-          first_ret = false;
-          ix = 1;
+        // Unmarshal output arguments
+        out << bl() << "guard let responseData = buffer.data else { throw BufferError(message: \"Failed to get response data\") }\n";
+
+        bool out_needs_endpoint = false;
+        for (auto f : fn->out_s->fields) {
+          if (contains_object(f->type)) {
+            out_needs_endpoint = true;
+            break;
+          }
         }
-        for (auto out_arg : fn->args) {
-          if (out_arg->modifier == ArgumentModifier::In) continue;
-          ++ix;
-          if (!first_ret) out << ", ";
-          first_ret = false;
-          out << "out._" << ix;
+
+        if (out_needs_endpoint) {
+          out << bl() << "let out = try " << ns(fn->out_s->nm) << "unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ", endpoint: endpoint)\n";
+        } else {
+          out << bl() << "let out = " << ns(fn->out_s->nm) << "unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ")\n";
         }
-        out << ")\n";
-      } else if (has_return) {
-        out << bl() << "return out._1\n";
-      } else {
-        // Single out parameter
-        out << bl() << "return out._1\n";
+
+        // Return output values
+        if ((has_return ? 1 : 0) + out_params.size() > 1) {
+          // Multiple return values - use tuple
+          out << bl() << "return (";
+          bool first_ret = true;
+          int ix = 0;
+          if (has_return) {
+            out << "out._1";
+            first_ret = false;
+            ix = 1;
+          }
+          for (auto out_arg : fn->args) {
+            if (out_arg->modifier == ArgumentModifier::In) continue;
+            ++ix;
+            if (!first_ret) out << ", ";
+            first_ret = false;
+            out << "out._" << ix;
+          }
+          out << ")\n";
+        } else if (has_return) {
+          out << bl() << "return out._1\n";
+        } else {
+          // Single out parameter
+          out << bl() << "return out._1\n";
+        }
       }
-    }
+    } // end if (fn->is_async) else
 
     out << eb() << "\n";
   }
@@ -619,6 +677,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       }
     }
 
+    // Servant methods only have throws if they have raises(...) in IDL
     out << (fn->is_throwing() ? ") throws" : ")");
 
     // Return type - match protocol
@@ -688,7 +747,14 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       }
 
       if (in_needs_endpoint) {
-        out << bl() << "let ia = " << ns(fn->in_s->nm) << "unmarshal_" << fn->in_s->name << "(buffer: data, offset: " << get_arguments_offset() << ", endpoint: remoteEndpoint)\n";
+        // Unmarshalling objects can throw - wrap in do-catch
+        out << bl() << "let ia: " << ns(fn->in_s->nm) << fn->in_s->name << "\n";
+        out << bl() << "do {\n";
+        out << bl() << "  ia = try " << ns(fn->in_s->nm) << "unmarshal_" << fn->in_s->name << "(buffer: data, offset: " << get_arguments_offset() << ", endpoint: remoteEndpoint)\n";
+        out << bl() << "} catch {\n";
+        out << bl() << "  makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_BadInput)\n";
+        out << bl() << "  return\n";
+        out << bl() << "}\n";
       } else {
         out << bl() << "let ia = " << ns(fn->in_s->nm) << "unmarshal_" << fn->in_s->name << "(buffer: data, offset: " << get_arguments_offset() << ")\n";
       }
@@ -1190,7 +1256,7 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
     auto nested = cflat(f->type);
     const int field_offset = align_offset(nested->align, offset, nested->size);
     if (has_endpoint && contains_object(f->type)) {
-      out << bl() << field_name << " = unmarshal_" << nested->name << "(buffer: buffer, offset: offset + " << field_offset << ", endpoint: endpoint)\n";
+      out << bl() << field_name << " = try unmarshal_" << nested->name << "(buffer: buffer, offset: offset + " << field_offset << ", endpoint: endpoint)\n";
     } else {
       out << bl() << field_name << " = unmarshal_" << nested->name << "(buffer: buffer, offset: offset + " << field_offset << ")\n";
     }
@@ -1199,7 +1265,7 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
   case FieldType::Object: {
     const int field_offset = align_offset(align_of_object, offset, size_of_object);
     if (has_endpoint) {
-      out << bl() << field_name << " = NPRPC.unmarshal_object_proxy(buffer: buffer, offset: offset + " << field_offset << ", endpoint: endpoint)\n";
+      out << bl() << field_name << " = try NPRPC.unmarshal_object_proxy(buffer: buffer, offset: offset + " << field_offset << ", endpoint: endpoint)\n";
     } else {
       out << bl() << field_name << " = NPRPC.unmarshal_object_id(buffer: buffer, offset: offset + " << field_offset << ")\n";
     }
@@ -1311,7 +1377,11 @@ void SwiftBuilder::emit_unmarshal_function(AstStructDecl* s)
   if (has_objects) {
     out << ", endpoint: NPRPCEndpoint";
   }
-  out << ") -> " << s->name << " ";
+  out << ")";
+  if (has_objects) {
+    out << " throws";
+  }
+  out << " -> " << s->name << " ";
   out << bb();
 
   // Create struct with default values (fields have defaults from emit_struct2)

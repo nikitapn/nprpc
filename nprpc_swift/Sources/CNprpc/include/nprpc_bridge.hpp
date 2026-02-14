@@ -217,6 +217,7 @@ uint32_t nprpc_object_get_endpoint_type(void* obj);  // Returns EndPointType as 
 const char* nprpc_object_get_endpoint_hostname(void* obj);  // Returns hostname string
 uint16_t nprpc_object_get_endpoint_port(void* obj);  // Returns port number
 bool nprpc_object_select_endpoint(void* obj);  // Select best endpoint
+bool nprpc_object_select_endpoint_with_info(void* obj, uint32_t type, const char* hostname, uint16_t port);  // Select endpoint with hint
 
 // ObjectId accessor functions (for raw ObjectId* from poa_activate)
 uint64_t nprpc_objectid_get_object_id(void* oid_ptr);
@@ -239,6 +240,24 @@ const uint8_t* nprpc_object_get_origin(void* obj_ptr);
 // Object RPC call - sends request and receives reply via C++ runtime
 // Returns: 0 = success, -1 = null args, -2 = endpoint selection failed, -3 = RPC call failed
 int nprpc_object_send_receive(void* obj_ptr, void* buffer_ptr, uint32_t timeout_ms);
+
+// Callback type for async RPC completion
+// context: user-provided context (e.g., boxed Swift continuation)
+// error_code: 0 = success, negative = error
+// error_message: error description (null on success), valid only during callback
+typedef void (*swift_async_callback)(void* context, int error_code, const char* error_message);
+
+// Object async RPC call with callback - for Swift async/await integration
+// Used for async methods in IDL
+// callback will be invoked when the operation completes (on success or failure)
+// Returns: 0 = started successfully, negative = failed to start (callback not invoked)
+int nprpc_object_send_async(
+    void* obj_ptr,
+    void* buffer_ptr,
+    void* context,
+    swift_async_callback callback,
+    uint32_t timeout_ms
+);
 
 // Object string serialization (NPRPC IOR format)
 // Returns: newly allocated string that caller must free with nprpc_free_string()
@@ -267,6 +286,24 @@ void* nprpc_create_object_from_components(
     const uint8_t* origin,
     const char* class_id,
     const char* urls);
+
+// Create an Object from flat buffer ObjectId with endpoint selection
+// This is the Swift equivalent of C++ create_object_from_flat
+// Parameters:
+//   buffer_ptr: raw pointer to the flat buffer data
+//   offset: offset within buffer where ObjectId starts
+//   endpoint_type: EndPointType as uint32_t
+//   endpoint_hostname: hostname string
+//   endpoint_port: port number
+//   out_object: output parameter for the created Object handle
+// Returns: 1 = success with valid object, 0 = success but null object, negative = error
+int nprpc_create_object_from_flat(
+    void* buffer_ptr,
+    uint32_t offset,
+    uint32_t endpoint_type,
+    const char* endpoint_hostname,
+    uint16_t endpoint_port,
+    void** out_object);
 
 // ============================================================================
 // POA operations

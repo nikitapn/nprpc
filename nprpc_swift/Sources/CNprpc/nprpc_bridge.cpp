@@ -17,10 +17,15 @@
 
 #include <sstream>
 
-// External declaration for the free function in rpc_impl.cpp
+// External declarations for the free functions in rpc_impl.cpp
 // This avoids including nprpc_impl.hpp which has template issues with Swift's clang
 namespace nprpc::impl {
     NPRPC_API void rpc_call(const nprpc::EndPoint& endpoint, nprpc::flat_buffer& buffer, uint32_t timeout_ms);
+    NPRPC_API void rpc_call_async(
+        const nprpc::EndPoint& endpoint,
+        nprpc::flat_buffer&& buffer,
+        std::function<void(const boost::system::error_code&, nprpc::flat_buffer&)>&& completion_handler,
+        uint32_t timeout_ms);
 }
 
 namespace nprpc_swift {
@@ -90,7 +95,7 @@ bool RpcHandle::initialize(RpcBuildConfig* config, size_t thread_pool_size) {
     if (initialized_ || !config) {
         return false;  // Already initialized or null config
     }
-    
+
     try {
         // Create implementation
         // thread_pool_size == 0: no thread pool, user must call run() manually (blocking)
@@ -123,17 +128,17 @@ bool RpcHandle::initialize(RpcBuildConfig* config, size_t thread_pool_size) {
         // Build Rpc using the provided config
         // Store config and use a pointer to it to avoid initialization order issues
         auto stored_config = std::make_unique<nprpc::impl::BuildConfig>(std::move(cxxConfig));
-        
+
         class RpcSwiftBuilder : public nprpc::impl::RpcBuilderBase {
         public:
             explicit RpcSwiftBuilder(nprpc::impl::BuildConfig& cfg)
                 : nprpc::impl::RpcBuilderBase(cfg) {}
-            
+
             nprpc::Rpc* build(boost::asio::io_context& ioc) {
                 return nprpc::impl::RpcBuilderBase::build(ioc);
             }
         };
-        
+
         impl->rpc_instance = RpcSwiftBuilder(*stored_config).build(impl->ioc);
 
         initialized_ = true;
@@ -199,25 +204,25 @@ std::string RpcHandle::get_debug_info() const {
 
 void* RpcHandle::create_poa(uint32_t max_objects, uint32_t lifespan, uint32_t id_policy) {
     if (!initialized_ || !impl_) return nullptr;
-    
+
     try {
         auto* impl = static_cast<RpcHandleImpl*>(impl_);
         if (!impl->rpc_instance) return nullptr;
-        
+
         auto builder = impl->rpc_instance->create_poa();
-        
+
         if (max_objects > 0) {
             builder.with_max_objects(max_objects);
         }
-        
+
         builder.with_lifespan(lifespan == 0 
             ? nprpc::PoaPolicy::Lifespan::Persistent 
             : nprpc::PoaPolicy::Lifespan::Transient);
-        
+
         builder.with_object_id_policy(id_policy == 0
             ? nprpc::PoaPolicy::ObjectIdPolicy::SystemGenerated
             : nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied);
-        
+
         return builder.build();
     } catch (const std::exception& e) {
         std::cerr << "RpcHandle::create_poa failed: " << e.what() << std::endl;
@@ -232,15 +237,15 @@ void* RpcHandle::create_poa(uint32_t max_objects, uint32_t lifespan, uint32_t id
 std::optional<EndPointInfo> EndPointInfo::parse(const std::string& url) {
     // Simple URL parsing for POC
     // Format: scheme://host:port/path
-    
+
     EndPointInfo info;
-    
+
     // Find scheme
     auto scheme_end = url.find("://");
     if (scheme_end == std::string::npos) {
         return std::nullopt;
     }
-    
+
     std::string scheme = url.substr(0, scheme_end);
     if (scheme == "tcp") info.type = EndPointType::Tcp;
     else if (scheme == "ws" || scheme == "wss") info.type = EndPointType::WebSocket;
@@ -249,19 +254,19 @@ std::optional<EndPointInfo> EndPointInfo::parse(const std::string& url) {
     else if (scheme == "udp") info.type = EndPointType::Udp;
     else if (scheme == "shm" || scheme == "mem") info.type = EndPointType::SharedMemory;
     else return std::nullopt;
-    
+
     // Parse host:port
     size_t host_start = scheme_end + 3;
     size_t path_start = url.find('/', host_start);
     std::string host_port;
-    
+
     if (path_start != std::string::npos) {
         host_port = url.substr(host_start, path_start - host_start);
         info.path = url.substr(path_start);
     } else {
         host_port = url.substr(host_start);
     }
-    
+
     // Split host:port
     auto colon_pos = host_port.rfind(':');
     if (colon_pos != std::string::npos) {
@@ -270,13 +275,13 @@ std::optional<EndPointInfo> EndPointInfo::parse(const std::string& url) {
     } else {
         info.hostname = host_port;
     }
-    
+
     return info;
 }
 
 std::string EndPointInfo::to_url() const {
     std::ostringstream oss;
-    
+
     switch (type) {
         case EndPointType::Tcp: oss << "tcp://"; break;
         case EndPointType::WebSocket: oss << "ws://"; break;
@@ -286,7 +291,7 @@ std::string EndPointInfo::to_url() const {
         case EndPointType::SharedMemory: oss << "shm://"; break;
         default: oss << "unknown://"; break;
     }
-    
+
     oss << hostname;
     if (port > 0) {
         oss << ":" << port;
@@ -294,7 +299,7 @@ std::string EndPointInfo::to_url() const {
     if (!path.empty()) {
         oss << path;
     }
-    
+
     return oss.str();
 }
 
@@ -393,6 +398,12 @@ bool nprpc_object_select_endpoint(void* obj) {
     return static_cast<nprpc::Object*>(obj)->select_endpoint();
 }
 
+bool nprpc_object_select_endpoint_with_info(void* obj, uint32_t type, const char* hostname, uint16_t port) {
+    if (!obj) return false;
+    nprpc::EndPoint ep(static_cast<nprpc::EndPointType>(type), hostname, port);
+    return static_cast<nprpc::Object*>(obj)->select_endpoint(ep);
+}
+
 // ObjectId accessor functions for Swift
 // NOTE: These are for raw ObjectId* from nprpc_poa_activate_swift_servant
 // Use nprpc_object_get_* for Object* from nprpc_create_object_from_components
@@ -469,17 +480,17 @@ const uint8_t* nprpc_object_get_origin(void* ptr) {
 // Object RPC call - sends request and receives reply via C++ runtime
 int nprpc_object_send_receive(void* obj_ptr, void* buffer_ptr, uint32_t timeout_ms) {
     if (!obj_ptr || !buffer_ptr) return -1;
-    
+
     auto* obj = static_cast<nprpc::Object*>(obj_ptr);
     auto* buffer = static_cast<nprpc::flat_buffer*>(buffer_ptr);
-    
+
     // Ensure endpoint is selected
     if (obj->get_endpoint().empty()) {
         if (!obj->select_endpoint()) {
             return -2;  // Failed to select endpoint
         }
     }
-    
+
     try {
         // Use the free function wrapper to make the call
         nprpc::impl::rpc_call(obj->get_endpoint(), *buffer, timeout_ms);
@@ -490,13 +501,59 @@ int nprpc_object_send_receive(void* obj_ptr, void* buffer_ptr, uint32_t timeout_
     }
 }
 
+// Object async RPC call with callback - for Swift async/await integration
+int nprpc_object_send_async(
+    void* obj_ptr,
+    void* buffer_ptr,
+    void* context,
+    swift_async_callback callback,
+    uint32_t timeout_ms
+) {
+    if (!obj_ptr || !buffer_ptr || !callback) {
+        return -1;  // Invalid arguments
+    }
+
+    auto* obj = static_cast<nprpc::Object*>(obj_ptr);
+    auto* buffer = static_cast<nprpc::flat_buffer*>(buffer_ptr);
+
+    // Ensure endpoint is selected
+    if (obj->get_endpoint().empty()) {
+        if (!obj->select_endpoint()) {
+            return -2;  // Failed to select endpoint
+        }
+    }
+
+    try {
+        // Create completion handler that invokes the Swift callback
+        auto handler = [context, callback](const boost::system::error_code& ec, nprpc::flat_buffer& buf) {
+            if (ec) {
+                std::string msg = ec.message();
+                callback(context, -3, msg.c_str());
+            } else {
+                callback(context, 0, nullptr);
+            }
+        };
+
+        nprpc::impl::rpc_call_async(
+            obj->get_endpoint(),
+            std::move(*buffer),
+            std::move(handler),
+            timeout_ms > 0 ? timeout_ms : obj->get_timeout()
+        );
+        return 0;  // Started successfully
+    } catch (const std::exception& e) {
+        std::cerr << "nprpc_object_send_async exception: " << e.what() << std::endl;
+        return -3;  // Failed to start
+    }
+}
+
 // Object string serialization (NPRPC IOR format)
 const char* nprpc_object_to_string(void* obj_ptr) {
     if (!obj_ptr) return nullptr;
-    
+
     auto* obj = static_cast<nprpc::Object*>(obj_ptr);
     std::string str = obj->to_string();
-    
+
     // Allocate a copy that Swift can own and free
     char* result = new char[str.size() + 1];
     std::memcpy(result, str.c_str(), str.size() + 1);
@@ -524,7 +581,7 @@ void* nprpc_create_object_from_components(
     if (!origin || !class_id || !urls) {
         return nullptr;
     }
-    
+
     try {
         // Create a temporary ObjectId with the data
         nprpc::ObjectId temp_oid;
@@ -535,7 +592,7 @@ void* nprpc_create_object_from_components(
         std::memcpy(data.origin.data(), origin, 16);
         data.class_id = class_id;
         data.urls = urls;
-        
+
         // Serialize to string and deserialize to Object
         // This uses the existing from_string infrastructure
         std::string oid_str = temp_oid.to_string();
@@ -549,13 +606,75 @@ void* nprpc_create_object_from_components(
     }
 }
 
+// Create Object from flat buffer ObjectId with endpoint selection
+// This is the Swift equivalent of C++ create_object_from_flat
+// Takes raw buffer pointer and offset, creates temporary flat_buffer view
+int nprpc_create_object_from_flat(
+    void* buffer_ptr,
+    uint32_t offset,
+    uint32_t endpoint_type,
+    const char* endpoint_hostname,
+    uint16_t endpoint_port,
+    void** out_object)
+{
+    if (!out_object) return -1;
+    *out_object = nullptr;
+
+    if (!buffer_ptr || !endpoint_hostname) {
+        return -2;  // Invalid parameters
+    }
+
+    try {
+        // Create a view-mode flat_buffer wrapping the raw pointer
+        nprpc::flat_buffer buf(
+            static_cast<std::uint8_t*>(buffer_ptr),
+            // We kind of have to guess the size here since we only have a pointer and offset
+            // FIXME: This is a bit hacky - we assume the ObjectId is within the next 64KB of the buffer
+            // This is a vulnerability now, actually no, since a reasonable string length (class_id, urls)
+            // has been checked in safety checks in Swift before calling this function, but still not ideal
+            offset + 65535,  // size
+            offset + 65535,  // max_size (read-only, same as size)
+            nullptr          // no endpoint needed for reading
+        );
+
+        // Create ObjectId_Direct accessor on the stack
+        nprpc::detail::flat::ObjectId_Direct direct(buf, offset);
+
+        // Create the remote endpoint on the stack
+        nprpc::EndPoint remote_endpoint(
+            static_cast<nprpc::EndPointType>(endpoint_type),
+            endpoint_hostname,
+            endpoint_port
+        );
+
+        // Call the actual create_object_from_flat
+        nprpc::Object* obj = nprpc::impl::create_object_from_flat(direct, remote_endpoint);
+
+        if (!obj) {
+            return 0;  // Success but null object (invalid_object_id)
+        }
+
+        *out_object = obj;
+        return 1;  // Success with valid object
+    } catch (const nprpc::Exception& e) {
+        // This is thrown when endpoint selection fails
+        std::cerr << "nprpc_create_object_from_flat: " << e.what() << std::endl;
+        return -3;  // Cannot select endpoint
+    } catch (const std::exception& e) {
+        std::cerr << "nprpc_create_object_from_flat exception: " << e.what() << std::endl;
+        return -4;  // Other exception
+    } catch (...) {
+        return -5;  // Unknown exception
+    }
+}
+
 // ============================================================================
 // POA operations
 // ============================================================================
 
 void* nprpc_rpc_create_poa(void* rpc_handle, uint32_t max_objects, uint32_t lifespan, uint32_t id_policy) {
     if (!rpc_handle) return nullptr;
-    
+
     auto* handle = static_cast<nprpc_swift::RpcHandle*>(rpc_handle);
     return handle->create_poa(max_objects, lifespan, id_policy);
 }
@@ -574,21 +693,21 @@ void nprpc_poa_deactivate_object(void* poa_handle, uint64_t object_id) {
 class SwiftServantBridge : public nprpc::ObjectServant {
 public:
     using DispatchFunc = void (*)(void*, void*, void*, void*);
-    
+
     SwiftServantBridge(void* swift_servant, const std::string& class_name, DispatchFunc dispatch)
         : swift_servant_(swift_servant)
         , class_name_(class_name)
         , dispatch_func_(dispatch)
     {}
-    
+
     ~SwiftServantBridge() override {
         // Don't delete swift_servant_ - Swift manages its lifetime
     }
-    
+
     std::string_view get_class() const noexcept override {
         return class_name_;
     }
-    
+
     void dispatch(nprpc::SessionContext& ctx, bool from_parent) override {
         // Call Swift dispatch through trampoline
         // Pass rx_buffer, tx_buffer, and endpoint
@@ -596,7 +715,7 @@ public:
             dispatch_func_(swift_servant_, ctx.rx_buffer, ctx.tx_buffer, &ctx.remote_endpoint);
         }
     }
-    
+
 private:
     void* swift_servant_;
     std::string class_name_;
@@ -616,17 +735,17 @@ void* nprpc_poa_activate_swift_servant(
     if (!poa || !swift_servant || !class_name || !dispatch_func) {
         return nullptr;
     }
-    
+
     try {
         auto bridge = std::make_unique<SwiftServantBridge>(
             swift_servant, class_name, dispatch_func);
-        
+
         auto oid = poa->activate_object(bridge.release(), activation_flags);
-        
+
         // Allocate and copy ObjectId to return to Swift
         // Swift will need to free this memory
         auto* oid_copy = new nprpc::ObjectId(oid);
-        
+
         // Return pointer to ObjectId - Swift will read it and delete it
         return oid_copy;
     } catch (...) {

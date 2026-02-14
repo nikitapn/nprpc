@@ -4,6 +4,17 @@ import CNprpc
 /// This is a typealias to the IDL-generated detail.ObjectId
 public typealias NPRPCObjectData = detail.ObjectId
 
+internal let invalidObjectId = UInt64.max
+
+/// Helper class to box a Swift continuation for passing to C++ as an opaque pointer
+/// Used for async RPC calls with callback-based completion
+private final class ContinuationBox<T> {
+    let continuation: CheckedContinuation<T, Error>
+    init(_ continuation: CheckedContinuation<T, Error>) {
+        self.continuation = continuation
+    }
+}
+
 /// Swift representation of a remote C++ nprpc::Object
 /// All data is accessed through the C++ object via the bridge - no duplication
 open class NPRPCObject: Codable, @unchecked Sendable {
@@ -114,6 +125,19 @@ open class NPRPCObject: Codable, @unchecked Sendable {
         nprpc_object_select_endpoint(handle)
     }
 
+    /// Select endpoint with a preferred endpoint hint
+    /// - Parameter endpoint: The preferred endpoint to try to select
+    /// - Returns: true if the endpoint was selected, false if not available
+    @discardableResult
+    public func selectEndpoint(_ endpoint: NPRPCEndpoint) -> Bool {
+        nprpc_object_select_endpoint_with_info(
+            handle,
+            UInt32(endpoint.type.rawValue),
+            endpoint.hostname,
+            endpoint.port
+        )
+    }
+
     // MARK: - RPC Communication
 
     /// Send a request and receive a reply (for client-side calls)
@@ -134,6 +158,52 @@ open class NPRPCObject: Codable, @unchecked Sendable {
             throw RuntimeError(message: "RPC call failed: communication error")
         default:
             throw RuntimeError(message: "RPC call failed: unknown error (\(result))")
+        }
+    }
+
+    /// Send a request asynchronously with async/await support
+    /// - Parameters:
+    ///   - buffer: The FlatBuffer containing the request (ownership transferred)
+    ///   - timeout: Timeout in milliseconds
+    /// - Throws: RpcError on communication failure
+    public func sendAsync(buffer: FlatBuffer, timeout: UInt32) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            // Box the continuation so we can pass a pointer to C++
+            let boxedContinuation = Unmanaged.passRetained(
+                ContinuationBox(continuation)
+            ).toOpaque()
+            
+            // C callback that resumes the Swift continuation
+            let callback: swift_async_callback = { context, errorCode, errorMessage in
+                guard let context = context else { return }
+                let box = Unmanaged<ContinuationBox<Void>>.fromOpaque(context).takeRetainedValue()
+                if errorCode == 0 {
+                    box.continuation.resume()
+                } else {
+                    let msg = errorMessage.map { String(cString: $0) } ?? "Unknown async RPC error"
+                    box.continuation.resume(throwing: RuntimeError(message: msg))
+                }
+            }
+            
+            let result = nprpc_object_send_async(
+                handle,
+                buffer.handle,
+                boxedContinuation,
+                callback,
+                timeout
+            )
+            
+            if result != 0 {
+                // Failed to start - take back ownership and resume with error
+                let box = Unmanaged<ContinuationBox<Void>>.fromOpaque(boxedContinuation).takeRetainedValue()
+                let errorMsg: String
+                switch result {
+                case -1: errorMsg = "Async RPC call failed: invalid arguments"
+                case -2: errorMsg = "Async RPC call failed: could not select endpoint"
+                default: errorMsg = "Async RPC call failed: unknown error (\(result))"
+                }
+                box.continuation.resume(throwing: RuntimeError(message: errorMsg))
+            }
         }
     }
 

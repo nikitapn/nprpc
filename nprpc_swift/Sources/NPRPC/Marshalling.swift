@@ -190,9 +190,35 @@ public struct Span<T> {
 
 // MARK: - NPRPCObject marshalling
 
-/// Unmarshal a remote object reference
-public func unmarshal_object_proxy(buffer: UnsafeRawPointer, offset: Int, endpoint: NPRPCEndpoint) -> NPRPCObject {
-    // Use the generated unmarshal function
-    let data = detail.unmarshal_ObjectId(buffer: buffer, offset: offset)
-    return NPRPCObject.fromObjectId(data)!
+/// Unmarshal a remote object reference from flat buffer
+/// This is the Swift equivalent of C++ create_object_from_flat
+/// Pass the raw buffer pointer directly to C++ to avoid data duplication
+public func unmarshal_object_proxy(buffer: UnsafeRawPointer, offset: Int, endpoint: NPRPCEndpoint) throws -> NPRPCObject {
+    // Call the C++ bridge function that handles all the logic
+    // It creates a view-mode flat_buffer and ObjectId_Direct on the stack
+    var objectHandle: UnsafeMutableRawPointer? = nil
+    let result = nprpc_create_object_from_flat(
+        UnsafeMutableRawPointer(mutating: buffer),  // Cast away const - C++ won't modify
+        UInt32(offset),
+        UInt32(endpoint.type.rawValue),
+        endpoint.hostname,
+        endpoint.port,
+        &objectHandle
+    )
+    
+    switch result {
+    case 0:
+        // Success but null object (invalid_object_id)
+        return NPRPCObject()
+    case 1:
+        // Success with valid object
+        guard let handle = objectHandle else {
+            throw RuntimeError(message: "Bridge returned success but null handle")
+        }
+        return NPRPCObject(handle: handle)
+    case -3:
+        throw RuntimeError(message: "Failed to select endpoint for object, endpoint: \(endpoint.toURL())")
+    default:
+        throw RuntimeError(message: "Failed to create object from flat buffer, error code: \(result)")
+    }
 }
