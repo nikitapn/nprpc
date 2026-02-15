@@ -693,4 +693,77 @@ final class IntegrationTests: XCTestCase {
         
         print("Async test completed successfully!")
     }
+
+    /// Test bad input validation for untrusted interfaces
+    /// This simulates a malicious client sending a malformed buffer with an oversized vector
+    func testBadInput() throws {
+        // TestBadInput servant implementation (interface marked as [trusted=false])
+        class TestBadInputImpl: TestBadInputServant {
+            override func in_(a: [UInt8]) {
+                // This should never be called - the safety check should reject the input
+                print("TestBadInputImpl: in_ called with \(a.count) bytes")
+            }
+        }
+        
+        // Create and activate servant
+        let servant = TestBadInputImpl()
+        let oid = try Self.poa!.activateObject(servant)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+        let client = narrow(obj, to: TestBadInput.self)!
+        
+        // Create a malformed buffer (similar to C++ test)
+        let buffer = FlatBuffer()
+        buffer.prepare(2048)
+        buffer.commit(40)  // Header (16) + CallHeader (24) = 40 bytes
+        
+        guard let data = buffer.data else {
+            XCTFail("Failed to get buffer data")
+            return
+        }
+        
+        // Write message header (16 bytes starting at offset 0)
+        data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)    // size (set later)
+        data.storeBytes(of: impl.MessageId.functionCall.rawValue, toByteOffset: 4, as: Int32.self)  // msg_id: FunctionCall
+        data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: Int32.self)    // msg_type: Request
+        data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self)   // reserved
+        
+        // Write call header (starting at offset 16)
+        data.storeBytes(of: client.poaIdx, toByteOffset: 16, as: UInt16.self)     // poa_idx
+        data.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)            // interface_idx
+        data.storeBytes(of: UInt8(0), toByteOffset: 19, as: UInt8.self)            // function_idx
+        data.storeBytes(of: client.objectId, toByteOffset: 24, as: UInt64.self)   // object_id
+        
+        // Commit additional space for the "payload"
+        buffer.commit(1024)
+        
+        // Get fresh data pointer after commit
+        guard let finalData = buffer.data else {
+            XCTFail("Failed to get buffer data after commit")
+            return
+        }
+        
+        // Set correct size in header (total size - 4 bytes for size field itself)
+        finalData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
+        
+        // Write malformed vector at offset 32 (where input struct begins)
+        // Vector format: [relative_offset: u32, count: u32]
+        // Set count to 0xDEADBEEF (much larger than buffer size)
+        finalData.storeBytes(of: UInt32(8), toByteOffset: 32, as: UInt32.self)          // relative offset
+        finalData.storeBytes(of: UInt32(0xDEADBEEF), toByteOffset: 36, as: UInt32.self) // count (malicious!)
+        
+        // Send the malformed buffer - should get ExceptionBadInput
+        do {
+            try client.sendReceive(buffer: buffer, timeout: client.timeout)
+            let _ = try handleStandardReply(buffer: buffer)
+            XCTFail("Expected ExceptionBadInput to be thrown")
+        } catch is ExceptionBadInput {
+            // Expected - test passed
+            print("Bad input test passed: ExceptionBadInput was correctly thrown")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
 }

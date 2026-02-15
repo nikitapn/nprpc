@@ -48,6 +48,10 @@ private:
   void emit_field_marshal(AstFieldDecl* f, int& offset, const std::string& data_name);
   void emit_field_unmarshal(AstFieldDecl* f, int& offset, const std::string& result_name, bool has_endpoint = false);
   
+  // Safety checks for untrusted input
+  void emit_safety_checks();  // Emit all check functions for untrusted interfaces
+  void emit_safety_checks_r(AstTypeDecl* type, const std::string& op, int offset, bool top_type);
+  
   // Utilities
   _ns ns(Namespace* nm) const;
   std::string swift_type_name(const std::string& name) const;

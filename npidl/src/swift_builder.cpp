@@ -6,6 +6,7 @@
 #include <cassert>
 #include <iostream>
 #include <fstream>
+#include <set>
 
 namespace npidl::builders {
 
@@ -797,6 +798,15 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
   for (auto& fn : ifs->fns) {
     out << bl() << "case " << fn->idx << ": // " << fn->name << "\n" << bb(false);
 
+    // Safety check for untrusted interfaces before unmarshalling
+    if (!ifs->trusted && fn->in_s) {
+      out << bl() << "// Validate input buffer for untrusted interface\n";
+      out << bl() << "guard " << ns(fn->in_s->nm) << "check_" << fn->in_s->get_function_struct_id() << "(buffer: data, bufferSize: buffer.size, offset: " << get_arguments_offset() << ") else " << bb();
+      out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_BadInput)\n";
+      out << bl() << "return\n";
+      out << eb() << "\n";
+    }
+
     // Unmarshal input arguments
     if (fn->in_s) {
       out << bl() << "// Unmarshal input arguments\n";
@@ -1467,6 +1477,142 @@ void SwiftBuilder::emit_unmarshal_function(AstStructDecl* s)
   out << eb() << "\n";
 }
 
+// Emit safety checks for a type recursively
+void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op, int offset, bool top_type)
+{
+  switch (type->id) {
+  case FieldType::Struct: {
+    auto s = cflat(type);
+
+    if (top_type) {
+      out << bl() << "guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: " << op << ", structSize: " << s->size << ") else { return false }\n";
+    }
+
+    if (s->flat)
+      break;
+
+    // Check non-flat fields
+    int field_offset = 0;
+    for (auto field : s->fields) {
+      auto ftr = field->type;
+      if (ftr->id == FieldType::Alias)
+        ftr = calias(ftr)->get_real_type();
+      
+      if (ftr->id == FieldType::Vector || ftr->id == FieldType::String || 
+          ftr->id == FieldType::Optional || ftr->id == FieldType::Struct) {
+        auto [f_size, f_align] = get_type_size_align(field->type);
+        int aligned_offset = align_offset(f_align, field_offset, f_size);
+        
+        std::string field_op = op + " + " + std::to_string(aligned_offset);
+        emit_safety_checks_r(ftr, field_op, aligned_offset, ftr->id != FieldType::Struct);
+      }
+    }
+    break;
+  }
+
+  case FieldType::String:
+    out << bl() << "guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: " << op << ") else { return false }\n";
+    break;
+
+  case FieldType::Vector: {
+    auto wt = cwt(type)->type;
+    auto [elem_size, elem_align] = get_type_size_align(wt);
+
+    out << bl() << "guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: " << op << ", elementSize: " << elem_size << ") else { return false }\n";
+
+    if (is_flat(wt))
+      break;
+
+    // For non-flat element types, need to check each element  
+    out << bl() << "do {\n" << bb(false);
+    out << bl() << "let relOffset = Int(buffer.load(fromByteOffset: " << op << ", as: UInt32.self))\n";
+    out << bl() << "let count = Int(buffer.load(fromByteOffset: " << op << " + 4, as: UInt32.self))\n";
+    out << bl() << "let dataOffset = " << op << " + relOffset\n";
+    out << bl() << "for i in 0..<count {\n" << bb(false);
+    out << bl() << "let elemOffset = dataOffset + i * " << elem_size << "\n";
+    emit_safety_checks_r(wt, "elemOffset", 0, true);
+    out << eb(false) << bl() << "}\n";
+    out << eb(false) << bl() << "}\n";
+    break;
+  }
+
+  case FieldType::Optional: {
+    auto wt = cwt(type)->type;
+    auto [elem_size, elem_align] = get_type_size_align(wt);
+
+    out << bl() << "guard NPRPC.check_optional_bounds(buffer: buffer, bufferSize: bufferSize, offset: " << op << ", valueSize: " << elem_size << ") else { return false }\n";
+
+    if (is_flat(wt))
+      break;
+
+    // If present, check the value
+    out << bl() << "do {\n" << bb(false);
+    out << bl() << "let relOffset = Int(buffer.load(fromByteOffset: " << op << ", as: UInt32.self))\n";
+    out << bl() << "if relOffset != 0 {\n" << bb(false);
+    out << bl() << "let valueOffset = " << op << " + relOffset\n";
+    emit_safety_checks_r(wt, "valueOffset", 0, true);
+    out << eb(false) << bl() << "}\n";
+    out << eb(false) << bl() << "}\n";
+    break;
+  }
+
+  case FieldType::Array: {
+    auto arr = static_cast<AstArrayDecl*>(type);
+    auto wt = cwt(type)->real_type();
+    
+    if (is_flat(wt))
+      break;
+
+    // Check each element of fixed-size array
+    auto [elem_size, elem_align] = get_type_size_align(wt);
+    out << bl() << "for i in 0..<" << arr->length << " {\n" << bb(false);
+    out << bl() << "let elemOffset = " << op << " + i * " << elem_size << "\n";
+    emit_safety_checks_r(wt, "elemOffset", 0, true);
+    out << eb(false) << bl() << "}\n";
+    break;
+  }
+
+  case FieldType::Alias: {
+    auto real_type = calias(type)->get_real_type();
+    emit_safety_checks_r(real_type, op, offset, top_type);
+    break;
+  }
+
+  default:
+    break;
+  }
+}
+
+// Emit check functions for all untrusted interfaces
+void SwiftBuilder::emit_safety_checks()
+{
+  std::set<struct_id_t> emitted;
+
+  for (auto ifs : ctx_->interfaces) {
+    if (ifs->trusted)
+      continue;
+
+    for (auto fn : ifs->fns) {
+      auto s = fn->in_s;
+      if (!s)
+        continue;
+
+      auto name = s->get_function_struct_id();
+      if (emitted.find(name) != emitted.end())
+        continue;
+      emitted.emplace(name);
+
+      out << "\n" << bl() << "// Safety check for " << s->name << "\n";
+      out << bl() << "fileprivate func check_" << name << "(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool " << bb();
+
+      emit_safety_checks_r(s, "offset", 0, true);
+
+      out << bl() << "return true\n";
+      out << eb() << "\n";
+    }
+  }
+}
+
 void SwiftBuilder::emit_namespace_begin()
 {
   auto ns = ctx_->nm_cur();
@@ -1487,6 +1633,9 @@ void SwiftBuilder::finalize()
 {
   if (out.str().empty())
     return;
+
+  // Emit safety check functions for untrusted interfaces at file scope
+  emit_safety_checks();
 
   // Write to output file - use IDL filename (like C++) not module name
   auto output_file = out_dir_ / (ctx_->current_file() + ".swift");

@@ -222,3 +222,86 @@ public func unmarshal_object_proxy(buffer: UnsafeRawPointer, offset: Int, endpoi
         throw RuntimeError(message: "Failed to create object from flat buffer, error code: \(result)")
     }
 }
+
+// MARK: - Safety Checks for Untrusted Input
+
+/// Check that a struct at the given offset fits within the buffer
+/// - Parameters:
+///   - bufferSize: Total buffer size in bytes
+///   - offset: Offset where struct starts
+///   - structSize: Expected size of the struct
+/// - Returns: true if valid, false if out of bounds
+@inline(__always)
+public func check_struct_bounds(bufferSize: Int, offset: Int, structSize: Int) -> Bool {
+    return offset >= 0 && structSize >= 0 && offset + structSize <= bufferSize
+}
+
+/// Check that a vector/string field has valid bounds
+/// The first 4 bytes at offset contain the relative data offset (from offset)
+/// The next 4 bytes contain the count
+/// - Parameters:
+///   - buffer: Raw buffer pointer
+///   - bufferSize: Total buffer size in bytes  
+///   - offset: Offset where vector header starts
+///   - elementSize: Size of each element
+/// - Returns: true if valid, false if out of bounds
+@inline(__always)
+public func check_vector_bounds(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int, elementSize: Int) -> Bool {
+    // Check header is within bounds (8 bytes for offset + count)
+    guard offset >= 0 && offset + 8 <= bufferSize else { return false }
+    
+    // Read the relative offset and count
+    let relativeOffset = Int(buffer.load(fromByteOffset: offset, as: UInt32.self))
+    let count = Int(buffer.load(fromByteOffset: offset + 4, as: UInt32.self))
+    
+    // Empty vector is always valid
+    guard count > 0 else { return true }
+    
+    // Calculate absolute data offset
+    let dataOffset = offset + relativeOffset
+    
+    // Check data region is within bounds
+    // Guard against integer overflow
+    guard dataOffset >= 0 && elementSize >= 0 else { return false }
+    let dataSize = count * elementSize
+    guard dataSize / elementSize == count else { return false }  // Overflow check
+    guard dataOffset + dataSize <= bufferSize else { return false }
+    
+    return true
+}
+
+/// Check that a string field has valid bounds
+/// Strings are stored like vectors of UInt8
+@inline(__always)
+public func check_string_bounds(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+    return check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset, elementSize: 1)
+}
+
+/// Check that an optional field has valid bounds
+/// Optionals have a 4-byte presence flag, followed by the relative data offset
+/// - Parameters:
+///   - buffer: Raw buffer pointer
+///   - bufferSize: Total buffer size in bytes
+///   - offset: Offset where optional header starts
+///   - valueSize: Size of the optional value (when present)
+/// - Returns: true if valid, false if out of bounds
+@inline(__always)
+public func check_optional_bounds(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int, valueSize: Int) -> Bool {
+    // Check header is within bounds (4 bytes for relative offset)
+    guard offset >= 0 && offset + 4 <= bufferSize else { return false }
+    
+    // Read the relative offset (0 means no value)
+    let relativeOffset = Int(buffer.load(fromByteOffset: offset, as: UInt32.self))
+    
+    // No value means valid
+    guard relativeOffset != 0 else { return true }
+    
+    // Calculate absolute data offset
+    let dataOffset = offset + relativeOffset
+    
+    // Check value is within bounds
+    guard dataOffset >= 0 && valueSize >= 0 else { return false }
+    guard dataOffset + valueSize <= bufferSize else { return false }
+    
+    return true
+}
