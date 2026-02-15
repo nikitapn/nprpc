@@ -207,6 +207,60 @@ open class NPRPCObject: Codable, @unchecked Sendable {
         }
     }
 
+    /// Send a request asynchronously and receive the response with async/await support
+    /// Use this for async methods that have output parameters
+    /// - Parameters:
+    ///   - buffer: The FlatBuffer containing the request (ownership transferred)
+    ///   - timeout: Timeout in milliseconds
+    /// - Returns: FlatBuffer containing the response
+    /// - Throws: RpcError on communication failure
+    public func sendAsyncReceive(buffer: FlatBuffer, timeout: UInt32) async throws -> FlatBuffer {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<FlatBuffer, Error>) in
+            // Box the continuation so we can pass a pointer to C++
+            let boxedContinuation = Unmanaged.passRetained(
+                ContinuationBox(continuation)
+            ).toOpaque()
+            
+            // C callback that resumes the Swift continuation with the response buffer
+            let callback: swift_async_receive_callback = { context, errorCode, errorMessage, responseBuffer in
+                guard let context = context else { return }
+                let box = Unmanaged<ContinuationBox<FlatBuffer>>.fromOpaque(context).takeRetainedValue()
+                if errorCode == 0 {
+                    if let responseBuffer = responseBuffer {
+                        // Ownership of responseBuffer is transferred to Swift
+                        let responseFlat = FlatBuffer(wrapping: responseBuffer, owned: true)
+                        box.continuation.resume(returning: responseFlat)
+                    } else {
+                        box.continuation.resume(throwing: RuntimeError(message: "Async RPC completed but no response buffer"))
+                    }
+                } else {
+                    let msg = errorMessage.map { String(cString: $0) } ?? "Unknown async RPC error"
+                    box.continuation.resume(throwing: RuntimeError(message: msg))
+                }
+            }
+            
+            let result = nprpc_object_send_async_receive(
+                handle,
+                buffer.handle,
+                boxedContinuation,
+                callback,
+                timeout
+            )
+            
+            if result != 0 {
+                // Failed to start - take back ownership and resume with error
+                let box = Unmanaged<ContinuationBox<FlatBuffer>>.fromOpaque(boxedContinuation).takeRetainedValue()
+                let errorMsg: String
+                switch result {
+                case -1: errorMsg = "Async RPC call failed: invalid arguments"
+                case -2: errorMsg = "Async RPC call failed: could not select endpoint"
+                default: errorMsg = "Async RPC call failed: unknown error (\(result))"
+                }
+                box.continuation.resume(throwing: RuntimeError(message: errorMsg))
+            }
+        }
+    }
+
     // MARK: - Data conversion for marshalling
 
     /// Get ObjectId data for marshalling to remote calls

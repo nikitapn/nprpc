@@ -246,11 +246,19 @@ const uint8_t* nprpc_object_get_origin(void* obj_ptr);
 // Returns: 0 = success, -1 = null args, -2 = endpoint selection failed, -3 = RPC call failed
 int nprpc_object_send_receive(void* obj_ptr, void* buffer_ptr, uint32_t timeout_ms);
 
-// Callback type for async RPC completion
+// Callback type for async RPC completion (fire-and-forget)
 // context: user-provided context (e.g., boxed Swift continuation)
 // error_code: 0 = success, negative = error
 // error_message: error description (null on success), valid only during callback
 typedef void (*swift_async_callback)(void* context, int error_code, const char* error_message);
+
+// Callback type for async RPC with response
+// context: user-provided context (e.g., boxed Swift continuation)
+// error_code: 0 = success, negative = error
+// error_message: error description (null on success), valid only during callback
+// response_buffer: FlatBuffer handle containing the response (null on error)
+//                  Ownership is transferred to callback - must be freed with nprpc_flatbuffer_destroy
+typedef void (*swift_async_receive_callback)(void* context, int error_code, const char* error_message, void* response_buffer);
 
 // Object async RPC call with callback - for Swift async/await integration
 // Used for async methods in IDL
@@ -261,6 +269,18 @@ int nprpc_object_send_async(
     void* buffer_ptr,
     void* context,
     swift_async_callback callback,
+    uint32_t timeout_ms
+);
+
+// Object async RPC call with response - for Swift async/await integration
+// Used for async methods that have output parameters
+// callback will be invoked when the operation completes with the response buffer
+// Returns: 0 = started successfully, negative = failed to start (callback not invoked)
+int nprpc_object_send_async_receive(
+    void* obj_ptr,
+    void* buffer_ptr,
+    void* context,
+    swift_async_receive_callback callback,
     uint32_t timeout_ms
 );
 

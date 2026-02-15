@@ -165,3 +165,17 @@ interface TestUnreliable {
 // 	[unreliable]
 // 	stream<u8> GetByteStream(size: u64);
 // }
+
+interface AsyncTest {
+	// Test async method with no return value
+	async Method1(arg1: u32, arg2: string);
+
+	// Test async method with output value
+	async Method2(arg1: u32, arg2: out string);
+
+	// Test async method that can throw an exception
+	// Async methods cannot throw an exception at this time because it would require callback parameters in C++.
+	// Future enhancement could allow async methods to throw exceptions that are delivered to the caller as rejections of the returned promise.
+	// In C++ the exception would be in the callback parameters.
+	// async Method3(arg1: u32) raises (AssertionFailed);
+}

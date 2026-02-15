@@ -4,7 +4,9 @@
 import CNprpc
 
 /// Swift wrapper for nprpc::flat_buffer
-public class FlatBuffer {
+/// Marked as @unchecked Sendable because ownership is explicitly transferred between tasks
+/// and the underlying C++ memory is safely encapsulated
+public class FlatBuffer: @unchecked Sendable {
     internal var handle: UnsafeMutableRawPointer
     private var owned: Bool
     
@@ -14,10 +16,13 @@ public class FlatBuffer {
         self.owned = true
     }
     
-    /// Wrap an existing C++ flat_buffer (Swift doesn't own it)
-    internal init(wrapping: UnsafeMutableRawPointer) {
+    /// Wrap an existing C++ flat_buffer
+    /// - Parameters:
+    ///   - wrapping: Opaque pointer to C++ flat_buffer
+    ///   - owned: If true, Swift will free the buffer on deinit (default: false)
+    internal init(wrapping: UnsafeMutableRawPointer, owned: Bool = false) {
         self.handle = wrapping
-        self.owned = false
+        self.owned = owned
     }
     
     deinit {

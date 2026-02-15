@@ -568,6 +568,54 @@ int nprpc_object_send_async(
     }
 }
 
+// Object async RPC call with response - for async methods with output parameters
+int nprpc_object_send_async_receive(
+    void* obj_ptr,
+    void* buffer_ptr,
+    void* context,
+    swift_async_receive_callback callback,
+    uint32_t timeout_ms
+) {
+    if (!obj_ptr || !buffer_ptr || !callback) {
+        return -1;  // Invalid arguments
+    }
+
+    auto* obj = static_cast<nprpc::Object*>(obj_ptr);
+    auto* buffer = static_cast<nprpc::flat_buffer*>(buffer_ptr);
+
+    // Ensure endpoint is selected
+    if (obj->get_endpoint().empty()) {
+        if (!obj->select_endpoint()) {
+            return -2;  // Failed to select endpoint
+        }
+    }
+
+    try {
+        // Create completion handler that invokes the Swift callback with response buffer
+        auto handler = [context, callback](const boost::system::error_code& ec, nprpc::flat_buffer& buf) {
+            if (ec) {
+                std::string msg = ec.message();
+                callback(context, -3, msg.c_str(), nullptr);
+            } else {
+                // Create a new flat_buffer with the response data and transfer ownership to Swift
+                auto* response = new nprpc::flat_buffer(std::move(buf));
+                callback(context, 0, nullptr, response);
+            }
+        };
+
+        nprpc::impl::rpc_call_async(
+            obj->get_endpoint(),
+            std::move(*buffer),
+            std::move(handler),
+            timeout_ms > 0 ? timeout_ms : obj->get_timeout()
+        );
+        return 0;  // Started successfully
+    } catch (const std::exception& e) {
+        std::cerr << "nprpc_object_send_async_receive exception: " << e.what() << std::endl;
+        return -3;  // Failed to start
+    }
+}
+
 // Object string serialization (NPRPC IOR format)
 const char* nprpc_object_to_string(void* obj_ptr) {
     if (!obj_ptr) return nullptr;

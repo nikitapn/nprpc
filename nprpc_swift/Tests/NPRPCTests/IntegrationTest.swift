@@ -634,4 +634,63 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(simpleServant1.value, 100, "SendNestedObjects should have called SetValue(100) on object1")
         XCTAssertEqual(simpleServant2.value, 200, "SendNestedObjects should have called SetValue(200) on object2")
     }
+
+    /// Test async methods with proper Swift async/await
+    func testAsyncMethods() async throws {
+        // AsyncTest servant implementation
+        class AsyncTestImpl: AsyncTestServant {
+            var receivedArg1: UInt32 = 0
+            var receivedArg2: String = ""
+            var method2Arg1: UInt32 = 0
+            
+            override func method1(arg1: UInt32, arg2: String) {
+                print("AsyncTestImpl: method1 called with arg1=\(arg1), arg2=\(arg2)")
+                receivedArg1 = arg1
+                receivedArg2 = arg2
+            }
+            
+            override func method2(arg1: UInt32) -> String {
+                print("AsyncTestImpl: method2 called with arg1=\(arg1)")
+                method2Arg1 = arg1
+                return "Response for \(arg1)"
+            }
+        }
+        
+        // Create and activate servant
+        let servant = AsyncTestImpl()
+        let oid = try Self.poa!.activateObject(servant)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+        let client = narrow(obj, to: AsyncTest.self)!
+        
+        // Test 1: Async method with no return value
+        // await blocks until the RPC completes and servant has executed
+        await client.method1(arg1: 42, arg2: "Hello async!")
+        XCTAssertEqual(servant.receivedArg1, 42)
+        XCTAssertEqual(servant.receivedArg2, "Hello async!")
+        
+        // Test 2: Async method with output value
+        // Async methods with outputs throw because they need to wait for a response
+        let result = try await client.method2(arg1: 123)
+        XCTAssertEqual(servant.method2Arg1, 123)
+        XCTAssertEqual(result, "Response for 123")
+        
+        // Test 3: Multiple concurrent async calls
+        servant.receivedArg1 = 0
+        servant.receivedArg2 = ""
+        
+        async let call1: Void = client.method1(arg1: 100, arg2: "First")
+        async let call2: Void = client.method1(arg1: 200, arg2: "Second")
+        async let call3: Void = client.method1(arg1: 300, arg2: "Third")
+        
+        // Wait for all calls to complete
+        _ = await (call1, call2, call3)
+        
+        // All calls have completed - the last received values depend on execution order
+        XCTAssertTrue(servant.receivedArg1 >= 100, "At least one async call should have completed")
+        
+        print("Async test completed successfully!")
+    }
 }
