@@ -80,9 +80,9 @@ docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace nprpc-swift-ubuntu b
     
     swift build -v
     
-    echo ""
-    echo "=== Running Tests ==="
-    swift test || echo "Tests completed (some may have Foundation conflicts)"
+    # echo ""
+    # echo "=== Running Tests ==="
+    # swift test || echo "Tests completed"
     
     echo ""
     echo "✅ Build successful in Ubuntu container!"

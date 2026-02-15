@@ -44,7 +44,7 @@ TEST_F(NprpcTest, TestBasic)
       ints.reserve(256);
       boost::push_back(ints, boost::irange(0, 255));
 
-      EXPECT_TRUE(obj->In(100, true, nprpc::flat::make_read_only_span(ints)));
+      EXPECT_TRUE(obj->In_(100, true, nprpc::flat::make_read_only_span(ints)));
 
       std::cout << "In/Out passed" << std::endl;
 
@@ -133,7 +133,7 @@ TEST_F(NprpcTest, TestOptional)
       auto obj = make_stuff_happen<nprpc::test::TestOptional>(servant, flags);
 
       EXPECT_TRUE(obj->InEmpty(std::nullopt));
-      EXPECT_TRUE(obj->In(100, nprpc::test::AAA{100u, "test_b"s, "test_c"s}));
+      EXPECT_TRUE(obj->In_(100, nprpc::test::AAA{100u, "test_b"s, "test_c"s}));
 
       std::optional<uint32_t> a;
 
@@ -236,7 +236,7 @@ TEST_F(NprpcTest, TestLargeMessage)
 
       // This should work with our async_write fix
       EXPECT_TRUE(
-          obj->In(42, true, nprpc::flat::make_read_only_span(large_data)));
+          obj->In_(42, true, nprpc::flat::make_read_only_span(large_data)));
 
       // Test receiving 3MB of data
       uint32_t a;
@@ -321,7 +321,7 @@ TEST_F(NprpcTest, TestBadInput)
   class TestBadInputImpl : public nprpc::test::ITestBadInput_Servant
   {
   public:
-    virtual void In(::nprpc::flat::Span<uint8_t> a) {}
+    virtual void In_(::nprpc::flat::Span<uint8_t> a) {}
   } servant;
 
   auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
@@ -658,7 +658,7 @@ TEST_F(NprpcTest, TestQuicBasic)
     ints.reserve(256);
     boost::push_back(ints, boost::irange(0, 255));
 
-    EXPECT_TRUE(obj->In(100, true, nprpc::flat::make_read_only_span(ints)));
+    EXPECT_TRUE(obj->In_(100, true, nprpc::flat::make_read_only_span(ints)));
 
     uint32_t a;
     bool b;
@@ -722,8 +722,7 @@ TEST_F(NprpcTest, TestQuicUnreliable)
 
   try {
     auto obj = make_stuff_happen<nprpc::test::TestUnreliable>(
-        servant, nprpc::ObjectActivationFlags::ALLOW_QUIC,
-        "quic_unreliable_test");
+        servant, nprpc::ObjectActivationFlags::ALLOW_QUIC, "quic_unreliable_test");
 
     // Test reliable call first (over QUIC stream)
     std::vector<uint8_t> data(10, 0x55);
@@ -786,6 +785,8 @@ TEST_F(NprpcTest, TestStreams)
 
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  // TODO: TCP stream crashes...
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
 }
 
 } // namespace nprpctest

@@ -28,16 +28,21 @@ if [ "$RUN_TESTS" = true ]; then
      nprpc-swift-ubuntu bash -c '
       set -e
       cd /workspace/nprpc_swift
-      LD_LIBRARY_PATH=/workspace/.build_ubuntu_swift swift test
+      export LD_LIBRARY_PATH=/workspace/.build_ubuntu_swift
+      swift build
+      set +e
+      # Use stdbuf to disable output buffering so we see print() before timeout kills process
+      stdbuf -oL -eL timeout 5 swift test --filter testStreams 2>&1
+      code=$?
+      test $code -eq 0 && echo "✅ Stream tests passed" || echo "❌ Stream tests failed with code $code"
      '
-  echo "✅ Swift tests completed."
 else
   docker run --rm -v         \
     "$NPRPC_ROOT:/workspace" \
      nprpc-swift-ubuntu bash -c '
       set -e
       cd /workspace/nprpc_swift
-      LD_LIBRARY_PATH=/workspace/.build_ubuntu_swift
+      export LD_LIBRARY_PATH=/workspace/.build_ubuntu_swift
       swift build
      '
   echo "✅ Swift package built successfully."

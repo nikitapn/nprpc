@@ -4,6 +4,7 @@
 #include <future>
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/websocket_session.hpp>
+#include "../logging.hpp"
 
 namespace nprpc::impl {
 
@@ -73,8 +74,8 @@ void WebSocketSession<Derived>::on_read(
 
   // Additional safety check: verify message size
   if (rx_buffer_.size() > max_message_size) {
-    std::cerr << "Rejected oversized WebSocket message: " << rx_buffer_.size()
-              << " bytes (max: " << max_message_size << " bytes)\n";
+    NPRPC_LOG_WARN("WebSocketSession::on_read: Rejected oversized WebSocket message: {} bytes (max: {} bytes)",
+      rx_buffer_.size(), max_message_size);
     close();
     return;
   }
@@ -82,10 +83,8 @@ void WebSocketSession<Derived>::on_read(
   nprpc::impl::flat::Header_Direct header(rx_buffer_, 0);
   const uint32_t request_id = header.request_id();
 
-  std::cerr << "[DEBUG] WS on_read: size=" << rx_buffer_.size()
-            << " msg_id=" << static_cast<uint32_t>(header.msg_id())
-            << " msg_type=" << static_cast<uint32_t>(header.msg_type())
-            << " request_id=" << request_id << '\n';
+  NPRPC_LOG_DEBUG("WebSocketSession::on_read: size={}, msg_id={}, msg_type={}, request_id={}",
+    rx_buffer_.size(), static_cast<uint32_t>(header.msg_id()), static_cast<uint32_t>(header.msg_type()), request_id);
 
   if (header.msg_type() == nprpc::impl::MessageType::Request) {
     // Handle incoming request
@@ -325,13 +324,13 @@ void WebSocketSession<Derived>::send_receive_async(
 template <class Derived>
 void WebSocketSession<Derived>::send_stream_message(flat_buffer&& buffer)
 {
-  std::cerr << "[DEBUG] send_stream_message: buffer.size()=" << buffer.size() << '\n';
+  NPRPC_LOG_INFO("WebSocketSession::send_stream_message: buffer.size()={}", buffer.size());
 
   // Fire-and-forget message for streaming - no response expected
   boost::asio::post(
       derived().ws().get_executor(),
       [this, buffer = std::move(buffer)]() mutable {
-        std::cerr << "[DEBUG] send_stream_message posted: buffer.size()=" << buffer.size() << '\n';
+        NPRPC_LOG_INFO("WebSocketSession::send_stream_message posted: buffer.size()={}", buffer.size());
         // Queue with no completion handler (fire and forget)
         write_queue_.emplace_back(std::move(buffer), nullptr);
         do_write();

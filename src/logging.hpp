@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 
+#include <nprpc/export.hpp>
 #include <nprpc_base.hpp>
 
 namespace nprpc::impl {
@@ -144,13 +145,8 @@ public:
   }
 };
 
-// Singleton logger instance
-inline std::shared_ptr<SimpleLogger>& get_logger()
-{
-  static std::shared_ptr<SimpleLogger> logger =
-      std::make_shared<SimpleLogger>("nprpc", LogLevel::info);
-  return logger;
-}
+// Singleton logger instance - defined in logging.cpp for proper shared library linkage
+NPRPC_API std::shared_ptr<SimpleLogger>& get_logger();
 
 } // namespace nprpc::impl
 

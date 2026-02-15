@@ -148,10 +148,8 @@ void StreamManager::send_chunk(uint64_t stream_id,
     unreliable = is_stream_unreliable(stream_id);
   }
   
-  std::cerr << "[DEBUG] send_chunk called: stream_id=" << stream_id 
-            << " data.size()=" << data.size() 
-            << " sequence=" << sequence 
-            << " unreliable=" << unreliable << '\n';
+  NPRPC_LOG_INFO("StreamManager::send_chunk called: stream_id={}, data.size()={}, sequence={}, unreliable={}",
+                  stream_id, data.size(), sequence, unreliable);
 
   // TODO: Shared Memory Optimization - write directly to shared ring buffer
   if (session_.shm_channel) {
@@ -202,9 +200,11 @@ void StreamManager::send_chunk(uint64_t stream_id,
     }
   } else if (send_native_stream_callback_) {
     // Use native QUIC stream for reliable streams (zero head-of-line blocking)
+    NPRPC_LOG_INFO("StreamManager::send_chunk: using send_native_stream_callback_");
     send_native_stream_callback_(std::move(fb));
   } else if (send_callback_) {
     // Fallback to main stream (for non-QUIC transports like WebSocket)
+    NPRPC_LOG_INFO("StreamManager::send_chunk: using send_callback_");
     send_callback_(std::move(fb));
   } else {
     NPRPC_LOG_ERROR("StreamManager::send_chunk: no send callback set");

@@ -54,6 +54,48 @@ public:
     assert(false);
   }
 
+  // Override for streaming: queue chunk to be sent asynchronously
+  virtual void send_stream_message(flat_buffer&& buffer) override
+  {
+    // Capture buffer and self in a work item
+    auto self = shared_from_this();
+    auto buf = std::make_shared<flat_buffer>(std::move(buffer));
+    
+    // Post to the socket's executor to ensure thread safety
+    boost::asio::post(socket_.get_executor(), [self, buf]() {
+      struct stream_work : work {
+        std::shared_ptr<Session_Socket> session;
+        std::shared_ptr<flat_buffer> buffer;
+        
+        stream_work(std::shared_ptr<Session_Socket> s, std::shared_ptr<flat_buffer> b)
+          : session(std::move(s)), buffer(std::move(b)) {}
+        
+        void operator()() override {
+          boost::asio::async_write(
+              session->socket_, buffer->cdata(),
+              [self = session, buf = buffer](boost::system::error_code ec, std::size_t) {
+                if (ec) {
+                  fail(ec, "stream write");
+                  return;
+                }
+                self->write_queue_.pop_front();
+                if (!self->write_queue_.empty()) {
+                  (*self->write_queue_.front())();
+                }
+              });
+        }
+      };
+      
+      bool was_empty = self->write_queue_.empty();
+      self->write_queue_.push_back(std::make_unique<stream_work>(self, buf));
+      
+      // If queue was empty, start writing
+      if (was_empty) {
+        (*self->write_queue_.front())();
+      }
+    });
+  }
+
   void on_write(boost::system::error_code ec,
                 [[maybe_unused]] std::size_t bytes_transferred)
   {
@@ -90,14 +132,27 @@ public:
       return;
     }
 
-    handle_request(rx_buffer_, tx_buffer_);
+    bool needs_reply = handle_request(rx_buffer_, tx_buffer_);
 
-    write_queue_.push_front({});
-
-    boost::asio::async_write(
-        socket_, tx_buffer_.cdata(),
-        std::bind(&Session_Socket::on_write, shared_from_this(),
-                  std::placeholders::_1, std::placeholders::_2));
+    if (needs_reply) {
+      // Create a work item that writes the tx_buffer
+      struct reply_work : work {
+        std::shared_ptr<Session_Socket> session;
+        reply_work(std::shared_ptr<Session_Socket> s) : session(std::move(s)) {}
+        void operator()() override {
+          boost::asio::async_write(
+              session->socket_, session->tx_buffer_.cdata(),
+              std::bind(&Session_Socket::on_write, session,
+                        std::placeholders::_1, std::placeholders::_2));
+        }
+      };
+      
+      write_queue_.push_front(std::make_unique<reply_work>(shared_from_this()));
+      (*write_queue_.front())();
+    } else {
+      // No reply needed (fire-and-forget like StreamInit) - go back to reading
+      do_read_size();
+    }
   }
 
   void do_read_body()

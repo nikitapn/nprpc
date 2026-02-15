@@ -161,10 +161,10 @@ interface TestUnreliable {
 	boolean ReliableCall(a: u32, b: boolean, c: vector<u8>) raises (AssertionFailed);
 }
 
-// interface TestStreams {
-// 	[unreliable]
-// 	stream<u8> GetByteStream(size: u64);
-// }
+interface TestStreams {
+	[unreliable]
+	stream<u8> GetByteStream(size: u64);
+}
 
 interface AsyncTest {
 	// Test async method with no return value

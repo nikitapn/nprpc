@@ -351,11 +351,97 @@ void nprpc_poa_deactivate_object(void* poa_handle, uint64_t object_id);
 
 // Swift Servant activation
 // Returns pointer to nprpc::ObjectId that Swift must destroy with nprpc_objectid_destroy
+// session_ctx: optional SessionContext* for session-specific activation (can be nullptr)
 void* nprpc_poa_activate_swift_servant(
     void* poa_handle,
     void* swift_servant,
     const char* class_name,
     uint32_t activation_flags,
-    void (*dispatch_func)(void*, void*, void*, void*));
+    void (*dispatch_func)(void*, void*, void*, void*, void*),
+    void* session_ctx);
+
+// ============================================================================
+// Streaming operations
+// ============================================================================
+
+// Generate a unique stream ID
+uint64_t nprpc_generate_stream_id();
+
+// Get stream_manager pointer from session context (for use in async Tasks)
+// The stream_manager pointer remains valid for the lifetime of the session
+void* nprpc_get_stream_manager(void* session_ctx);
+
+// Send a stream chunk via stream_manager (server -> client)
+// Parameters:
+//   stream_manager: StreamManager* from nprpc_get_stream_manager
+//   stream_id: stream identifier
+//   data: chunk data pointer
+//   data_size: size of data in bytes
+//   sequence: sequence number
+void nprpc_stream_manager_send_chunk(
+    void* stream_manager,
+    uint64_t stream_id,
+    const void* data,
+    uint32_t data_size,
+    uint64_t sequence);
+
+// Send stream completion via stream_manager (server -> client)
+void nprpc_stream_manager_send_complete(void* stream_manager, uint64_t stream_id, uint64_t final_sequence);
+
+// Send stream error via stream_manager (server -> client)
+void nprpc_stream_manager_send_error(
+    void* stream_manager,
+    uint64_t stream_id,
+    uint32_t error_code,
+    const void* error_data,
+    uint32_t error_data_size);
+
+// Legacy: Send a stream chunk via session context (deprecated - use stream_manager versions)
+// Parameters:
+//   session_ctx: SessionContext* from dispatch
+//   stream_id: stream identifier
+//   data: chunk data pointer
+//   data_size: size of data in bytes
+//   sequence: sequence number
+void nprpc_stream_send_chunk(
+    void* session_ctx,
+    uint64_t stream_id,
+    const void* data,
+    uint32_t data_size,
+    uint64_t sequence);
+
+// Send stream completion (server -> client)
+void nprpc_stream_send_complete(void* session_ctx, uint64_t stream_id, uint64_t final_sequence);
+
+// Send stream error (server -> client)
+void nprpc_stream_send_error(
+    void* session_ctx,
+    uint64_t stream_id,
+    uint32_t error_code,
+    const void* error_data,
+    uint32_t error_data_size);
+
+// Register a stream reader to receive chunks (client side)
+// Parameters:
+//   object_ptr: Object* to get session from
+//   stream_id: stream identifier
+//   context: opaque Swift context
+//   on_chunk: callback when chunk received (context, data_ptr, data_size)
+//   on_complete: callback when stream completes (context)
+//   on_error: callback when error occurs (context, error_code)
+void nprpc_stream_register_reader(
+    void* object_ptr,
+    uint64_t stream_id,
+    void* context,
+    void (*on_chunk)(void*, const void*, uint32_t),
+    void (*on_complete)(void*),
+    void (*on_error)(void*, uint32_t));
+
+// Send StreamInit message (client -> server)
+// Returns 0 on success, error code on failure
+int nprpc_stream_send_init(
+    void* object_ptr,
+    void* buffer_ptr,
+    uint32_t timeout_ms);
 
 } // extern "C"

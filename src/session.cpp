@@ -129,7 +129,7 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     break;
   }
   case MessageId::StreamDataChunk: {
-    NPRPC_LOG_ERROR("Handle Request: StreamDataChunk.");
+    NPRPC_LOG_INFO("Handle Request: StreamDataChunk.");
     ctx_.stream_manager->on_chunk_received(std::move(rx_buffer));
     needs_reply = false;  // Fire-and-forget, no reply needed
     break;

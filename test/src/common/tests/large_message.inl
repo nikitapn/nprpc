@@ -4,7 +4,7 @@ public:
         return true;
     }
 
-    virtual bool In(uint32_t a, ::nprpc::flat::Boolean b, ::nprpc::flat::Span<uint8_t> c) {
+    virtual bool In_(uint32_t a, ::nprpc::flat::Boolean b, ::nprpc::flat::Span<uint8_t> c) {
         EXPECT_EQ(a, 42u);
         EXPECT_TRUE(b.get());
 

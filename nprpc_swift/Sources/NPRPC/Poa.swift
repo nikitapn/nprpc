@@ -80,13 +80,17 @@ public enum PoaLifetime {
 // MARK: - Global dispatch function for C++ callback
 /// This is a C-compatible function that C++ calls when dispatching to Swift servants.
 /// It extracts the NPRPCServant from the opaque pointer and calls its dispatch method.
-private let globalServantDispatch: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void = { servantPtr, rxBuffer, txBuffer, endpointPtr in
+private let globalServantDispatch: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void = { servantPtr, rxBuffer, txBuffer, endpointPtr, sessionCtxPtr in
     guard let servantPtr = servantPtr else { return }
     guard let rxBuffer = rxBuffer else { return }
     guard let txBuffer = txBuffer else { return }
     
     // Reconstruct servant (don't consume - just borrow)
     let servant = Unmanaged<NPRPCServant>.fromOpaque(servantPtr).takeUnretainedValue()
+    
+    // Store session context for streaming operations
+    servant.sessionContext = sessionCtxPtr
+    defer { servant.sessionContext = nil }
     
     // Wrap rx buffer for servant dispatch
     let buffer = FlatBuffer(wrapping: rxBuffer)
@@ -164,11 +168,13 @@ public final class Poa {
     /// - Parameters:
     ///   - servant: The servant to activate
     ///   - flags: Transport flags controlling how the object is accessible
+    ///   - sessionContext: Optional session context for session-specific activation
     /// - Returns: ObjectId data for the activated object
     /// - Throws: RuntimeError if activation fails
     public func activateObject(
         _ servant: NPRPCServant,
-        flags: ObjectActivationFlags = .networkOnly
+        flags: ObjectActivationFlags = .networkOnly,
+        sessionContext: UnsafeMutableRawPointer? = nil
     ) throws -> detail.ObjectId {
         // Get unmanaged pointer to servant (we need to prevent Swift from deallocating it)
         let unmanagedServant = Unmanaged.passRetained(servant)
@@ -179,7 +185,8 @@ public final class Poa {
             servantPtr,
             servant.getClass(),
             flags.rawValue,
-            globalServantDispatch
+            globalServantDispatch,
+            sessionContext
         ) else {
             // Release the retained servant since activation failed
             unmanagedServant.release()

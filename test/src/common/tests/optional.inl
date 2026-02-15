@@ -6,7 +6,7 @@ public:
         return true;
     }
 
-    bool In(::nprpc::flat::Optional_Direct<uint32_t> a, 
+    bool In_(::nprpc::flat::Optional_Direct<uint32_t> a, 
                    ::nprpc::flat::Optional_Direct<nprpc::test::flat::AAA, nprpc::test::flat::AAA_Direct> b) override {
         EXPECT_TRUE(a.has_value());
         EXPECT_EQ(a.value(), 100u);

@@ -9,7 +9,7 @@ public:
         return true;
     }
 
-    bool In(uint32_t a, ::nprpc::flat::Boolean b, ::nprpc::flat::Span<uint8_t> c) override {
+    bool In_(uint32_t a, ::nprpc::flat::Boolean b, ::nprpc::flat::Span<uint8_t> c) override {
         EXPECT_EQ(a, 100u);
         EXPECT_TRUE(b.get());
 

@@ -25,7 +25,7 @@ open class NPRPCObject: Codable, @unchecked Sendable {
     }
 
     /// Opaque handle to C++ nprpc::Object
-    internal let handle: UnsafeMutableRawPointer
+    public let handle: UnsafeMutableRawPointer
 
     // MARK: - Codable
 

@@ -147,6 +147,12 @@ void SwiftBuilder::emit_type(AstTypeDecl* type, std::ostream& os)
     emit_type(cwt(type)->type, os);
     os << "?";
     break;
+  case FieldType::Stream:
+    // For streams, wrap the inner type in AsyncThrowingStream
+    os << "AsyncThrowingStream<";
+    emit_type(cwt(type)->type, os);
+    os << ", Error>";
+    break;
   default:
     assert(false && "Unknown type");
   }
@@ -356,6 +362,15 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
 
     out << ")";
 
+    // For streaming methods, servant returns AsyncStream<T> (producer)
+    if (fn->is_stream) {
+      out << " -> AsyncStream<";
+      emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, out);
+      out << ">";
+      out << "\n";
+      continue;
+    }
+
     // Return type: collect out parameters and return value
     std::vector<AstFunctionArgument*> out_params;
     for (auto& arg : fn->args) {
@@ -411,10 +426,11 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
   // Check if client proxy can conform to protocol
   // A method causes non-conformance if:
   // - It's async (protocol is sync, proxy is async)
+  // - It's streaming (protocol returns AsyncStream, proxy returns AsyncThrowingStream)
   // - It's non-async without raises() (protocol has no throws, proxy has throws)
   bool can_conform = true;
   for (auto& fn : ifs->fns) {
-    if (fn->is_async || !fn->is_throwing()) {
+    if (fn->is_async || fn->is_stream || !fn->is_throwing()) {
       can_conform = false;
       break;
     }
@@ -445,6 +461,12 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
   // Implement protocol methods with marshalling
   for (auto& fn : ifs->fns) {
+    // Handle streaming methods separately
+    if (fn->is_stream) {
+      emit_client_stream_method(ifs, fn);
+      continue;
+    }
+
     out << bl() << "public func " << swift_method_name(fn->name) << "(";
 
     // Emit only 'in' parameters (to match protocol)
@@ -708,6 +730,131 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
   out << eb() << "\n";
 }
 
+void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionDecl* fn)
+{
+  auto stream_type = static_cast<AstStreamDecl*>(fn->ret_value)->type;
+  
+  out << bl() << "public func " << swift_method_name(fn->name) << "(";
+
+  // Emit only 'in' parameters
+  bool first = true;
+  for (auto arg : fn->args) {
+    if (arg->modifier == ArgumentModifier::In) {
+      if (!first) out << ", ";
+      first = false;
+      out << arg->name << ": ";
+      emit_type(arg->type, out);
+    }
+  }
+
+  // Streaming methods return AsyncThrowingStream on client side
+  out << ") throws -> AsyncThrowingStream<";
+  emit_type(stream_type, out);
+  out << ", Error> " << bb();
+
+  // Generate unique stream ID
+  out << bl() << "let streamId = nprpc_generate_stream_id()\n\n";
+
+  // Calculate buffer sizes for StreamInit
+  // StreamInit layout (with C alignment):
+  //   stream_id(8) + poa_idx(2) + interface_idx(1) + pad(5) + object_id(8) + func_idx(1) + pad(7) = 32 bytes
+  const auto stream_init_size = 32; // Aligned size 
+  const auto args_offset = size_of_header + stream_init_size;
+  const auto fixed_size = args_offset + (fn->in_s ? fn->in_s->size : 0);
+  const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
+
+  out << bl() << "// Prepare StreamInit buffer\n";
+  out << bl() << "let buffer = FlatBuffer()\n";
+  out << bl() << "buffer.prepare(" << capacity << ")\n";
+  out << bl() << "buffer.commit(" << fixed_size << ")\n";
+  out << bl() << "guard let data = buffer.data else { throw BufferError(message: \"Failed to get buffer data\") }\n\n";
+
+  // Write message header with StreamInitialization message ID
+  out << bl() << "// Write StreamInit message header\n";
+  out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)\n";
+  out << bl() << "data.storeBytes(of: impl.MessageId.streamInitialization.rawValue, toByteOffset: 4, as: Int32.self)\n";
+  out << bl() << "data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: Int32.self)\n";
+  out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self)  // reserved\n\n";
+
+  // Write StreamInit fields (matching C++ struct layout with alignment)
+  out << bl() << "// Write StreamInit fields\n";
+  out << bl() << "data.storeBytes(of: streamId, toByteOffset: " << size_of_header << ", as: UInt64.self)  // offset 0\n";
+  out << bl() << "data.storeBytes(of: poaIdx, toByteOffset: " << (size_of_header + 8) << ", as: UInt16.self)  // offset 8\n";
+  out << bl() << "data.storeBytes(of: UInt8(0), toByteOffset: " << (size_of_header + 10) << ", as: UInt8.self)  // interface_idx at offset 10\n";
+  out << bl() << "data.storeBytes(of: objectId, toByteOffset: " << (size_of_header + 16) << ", as: UInt64.self)  // offset 16 (after 5-byte pad)\n";
+  out << bl() << "data.storeBytes(of: UInt8(" << fn->idx << "), toByteOffset: " << (size_of_header + 24) << ", as: UInt8.self)  // func_idx at offset 24\n\n";
+
+  // Marshal input arguments if any
+  if (fn->in_s) {
+    out << bl() << "// Marshal input arguments\n";
+    out << bl() << "var inArgs = " << ns(fn->in_s->nm) << fn->in_s->name << "()\n";
+
+    int ix = 0;
+    for (auto arg : fn->args) {
+      if (arg->modifier == ArgumentModifier::Out) continue;
+      ++ix;
+      out << bl() << "inArgs._" << ix << " = " << arg->name << "\n";
+    }
+
+    out << bl() << ns(fn->in_s->nm) << "marshal_" << fn->in_s->name << "(buffer: buffer, offset: " << args_offset << ", data: inArgs)\n\n";
+  }
+
+  // Set message size
+  out << bl() << "guard let finalData = buffer.data else { throw BufferError(message: \"Failed to get buffer data\") }\n";
+  out << bl() << "finalData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n\n";
+
+  // Create AsyncThrowingStream with continuation
+  out << bl() << "// Create AsyncThrowingStream for receiving chunks\n";
+  out << bl() << "return AsyncThrowingStream { continuation in\n" << bb(false);
+  out << bl() << "  // Box the continuation for C callback\n";
+  out << bl() << "  final class ContinuationBox {\n";
+  out << bl() << "    var continuation: AsyncThrowingStream<";
+  emit_type(stream_type, out);
+  out << ", Error>.Continuation\n";
+  out << bl() << "    init(_ c: AsyncThrowingStream<";
+  emit_type(stream_type, out);
+  out << ", Error>.Continuation) { continuation = c }\n";
+  out << bl() << "  }\n";
+  out << bl() << "  let box = Unmanaged.passRetained(ContinuationBox(continuation)).toOpaque()\n\n";
+
+  // Define C callbacks
+  out << bl() << "  let onChunk: @convention(c) (UnsafeMutableRawPointer?, UnsafeRawPointer?, UInt32) -> Void = { ctx, dataPtr, size in\n";
+  out << bl() << "    guard let ctx = ctx, let dataPtr = dataPtr, size > 0 else { return }\n";
+  out << bl() << "    let box = Unmanaged<ContinuationBox>.fromOpaque(ctx).takeUnretainedValue()\n";
+  // For now, assume fundamental types - later we'd need type-specific deserialization
+  out << bl() << "    let value = dataPtr.load(as: ";
+  emit_type(stream_type, out);
+  out << ".self)\n";
+  out << bl() << "    box.continuation.yield(value)\n";
+  out << bl() << "  }\n\n";
+
+  out << bl() << "  let onComplete: @convention(c) (UnsafeMutableRawPointer?) -> Void = { ctx in\n";
+  out << bl() << "    guard let ctx = ctx else { return }\n";
+  out << bl() << "    let box = Unmanaged<ContinuationBox>.fromOpaque(ctx).takeRetainedValue()\n";
+  out << bl() << "    box.continuation.finish()\n";
+  out << bl() << "  }\n\n";
+
+  out << bl() << "  let onError: @convention(c) (UnsafeMutableRawPointer?, UInt32) -> Void = { ctx, errorCode in\n";
+  out << bl() << "    guard let ctx = ctx else { return }\n";
+  out << bl() << "    let box = Unmanaged<ContinuationBox>.fromOpaque(ctx).takeRetainedValue()\n";
+  out << bl() << "    box.continuation.finish(throwing: RuntimeError(message: \"Stream error: \\(errorCode)\"))\n";
+  out << bl() << "  }\n\n";
+
+  // Register stream reader with C++ runtime
+  out << bl() << "  nprpc_stream_register_reader(self.handle, streamId, box, onChunk, onComplete, onError)\n\n";
+
+  // Send StreamInit message
+  out << bl() << "  // Send StreamInit message\n";
+  out << bl() << "  let result = nprpc_stream_send_init(self.handle, buffer.handle, self.timeout)\n";
+  out << bl() << "  if result != 0 {\n";
+  out << bl() << "    let box = Unmanaged<ContinuationBox>.fromOpaque(box).takeRetainedValue()\n";
+  out << bl() << "    box.continuation.finish(throwing: RuntimeError(message: \"Failed to send StreamInit\"))\n";
+  out << bl() << "  }\n";
+  out << eb() << "\n";
+
+  out << eb() << "\n";
+}
+
 void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
 {
   const std::string class_name = swift_type_name(ifs->name);
@@ -738,6 +885,16 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
         out << arg->name << ": ";
         emit_type(arg->type, out);
       }
+    }
+
+    // For streaming methods, return AsyncStream<T>
+    if (fn->is_stream) {
+      out << ") -> AsyncStream<";
+      emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, out);
+      out << "> " << bb();
+      out << bl() << "fatalError(\"Subclass must implement " << swift_method_name(fn->name) << "\")\n";
+      out << eb() << "\n";
+      continue;
     }
 
     // Servant methods only have throws if they have raises(...) in IDL
@@ -788,14 +945,55 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
 
   out << bl() << "guard let data = buffer.data else { return }\n\n";
 
-  // Read function index
-  out << bl() << "// Read function index\n";
+  // Check if this interface has any streaming methods
+  bool has_streaming = false;
+  for (auto& fn : ifs->fns) {
+    if (fn->is_stream) {
+      has_streaming = true;
+      break;
+    }
+  }
+
+  if (has_streaming) {
+    // Need to check message type first
+    out << bl() << "// Check message type to route streaming vs regular calls\n";
+    out << bl() << "let msgId = data.load(fromByteOffset: 4, as: Int32.self)\n\n";
+    out << bl() << "if msgId == impl.MessageId.streamInitialization.rawValue " << bb();
+    
+    // Streaming dispatch path
+    // StreamInit layout: stream_id(8) + poa_idx(2) + interface_idx(1) + pad(5) + object_id(8) + func_idx(1)
+    // func_idx is at offset 24 from StreamInit start = header(16) + 24 = 40
+    out << bl() << "// StreamInit: func_idx at offset 24 from struct start\n";
+    out << bl() << "let streamFuncIdx = data.load(fromByteOffset: " << (size_of_header + 24) << ", as: UInt8.self)\n";
+    out << bl() << "switch streamFuncIdx " << bb();
+    
+    for (auto& fn : ifs->fns) {
+      if (!fn->is_stream) continue;
+      out << bl() << "case " << fn->idx << ": // " << fn->name << "\n" << bb(false);
+      emit_servant_stream_dispatch(fn);
+      out << eb(false);
+    }
+    
+    out << bl() << "default:\n";
+    out << bl() << "  makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_UnknownFunctionIdx)\n";
+    out << eb(false) << bl() << "} // switch streamFuncIdx\n";
+    out << bl() << "return\n";
+    out << eb() << "\n";
+  }
+
+  // Regular function call dispatch
+  out << bl() << "// Read function index from CallHeader\n";
   out << bl() << "let functionIdx = data.load(fromByteOffset: " << (size_of_header + 3) << ", as: UInt8.self)\n\n";
 
   // Switch on function index
   out << bl() << "switch functionIdx " << bb();
 
   for (auto& fn : ifs->fns) {
+    // Skip streaming methods - they're handled above in StreamInit path
+    if (fn->is_stream) {
+      continue;
+    }
+
     out << bl() << "case " << fn->idx << ": // " << fn->name << "\n" << bb(false);
 
     // Safety check for untrusted interfaces before unmarshalling
@@ -964,6 +1162,74 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
 
   out << eb(false) << bl() << "} // switch\n";
   out << eb(false) << bl() << "} // dispatch\n";
+  out << eb() << "\n";
+}
+
+void SwiftBuilder::emit_servant_stream_dispatch(AstFunctionDecl* fn)
+{
+  auto stream_type = static_cast<AstStreamDecl*>(fn->ret_value)->type;
+
+  // For streaming dispatch, we need to:
+  // 1. Read stream_id from the StreamInit message (different from CallHeader layout)
+  // 2. Call the servant method to get AsyncStream
+  // 3. Iterate over the stream and send chunks  
+  // 4. Send completion when done
+
+  // StreamInit layout (32 bytes after alignment):
+  // stream_id(8) + poa_idx(2) + interface_idx(1) + pad(5) + object_id(8) + func_idx(1) + pad(7) = 32 bytes
+  out << bl() << "// Streaming method dispatch\n";
+  out << bl() << "guard let data = buffer.data else { return }\n";
+  out << bl() << "let streamId = data.load(fromByteOffset: " << size_of_header << ", as: UInt64.self)\n\n";
+
+  // Unmarshal input arguments if any
+  // Input args start after StreamInit (header 16 + StreamInit 32 = offset 48)
+  const auto args_offset = size_of_header + 32;  // StreamInit is 32 bytes
+  if (fn->in_s) {
+    out << bl() << "// Unmarshal input arguments\n";
+    out << bl() << "let ia = " << ns(fn->in_s->nm) << "unmarshal_" << fn->in_s->name << "(buffer: data, offset: " << args_offset << ")\n\n";
+  }
+
+  // Get stream_manager from session context (stream_manager is heap-allocated and stays alive)
+  out << bl() << "// Get stream_manager for streaming (heap-allocated, survives after dispatch returns)\n";
+  out << bl() << "guard let sessionCtx = self.sessionContext,\n";
+  out << bl() << "      let streamManager = nprpc_get_stream_manager(sessionCtx) else {\n";
+  out << bl() << "  makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_BadInput)\n";
+  out << bl() << "  return\n";
+  out << bl() << "}\n";
+  // Convert to UInt for Swift 6 Sendable compliance
+  out << bl() << "let streamManagerInt = UInt(bitPattern: streamManager)\n\n";
+
+  // Call servant method
+  out << bl() << "// Get stream from servant implementation\n";
+  out << bl() << "let stream = " << swift_method_name(fn->name) << "(";
+  bool first = true;
+  int ix = 0;
+  for (auto arg : fn->args) {
+    if (arg->modifier == ArgumentModifier::Out) continue;
+    ++ix;
+    if (!first) out << ", ";
+    first = false;
+    out << arg->name << ": ia._" << ix;
+  }
+  out << ")\n\n";
+
+  // Iterate and send chunks using Task for async iteration
+  out << bl() << "// Pump stream and send chunks in background\n";
+  out << bl() << "Task {\n" << bb(false);
+  out << bl() << "  let streamManagerPtr = UnsafeMutableRawPointer(bitPattern: streamManagerInt)!\n";
+  out << bl() << "  var sequence: UInt64 = 0\n";
+  out << bl() << "  for await value in stream {\n";
+
+  // Serialize the value and send as chunk
+  // For now, handle fundamental types directly
+  out << bl() << "    // Send chunk\n";
+  out << bl() << "    withUnsafeBytes(of: value) { valueBytes in\n";
+  out << bl() << "      nprpc_stream_manager_send_chunk(streamManagerPtr, streamId, valueBytes.baseAddress, UInt32(valueBytes.count), sequence)\n";
+  out << bl() << "    }\n";
+  out << bl() << "    sequence += 1\n";
+  out << bl() << "  }\n";
+  out << bl() << "  // Send completion\n";
+  out << bl() << "  nprpc_stream_manager_send_complete(streamManagerPtr, streamId, sequence)\n";
   out << eb() << "\n";
 }
 

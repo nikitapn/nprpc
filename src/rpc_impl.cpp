@@ -356,6 +356,21 @@ NPRPC_API void rpc_call_async(
   g_rpc->call_async(endpoint, std::move(buffer), std::make_optional(std::move(completion_handler)), timeout_ms);
 }
 
+// Free function wrapper for async fire-and-forget (no callback, for streaming init)
+NPRPC_API void rpc_call_async_no_reply(
+    const EndPoint& endpoint,
+    flat_buffer&& buffer,
+    uint32_t timeout_ms)
+{
+  g_rpc->call_async(endpoint, std::move(buffer), std::nullopt, timeout_ms);
+}
+
+// Free function wrapper for get_session (e.g., Swift bridge for streaming)
+NPRPC_API std::shared_ptr<Session> get_session_for_endpoint(const EndPoint& endpoint)
+{
+  return g_rpc->get_session(endpoint);
+}
+
 NPRPC_API void RpcImpl::send_udp(const EndPoint& endpoint, flat_buffer&& buffer)
 {
   if (endpoint.type() == EndPointType::Udp) {

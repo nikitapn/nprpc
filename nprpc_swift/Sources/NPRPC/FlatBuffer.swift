@@ -7,7 +7,7 @@ import CNprpc
 /// Marked as @unchecked Sendable because ownership is explicitly transferred between tasks
 /// and the underlying C++ memory is safely encapsulated
 public class FlatBuffer: @unchecked Sendable {
-    internal var handle: UnsafeMutableRawPointer
+    public var handle: UnsafeMutableRawPointer
     private var owned: Bool
     
     /// Create a new FlatBuffer (Swift owns it)

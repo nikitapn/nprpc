@@ -8,6 +8,13 @@
 #include <nprpc/basic.hpp>
 #include <nprpc/endpoint.hpp>
 #include <nprpc/object_ptr.hpp>
+#include <nprpc/stream_base.hpp>
+#include <nprpc/impl/stream_manager.hpp>
+#include <nprpc/impl/session.hpp>
+#include <nprpc/session_context.h>
+
+// Use nprpc's internal logger for synchronized output
+#include "../../../src/logging.hpp"
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
@@ -15,17 +22,30 @@
 #include <boost/asio/thread_pool.hpp>
 #include <boost/asio/use_future.hpp>
 
+#include <atomic>
+#include <random>
 #include <sstream>
 
-// External declarations for the free functions in rpc_impl.cpp
-// This avoids including nprpc_impl.hpp which has template issues with Swift's clang
+// Forward declarations for nprpc impl internals
+// Avoids including nprpc_impl.hpp which has template issues with Swift's clang
 namespace nprpc::impl {
+    class RpcImpl;
+    class Session;
+    NPRPC_API extern RpcImpl* g_rpc;
+    
     NPRPC_API void rpc_call(const nprpc::EndPoint& endpoint, nprpc::flat_buffer& buffer, uint32_t timeout_ms);
     NPRPC_API void rpc_call_async(
         const nprpc::EndPoint& endpoint,
         nprpc::flat_buffer&& buffer,
         std::function<void(const boost::system::error_code&, nprpc::flat_buffer&)>&& completion_handler,
         uint32_t timeout_ms);
+    NPRPC_API void rpc_call_async_no_reply(
+        const nprpc::EndPoint& endpoint,
+        nprpc::flat_buffer&& buffer,
+        uint32_t timeout_ms);
+    
+    // Forward declare get_session - we'll use it for stream registration
+    NPRPC_API std::shared_ptr<Session> get_session_for_endpoint(const nprpc::EndPoint& endpoint);
 }
 
 namespace nprpc_swift {
@@ -761,7 +781,8 @@ void nprpc_poa_deactivate_object(void* poa_handle, uint64_t object_id) {
 // Swift Servant Bridge
 class SwiftServantBridge : public nprpc::ObjectServant {
 public:
-    using DispatchFunc = void (*)(void*, void*, void*, void*);
+    // Updated dispatch function signature to include session context
+    using DispatchFunc = void (*)(void*, void*, void*, void*, void*);
 
     SwiftServantBridge(void* swift_servant, const std::string& class_name, DispatchFunc dispatch)
         : swift_servant_(swift_servant)
@@ -779,9 +800,9 @@ public:
 
     void dispatch(nprpc::SessionContext& ctx, bool from_parent) override {
         // Call Swift dispatch through trampoline
-        // Pass rx_buffer, tx_buffer, and endpoint
+        // Pass rx_buffer, tx_buffer, endpoint, and session context (for streaming)
         if (dispatch_func_ && swift_servant_) {
-            dispatch_func_(swift_servant_, ctx.rx_buffer, ctx.tx_buffer, &ctx.remote_endpoint);
+            dispatch_func_(swift_servant_, ctx.rx_buffer, ctx.tx_buffer, &ctx.remote_endpoint, &ctx);
         }
     }
 
@@ -798,7 +819,8 @@ void* nprpc_poa_activate_swift_servant(
     void* swift_servant,
     const char* class_name,
     uint32_t activation_flags,
-    void (*dispatch_func)(void*, void*, void*, void*))
+    void (*dispatch_func)(void*, void*, void*, void*, void*),
+    void* session_ctx)
 {
     auto* poa = static_cast<nprpc::Poa*>(poa_handle);
     if (!poa || !swift_servant || !class_name || !dispatch_func) {
@@ -809,7 +831,8 @@ void* nprpc_poa_activate_swift_servant(
         auto bridge = std::make_unique<SwiftServantBridge>(
             swift_servant, class_name, dispatch_func);
 
-        auto oid = poa->activate_object(bridge.release(), activation_flags);
+        auto* ctx = static_cast<nprpc::SessionContext*>(session_ctx);
+        auto oid = poa->activate_object(bridge.release(), activation_flags, ctx);
 
         // Allocate and copy ObjectId to return to Swift
         // Swift will need to free this memory
@@ -819,6 +842,227 @@ void* nprpc_poa_activate_swift_servant(
         return oid_copy;
     } catch (...) {
         return nullptr;
+    }
+}
+
+// ============================================================================
+// Streaming operations
+// ============================================================================
+
+uint64_t nprpc_generate_stream_id() {
+    static std::atomic<uint64_t> counter{0};
+    static const uint64_t random_base = []() {
+        std::random_device rd;
+        return (static_cast<uint64_t>(rd()) << 32) | rd();
+    }();
+    return random_base ^ (++counter);
+}
+
+void* nprpc_get_stream_manager(void* session_ctx) {
+    auto* ctx = static_cast<nprpc::SessionContext*>(session_ctx);
+    if (!ctx) {
+        NPRPC_LOG_WARN("[SWIFT] nprpc_get_stream_manager: session_ctx is null");
+        return nullptr;
+    }
+    NPRPC_LOG_DEBUG("[SWIFT] nprpc_get_stream_manager: stream_manager={}", (void*)ctx->stream_manager);
+    return ctx->stream_manager;
+}
+
+void nprpc_stream_manager_send_chunk(
+    void* stream_manager,
+    uint64_t stream_id,
+    const void* data,
+    uint32_t data_size,
+    uint64_t sequence)
+{
+    NPRPC_LOG_DEBUG("[SWIFT] send_chunk: stream_id={} data_size={} sequence={}", stream_id, data_size, sequence);
+
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) {
+        NPRPC_LOG_ERROR("[SWIFT] send_chunk: stream_manager is null");
+        return;
+    }
+
+    std::span<const uint8_t> data_span(
+        static_cast<const uint8_t*>(data),
+        data_size
+    );
+
+    mgr->send_chunk(stream_id, data_span, sequence);
+}
+
+void nprpc_stream_manager_send_complete(void* stream_manager, uint64_t stream_id, uint64_t final_sequence) {
+    NPRPC_LOG_DEBUG("[SWIFT] send_complete: stream_id={} final_sequence={}", stream_id, final_sequence);
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) return;
+
+    mgr->send_complete(stream_id, final_sequence);
+}
+
+void nprpc_stream_manager_send_error(
+    void* stream_manager,
+    uint64_t stream_id,
+    uint32_t error_code,
+    const void* error_data,
+    uint32_t error_data_size)
+{
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) return;
+
+    std::span<const uint8_t> data_span(
+        static_cast<const uint8_t*>(error_data),
+        error_data_size
+    );
+
+    mgr->send_error(stream_id, error_code, data_span);
+}
+
+// Legacy session context versions
+void nprpc_stream_send_chunk(
+    void* session_ctx,
+    uint64_t stream_id,
+    const void* data,
+    uint32_t data_size,
+    uint64_t sequence)
+{
+    auto* ctx = static_cast<nprpc::SessionContext*>(session_ctx);
+    if (!ctx || !ctx->stream_manager) return;
+
+    // Create a span from the data
+    std::span<const uint8_t> data_span(
+        static_cast<const uint8_t*>(data),
+        data_size
+    );
+
+    ctx->stream_manager->send_chunk(stream_id, data_span, sequence);
+}
+
+void nprpc_stream_send_complete(void* session_ctx, uint64_t stream_id, uint64_t final_sequence) {
+    auto* ctx = static_cast<nprpc::SessionContext*>(session_ctx);
+    if (!ctx || !ctx->stream_manager) return;
+
+    ctx->stream_manager->send_complete(stream_id, final_sequence);
+}
+
+void nprpc_stream_send_error(
+    void* session_ctx,
+    uint64_t stream_id,
+    uint32_t error_code,
+    const void* error_data,
+    uint32_t error_data_size)
+{
+    auto* ctx = static_cast<nprpc::SessionContext*>(session_ctx);
+    if (!ctx || !ctx->stream_manager) return;
+
+    std::span<const uint8_t> data_span(
+        static_cast<const uint8_t*>(error_data),
+        error_data_size
+    );
+
+    ctx->stream_manager->send_error(stream_id, error_code, data_span);
+}
+
+// Swift stream reader bridge - stores Swift callbacks
+struct SwiftStreamReader : public nprpc::StreamReaderBase {
+    void* swift_context;
+    void (*on_chunk_callback)(void*, const void*, uint32_t);
+    void (*on_complete_callback)(void*);
+    void (*on_error_callback)(void*, uint32_t);
+
+    SwiftStreamReader(
+        void* context,
+        void (*on_chunk)(void*, const void*, uint32_t),
+        void (*on_complete)(void*),
+        void (*on_error)(void*, uint32_t)
+    ) : swift_context(context),
+        on_chunk_callback(on_chunk),
+        on_complete_callback(on_complete),
+        on_error_callback(on_error) {}
+
+    void on_chunk_received(nprpc::flat_buffer fb) override {
+        NPRPC_LOG_DEBUG("[SWIFT] SwiftStreamReader::on_chunk_received");
+        // Extract data from StreamChunk
+        // Chunk layout: Header (16) + stream_id (8) + sequence (8) + data vector header (8) + window_size (4)
+        constexpr size_t header_size = 16;
+        constexpr size_t chunk_offset = header_size;
+
+        auto data = fb.data();
+        if (data.size() < chunk_offset + 28) return;
+
+        // Read data vector
+        const uint8_t* chunk_ptr = static_cast<const uint8_t*>(data.data()) + chunk_offset;
+        uint32_t data_rel_offset = *reinterpret_cast<const uint32_t*>(chunk_ptr + 16);
+        uint32_t data_count = *reinterpret_cast<const uint32_t*>(chunk_ptr + 20);
+
+        NPRPC_LOG_DEBUG("[SWIFT] Chunk: data_count={}", data_count);
+
+        if (data_count > 0 && on_chunk_callback) {
+            const void* data_ptr = chunk_ptr + 16 + data_rel_offset;
+            on_chunk_callback(swift_context, data_ptr, data_count);
+        }
+    }
+
+    void on_complete() override {
+        if (on_complete_callback) {
+            on_complete_callback(swift_context);
+        }
+    }
+
+    void on_error(uint32_t error_code, nprpc::flat_buffer error_data) override {
+        if (on_error_callback) {
+            on_error_callback(swift_context, error_code);
+        }
+    }
+};
+
+void nprpc_stream_register_reader(
+    void* object_ptr,
+    uint64_t stream_id,
+    void* context,
+    void (*on_chunk)(void*, const void*, uint32_t),
+    void (*on_complete)(void*),
+    void (*on_error)(void*, uint32_t))
+{
+    NPRPC_LOG_DEBUG("[SWIFT] nprpc_stream_register_reader: stream_id={}", stream_id);
+    auto* obj = static_cast<nprpc::Object*>(object_ptr);
+    if (!obj) {
+        NPRPC_LOG_ERROR("[SWIFT] nprpc_stream_register_reader: object_ptr is null");
+        return;
+    }
+
+    // Get session from object's endpoint
+    auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
+    if (!session || !session->ctx().stream_manager) {
+        NPRPC_LOG_ERROR("[SWIFT] nprpc_stream_register_reader: no session or stream_manager");
+        return;
+    }
+
+    // Create and register the Swift reader bridge
+    // Note: Memory ownership is transferred to stream_manager
+    auto* reader = new SwiftStreamReader(context, on_chunk, on_complete, on_error);
+    session->ctx().stream_manager->register_reader(stream_id, reader);
+    NPRPC_LOG_DEBUG("[SWIFT] Reader registered with stream_manager={}", (void*)session->ctx().stream_manager);
+}
+
+int nprpc_stream_send_init(
+    void* object_ptr,
+    void* buffer_ptr,
+    uint32_t timeout_ms)
+{
+    auto* obj = static_cast<nprpc::Object*>(object_ptr);
+    auto* buf = static_cast<nprpc::flat_buffer*>(buffer_ptr);
+    if (!obj || !buf) return -1;
+
+    try {
+        // Send asynchronously with no callback - StreamInit doesn't get a reply,
+        // the server will start sending chunks directly to the registered reader
+        nprpc::impl::rpc_call_async_no_reply(
+            obj->get_endpoint(),
+            std::move(*buf),
+            timeout_ms);
+        return 0;
+    } catch (...) {
+        return -1;
     }
 }
 

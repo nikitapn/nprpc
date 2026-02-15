@@ -16,9 +16,13 @@ final class IntegrationTests: XCTestCase {
         print("Setting up integration tests (class-wide)...")
         do {
             rpc = try RpcBuilder()
-                .setLogLevel(.warn)
-                .setHostname("127.0.0.1")
+                .setLogLevel(.info)
+                .setHostname("localhost")
                 .withTcp(16000)
+                .withHttp(16001)
+                .withQuic(16002)
+                    .ssl(certFile: "/workspace/certs/out/localhost.crt",
+                         keyFile: "/workspace/certs/out/localhost.key")
                 .build()
             // Give the TCP listener time to start accepting connections
             Thread.sleep(forTimeInterval: 0.1)
@@ -765,5 +769,54 @@ final class IntegrationTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
+    }
+
+    /// Test streaming RPC methods
+    /// This tests the full round-trip: client sends StreamInit, servant produces stream,
+    /// servant dispatch pumps chunks, client receives via AsyncThrowingStream
+    func testStreams() async throws {
+        // TestStreams servant implementation
+        class TestStreamsImpl: TestStreamsServant {
+            override func getByteStream(size: UInt64) -> AsyncStream<UInt8> {
+                return AsyncStream { continuation in
+                    // Produce 'size' bytes (capped at 256 for test)
+                    let count = min(size, 256)
+                    for i in 0..<count {
+                        continuation.yield(UInt8(i & 0xFF))
+                    }
+                    continuation.finish()
+                }
+            }
+        }
+        
+        // Create and activate servant
+        let servant = TestStreamsImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .allowWebSocket)
+        XCTAssertEqual(oid.class_id, "nprpc_test/nprpc.test.TestStreams")
+        
+        // Create client proxy
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+        let client = narrow(obj, to: TestStreams.self)!
+        XCTAssertEqual(client.classId, "nprpc_test/nprpc.test.TestStreams")
+        
+        // Test full round-trip: call streaming method and consume the stream
+        let stream = try client.getByteStream(size: 5)
+        var receivedValues: [UInt8] = []
+        
+        for try await value in stream {
+            print("[SWIFT] Received byte: \(value)")
+            receivedValues.append(value)
+        }
+        
+        // Verify we received all expected values
+        XCTAssertEqual(receivedValues.count, 5, "Should receive 5 bytes from stream")
+        for i in 0..<5 {
+            XCTAssertEqual(receivedValues[i], UInt8(i), "Byte \(i) should be \(i)")
+        }
+        
+        print("Stream test completed successfully! Received \(receivedValues.count) values")
     }
 }

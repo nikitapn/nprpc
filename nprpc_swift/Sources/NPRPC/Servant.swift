@@ -43,6 +43,9 @@ public struct NPRPCEndpoint {
 
 /// Base class for Swift servants
 open class NPRPCServant {
+    /// Session context pointer for streaming operations (set during dispatch)
+    public var sessionContext: UnsafeMutableRawPointer?
+    
     public init() {}
     
     /// Override this to return the class name/ID of this servant
@@ -68,7 +71,8 @@ internal class SwiftServantBridge {
     }
     
     /// C-compatible dispatch function that will be called from C++
-    static let dispatchTrampoline: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void = { swiftServantPtr, rxBufferPtr, txBufferPtr, endpointPtr in
+    /// Parameters: swiftServant, rxBuffer, txBuffer, endpoint, sessionContext
+    static let dispatchTrampoline: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void = { swiftServantPtr, rxBufferPtr, txBufferPtr, endpointPtr, sessionCtxPtr in
         guard let swiftServantPtr = swiftServantPtr,
               let rxBufferPtr = rxBufferPtr else {
             return
@@ -76,6 +80,10 @@ internal class SwiftServantBridge {
         
         let bridge = Unmanaged<SwiftServantBridge>.fromOpaque(swiftServantPtr).takeUnretainedValue()
         guard let servant = bridge.servant else { return }
+        
+        // Store session context for streaming operations
+        servant.sessionContext = sessionCtxPtr
+        defer { servant.sessionContext = nil }
         
         // Wrap C++ flat_buffer without taking ownership
         let buffer = FlatBuffer(wrapping: rxBufferPtr)

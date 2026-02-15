@@ -198,6 +198,7 @@ add_library(nprpc
   src/udp/udp_listener.cpp
   # Core framework files
   src/nprpc.cpp
+  src/logging.cpp
   src/rpc_impl.cpp
   src/session_context.cpp
   src/session.cpp

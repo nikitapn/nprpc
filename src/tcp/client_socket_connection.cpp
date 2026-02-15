@@ -3,6 +3,7 @@
 
 #include <nprpc/common.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/stream_manager.hpp>
 
 #include <boost/asio/write.hpp>
 #include <future>
@@ -132,7 +133,15 @@ void SocketConnection::send_receive_async(
           this_->pop_and_execute_next_task();
           return;
         }
-        this_->do_read_size();
+        if (!handler) {
+          // Fire-and-forget: pop immediately and start streaming listener mode
+          this_->pop_and_execute_next_task();
+          // Continue reading for streaming messages
+          this_->do_read_size();
+        } else {
+          // Normal request-response: wait for reply
+          this_->do_read_size();
+        }
       });
     }
 
@@ -210,8 +219,10 @@ void SocketConnection::on_read_size(const boost::system::error_code& ec,
 
   if (ec) {
     fail(ec, "client_socket_session: on_read_size");
-    (*wq_.front()).on_failed(ec);
-    pop_and_execute_next_task();
+    if (!wq_.empty()) {
+      (*wq_.front()).on_failed(ec);
+      pop_and_execute_next_task();
+    }
     return;
   }
 
@@ -219,8 +230,10 @@ void SocketConnection::on_read_size(const boost::system::error_code& ec,
 
   if (rx_size_ > max_message_size) {
     fail(boost::asio::error::no_buffer_space, "rx_size_ > max_message_size");
-    (*wq_.front()).on_failed(ec);
-    pop_and_execute_next_task();
+    if (!wq_.empty()) {
+      (*wq_.front()).on_failed(ec);
+      pop_and_execute_next_task();
+    }
     return;
   }
 
@@ -238,8 +251,10 @@ void SocketConnection::on_read_body(const boost::system::error_code& ec,
 
   if (ec) {
     fail(ec, "client_socket_session: on_read_body");
-    (*wq_.front()).on_failed(ec);
-    pop_and_execute_next_task();
+    if (!wq_.empty()) {
+      (*wq_.front()).on_failed(ec);
+      pop_and_execute_next_task();
+    }
     return;
   }
 
@@ -251,8 +266,38 @@ void SocketConnection::on_read_body(const boost::system::error_code& ec,
   if (rx_size_ != 0) {
     do_read_body();
   } else {
-    (*wq_.front()).on_executed();
-    pop_and_execute_next_task();
+    // Check if this is a streaming message that should be routed to stream_manager
+    auto* header = reinterpret_cast<const flat::Header*>(buf.data().data());
+    bool is_stream_msg = (header->msg_id == MessageId::StreamDataChunk ||
+                          header->msg_id == MessageId::StreamCompletion ||
+                          header->msg_id == MessageId::StreamError);
+    
+    if (is_stream_msg && ctx_.stream_manager) {
+      // Route to stream_manager instead of treating as RPC response
+      if (header->msg_id == MessageId::StreamDataChunk) {
+        flat_buffer chunk_buf;
+        chunk_buf.prepare(buf.size());
+        chunk_buf.commit(buf.size());
+        std::memcpy(chunk_buf.data().data(), buf.data().data(), buf.size());
+        ctx_.stream_manager->on_chunk_received(std::move(chunk_buf));
+      } else if (header->msg_id == MessageId::StreamCompletion) {
+        flat::StreamComplete_Direct msg(buf, sizeof(flat::Header));
+        ctx_.stream_manager->on_stream_complete(msg.stream_id());
+      } else if (header->msg_id == MessageId::StreamError) {
+        flat::StreamError_Direct msg(buf, sizeof(flat::Header));
+        flat_buffer error_buf;  // Empty for now
+        ctx_.stream_manager->on_stream_error(msg.stream_id(), msg.error_code(), std::move(error_buf));
+      }
+      // Continue reading for more streaming messages
+      do_read_size();
+    } else if (!wq_.empty()) {
+      // Regular RPC response
+      (*wq_.front()).on_executed();
+      pop_and_execute_next_task();
+    } else {
+      // Unexpected message while in streaming mode - just continue reading
+      do_read_size();
+    }
   }
 }
 
