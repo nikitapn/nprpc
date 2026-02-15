@@ -20,28 +20,37 @@ public struct ObjectActivationFlags: OptionSet, Sendable {
         self.rawValue = rawValue
     }
     
+    /// Make object session-specific (tethered to current session)
+    public static let sessionSpecific = ObjectActivationFlags(rawValue: 1 << 0)
+    
     /// Allow TCP connections
-    public static let allowTcp = ObjectActivationFlags(rawValue: 1 << 0)
+    public static let allowTcp = ObjectActivationFlags(rawValue: 1 << 1)
     
     /// Allow WebSocket connections
-    public static let allowWebSocket = ObjectActivationFlags(rawValue: 1 << 1)
+    public static let allowWebSocket = ObjectActivationFlags(rawValue: 1 << 2)
+    
+    /// Allow SSL WebSocket connections
+    public static let allowSslWebSocket = ObjectActivationFlags(rawValue: 1 << 3)
     
     /// Allow HTTP connections
-    public static let allowHttp = ObjectActivationFlags(rawValue: 1 << 2)
+    public static let allowHttp = ObjectActivationFlags(rawValue: 1 << 4)
     
-    /// Allow QUIC connections
-    public static let allowQuic = ObjectActivationFlags(rawValue: 1 << 3)
-    
-    /// Allow UDP datagrams
-    public static let allowUdp = ObjectActivationFlags(rawValue: 1 << 4)
+    /// Allow secured HTTP connections
+    public static let allowSecuredHttp = ObjectActivationFlags(rawValue: 1 << 5)
     
     /// Allow shared memory transport
-    public static let allowSharedMemory = ObjectActivationFlags(rawValue: 1 << 5)
+    public static let allowSharedMemory = ObjectActivationFlags(rawValue: 1 << 6)
+    
+    /// Allow UDP datagrams
+    public static let allowUdp = ObjectActivationFlags(rawValue: 1 << 7)
+    
+    /// Allow QUIC connections
+    public static let allowQuic = ObjectActivationFlags(rawValue: 1 << 8)
     
     /// Allow all transports
     public static let allowAll: ObjectActivationFlags = [
-        .allowTcp, .allowWebSocket, .allowHttp, 
-        .allowQuic, .allowUdp, .allowSharedMemory
+        .allowTcp, .allowWebSocket, .allowSslWebSocket, .allowHttp, 
+        .allowSecuredHttp, .allowSharedMemory, .allowQuic
     ]
     
     /// Network transports only (no shared memory)
@@ -82,8 +91,17 @@ private let globalServantDispatch: @convention(c) (UnsafeMutableRawPointer?, Uns
     // Wrap rx buffer for servant dispatch
     let buffer = FlatBuffer(wrapping: rxBuffer)
     
-    // Create endpoint info (simplified for now)
-    let endpoint = NPRPCEndpoint(type: .tcp, hostname: "localhost", port: 0)
+    // Extract endpoint from C++ EndPoint pointer
+    let endpoint: NPRPCEndpoint
+    if let endpointPtr = endpointPtr {
+        let typeValue = Int32(nprpc_endpoint_get_type(endpointPtr))
+        let hostname = String(cString: nprpc_endpoint_get_hostname(endpointPtr))
+        let port = nprpc_endpoint_get_port(endpointPtr)
+        endpoint = NPRPCEndpoint(type: EndPointType(rawValue: typeValue) ?? .tcp, hostname: hostname, port: port)
+    } else {
+        // Fallback - shouldn't happen in normal operation
+        endpoint = NPRPCEndpoint(type: .tcp, hostname: "localhost", port: 0)
+    }
     
     // Call servant dispatch - it writes response back to the same buffer
     servant.dispatch(buffer: buffer, remoteEndpoint: endpoint)

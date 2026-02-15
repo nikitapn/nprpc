@@ -175,8 +175,7 @@ public:
 
 inline std::ostream& operator<<(std::ostream& os, const EndPoint& endpoint)
 {
-  return os << EndPoint::to_string(endpoint.type()) << endpoint.hostname()
-            << ":" << endpoint.port();
+  return os << endpoint.to_string();
 }
 
 } // namespace nprpc

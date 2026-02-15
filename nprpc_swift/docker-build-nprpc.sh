@@ -7,12 +7,24 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-echo "Building Docker image with Swift on Ubuntu..."
-docker build -f "$SCRIPT_DIR/Dockerfile" \
-    --build-arg USER_ID=$(id -u) \
-    --build-arg GROUP_ID=$(id -g) \
-    --build-arg USERNAME=$(id -un) \
-    -t nprpc-swift-ubuntu "$PROJECT_ROOT"
+REBUILD_DOCKER=false
+if [ "$1" == "--rebuild" ]; then
+    REBUILD_DOCKER=true
+fi
+
+DOCKER_IMAGE_NAME="nprpc-swift-ubuntu"
+IS_DOCKER_BUILT=$(docker images -q "$DOCKER_IMAGE_NAME")
+
+if [ -z "$IS_DOCKER_BUILT" ] || [ "$REBUILD_DOCKER" = true ]; then
+    echo "Docker image '$DOCKER_IMAGE_NAME' not found or rebuild requested. Building..."
+    docker build -f "$SCRIPT_DIR/Dockerfile" \
+        --build-arg USER_ID=$(id -u) \
+        --build-arg GROUP_ID=$(id -g) \
+        --build-arg USERNAME=$(id -un) \
+        -t nprpc-swift-ubuntu "$PROJECT_ROOT"
+else
+    echo "Docker image '$DOCKER_IMAGE_NAME' already exists. Skipping build."
+fi
 
 echo ""
 echo "Running build in container..."
@@ -70,7 +82,7 @@ docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace nprpc-swift-ubuntu b
     
     echo ""
     echo "=== Running Tests ==="
-    swift test --skip-build || echo "Tests completed (some may have Foundation conflicts)"
+    swift test || echo "Tests completed (some may have Foundation conflicts)"
     
     echo ""
     echo "✅ Build successful in Ubuntu container!"

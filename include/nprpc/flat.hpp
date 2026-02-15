@@ -181,7 +181,7 @@ template <class T, class TD> struct Span_ref {
 
 template <typename T, size_t Size> class Array
 {
-  std::aligned_storage_t<sizeof(T), alignof(T)> storage_[Size];
+  alignas(T) std::byte storage_[sizeof(T) * Size];
 
   T* data() noexcept
   {

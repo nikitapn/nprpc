@@ -404,6 +404,27 @@ bool nprpc_object_select_endpoint_with_info(void* obj, uint32_t type, const char
     return static_cast<nprpc::Object*>(obj)->select_endpoint(ep);
 }
 
+// Raw EndPoint* accessor functions (for dispatch endpoint parameter)
+uint32_t nprpc_endpoint_get_type(void* endpoint_ptr) {
+    if (!endpoint_ptr) return 0;
+    const auto* ep = static_cast<nprpc::EndPoint*>(endpoint_ptr);
+    return static_cast<uint32_t>(ep->type());
+}
+
+const char* nprpc_endpoint_get_hostname(void* endpoint_ptr) {
+    if (!endpoint_ptr) return "";
+    const auto* ep = static_cast<nprpc::EndPoint*>(endpoint_ptr);
+    // Copy to thread-local to ensure lifetime
+    g_endpoint_hostname = std::string(ep->hostname());
+    return g_endpoint_hostname.c_str();
+}
+
+uint16_t nprpc_endpoint_get_port(void* endpoint_ptr) {
+    if (!endpoint_ptr) return 0;
+    const auto* ep = static_cast<nprpc::EndPoint*>(endpoint_ptr);
+    return ep->port();
+}
+
 // ObjectId accessor functions for Swift
 // NOTE: These are for raw ObjectId* from nprpc_poa_activate_swift_servant
 // Use nprpc_object_get_* for Object* from nprpc_create_object_from_components

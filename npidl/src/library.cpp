@@ -380,7 +380,7 @@ template <typename T, size_t MaxSize> class Queue
   T* begin_;
   T* end_;
   size_t size_;
-  std::aligned_storage_t<sizeof(T), alignof(T)> storage_[MaxSize];
+  alignas(T) std::byte storage_[sizeof(T) * MaxSize];
 
   T* data() noexcept
   {

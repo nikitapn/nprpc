@@ -816,13 +816,15 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
   const std::string default_url =
       g_cfg.hostname.empty() ? "127.0.0.1"s : g_cfg.hostname;
 
-  if (activation_flags & ObjectActivationFlags::ALLOW_TCP) {
+  if ((activation_flags & ObjectActivationFlags::ALLOW_TCP) &&
+      g_cfg.listen_tcp_port != 0) {
     oid.urls += (std::string(tcp_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_tcp_port)) +
                 ';';
   }
 
-  if (activation_flags & ObjectActivationFlags::ALLOW_WEBSOCKET) {
+  if ((activation_flags & ObjectActivationFlags::ALLOW_WEBSOCKET) &&
+      g_cfg.listen_http_port != 0) {
     oid.urls += (std::string(ws_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_http_port)) +
                 ';';
@@ -832,12 +834,15 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
     if (g_cfg.hostname.empty()) {
       throw std::runtime_error("SSL websocket requires a hostname");
     }
-    oid.urls += (std::string(wss_prefix) + g_cfg.hostname + ":" +
-                 std::to_string(g_cfg.listen_http_port)) +
-                ';';
+    if (g_cfg.listen_http_port != 0) {
+      oid.urls += (std::string(wss_prefix) + g_cfg.hostname + ":" +
+                   std::to_string(g_cfg.listen_http_port)) +
+                  ';';
+    }
   }
 
-  if (activation_flags & ObjectActivationFlags::ALLOW_HTTP) {
+  if ((activation_flags & ObjectActivationFlags::ALLOW_HTTP) &&
+      g_cfg.listen_http_port != 0) {
     oid.urls += (std::string(http_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_http_port)) +
                 ';';
@@ -847,32 +852,36 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
     if (g_cfg.hostname.empty()) {
       throw std::runtime_error("Secured HTTP requires a hostname");
     }
-    oid.urls += (std::string(https_prefix) + g_cfg.hostname + ":" +
-                 std::to_string(g_cfg.listen_http_port)) +
-                ';';
+    if (g_cfg.listen_http_port != 0) {
+      oid.urls += (std::string(https_prefix) + g_cfg.hostname + ":" +
+                   std::to_string(g_cfg.listen_http_port)) +
+                  ';';
+    }
   }
 
   if (activation_flags & ObjectActivationFlags::ALLOW_SHARED_MEMORY) {
     oid.urls += (std::string(mem_prefix) + g_server_listener_uuid) + ';';
   }
 
-  if (activation_flags & ObjectActivationFlags::ALLOW_UDP) {
-    if (g_cfg.listen_udp_port == 0) {
-      throw std::runtime_error("UDP port not configured");
-    }
+  if ((activation_flags & ObjectActivationFlags::ALLOW_UDP) &&
+      g_cfg.listen_udp_port != 0) {
     oid.urls += (std::string(udp_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_udp_port)) +
                 ';';
   }
 
-  if (activation_flags & ObjectActivationFlags::ALLOW_QUIC) {
-    if (g_cfg.listen_quic_port == 0) {
-      throw std::runtime_error(
-          "QUIC port not configured. Use set_listen_quic_port()");
-    }
+  if ((activation_flags & ObjectActivationFlags::ALLOW_QUIC) &&
+      g_cfg.listen_quic_port != 0) {
     oid.urls += (std::string(quic_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_quic_port)) +
                 ';';
+  }
+
+  // Ensure at least one URL was added (unless session-specific which uses tethered connection)
+  if (oid.urls.empty() && !(activation_flags & ObjectActivationFlags::SESSION_SPECIFIC)) {
+    throw std::runtime_error("No transport configured for activation. "
+                             "Check that at least one requested transport "
+                             "(TCP, WebSocket, etc.) has been configured in RpcBuilder.");
   }
 
   if (pl_lifespan_ == PoaPolicy::Lifespan::Transient) {

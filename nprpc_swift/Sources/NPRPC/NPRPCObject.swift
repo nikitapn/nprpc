@@ -290,7 +290,7 @@ open class NPRPCObject: Codable, @unchecked Sendable {
 
     deinit {
         // Release our reference to C++ object
-        nprpc_object_release(handle)
+        // nprpc_object_release(handle)
     }
 }
 

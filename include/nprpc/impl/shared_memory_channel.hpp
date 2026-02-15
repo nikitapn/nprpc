@@ -80,8 +80,8 @@ public:
   // Non-copyable, movable
   SharedMemoryChannel(const SharedMemoryChannel&) = delete;
   SharedMemoryChannel& operator=(const SharedMemoryChannel&) = delete;
-  SharedMemoryChannel(SharedMemoryChannel&&) = default;
-  SharedMemoryChannel& operator=(SharedMemoryChannel&&) = default;
+  SharedMemoryChannel(SharedMemoryChannel&&) = delete;
+  SharedMemoryChannel& operator=(SharedMemoryChannel&&) = delete;
 
   /**
    * @brief Send data through the channel (non-blocking)

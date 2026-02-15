@@ -533,97 +533,105 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(nested.y.y.z, 0xDEADBEEFCAFEBABE)
     }
 
-    // func testObjects() async throws {
-    //     // SimpleObject servant that stores a value
-    //     class SimpleObjectImpl: SimpleObjectServant {
-    //         var value: UInt32 = 0
-            
-    //         override func setValue(a: UInt32) {
-    //             value = a
-    //         }
-    //     }
-        
+    func testObjects() async throws {
+        // This test verifies that object references can be passed as parameters and returned from methods, and that the servant can narrow them to the correct type and call methods on them.
+        let semaphore = DispatchSemaphore(value: 0)
+
+        // SimpleObject servant that stores a value
+        class SimpleObjectImpl: SimpleObjectServant {
+            var value: UInt32 = 0
+            override func setValue(a: UInt32) {
+                value = a
+            }
+        }
+
         // TestObjects servant that receives and manipulates object references
-    //     class TestObjectsImpl: TestObjectsServant {
-    //         var receivedObject: SimpleObject?
-            
-    //         override func sendObject(o: NPRPCObject) throws {
-    //             // Narrow the received object to SimpleObject
-    //             guard let simpleObj = narrow(o, to: SimpleObject.self) else {
-    //                 throw AssertionFailed(message: "Invalid object type passed to SendObject")
-    //             }
-                
-    //             // Store the object for later and call SetValue on it
-    //             receivedObject = simpleObj
-    //             // setValue is async - use Task to call from sync context
-    //             let semaphore = DispatchSemaphore(value: 0)
-    //             Task {
-    //                 await simpleObj.setValue(a: 42)
-    //                 semaphore.signal()
-    //             }
-    //             // semaphore.wait()
-    //         }
-            
-    //         override func releaseReceivedObject() throws {
-    //             guard receivedObject != nil else {
-    //                 throw AssertionFailed(message: "No object was received yet")
-    //             }
-    //             receivedObject = nil
-    //         }
-            
-    //         override func sendNestedObjects(o: NestedObjects) throws {
-    //             // Narrow both objects to SimpleObject
-    //             guard let obj1 = narrow(o.object1, to: SimpleObject.self),
-    //                   let obj2 = narrow(o.object2, to: SimpleObject.self) else {
-    //                 throw AssertionFailed(message: "Invalid object types in NestedObjects")
-    //             }
-                
-    //             // Call methods on both objects - use Task for async calls
-    //             let semaphore = DispatchSemaphore(value: 0)
-    //             Task {
-    //                 await obj1.setValue(a: 100)
-    //                 await obj2.setValue(a: 200)
-    //                 semaphore.signal()
-    //             }
-    //             // semaphore.wait()
-    //         }
-    //     }
-        
-    //     // Create and activate SimpleObject servants
-    //     let simpleServant1 = SimpleObjectImpl()
-    //     let simpleOid1 = try Self.poa!.activateObject(simpleServant1)
-    //     guard let simpleObj1 = NPRPCObject.fromObjectId(simpleOid1) else {
-    //         XCTFail("Failed to create NPRPCObject from ObjectId")
-    //         return
-    //     }
-        
-    //     let simpleServant2 = SimpleObjectImpl()
-    //     let simpleOid2 = try Self.poa!.activateObject(simpleServant2)
-    //     guard let simpleObj2 = NPRPCObject.fromObjectId(simpleOid2) else {
-    //         XCTFail("Failed to create NPRPCObject from ObjectId")
-    //         return
-    //     }
-        
-    //     // Create and activate TestObjects servant
-    //     let testObjectsServant = TestObjectsImpl()
-    //     let testOid = try Self.poa!.activateObject(testObjectsServant)
-    //     guard let testObj = NPRPCObject.fromObjectId(testOid) else {
-    //         XCTFail("Failed to create NPRPCObject from ObjectId")
-    //         return
-    //     }
-    //     let testClient = narrow(testObj, to: TestObjects.self)!
-        
-    //     // Test 1: Send a single object
-    //     try testClient.sendObject(o: simpleObj1)
-    //     XCTAssertEqual(simpleServant1.value, 42, "SendObject should have called SetValue(42) on the object")
-        
-    //     // Test 2: Release the received object
-    //     try testClient.releaseReceivedObject()
-        
-    //     // Test 3: Send nested objects
-    //     let nested = NestedObjects(object1: simpleObj1, object2: simpleObj2)
-    //     try testClient.sendNestedObjects(o: nested)
-    //     XCTAssertEqual(simpleServant1.value, 100, "SendNestedObjects should have called SetValue(100) on object1")
-    //     XCTAssertEqual(simpleServant2.value, 200, "SendNestedObjects should have called SetValue(200) on object2")
-    // }
+        class TestObjectsImpl: TestObjectsServant {
+            var receivedObject: SimpleObject?
+            let semaphore: DispatchSemaphore
+
+            init(semaphore: DispatchSemaphore) {
+                self.semaphore = semaphore
+                super.init()
+            }
+
+            override func sendObject(o: NPRPCObject) throws {
+                // Narrow the received object to SimpleObject
+                guard let simpleObj = narrow(o, to: SimpleObject.self) else {
+                    throw AssertionFailed(message: "Invalid object type passed to SendObject")
+                }
+
+                // Store the object for later and call SetValue on it
+                receivedObject = simpleObj
+                // setValue is async - use Task to call from sync context
+                let sem = semaphore
+                Task { [simpleObj, sem] in
+                    await simpleObj.setValue(a: 42)
+                    sem.signal()
+                }
+            }
+
+            override func releaseReceivedObject() throws {
+                guard receivedObject != nil else {
+                    throw AssertionFailed(message: "No object was received yet")
+                }
+                receivedObject = nil
+            }
+
+            override func sendNestedObjects(o: NestedObjects) throws {
+                // Narrow both objects to SimpleObject
+                guard let obj1 = narrow(o.object1, to: SimpleObject.self),
+                      let obj2 = narrow(o.object2, to: SimpleObject.self) else {
+                    throw AssertionFailed(message: "Invalid object types in NestedObjects")
+                }
+
+                // Call methods on both objects - use Task for async calls
+                let sem = semaphore
+                Task { [obj1, obj2, sem] in
+                    await obj1.setValue(a: 100)
+                    await obj2.setValue(a: 200)
+                    sem.signal()
+                }
+            }
+        }
+
+        // Create and activate SimpleObject servants
+        let simpleServant1 = SimpleObjectImpl()
+        let simpleOid1 = try Self.poa!.activateObject(simpleServant1)
+        guard let simpleObj1 = NPRPCObject.fromObjectId(simpleOid1) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+
+        let simpleServant2 = SimpleObjectImpl()
+        let simpleOid2 = try Self.poa!.activateObject(simpleServant2)
+        guard let simpleObj2 = NPRPCObject.fromObjectId(simpleOid2) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+
+        // Create and activate TestObjects servant
+        let testObjectsServant = TestObjectsImpl(semaphore: semaphore)
+        let testOid = try Self.poa!.activateObject(testObjectsServant)
+        guard let testObj = NPRPCObject.fromObjectId(testOid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+        let testClient = narrow(testObj, to: TestObjects.self)!
+
+        // Test 1: Send a single object
+        try testClient.sendObject(o: simpleObj1)
+        semaphore.wait()
+        XCTAssertEqual(simpleServant1.value, 42, "SendObject should have called SetValue(42) on the object")
+
+        // Test 2: Release the received object
+        try testClient.releaseReceivedObject()
+
+        // Test 3: Send nested objects
+        let nested = NestedObjects(object1: simpleObj1, object2: simpleObj2)
+        try testClient.sendNestedObjects(o: nested)
+        semaphore.wait()
+        XCTAssertEqual(simpleServant1.value, 100, "SendNestedObjects should have called SetValue(100) on object1")
+        XCTAssertEqual(simpleServant2.value, 200, "SendNestedObjects should have called SetValue(200) on object2")
+    }
 }

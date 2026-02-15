@@ -219,6 +219,11 @@ uint16_t nprpc_object_get_endpoint_port(void* obj);  // Returns port number
 bool nprpc_object_select_endpoint(void* obj);  // Select best endpoint
 bool nprpc_object_select_endpoint_with_info(void* obj, uint32_t type, const char* hostname, uint16_t port);  // Select endpoint with hint
 
+// Raw EndPoint* accessors (for dispatch endpoint parameter)
+uint32_t nprpc_endpoint_get_type(void* endpoint_ptr);  // Returns EndPointType as uint32_t
+const char* nprpc_endpoint_get_hostname(void* endpoint_ptr);  // Returns hostname string (temp memory)
+uint16_t nprpc_endpoint_get_port(void* endpoint_ptr);  // Returns port number
+
 // ObjectId accessor functions (for raw ObjectId* from poa_activate)
 uint64_t nprpc_objectid_get_object_id(void* oid_ptr);
 uint16_t nprpc_objectid_get_poa_idx(void* oid_ptr);
