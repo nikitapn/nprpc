@@ -54,13 +54,13 @@ docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace nprpc-swift-ubuntu b
         -DCMAKE_C_COMPILER=clang \
         -DCMAKE_CXX_COMPILER=clang++ \
         -DBOOST_DIR=/workspace/.build_ubuntu_swift/boost_install \
-        -DNPRPC_BUILD_TESTS=OFF \
         -DNPRPC_BUILD_TOOLS=ON \
-        -DNPRPC_BUILD_JS=OFF \
-        -DNPRPC_ENABLE_QUIC=OFF \
-        -DNPRPC_ENABLE_HTTP3=OFF \
-        -DNPRPC_ENABLE_SSR=OFF \
-        -DBUILD_SHARED_LIBS=ON
+        -DNPRPC_ENABLE_QUIC=ON \
+        -DNPRPC_ENABLE_HTTP3=ON \
+        -DNPRPC_ENABLE_SSR=ON \
+        -DBUILD_SHARED_LIBS=ON \
+        -DNPRPC_BUILD_TESTS=OFF \
+        -DNPRPC_BUILD_JS=OFF
     
     echo ""
     echo "=== Building NPRPC ==="

@@ -65,7 +65,11 @@ target_include_directories(npidl
     ${CMAKE_SOURCE_DIR}/third_party/glaze/include
 )
 
-target_link_libraries(npidl PRIVATE npidl_core)
+target_link_libraries(npidl
+  PRIVATE 
+    npidl_core
+    Boost::headers
+)
 
 # Optional: Build tests
 if(NPRPC_BUILD_TESTS AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test)

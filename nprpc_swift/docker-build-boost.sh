@@ -47,6 +47,7 @@ EOF
         --with-thread \
         --with-filesystem \
         --with-program_options \
+        --with-process \
         -j$(nproc) \
         install
     

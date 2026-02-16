@@ -63,10 +63,13 @@ find_package(OpenSSL REQUIRED)
 # Custom Boost directory support (for Docker/CI builds with local Boost)
 if(DEFINED BOOST_DIR)
   message(STATUS "Using custom Boost directory: ${BOOST_DIR}")
-  include_directories(${BOOST_DIR}/include)
-  link_directories(${BOOST_DIR}/lib)
+  set(BOOST_ROOT ${BOOST_DIR})
+  set(Boost_NO_SYSTEM_PATHS ON)
   set(CMAKE_PREFIX_PATH ${BOOST_DIR} ${CMAKE_PREFIX_PATH})
 endif()
+
+# Find Boost (required for Asio and other header-only libraries)
+find_package(Boost REQUIRED)
 
 # When using Swift's Clang 17, explicitly link libstdc++
 if(CMAKE_CXX_COMPILER MATCHES "swift.*clang")
@@ -280,6 +283,7 @@ target_link_libraries(nprpc
     Threads::Threads
     OpenSSL::SSL
     OpenSSL::Crypto
+    Boost::headers
 )
 
 # MsQuic linking
@@ -351,6 +355,11 @@ target_include_directories(npidl_check_size
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/npidl/src
+)
+
+target_link_libraries(npidl_check_size
+  PRIVATE
+    Boost::headers
 )
 
 add_dependencies(npidl_check_size nprpc_copy_headers)
