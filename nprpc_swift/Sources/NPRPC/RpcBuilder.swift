@@ -46,7 +46,7 @@ public protocol RpcBuilderProtocol {
     
     /// Set hostname for advertised URLs
     @discardableResult
-    func setHostname(_ hostname: String) -> Self
+    func withHostname(_ hostname: String) -> Self
 
     /// Set number of threads in io_context thread pool
     @discardableResult
@@ -90,7 +90,7 @@ extension RpcBuilderInternal {
     }
     
     @discardableResult
-    public func setHostname(_ hostname: String) -> Self {
+    public func withHostname(_ hostname: String) -> Self {
         config.hostname = hostname
         return self
     }

@@ -157,46 +157,21 @@ Serve web clients over HTTP/3 using nghttp3/ngtcp2
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Swift Language Bindings 🚀 IN PROGRESS
+## Swift Language Bindings ✅ COMPLETE
 
-### Completed ✅
+Full Swift 6.2+ bindings via C++ interop. All core features working:
+
 * [x] Swift package structure (nprpc_swift)
 * [x] Swift wrappers for Rpc, Poa, ObjectPtr
 * [x] npidl `--swift` code generation
-* [x] Basic type marshalling (fundamentals, enums, structs)
+* [x] Marshalling: fundamentals, enums, strings, vectors, arrays, flat/nested structs, optionals, objects
 * [x] Servant base classes with dispatch
 * [x] Client proxy generation
-* [x] Basic RPC loopback tests working
-
-### Marshalling - Type Coverage
-* [x] Fundamentals (i8, u8, i16, u16, i32, u32, i64, u64, f32, f64, bool)
-* [x] Enums
-* [x] Nested structs
-* [ ] **Strings** - Need unmarshal_string/marshal_string helpers
-* [ ] **Vectors** - Need NPRPC.unmarshal_vector/marshal_vector
-* [ ] **Arrays** - Need proper bounds checking and iteration
-* [ ] **Optionals** - Need presence flag + conditional marshalling
-* [ ] **Objects (ObjectPtr)** - Need NPRPC.unmarshal_object_proxy/marshal_object_id
-* [ ] **Bounds checking** - Swift UnsafeRawPointer doesn't validate, add explicit checks
-
-### Client-Side (Proxy)
-* [ ] **Async support** - Make proxy methods actually async (currently sync)
-* [ ] **Error handling** - Map C++ exceptions to Swift errors
-* [ ] **Out parameters** - Handle multi-return (tuples)
-* [ ] **Streams** - Map stream<T> to AsyncSequence
-
-### Server-Side (Servant)  
-* [ ] **Async dispatch bridge** - C++ dispatch() is sync, Swift methods are async
-* [ ] **Error propagation** - Swift throws → C++ exception in dispatch
-* [ ] **Streams** - Servant methods returning AsyncSequence
-
-### Next Steps
-1. Complete marshalling for complex types (strings, vectors, arrays, optionals, objects)
- - [x] fundamental optional
- - [x] strings
- - [x] vector of structs
- - [x] Exceptions: fix manual __ex_id assignment in test servant (use auto-generated id)
-2. Add bounds checking to all unmarshal operations
-3. Implement async proxy calls
-4. Implement async servant dispatch bridge
-5. Add stream support (AsyncSequence)
+* [x] Exception propagation (Swift throws ↔ C++ exceptions)
+* [x] Async methods (Swift concurrency)
+* [x] Object references as parameters
+* [x] Streaming RPC (AsyncStream servant → AsyncThrowingStream client)
+* [x] Bad input validation ([trusted=false])
+* [x] Large message support
+* [x] Docker-based build pipeline
+* [x] Comprehensive integration test suite

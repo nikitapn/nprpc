@@ -15,9 +15,9 @@ NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framewo
   - **QUIC** - Next-gen encrypted transport (via MsQuic)
 - **Server-Side Rendering**: Built-in SvelteKit SSR support via shared memory IPC
 - **Efficient Binary Protocol**: FlatBuffers-based serialization for minimal overhead
-- **Type-Safe IDL**: Interface Definition Language with code generation for C++ and TypeScript
-- **Cross-Language Support**: Seamless C++ ↔ TypeScript/JavaScript communication
-- **Modern Async API**: Built on Boost.Asio (C++) and async/await (TypeScript)
+- **Type-Safe IDL**: Interface Definition Language with code generation for C++, TypeScript, and Swift
+- **Cross-Language Support**: Seamless C++ ↔ TypeScript/JavaScript ↔ Swift communication
+- **Modern Async API**: Built on Boost.Asio (C++), async/await (TypeScript), and Swift concurrency
 - **Built-in Object Management**: POA (Portable Object Adapter) for lifecycle management
 - **Nameserver**: Service discovery and object binding
 - **SSL/TLS Support**: Secure communications out of the box
@@ -656,6 +656,85 @@ interface Geometry {
 }
 ```
 
+## 🍎 Swift Bindings
+
+NPRPC provides native Swift bindings via C++ interop (Swift 6.2+), supporting the full feature set: servants, client proxies, async methods, exceptions, object references, and streaming.
+
+### Generate Swift Stubs
+
+```bash
+npidl calculator.npidl --swift
+```
+
+### Implement a Servant
+
+```swift
+import NPRPC
+
+class CalculatorImpl: CalculatorServant {
+    override func add(a: Float64, b: Float64) throws -> Float64 {
+        return a + b
+    }
+
+    override func divide(a: Float64, b: Float64) throws -> Float64 {
+        guard b != 0 else {
+            throw CalculationError(message: "Division by zero", code: 1)
+        }
+        return a / b
+    }
+}
+```
+
+### Activate and Call
+
+```swift
+let rpc = try RpcBuilder()
+    .setHostname("localhost")
+    .withTcp(15000)
+    .withHttp(15001)
+    .build()
+
+let poa = try rpc.createPoa(maxObjects: 100)
+
+let servant = CalculatorImpl()
+let oid = try poa.activateObject(servant, flags: .allowWebSocket)
+
+// Create client proxy from ObjectId
+let obj = NPRPCObject.fromObjectId(oid)!
+let client = narrow(obj, to: Calculator.self)!
+
+let result = try client.add(a: 10, b: 20)  // 30.0
+```
+
+### Async Methods and Streaming
+
+```swift
+// Async fire-and-forget
+await client.playerMoved(x: 1.0, y: 2.0, z: 3.0)
+
+// Async with return value
+let response = try await client.method2(arg1: 42)  // "Response for 42"
+
+// Streaming - servant returns AsyncStream, client receives AsyncThrowingStream
+let stream = try client.getByteStream(size: 1024)
+for try await byte in stream {
+    process(byte)
+}
+```
+
+### Building
+
+```bash
+cd nprpc_swift
+./gen_stubs.sh                # Generate Swift stubs from IDL
+./docker-build-boost.sh       # Build Boost (first time only)
+./docker-build-nprpc.sh        # Build NPRPC C++ library
+./docker-build-swift.sh        # Build and run Swift package
+./docker-build-swift.sh --test # Run tests
+```
+
+See [`nprpc_swift/README.md`](nprpc_swift/README.md) for details.
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -678,7 +757,8 @@ Check out the complete examples:
 - [Nameserver](npnameserver/npnameserver.cpp) - Service discovery server
 - [Calculator Service](../nscalc/server/src/main.cpp) - Full-featured web service
 - [TypeScript Client](../nscalc/client/src/rpc/rpc.ts) - Browser client
-- [Test Suite](test/js/test/nprpc-integration.test.ts) - Comprehensive tests
+- [Swift Integration Tests](nprpc_swift/Tests/NPRPCTests/IntegrationTest.swift) - Comprehensive Swift tests
+- [Test Suite](test/js/test/nprpc-integration.test.ts) - Comprehensive JS tests
 
 ---
 

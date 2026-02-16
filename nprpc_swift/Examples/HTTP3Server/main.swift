@@ -15,7 +15,7 @@ do {
     // Build Rpc configuration using fluent API (matches C++ RpcBuilder pattern)
     let rpc = try RpcBuilder()
         .setLogLevel(.trace)
-        .setHostname("localhost")
+        .withHostname("localhost")
         .withHttp(3000)
             .ssl(
                 certFile: "/workspace/certs/out/localhost.crt",

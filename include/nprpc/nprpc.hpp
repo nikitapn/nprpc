@@ -378,7 +378,7 @@ public:
     return *this;
   }
 
-  RpcBuilderBase& set_hostname(std::string_view hostname) noexcept
+  RpcBuilderBase& with_hostname(std::string_view hostname) noexcept
   {
     cfg_.hostname = hostname;
     return *this;
@@ -470,12 +470,6 @@ public:
   explicit RpcBuilderQuic(impl::BuildConfig& cfg)
       : RpcBuilderBase(cfg)
   {
-  }
-
-  RpcBuilderQuic& port(uint16_t port) noexcept
-  {
-    cfg_.quic_port = port;
-    return *this;
   }
 
   RpcBuilderQuic& ssl(std::string_view cert_file,

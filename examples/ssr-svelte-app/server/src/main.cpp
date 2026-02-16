@@ -15,7 +15,7 @@ int main(int argc, char* argv[])
     auto rpc =
         nprpc::RpcBuilder()
             .set_log_level(nprpc::LogLevel::trace)
-            .set_hostname("linuxvm")
+            .with_hostname("localhost")
             .with_http(3000)
             .root_dir("/home/nikita/projects/nprpc/examples/ssr-svelte-app/"
                       "client/build/"

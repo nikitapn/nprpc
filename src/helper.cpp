@@ -20,6 +20,7 @@ sync_socket_connect(const EndPoint& endpoint,
   auto ipv4_addr = net::ip::make_address_v4(endpoint.hostname(), ec);
 
   if (ec) {
+    // Hostname resolution needed - try all resolved endpoints (IPv4/IPv6) until one succeeds
     tcp::resolver resolver(socket.get_executor());
     auto endpoints =
         resolver.resolve(endpoint.hostname(), std::to_string(endpoint.port()));
@@ -27,17 +28,27 @@ sync_socket_connect(const EndPoint& endpoint,
       throw nprpc::Exception(
           ("Could not resolve the hostname: " + ec.message()).c_str());
     }
-    selected_endpoint = endpoints.begin()->endpoint();
-    socket.connect(selected_endpoint, ec);
+
+    // Use Boost.Asio's connect() which automatically tries all endpoints
+    // and handles socket state correctly between attempts
+    selected_endpoint = net::connect(socket, endpoints, ec);
+    
+    if (ec) {
+      throw nprpc::Exception(
+          ("Could not connect to any resolved address for " + 
+           std::string(endpoint.hostname()) + ":" + std::to_string(endpoint.port()) + 
+           ": " + ec.message()).c_str());
+    }
   } else {
     // if the address is valid, set the port
     selected_endpoint = tcp::endpoint(ipv4_addr, endpoint.port());
     socket.connect(selected_endpoint, ec);
-  }
 
-  if (ec) {
-    throw nprpc::Exception(
-        ("Could not connect to the socket: " + ec.message()).c_str());
+    if (ec) {
+      throw nprpc::Exception(
+          ("Could not connect to the socket (ep=" + selected_endpoint.address().to_string() + 
+           ":" + std::to_string(selected_endpoint.port()) + "): " + ec.message()).c_str());
+    }
   }
 
   return selected_endpoint;

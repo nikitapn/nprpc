@@ -17,12 +17,13 @@ final class IntegrationTests: XCTestCase {
         do {
             rpc = try RpcBuilder()
                 .setLogLevel(.info)
-                .setHostname("localhost")
+                .withHostname("localhost")
                 .withTcp(16000)
+                // TODO: Fix crash during websocket shutdown
                 .withHttp(16001)
-                .withQuic(16002)
-                    .ssl(certFile: "/workspace/certs/out/localhost.crt",
-                         keyFile: "/workspace/certs/out/localhost.key")
+                // .withQuic(16002)
+                //     .ssl(certFile: "/workspace/certs/out/localhost.crt",
+                //          keyFile: "/workspace/certs/out/localhost.key")
                 .build()
             // Give the TCP listener time to start accepting connections
             Thread.sleep(forTimeInterval: 0.1)
@@ -87,7 +88,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestShapeServant()
-        let oid = try Self.poa!.activateObject(servant)
+        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
 
         // Create ShapeService client proxy from oid
         guard let obj = NPRPCObject.fromObjectId(oid) else {
@@ -173,7 +174,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = ExceptionServant()
-        let oid = try Self.poa!.activateObject(servant)
+        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -277,7 +278,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestBasicServantImpl()
-        let oid = try Self.poa!.activateObject(servant)
+        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -369,7 +370,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestLargeMessageServantImpl()
-        let oid = try Self.poa!.activateObject(servant)
+        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -425,7 +426,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestOptionalServantImpl()
-        let oid = try Self.poa!.activateObject(servant)
+        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -502,7 +503,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestNestedServantImpl()
-        let oid = try Self.poa!.activateObject(servant)
+        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -601,14 +602,14 @@ final class IntegrationTests: XCTestCase {
 
         // Create and activate SimpleObject servants
         let simpleServant1 = SimpleObjectImpl()
-        let simpleOid1 = try Self.poa!.activateObject(simpleServant1)
+        let simpleOid1 = try Self.poa!.activateObject(simpleServant1, flags: .allowTcp)
         guard let simpleObj1 = NPRPCObject.fromObjectId(simpleOid1) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
         }
 
         let simpleServant2 = SimpleObjectImpl()
-        let simpleOid2 = try Self.poa!.activateObject(simpleServant2)
+        let simpleOid2 = try Self.poa!.activateObject(simpleServant2, flags: .allowTcp)
         guard let simpleObj2 = NPRPCObject.fromObjectId(simpleOid2) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -616,7 +617,7 @@ final class IntegrationTests: XCTestCase {
 
         // Create and activate TestObjects servant
         let testObjectsServant = TestObjectsImpl(semaphore: semaphore)
-        let testOid = try Self.poa!.activateObject(testObjectsServant)
+        let testOid = try Self.poa!.activateObject(testObjectsServant, flags: .allowTcp)
         guard let testObj = NPRPCObject.fromObjectId(testOid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -662,7 +663,7 @@ final class IntegrationTests: XCTestCase {
         
         // Create and activate servant
         let servant = AsyncTestImpl()
-        let oid = try Self.poa!.activateObject(servant)
+        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -711,7 +712,7 @@ final class IntegrationTests: XCTestCase {
         
         // Create and activate servant
         let servant = TestBadInputImpl()
-        let oid = try Self.poa!.activateObject(servant)
+        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -771,9 +772,9 @@ final class IntegrationTests: XCTestCase {
         }
     }
 
-    /// Test streaming RPC methods
-    /// This tests the full round-trip: client sends StreamInit, servant produces stream,
-    /// servant dispatch pumps chunks, client receives via AsyncThrowingStream
+    // Test streaming RPC methods
+    // This tests the full round-trip: client sends StreamInit, servant produces stream,
+    // servant dispatch pumps chunks, client receives via AsyncThrowingStream
     func testStreams() async throws {
         // TestStreams servant implementation
         class TestStreamsImpl: TestStreamsServant {

@@ -32,9 +32,9 @@ if [ "$RUN_TESTS" = true ]; then
       swift build
       set +e
       # Use stdbuf to disable output buffering so we see print() before timeout kills process
-      stdbuf -oL -eL timeout 15 swift test --filter testStreams 2>&1
+      stdbuf -oL -eL timeout 15 swift test 2>&1
       code=$?
-      test $code -eq 0 && echo "✅ Stream tests passed" || echo "❌ Stream tests failed with code $code"
+      test $code -eq 0 && echo "✅ Swift tests passed" || echo "❌ Swift tests failed with code $code"
      '
 else
   docker run --rm -v         \

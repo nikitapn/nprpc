@@ -121,7 +121,7 @@ public:
             // Use the new RpcBuilder API
             rpc = nprpc::RpcBuilder()
                 .set_log_level(nprpc::LogLevel::trace)
-                .set_hostname("localhost")
+                .with_hostname("localhost")
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
                 .with_tcp(22222)
                 .with_udp(22224)
