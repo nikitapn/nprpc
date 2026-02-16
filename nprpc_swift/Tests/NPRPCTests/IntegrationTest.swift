@@ -778,12 +778,15 @@ final class IntegrationTests: XCTestCase {
         // TestStreams servant implementation
         class TestStreamsImpl: TestStreamsServant {
             override func getByteStream(size: UInt64) -> AsyncStream<UInt8> {
+                print("[SWIFT] getByteStream called with size: \(size)")
                 return AsyncStream { continuation in
                     // Produce 'size' bytes (capped at 256 for test)
                     let count = min(size, 256)
                     for i in 0..<count {
+                        print("[SWIFT] Producing byte \(i & 0xFF)")
                         continuation.yield(UInt8(i & 0xFF))
                     }
+                    print("[SWIFT] Finished producing stream of \(count) bytes")
                     continuation.finish()
                 }
             }
@@ -810,6 +813,8 @@ final class IntegrationTests: XCTestCase {
             print("[SWIFT] Received byte: \(value)")
             receivedValues.append(value)
         }
+
+        print("[SWIFT] Stream finished. Total bytes received: \(receivedValues.count)")
         
         // Verify we received all expected values
         XCTAssertEqual(receivedValues.count, 5, "Should receive 5 bytes from stream")

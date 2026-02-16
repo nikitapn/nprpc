@@ -33,6 +33,9 @@ public:
   // Callback type for posting async work
   using PostCallback = std::function<void(std::function<void()>)>;
 
+  // Generate unique stream ID (client-side)
+  static uint64_t generate_stream_id();
+
   explicit StreamManager(SessionContext& session);
   ~StreamManager();
 
@@ -96,12 +99,9 @@ private:
 
   // Mutex for thread-safe access
   std::mutex mutex_;
-  
+
   // Internal helper to determine if a stream is unreliable
   bool is_stream_unreliable(uint64_t stream_id) const;
 };
-
-// Generate unique stream ID (client-side)
-NPRPC_API uint64_t generate_stream_id();
 
 }} // namespace impl

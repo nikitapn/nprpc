@@ -3,8 +3,6 @@
 
 #pragma once
 
-#include <cstdint>
-
 #include <nprpc/export.hpp>
 #include <nprpc/flat_buffer.hpp>
 

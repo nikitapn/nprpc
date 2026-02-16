@@ -324,8 +324,6 @@ void WebSocketSession<Derived>::send_receive_async(
 template <class Derived>
 void WebSocketSession<Derived>::send_stream_message(flat_buffer&& buffer)
 {
-  NPRPC_LOG_INFO("WebSocketSession::send_stream_message: buffer.size()={}", buffer.size());
-
   // Fire-and-forget message for streaming - no response expected
   boost::asio::post(
       derived().ws().get_executor(),

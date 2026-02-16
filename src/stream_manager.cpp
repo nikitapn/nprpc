@@ -15,8 +15,7 @@
 
 namespace nprpc::impl {
 
-// Generate unique stream ID using combination of random + counter
-uint64_t generate_stream_id()
+uint64_t StreamManager::generate_stream_id()
 {
   static std::atomic<uint64_t> counter{0};
   static const uint64_t random_base = []() {

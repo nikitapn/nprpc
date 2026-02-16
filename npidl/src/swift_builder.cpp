@@ -756,10 +756,7 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
   out << bl() << "let streamId = nprpc_generate_stream_id()\n\n";
 
   // Calculate buffer sizes for StreamInit
-  // StreamInit layout (with C alignment):
-  //   stream_id(8) + poa_idx(2) + interface_idx(1) + pad(5) + object_id(8) + func_idx(1) + pad(7) = 32 bytes
-  const auto stream_init_size = 32; // Aligned size 
-  const auto args_offset = size_of_header + stream_init_size;
+  const auto args_offset = get_stream_init_arguments_offset();
   const auto fixed_size = args_offset + (fn->in_s ? fn->in_s->size : 0);
   const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
 
@@ -957,23 +954,21 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
   if (has_streaming) {
     // Need to check message type first
     out << bl() << "// Check message type to route streaming vs regular calls\n";
-    out << bl() << "let msgId = data.load(fromByteOffset: 4, as: Int32.self)\n\n";
+    out << bl() << "let msgId = data.load(fromByteOffset: MemoryLayout<NPRPC.impl.Header>.offset(of: \\NPRPC.impl.Header.msg_id)!, as: Int32.self)\n\n";
     out << bl() << "if msgId == impl.MessageId.streamInitialization.rawValue " << bb();
-    
+
     // Streaming dispatch path
-    // StreamInit layout: stream_id(8) + poa_idx(2) + interface_idx(1) + pad(5) + object_id(8) + func_idx(1)
-    // func_idx is at offset 24 from StreamInit start = header(16) + 24 = 40
-    out << bl() << "// StreamInit: func_idx at offset 24 from struct start\n";
-    out << bl() << "let streamFuncIdx = data.load(fromByteOffset: " << (size_of_header + 24) << ", as: UInt8.self)\n";
+    out << bl() << "let streamFuncIdx = data.load(fromByteOffset: (" <<
+      size_of_header << " + MemoryLayout<NPRPC.impl.StreamInit>.offset(of: \\NPRPC.impl.StreamInit.func_idx)!), as: UInt8.self)\n";
     out << bl() << "switch streamFuncIdx " << bb();
-    
+
     for (auto& fn : ifs->fns) {
       if (!fn->is_stream) continue;
       out << bl() << "case " << fn->idx << ": // " << fn->name << "\n" << bb(false);
       emit_servant_stream_dispatch(fn);
       out << eb(false);
     }
-    
+
     out << bl() << "default:\n";
     out << bl() << "  makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_UnknownFunctionIdx)\n";
     out << eb(false) << bl() << "} // switch streamFuncIdx\n";
@@ -983,7 +978,8 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
 
   // Regular function call dispatch
   out << bl() << "// Read function index from CallHeader\n";
-  out << bl() << "let functionIdx = data.load(fromByteOffset: " << (size_of_header + 3) << ", as: UInt8.self)\n\n";
+  out << bl() << "let functionIdx = data.load(fromByteOffset: (" <<
+    size_of_header << " + MemoryLayout<NPRPC.impl.CallHeader>.offset(of: \\NPRPC.impl.CallHeader.function_idx)!), as: UInt8.self)\n\n";
 
   // Switch on function index
   out << bl() << "switch functionIdx " << bb();
@@ -1175,15 +1171,14 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstFunctionDecl* fn)
   // 3. Iterate over the stream and send chunks  
   // 4. Send completion when done
 
-  // StreamInit layout (32 bytes after alignment):
-  // stream_id(8) + poa_idx(2) + interface_idx(1) + pad(5) + object_id(8) + func_idx(1) + pad(7) = 32 bytes
   out << bl() << "// Streaming method dispatch\n";
   out << bl() << "guard let data = buffer.data else { return }\n";
-  out << bl() << "let streamId = data.load(fromByteOffset: " << size_of_header << ", as: UInt64.self)\n\n";
+  out << bl() << "let streamId = data.load(fromByteOffset: (" <<
+    size_of_header << " + MemoryLayout<NPRPC.impl.StreamInit>.offset(of: \\NPRPC.impl.StreamInit.stream_id)!), as: UInt64.self)\n\n";
 
   // Unmarshal input arguments if any
-  // Input args start after StreamInit (header 16 + StreamInit 32 = offset 48)
-  const auto args_offset = size_of_header + 32;  // StreamInit is 32 bytes
+  // Input args start after StreamInit
+  constexpr auto args_offset = get_stream_init_arguments_offset();
   if (fn->in_s) {
     out << bl() << "// Unmarshal input arguments\n";
     out << bl() << "let ia = " << ns(fn->in_s->nm) << "unmarshal_" << fn->in_s->name << "(buffer: data, offset: " << args_offset << ")\n\n";

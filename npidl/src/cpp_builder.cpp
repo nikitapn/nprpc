@@ -1336,7 +1336,7 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
 {
   oc << "  auto session = "
         "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n";
-  oc << "  auto stream_id = ::nprpc::impl::generate_stream_id();\n";
+  oc << "  auto stream_id = ::nprpc::impl::StreamManager::generate_stream_id();\n";
 
   // Create StreamReader BEFORE sending StreamInit to avoid race condition
   // where chunks arrive before the reader is registered
@@ -1344,9 +1344,7 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
   emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oc);
   oc << "> reader(session->ctx(), stream_id);\n";
 
-  // Calculate buffer size: Header + StreamInit (24 bytes) + input args
-  const auto stream_init_size = size_of_stream_init;
-  const auto args_offset = size_of_header + stream_init_size;
+  const auto args_offset = get_stream_init_arguments_offset();
   const auto fixed_size = args_offset + (fn->in_s ? fn->in_s->size : 0);
   const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
 
@@ -1670,7 +1668,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       // Unmarshal input arguments if any
       if (fn->in_s) {
         oc << "        " << fn->in_s->name << "_Direct ia(*ctx.rx_buffer, "
-           << (size_of_header + size_of_stream_init) << ");\n"; // Header + StreamInit fields
+           << get_stream_init_arguments_offset() << ");\n";
       }
 
       // Call servant method with parameters

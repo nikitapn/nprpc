@@ -22,7 +22,8 @@ bool contains_object(AstTypeDecl* type);
 constexpr uint32_t size_of_header = 16;
 constexpr uint32_t size_of_call_header = 16;
 constexpr uint32_t align_of_call_header = 8;
-constexpr uint32_t size_of_stream_init = 32;
+constexpr uint32_t size_of_stream_init_header = 32;
+constexpr uint32_t align_of_stream_init_header = 8;
 
 constexpr size_t size_of_object = 48;
 constexpr size_t align_of_object = 8;
@@ -31,6 +32,12 @@ inline constexpr uint32_t get_arguments_offset()
 {
   static_assert((size_of_header + align_of_call_header) % 8 == 0);
   return size_of_header + size_of_call_header;
+}
+
+inline constexpr uint32_t get_stream_init_arguments_offset()
+{
+  static_assert((size_of_header + align_of_stream_init_header) % 8 == 0);
+  return size_of_header + size_of_stream_init_header;
 }
 
 void dfs_interface(std::function<void(AstInterfaceDecl*)> fn,
