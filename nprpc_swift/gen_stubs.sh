@@ -6,10 +6,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 cd "$SCRIPT_DIR/.."
 
-NPIDL=.build_relwith_debinfo/npidl/npidl
+NPIDL=${NPIDL:-.build_relwith_debinfo/npidl/npidl}
 
-# Build npidl if needed
-./bt.sh npidl > /dev/null
+if [ "$NPIDL" == ".build_relwith_debinfo/npidl/npidl" ]; then
+  # Build npidl if needed
+  ./bt.sh npidl > /dev/null
+fi
 
 $NPIDL --swift \
   idl/nprpc_base.npidl \

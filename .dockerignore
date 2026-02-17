@@ -1,0 +1,63 @@
+# Build artifacts
+.build*
+.cache
+build/
+*.build/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Test outputs
+*.log
+*.test
+
+# Node modules
+node_modules/
+nprpc_js/node_modules/
+nprpc_node/node_modules/
+test/js/node_modules/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+
+# Temporary files
+*.tmp
+tmp/
+temp/
+
+# Documentation build outputs
+docs/_build/
+*.pdf
+
+# Benchmark results
+benchmark.txt
+*.csv
+
+# Swift build artifacts
+.swiftpm/
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Docker
+Dockerfile.dev
+.dockerignore

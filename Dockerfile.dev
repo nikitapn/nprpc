@@ -1,0 +1,158 @@
+# Multi-stage Docker image with NPRPC C++ and Swift artifacts
+# Use this as a base image for projects that depend on NPRPC
+
+# ============================================================================
+# Stage 1: Build Boost
+# ============================================================================
+FROM swift:6.2.3 AS boost-builder
+
+RUN apt-get update && apt-get install -y \
+    wget \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Download and build Boost 1.89.0
+RUN wget https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz && \
+    tar -xzf boost_1_89_0.tar.gz
+
+WORKDIR /build/boost_1_89_0
+
+COPY <<EOF ./user-config.jam
+using clang : : clang++ ;
+EOF
+
+RUN ./bootstrap.sh --with-toolset=clang
+
+RUN ./b2 --user-config=user-config.jam \
+    toolset=clang \
+    cxxstd=23 \
+    variant=release \
+    link=shared \
+    threading=multi \
+    --prefix=/opt/boost \
+    --with-system \
+    --with-thread \
+    --with-filesystem \
+    --with-program_options \
+    --with-process \
+    -j$(nproc) install && \
+    cd .. && \
+    rm -rf boost_1_89_0 boost_1_89_0.tar.gz
+
+# ============================================================================
+# Stage 2: Build NPRPC C++
+# ============================================================================
+FROM swift:6.2.3 AS nprpc-builder
+
+RUN apt-get update && apt-get install -y \
+    cmake \
+    ninja-build \
+    build-essential \
+    libssl-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Boost from previous stage
+COPY --from=boost-builder /opt/boost /opt/boost
+
+WORKDIR /workspace
+
+# Copy NPRPC source (assuming build context is nprpc root)
+COPY ./ /workspace/
+
+# Build NPRPC C++ library and tools
+RUN cmake -G Ninja \
+    -S . \
+    -B .build_release \
+    -DCMAKE_C_COMPILER=clang \
+    -DCMAKE_CXX_COMPILER=clang++ \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBOOST_DIR=/opt/boost \
+    -DCMAKE_INSTALL_PREFIX=/opt/nprpc \
+    -DNPRPC_BUILD_TOOLS=ON \
+    -DNPRPC_ENABLE_QUIC=ON \
+    -DNPRPC_ENABLE_HTTP3=ON \
+    -DNPRPC_ENABLE_SSR=ON \
+    -DBUILD_SHARED_LIBS=ON \
+    -DNPRPC_BUILD_TESTS=OFF \
+    -DNPRPC_BUILD_JS=OFF \
+    && cmake --build .build_release -j$(nproc) \
+    && cmake --install .build_release
+
+# ============================================================================
+# Stage 3: Build Swift bindings
+# ============================================================================
+FROM nprpc-builder AS swift-builder
+
+WORKDIR /workspace/nprpc_swift
+
+# Generate Swift stubs
+RUN NPIDL=.build_release/npidl/npidl ./gen_stubs.sh
+
+# Build Swift package (release mode)
+RUN swift build -c release \
+    -Xcc -I/opt/boost/include \
+    -Xcc -I/opt/nprpc/include \
+    -Xlinker -L/opt/boost/lib \
+    -Xlinker -L/opt/nprpc/lib \
+    -Xlinker -rpath=/opt/boost/lib \
+    -Xlinker -rpath=/opt/nprpc/lib
+
+# ============================================================================
+# Stage 4: Final runtime image with all artifacts
+# ============================================================================
+FROM swift:6.2.3
+
+LABEL org.opencontainers.image.title="NPRPC Development Image"
+LABEL org.opencontainers.image.description="Swift 6.2.3 with NPRPC C++ and Swift bindings"
+LABEL org.opencontainers.image.version="1.0.0"
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    cmake \
+    ninja-build \
+    libssl-dev \
+    pkg-config \
+    git \
+    vim \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Boost runtime libraries
+COPY --from=boost-builder /opt/boost /opt/boost
+
+# Copy NPRPC C++ artifacts (libs, headers, tools, cmake configs)
+COPY --from=nprpc-builder /opt/nprpc /opt/nprpc
+
+# Copy Swift package source for dependent projects
+COPY --from=swift-builder /workspace/nprpc_swift /opt/nprpc_swift
+
+# Copy built Swift artifacts
+COPY --from=swift-builder /workspace/nprpc_swift/.build/release /opt/nprpc_swift/.build/release
+
+# Set environment variables for easy discovery
+ENV BOOST_ROOT=/opt/boost
+ENV NPRPC_ROOT=/opt/nprpc
+ENV NPRPC_SWIFT_ROOT=/opt/nprpc_swift
+ENV PATH="${PATH}:/opt/nprpc/bin"
+ENV LD_LIBRARY_PATH="/opt/boost/lib:/opt/nprpc/lib:${LD_LIBRARY_PATH}"
+ENV PKG_CONFIG_PATH="/opt/nprpc/lib/pkgconfig:${PKG_CONFIG_PATH}"
+
+# Create CMake toolchain hint file for projects
+RUN echo "# NPRPC Paths\n\
+set(Boost_ROOT /opt/boost)\n\
+set(nprpc_DIR /opt/nprpc/lib/cmake/nprpc)\n\
+list(APPEND CMAKE_PREFIX_PATH /opt/nprpc)\n\
+list(APPEND CMAKE_PREFIX_PATH /opt/boost)\n" > /opt/nprpc-toolchain.cmake
+
+WORKDIR /project
+
+# Verify installation
+RUN npidl --version && echo "✓ npidl installed" && \
+    test -f /opt/nprpc/lib/libnprpc.so && echo "✓ libnprpc.so found" && \
+    test -d /opt/nprpc/include/nprpc && echo "✓ Headers found" && \
+    test -f /opt/nprpc_swift/Package.swift && echo "✓ Swift package found" && \
+    swift --version
+
+CMD ["/bin/bash"]

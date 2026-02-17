@@ -32,20 +32,15 @@ int main(int argc, char* argv[])
 
   // Declare the supported options.
   po::options_description desc("Allowed options");
-  desc.add_options()("help", "produce help message")(
-      "lsp", "run as Language Server Protocol server")
-      ("cpp", po::bool_switch(&generate_cpp)->default_value(false),
-       "Generate C++")(
-          "ts", po::bool_switch(&generate_typescript)->default_value(false),
-          "Generate TypeScript")(
-          "swift", po::bool_switch(&generate_swift)->default_value(false),
-          "Generate Swift")(
-          "output-dir",
-          po::value<std::filesystem::path>(&output_dir),
-          "Output directory for all generated files")(
-          "input-files",
-          po::value<std::vector<std::filesystem::path>>(&input_files),
-          "List of input files");
+  desc.add_options()
+    ("help", "produce help message")
+    ("version", "print version information")
+    ("lsp", "run as Language Server Protocol server")
+    ("cpp", po::bool_switch(&generate_cpp)->default_value(false), "Generate C++")
+    ("ts", po::bool_switch(&generate_typescript)->default_value(false),"Generate TypeScript")
+    ("swift", po::bool_switch(&generate_swift)->default_value(false), "Generate Swift")
+    ("output-dir", po::value<std::filesystem::path>(&output_dir), "Output directory for all generated files")
+    ("input-files", po::value<std::vector<std::filesystem::path>>(&input_files), "List of input files");
 
   po::positional_options_description p;
   p.add("input-files", -1);
@@ -59,6 +54,11 @@ int main(int argc, char* argv[])
 
     if (vm.count("help")) {
       std::cout << desc << "\n";
+      return 0;
+    }
+
+    if (vm.count("version")) {
+      std::cout << "npidl version 0.1.0\n";
       return 0;
     }
 
