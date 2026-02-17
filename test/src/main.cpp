@@ -31,7 +31,7 @@ TEST_F(NprpcTest, TestBasic)
   TestBasicImpl servant;
   auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
     try {
-      auto obj = make_stuff_happen<nprpc::test::TestBasic>(servant, flags);
+      auto obj = bind_and_resolve<nprpc::test::TestBasic>(servant, flags);
 
       // ReturnU32 test
       EXPECT_EQ(obj->ReturnU32(), 42u);
@@ -94,7 +94,7 @@ TEST_F(NprpcTest, TestException)
   TestBasicImpl servant;
   auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
     try {
-      auto obj = make_stuff_happen<nprpc::test::TestBasic>(servant, flags);
+      auto obj = bind_and_resolve<nprpc::test::TestBasic>(servant, flags);
 
       // InException test
       try {
@@ -130,7 +130,7 @@ TEST_F(NprpcTest, TestOptional)
   TestOptionalImpl servant;
   auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
     try {
-      auto obj = make_stuff_happen<nprpc::test::TestOptional>(servant, flags);
+      auto obj = bind_and_resolve<nprpc::test::TestOptional>(servant, flags);
 
       EXPECT_TRUE(obj->InEmpty(std::nullopt));
       EXPECT_TRUE(obj->In_(100, nprpc::test::AAA{100u, "test_b"s, "test_c"s}));
@@ -172,7 +172,7 @@ TEST_F(NprpcTest, TestNested)
   TestNestedImpl servant;
   auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
     try {
-      auto obj = make_stuff_happen<nprpc::test::TestNested>(servant, flags);
+      auto obj = bind_and_resolve<nprpc::test::TestNested>(servant, flags);
       obj->set_timeout(5000); // Set a longer timeout for this test
 
       std::optional<nprpc::test::BBB> a;
@@ -221,7 +221,7 @@ TEST_F(NprpcTest, TestLargeMessage)
   auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
     try {
       auto obj =
-          make_stuff_happen<nprpc::test::TestLargeMessage>(servant, flags);
+          bind_and_resolve<nprpc::test::TestLargeMessage>(servant, flags);
       obj->set_timeout(5000); // Set a longer timeout for this test
 
       // Test sending 3MB of data
@@ -326,7 +326,7 @@ TEST_F(NprpcTest, TestBadInput)
 
   auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
     try {
-      auto obj = make_stuff_happen<nprpc::test::TestBadInput>(servant, flags);
+      auto obj = bind_and_resolve<nprpc::test::TestBadInput>(servant, flags);
 
       nprpc::flat_buffer buf;
       auto mb = buf.prepare(2048);
@@ -425,7 +425,7 @@ TEST_F(NprpcTest, TestBadInput)
 //     } game_sync_servant;
 
 //     try {
-//         auto proxy_game = make_stuff_happen<test_udp::GameSync>(
+//         auto proxy_game = bind_and_resolve<test_udp::GameSync>(
 //             game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP,
 //             "udp_game_sync_ff");
 
@@ -533,12 +533,12 @@ TEST_F(NprpcTest, TestBadInput)
 //     } ack_servant; // Local
 
 //     try {
-//         auto proxy_game = make_stuff_happen<test_udp::GameSync>(
+//         auto proxy_game = bind_and_resolve<test_udp::GameSync>(
 //             game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP,
 //             "udp_game_sync");
 
 //         auto proxy_server_control =
-//         make_stuff_happen<nprpc::test::ServerControl>(
+//         bind_and_resolve<nprpc::test::ServerControl>(
 //             server_control_servant,
 //             nprpc::ObjectActivationFlags::ALLOW_SHARED_MEMORY,
 //             "udp_server_control");
@@ -600,7 +600,7 @@ TEST_F(NprpcTest, TestBadInput)
 //     } game_sync_servant;
 
 //     try {
-//         auto proxy_game = make_stuff_happen<test_udp::GameSync>(
+//         auto proxy_game = bind_and_resolve<test_udp::GameSync>(
 //             game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP,
 //             "udp_reliable_test");
 
@@ -647,7 +647,7 @@ TEST_F(NprpcTest, TestQuicBasic)
   TestBasicImpl servant;
 
   try {
-    auto obj = make_stuff_happen<nprpc::test::TestBasic>(
+    auto obj = bind_and_resolve<nprpc::test::TestBasic>(
         servant, nprpc::ObjectActivationFlags::ALLOW_QUIC, "quic_basic_test");
 
     // ReturnBoolean test
@@ -721,7 +721,7 @@ TEST_F(NprpcTest, TestQuicUnreliable)
   } servant;
 
   try {
-    auto obj = make_stuff_happen<nprpc::test::TestUnreliable>(
+    auto obj = bind_and_resolve<nprpc::test::TestUnreliable>(
         servant, nprpc::ObjectActivationFlags::ALLOW_QUIC, "quic_unreliable_test");
 
     // Test reliable call first (over QUIC stream)
@@ -756,7 +756,7 @@ TEST_F(NprpcTest, TestStreams)
   TestStreamsImpl servant;
   auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
     try {
-      auto obj = make_stuff_happen<nprpc::test::TestStreams>(servant, flags, "streams_test");
+      auto obj = bind_and_resolve<nprpc::test::TestStreams>(servant, flags, "streams_test");
 
       // Request a stream of 5 bytes
       auto reader = obj->GetByteStream(5);

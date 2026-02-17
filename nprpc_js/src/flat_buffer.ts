@@ -131,7 +131,7 @@ export function _alloc(buffer: FlatBuffer, vector_offset: number, n: number, ele
 		return 0;
 	}
 
-	const offset = (buffer.offset + align - 1) % ~(align - 1);
+	const offset = (buffer.offset + align - 1) & ~(align - 1);
 	const added_size = n * element_size + (offset - buffer.offset);
 
 	buffer.prepare(added_size);
@@ -149,7 +149,7 @@ export function _alloc(buffer: FlatBuffer, vector_offset: number, n: number, ele
  * Returns absolute offset of allocated element.
  */
 export function _alloc1(buffer: FlatBuffer, flat_offset: number, element_size: number, align: number): number {
-	const offset = (buffer.offset + align - 1) % ~(align - 1);
+	const offset = (buffer.offset + align - 1) & ~(align - 1);
 	const added_size = element_size + (offset - buffer.offset);
 	buffer.prepare(added_size);
 	buffer.commit(added_size);

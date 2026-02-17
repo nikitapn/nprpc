@@ -2,7 +2,7 @@ import { FlatBuffer } from './flat_buffer';
 import { MyPromise } from "./utils";
 import {
   impl, detail, oid_t, poa_idx_t,
-  DebugLevel, 
+  LogLevel,
   ExceptionObjectNotExist, 
   ExceptionUnknownFunctionIndex, 
   ExceptionUnknownMessageId, 
@@ -28,7 +28,7 @@ export type { ObjectId };
 export let rpc: Rpc;
 let host_info: HostInfo = {secured: false, objects: {}};
 
-let g_debug_level: DebugLevel = DebugLevel.Error;
+let gLogLevel: LogLevel = LogLevel.error;
 
 export class EndPoint {
   constructor(
@@ -148,7 +148,7 @@ export class Connection {
     
     // Store the pending request
     this.pending_requests.set(request_id, { buffer: buffer, promise: promise });
-    
+
     // Send the request if WebSocket is ready
     if (this.ws.readyState === WebSocket.OPEN) {
       this.perform_request(request_id, buffer);
@@ -189,7 +189,7 @@ export class Connection {
         case impl.MessageId.FunctionCall: {
           let ch = impl.unmarshal_CallHeader(buf, header_size);
 
-          if (g_debug_level >= DebugLevel.Warning) {
+          if (gLogLevel >= LogLevel.warn) {
             console.log("FunctionCall. interface_idx: " + ch.interface_idx + " , fn_idx: " + ch.function_idx 
               + " , poa_idx: " + ch.poa_idx + " , oid: " + ch.object_id);
           }
@@ -205,7 +205,7 @@ export class Connection {
           let msg = detail.unmarshal_ObjectIdLocal(buf, header_size);
 
           //detail::ObjectIdLocal oid{ msg.poa_idx(), msg.object_id() };
-          if (g_debug_level >= DebugLevel.Warning) {
+          if (gLogLevel >= LogLevel.warn) {
             console.log("AddReference. poa_idx: " + msg.poa_idx + " , oid: " + msg.object_id);
           }
 
@@ -823,6 +823,6 @@ export const init = async (use_host_json: boolean = true): Promise<Rpc> => {
   return rpc ? rpc : (rpc = new Rpc(use_host_json ? await Rpc.read_host() : {} as HostInfo));
 }
 
-export const set_log_level = (debug_level: DebugLevel): void => {
-  g_debug_level = debug_level;
+export const setLogLevel = (logLevel: LogLevel): void => {
+  gLogLevel = logLevel;
 }

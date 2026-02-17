@@ -775,6 +775,9 @@ void init_http_server(boost::asio::io_context& ioc)
                     g_cfg.listen_http_port},
       std::make_shared<std::string const>(g_cfg.http_root_dir));
   g_http_listener->run();
+
+  NPRPC_LOG_INFO("[HTTP/WebSocket] HTTP Server: Listening on {}:{} with root '{}'", g_cfg.listen_address,
+                 g_cfg.listen_http_port, g_cfg.http_root_dir);
 }
 
 void stop_http_server()

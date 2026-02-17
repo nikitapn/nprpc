@@ -1,18 +1,5 @@
 # JavaScript tests for NPRPC
 
-# Collect TypeScript source files for dependency tracking
-file(GLOB_RECURSE JS_TEST_TS_SOURCES 
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.ts"
-    "${CMAKE_CURRENT_SOURCE_DIR}/test/*.ts"
-)
-
-# Configuration files that affect the build
-set(JS_TEST_CONFIG_FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/package.json"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tsconfig.json"
-    "${CMAKE_CURRENT_SOURCE_DIR}/.mocharc.json"
-)
-
 set(NPRPC_TEST_JS_SRC ${CMAKE_BINARY_DIR}/nprpc_test_stub/src/gen/js/nprpc_test.ts)
 set(NPRPC_TEST_JS_DST ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/nprpc_test.ts)
 
@@ -26,6 +13,24 @@ add_custom_command(
   VERBATIM
 )
 
+add_custom_target(nprpc_test_js_gen ALL
+  DEPENDS ${NPRPC_TEST_JS_DST} npidl
+)
+
+# Collect TypeScript source files for dependency tracking
+file(GLOB_RECURSE JS_TEST_TS_SOURCES 
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.ts"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/*.ts"
+    "${NPRPC_TEST_JS_DST}"
+)
+
+# Configuration files that affect the build
+set(JS_TEST_CONFIG_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/package.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tsconfig.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/.mocharc.json"
+)
+
 # Build and run JavaScript tests
 add_custom_command(
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/nprpc_js_test.stamp
@@ -35,9 +40,9 @@ add_custom_command(
   DEPENDS 
     ${JS_TEST_TS_SOURCES}
     ${JS_TEST_CONFIG_FILES}
-    ${NPRPC_TEST_JS_DST}
     nprpc_js
     nprpc_server_test
+    npidl
   COMMENT "Building JavaScript tests"
   VERBATIM
 )

@@ -874,6 +874,9 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   // proxy object functions definitions
   out << '\n';
   for (auto& fn : ifs->fns) {
+    if (fn->is_stream)
+      continue; // skip stream functions for now
+
     out << bl() << "public async " << fn->name;
     emit_function_arguments(
         true, fn, out,
@@ -1006,6 +1009,9 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
 
   bool first_http_method = true;
   for (auto& fn : ifs->fns) {
+    if (fn->is_stream)
+      continue; // skip stream functions for now
+
     if (!first_http_method)
       out << ",\n";
     first_http_method = false;
@@ -1236,6 +1242,9 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   }
   out << bb();
   for (auto fn : ifs->fns) {
+    if (fn->is_stream)
+      continue; // skip stream functions for now
+
     out << bl() << fn->name;
     emit_function_arguments(
         false, fn, out,
@@ -1302,6 +1311,9 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   out << bl() << "switch(function_idx) {\n" << bb(false);
 
   for (auto fn : ifs->fns) {
+    if (fn->is_stream)
+      continue; // skip stream functions for now
+
     out << bl() << "case " << fn->idx << ": {\n" << bb(false);
     int out_ix = fn->is_void() ? 0 : 1;
     if (fn->out_s) {

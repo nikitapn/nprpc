@@ -83,7 +83,7 @@ void WebSocketSession<Derived>::on_read(
   nprpc::impl::flat::Header_Direct header(rx_buffer_, 0);
   const uint32_t request_id = header.request_id();
 
-  NPRPC_LOG_DEBUG("WebSocketSession::on_read: size={}, msg_id={}, msg_type={}, request_id={}",
+  NPRPC_LOG_TRACE("WebSocketSession::on_read: size={}, msg_id={}, msg_type={}, request_id={}",
     rx_buffer_.size(), static_cast<uint32_t>(header.msg_id()), static_cast<uint32_t>(header.msg_type()), request_id);
 
   if (header.msg_type() == nprpc::impl::MessageType::Request) {
@@ -110,9 +110,7 @@ void WebSocketSession<Derived>::on_read(
       pending_requests_.erase(it);
     } else {
       // Received response for unknown request - possible attack or bug
-      std::cerr << "[nprcp] WebSocketSession: Received response for unknown "
-                   "request ID: "
-                << request_id << '\n';
+      NPRPC_LOG_WARN("WebSocketSession: Received response for unknown request ID: {}", request_id);
     }
   }
 

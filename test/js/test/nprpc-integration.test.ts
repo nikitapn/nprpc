@@ -115,7 +115,7 @@ describe('NPRPC Integration Tests', function() {
                 testData[i] = i;
             }
 
-            const result = await testBasic.In(100, true, new Uint8Array(testData));
+            const result = await testBasic.In_(100, true, new Uint8Array(testData));
             expect(result).to.be.true;
         });
 
@@ -208,7 +208,7 @@ describe('NPRPC Integration Tests', function() {
                 b: "test_b",
                 c: "test_c"
             };
-            const result = await testOptional.In(100, testAAA);
+            const result = await testOptional.In_(100, testAAA);
             expect(result).to.be.true;
         });
 
@@ -240,8 +240,8 @@ describe('NPRPC Integration Tests', function() {
             try {
                 const opt = await testOptional.ReturnOpt1();
                 expect(opt.str).to.equal('test_string');
-                expect(opt.stream).to.be.an('uint8array').that.has.lengthOf(10);
-                expect(opt.stream).to.deep.equal(new Uint8Array([0,1,2,3,4,5,6,7,8,9]));
+                expect(opt.data).to.be.an('uint8array').that.has.lengthOf(10);
+                expect(opt.data).to.deep.equal(new Uint8Array([0,1,2,3,4,5,6,7,8,9]));
             } catch (error) {
                 console.error('Out call failed:', error);
                 throw error;
@@ -378,7 +378,7 @@ describe('NPRPC Integration Tests', function() {
             for (let i = 0; i < 256; i++) {
                 testData[i] = i;
             }
-            const result = await testBasic.http.In(100, true, new Uint8Array(testData));
+            const result = await testBasic.http.In_(100, true, new Uint8Array(testData));
             expect(result).to.be.true;
         });
 
@@ -436,7 +436,7 @@ describe('NPRPC Integration Tests', function() {
         });
 
         it('should handle optional values via HTTP', async function() {
-            const result = await testOptional.http.In(100, {
+            const result = await testOptional.http.In_(100, {
                 a: 100,
                 b: "test_b",
                 c: "test_c"
@@ -447,8 +447,8 @@ describe('NPRPC Integration Tests', function() {
         it('should return optional via HTTP', async function() {
             const result = await testOptional.http.ReturnOpt1();
             expect(result.str).to.equal('test_string');
-            expect(result.stream).to.be.an('uint8array').that.has.lengthOf(10);
-            expect(result.stream).to.deep.equal(new Uint8Array([0,1,2,3,4,5,6,7,8,9]));
+            expect(result.data).to.be.an('uint8array').that.has.lengthOf(10);
+            expect(result.data).to.deep.equal(new Uint8Array([0,1,2,3,4,5,6,7,8,9]));
         });
 
         it('should handle nested structures via HTTP', async function() {
@@ -543,7 +543,7 @@ describe('NPRPC Integration Tests', function() {
             for (let i = 0; i < 256; i++) {
                 testData[i] = i;
             }
-            const result = await testBasic.http.In(100, true, new Uint8Array(testData));
+            const result = await testBasic.http.In_(100, true, new Uint8Array(testData));
             expect(result).to.be.true;
         });
 
@@ -601,7 +601,7 @@ describe('NPRPC Integration Tests', function() {
 
         it('should handle optional values via HTTP/3', async function() {
             if (!http3Available) this.skip();
-            const result = await testOptional.http.In(100, {
+            const result = await testOptional.http.In_(100, {
                 a: 100,
                 b: "test_b",
                 c: "test_c"
@@ -613,8 +613,8 @@ describe('NPRPC Integration Tests', function() {
             if (!http3Available) this.skip();
             const result = await testOptional.http.ReturnOpt1();
             expect(result.str).to.equal('test_string');
-            expect(result.stream).to.be.an('uint8array').that.has.lengthOf(10);
-            expect(result.stream).to.deep.equal(new Uint8Array([0,1,2,3,4,5,6,7,8,9]));
+            expect(result.data).to.be.an('uint8array').that.has.lengthOf(10);
+            expect(result.data).to.deep.equal(new Uint8Array([0,1,2,3,4,5,6,7,8,9]));
         });
 
         it('should handle nested structures via HTTP/3', async function() {

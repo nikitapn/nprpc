@@ -58,9 +58,9 @@ public:
             execl(nameserver_path.c_str(), "npnameserver", nullptr);
 #else
             // Fallback: try common build directories
-            execl(".build_relwith_debinfo/npnameserver", "npnameserver", nullptr);
-            execl(".build_release/npnameserver", "npnameserver", nullptr);
-            execl(".build_debug/npnameserver", "npnameserver", nullptr);
+            execl("/home/nikita/projects/nprpc/.build_relwith_debinfo/npnameserver", "npnameserver", nullptr);
+            execl("/home/nikita/projects/nprpc/.build_release/npnameserver", "npnameserver", nullptr);
+            execl("/home/nikita/projects/nprpc/.build_debug/npnameserver", "npnameserver", nullptr);
 #endif
             // If all fail, exit with error
             std::cerr << "Failed to execute npnameserver" << std::endl;
@@ -184,17 +184,30 @@ protected:
 #ifndef NPRPC_USE_GTEST
 inline
 #endif
-    auto make_stuff_happen(
+    void bind(
         typename T::servant_t& servant,
         std::uint32_t flags,
         const std::string& object_name = "nprpc_test_object"
     ) {
-        auto nameserver = rpc->get_nameserver("127.0.0.1");
-
         auto oid = poa->activate_object(&servant, flags);
+
+        auto nameserver = rpc->get_nameserver("127.0.0.1");
         nameserver->Bind(oid, object_name);
+    }
+
+    template<typename T>
+#ifndef NPRPC_USE_GTEST
+inline
+#endif
+    auto bind_and_resolve(
+        typename T::servant_t& servant,
+        std::uint32_t flags,
+        const std::string& object_name = "nprpc_test_object"
+    ) {
+        bind(servant, flags, object_name);
 
         nprpc::Object* raw;
+        auto nameserver = rpc->get_nameserver("127.0.0.1");
         EXPECT_TRUE(nameserver->Resolve(object_name, raw));
 
         return nprpc::ObjectPtr(nprpc::narrow<T>(raw));

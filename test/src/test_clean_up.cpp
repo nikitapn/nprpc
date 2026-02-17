@@ -122,11 +122,11 @@ void run()
   } ack_servant; // Local
 
   try {
-    auto proxy_game = make_stuff_happen<test_udp::GameSync>(
+    auto proxy_game = bind_and_resolve<test_udp::GameSync>(
         game_sync_servant, nprpc::ObjectActivationFlags::ALLOW_UDP,
         "udp_game_sync");
 
-    auto proxy_server_control = make_stuff_happen<nprpc::test::ServerControl>(
+    auto proxy_server_control = bind_and_resolve<nprpc::test::ServerControl>(
         server_control_servant,
         nprpc::ObjectActivationFlags::ALLOW_SHARED_MEMORY,
         "udp_server_control");

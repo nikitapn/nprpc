@@ -26,6 +26,7 @@ export class ServerManager {
         
         // Try different paths for the test server binary
         const serverPaths = [
+            '/home/nikita/projects/nprpc/.build_relwith_debinfo/test/nprpc_server_test',
             '/home/nikita/projects/nprpc/.build_release/test/nprpc_server_test',
             '/home/nikita/projects/nprpc/.build_debug/test/nprpc_server_test'
         ];
@@ -65,7 +66,6 @@ export class ServerManager {
 
     async startAll(): Promise<boolean> {
         console.log('Starting test server...');
-
         // Start test server
         const testServerStarted = await this.startTestServer();
         if (!testServerStarted)
