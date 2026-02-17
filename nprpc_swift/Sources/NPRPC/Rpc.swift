@@ -10,26 +10,26 @@ public struct RpcConfiguration: Sendable {
     /// Nameserver address
     public var nameserverHost: String
     public var nameserverPort: UInt16
-    
+
     /// Listen ports (0 = don't listen on this transport)
     public var listenTcpPort: UInt16
     public var listenWsPort: UInt16
     public var listenHttpPort: UInt16
     public var listenQuicPort: UInt16
     public var listenUdpPort: UInt16
-    
+
     /// HTTP/WebSocket settings
     public var httpRootDir: String
-    
+
     /// TLS/SSL settings
     public var sslCertFile: String
     public var sslKeyFile: String
     public var quicCertFile: String
     public var quicKeyFile: String
-    
+
     /// Thread pool size for io_context
     public var threadPoolSize: UInt16
-    
+
     /// Default configuration (nameserver only)
     public init(
         nameserverHost: String = "127.0.0.1",
@@ -60,7 +60,7 @@ public struct RpcConfiguration: Sendable {
         self.quicKeyFile = quicKeyFile
         self.threadPoolSize = threadPoolSize
     }
-    
+
     /// Convert to C++ RpcBuildConfig (matches nprpc::impl::BuildConfig)
     func toCxxConfig() -> nprpc_swift.RpcBuildConfig {
         var config = nprpc_swift.RpcBuildConfig()
@@ -105,77 +105,101 @@ public struct RpcConfiguration: Sendable {
 public final class Rpc {
     var handle: UnsafeMutablePointer<nprpc_swift.RpcHandle>?
     private var isRunning: Bool = false
-    
+
     /// Private initializer - use `initialize()` instead
     private init() {
         self.handle = nil
     }
-    
+
     /// Internal initializer for builder access
     internal init(handle: UnsafeMutablePointer<nprpc_swift.RpcHandle>?) {
         self.handle = handle
     }
-    
+
     deinit {
         if let handle = handle {
             handle.deinitialize(count: 1)
             handle.deallocate()
         }
     }
-    
+
     /// Initialize the NPRPC runtime with configuration
     /// - Parameter config: Runtime configuration
     /// - Returns: Initialized Rpc instance
     /// - Throws: RuntimeError if initialization fails
     public static func initialize(_ config: RpcConfiguration) throws -> Rpc {
         let rpc = Rpc()
-        
+
         // Allocate handle
         rpc.handle = UnsafeMutablePointer<nprpc_swift.RpcHandle>.allocate(capacity: 1)
         rpc.handle!.initialize(to: nprpc_swift.RpcHandle())
-        
+
         // Convert Swift config to C++
         var cxxConfig = config.toCxxConfig()
-        
+
         // Initialize (pass pointer to config and thread pool size)
         // Use thread pool size from config (default 4)
-        guard rpc.handle!.pointee.initialize(&cxxConfig, Int(config.threadPoolSize)) else {
+        guard rpc.handle!.pointee.initialize(&cxxConfig) else {
             rpc.handle!.deinitialize(count: 1)
             rpc.handle!.deallocate()
             rpc.handle = nil
             throw RuntimeError(message: "Failed to initialize NPRPC runtime")
         }
-        
+
         return rpc
     }
-    
+
     /// Run the io_context event loop (blocks until stopped)
-    /// - Throws: RuntimeError if not initialized
+    /// - Throws: RuntimeError if not initialized or if run fails
     public func run() throws {
         guard let handle = handle else {
             throw RuntimeError(message: "Rpc not initialized")
         }
-        
+
         guard !isRunning else {
             throw RuntimeError(message: "Rpc is already running")
         }
-        
+
         isRunning = true
-        handle.pointee.run()
-        isRunning = false
+        defer { isRunning = false }
+        let result = handle.pointee.run()
+        if result != 0 {
+            throw RuntimeError(message: "Rpc run failed with error code \(result)")
+        }
     }
-    
+
+    /// Start the thread pool for handling async operations (non-blocking)
+    /// - Parameter threadCount: Number of threads to start (must be > 0)
+    /// - Throws: RuntimeError if not initialized or already running
+    public func startThreadPool(_ threadCount: Int) throws {
+        guard let handle = handle else {
+            throw RuntimeError(message: "Rpc not initialized")
+        }
+
+        guard !isRunning else {
+            throw RuntimeError(message: "Already running")
+        }
+
+        guard threadCount > 0 else {
+            throw RuntimeError(message: "Thread count must be > 0")
+        }
+
+        isRunning = true
+        handle.pointee.start_thread_pool(threadCount)
+    }
+
     /// Stop the io_context event loop
     public func stop() {
         guard let handle = handle else { return }
         handle.pointee.stop()
+        isRunning = false
     }
-    
+
     /// Check if runtime is initialized
     public var isInitialized: Bool {
         return handle?.pointee.is_initialized() ?? false
     }
-    
+
     /// Get debug information
     public func debugInfo() -> String {
         guard let handle = handle else {

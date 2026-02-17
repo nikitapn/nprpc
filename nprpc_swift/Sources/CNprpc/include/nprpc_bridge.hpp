@@ -8,11 +8,9 @@
 
 #include <cstdint>
 #include <string>
-#include <string_view>
 #include <memory>
 #include <vector>
 #include <optional>
-#include <functional>
 
 // Swift interop macros
 #ifndef SWIFT_RETURNS_INDEPENDENT_VALUE
@@ -27,10 +25,10 @@ namespace nprpc {
     class Object;
     template<typename T> class ObjectPtr;
     class flat_buffer;
-    
+
     // Forward declare LogLevel (defined in nprpc_base.hpp)
     enum class LogLevel : uint32_t;
-    
+
     namespace impl {
         struct BuildConfig;
     }
@@ -84,11 +82,11 @@ inline const char* string_to_cstr(const std::string& str) {
 struct RpcBuildConfig {
     uint32_t log_level = 2;  // LogLevel::info
     uint8_t uuid[16] = {};
-    
+
     uint16_t tcp_port = 0;
     uint16_t udp_port = 0;
     std::string hostname;
-    
+
     // HTTP/HTTPS + WebSocket/SSL WebSocket
     uint16_t http_port = 0;
     bool http_ssl_enabled = false;
@@ -100,7 +98,7 @@ struct RpcBuildConfig {
     std::string http_dhparams_file;
     std::string http_root_dir;
     std::string ssr_handler_dir;
-    
+
     // QUIC
     uint16_t quic_port = 0;
     std::string quic_cert_file;
@@ -116,33 +114,37 @@ class RpcHandle {
 public:
     RpcHandle() = default;
     ~RpcHandle();
-    
+
     // Prevent copying (Rpc is a singleton)
     RpcHandle(const RpcHandle&) = delete;
     RpcHandle& operator=(const RpcHandle&) = delete;
-    
+
     // Allow moving
     RpcHandle(RpcHandle&&) noexcept;
     RpcHandle& operator=(RpcHandle&&) noexcept;
-    
+
     /// Initialize the RPC system with config
     /// @param config Configuration struct (pointer, can't use rvalue ref for Swift compat)
-    /// @param thread_pool_size Number of worker threads (0 = manual mode, user must call run(); default = 4)
     /// @return true if successful, false on error
-    bool initialize(RpcBuildConfig* config, size_t thread_pool_size = 4);
-    
+    bool initialize(RpcBuildConfig* config);
+
     /// Run the io_context (blocks until stopped)
-    void run();
-    
+    /// @return 0 - success, negative on error: -1 = not initialized, -2 = run failed
+    int run();
+
+    /// Start io_context in background threads
+    /// @param thread_count Number of threads to run (must be > 0 to start thread pool)
+    void start_thread_pool(size_t thread_count) noexcept;
+
     /// Stop the io_context
-    void stop();
-    
+    void stop() noexcept;
+
     /// Check if initialized
     bool is_initialized() const { return initialized_; }
-    
+
     /// Get debug info
     std::string get_debug_info() const;
-    
+
     /// Create a POA
     /// @param max_objects Maximum number of objects (0 = default)
     /// @param lifespan 0 = persistent, 1 = transient
@@ -150,7 +152,7 @@ public:
     /// @return Opaque pointer to nprpc::Poa or nullptr on error
     SWIFT_RETURNS_INDEPENDENT_VALUE
     void* create_poa(uint32_t max_objects, uint32_t lifespan, uint32_t id_policy);
-    
+
 private:
     bool initialized_ = false;
     void* impl_ = nullptr;  // Opaque pointer to RpcHandleImpl
@@ -180,10 +182,10 @@ struct EndPointInfo {
     std::string hostname;
     uint16_t port = 0;
     std::string path;  // For WebSocket/HTTP
-    
+
     /// Parse from URL string
     static std::optional<EndPointInfo> parse(const std::string& url);
-    
+
     /// Convert back to URL string
     std::string to_url() const;
 };

@@ -22,8 +22,6 @@
 #include <boost/asio/thread_pool.hpp>
 #include <boost/asio/use_future.hpp>
 
-#include <atomic>
-#include <random>
 #include <sstream>
 
 // Forward declarations for nprpc impl internals
@@ -52,32 +50,49 @@ namespace nprpc_swift {
 
 struct RpcHandleImpl {
     nprpc::Rpc* rpc_instance = nullptr;
+    bool stopped = true;
 
     boost::asio::io_context ioc;
     std::unique_ptr<boost::asio::thread_pool> pool;
-    boost::asio::executor_work_guard<boost::asio::io_context::executor_type>
-      work_guard;
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard;
 
-    RpcHandleImpl(size_t thread_count)
-        : work_guard(boost::asio::make_work_guard(ioc))
-    {
-        // Only create thread pool if thread_count > 0
-        // If thread_count == 0, user must call run() manually
-        if (thread_count > 0) {
-            pool = std::make_unique<boost::asio::thread_pool>(thread_count);
-            for (size_t i = 0; i < thread_count; ++i) {
-                boost::asio::post(*pool, [this] {
-                    ioc.run();
-                });
-            }
+    RpcHandleImpl()
+        : work_guard(boost::asio::make_work_guard(ioc)) {}
+
+    void run() {
+        if (!stopped) return;  // Already running in background
+        stopped = false;
+        ioc.run();  // Blocking call for manual mode
+    }
+
+    void start_thread_pool(size_t thread_count) noexcept {
+        if (pool) return;  // Thread pool already exists
+        pool = std::make_unique<boost::asio::thread_pool>(thread_count);
+        for (size_t i = 0; i < thread_count; ++i) {
+            boost::asio::post(*pool, [this] {
+                ioc.run();
+            });
         }
+        stopped = false;
+    }
+
+    void stop() noexcept {
+        ioc.stop();
+        if (pool) {
+            pool->join();
+            pool.reset();
+        }
+        stopped = true;
     }
 
     ~RpcHandleImpl() {
-        ioc.stop();
         work_guard.reset();
-        if (pool) {
-            pool->join();
+        if (!stopped)
+            stop();
+        if (rpc_instance) {
+            NPRPC_LOG_INFO("[SWB] About to destroy Rpc instance");
+            rpc_instance->destroy();
+            rpc_instance = nullptr;
         }
     }
 };
@@ -88,7 +103,8 @@ struct RpcHandleImpl {
 
 RpcHandle::~RpcHandle() {
     if (initialized_) {
-        stop();
+        delete static_cast<RpcHandleImpl*>(impl_);
+        impl_ = nullptr;
     }
 }
 
@@ -111,16 +127,14 @@ RpcHandle& RpcHandle::operator=(RpcHandle&& other) noexcept {
     return *this;
 }
 
-bool RpcHandle::initialize(RpcBuildConfig* config, size_t thread_pool_size) {
+bool RpcHandle::initialize(RpcBuildConfig* config) {
     if (initialized_ || !config) {
         return false;  // Already initialized or null config
     }
 
     try {
         // Create implementation
-        // thread_pool_size == 0: no thread pool, user must call run() manually (blocking)
-        // thread_pool_size > 0: background thread pool, run() is a no-op
-        impl_ = new RpcHandleImpl(thread_pool_size);
+        impl_ = new RpcHandleImpl();
         auto* impl = static_cast<RpcHandleImpl*>(impl_);
 
         // Convert RpcBuildConfig to nprpc::impl::BuildConfig
@@ -165,14 +179,14 @@ bool RpcHandle::initialize(RpcBuildConfig* config, size_t thread_pool_size) {
         return true;
     } catch (const std::exception& e) {
         // Log error but don't throw to Swift (Swift runtime not built with exceptions)
-        std::cerr << "RpcHandle::initialize failed: " << e.what() << std::endl;
+        NPRPC_LOG_ERROR("[SWB] RpcHandle::initialize failed: {}", e.what());
         if (impl_) {
             delete static_cast<RpcHandleImpl*>(impl_);
             impl_ = nullptr;
         }
         return false;
     } catch (...) {
-        std::cerr << "RpcHandle::initialize failed with unknown exception" << std::endl;
+        NPRPC_LOG_ERROR("[SWB] RpcHandle::initialize failed with unknown exception");
         if (impl_) {
             delete static_cast<RpcHandleImpl*>(impl_);
             impl_ = nullptr;
@@ -181,39 +195,32 @@ bool RpcHandle::initialize(RpcBuildConfig* config, size_t thread_pool_size) {
     }
 }
 
-void RpcHandle::run() {
-    if (!initialized_ || !impl_) return;
+int RpcHandle::run() {
+    if (!initialized_ || !impl_)
+        return -1;
+    auto* impl = static_cast<RpcHandleImpl*>(impl_);
     try {
-        auto* impl = static_cast<RpcHandleImpl*>(impl_);
-        // Only call run() if no thread pool (thread_count was 0)
-        // Otherwise io_context is already running in background threads
-        if (!impl->pool) {
-            impl->ioc.run();  // Blocking call for manual mode
-        }
-        // If thread pool exists, this is a no-op (already running in background)
+        impl->run();
     } catch (const std::exception& e) {
-        std::cerr << "RpcHandle::run failed: " << e.what() << std::endl;
+        NPRPC_LOG_ERROR("RpcHandle::run failed: {}", e.what());
+        return -2;
     } catch (...) {
-        std::cerr << "RpcHandle::run failed with unknown exception" << std::endl;
+        NPRPC_LOG_ERROR("RpcHandle::run failed with unknown exception");
+        return -2;
     }
+    return 0;
 }
 
-void RpcHandle::stop() {
+void RpcHandle::start_thread_pool(size_t thread_count) noexcept {
     if (!initialized_ || !impl_) return;
-    try {
-        auto* impl = static_cast<RpcHandleImpl*>(impl_);
-        delete impl;
-        impl_ = nullptr;
-        initialized_ = false;
-    } catch (const std::exception& e) {
-        std::cerr << "RpcHandle::stop failed: " << e.what() << std::endl;
-        impl_ = nullptr;
-        initialized_ = false;
-    } catch (...) {
-        std::cerr << "RpcHandle::stop failed with unknown exception" << std::endl;
-        impl_ = nullptr;
-        initialized_ = false;
-    }
+    auto* impl = static_cast<RpcHandleImpl*>(impl_);
+    impl->start_thread_pool(thread_count);
+}
+
+void RpcHandle::stop() noexcept {
+    if (!initialized_ || !impl_) return;
+    auto* impl = static_cast<RpcHandleImpl*>(impl_);
+    impl->stop();
 }
 
 std::string RpcHandle::get_debug_info() const {
@@ -245,7 +252,7 @@ void* RpcHandle::create_poa(uint32_t max_objects, uint32_t lifespan, uint32_t id
 
         return builder.build();
     } catch (const std::exception& e) {
-        std::cerr << "RpcHandle::create_poa failed: " << e.what() << std::endl;
+        NPRPC_LOG_ERROR("[SWB] RpcHandle::create_poa failed: {}", e.what());
         return nullptr;
     }
 }
@@ -537,7 +544,7 @@ int nprpc_object_send_receive(void* obj_ptr, void* buffer_ptr, uint32_t timeout_
         nprpc::impl::rpc_call(obj->get_endpoint(), *buffer, timeout_ms);
         return 0;  // Success
     } catch (const std::exception& e) {
-        std::cerr << "nprpc_object_send_receive exception: " << e.what() << std::endl;
+        NPRPC_LOG_ERROR("[SWB] nprpc_object_send_receive exception: {}", e.what());
         return -3;  // RPC call failed
     }
 }
@@ -583,7 +590,7 @@ int nprpc_object_send_async(
         );
         return 0;  // Started successfully
     } catch (const std::exception& e) {
-        std::cerr << "nprpc_object_send_async exception: " << e.what() << std::endl;
+        NPRPC_LOG_ERROR("[SWB] nprpc_object_send_async exception: {}", e.what());
         return -3;  // Failed to start
     }
 }
@@ -631,7 +638,7 @@ int nprpc_object_send_async_receive(
         );
         return 0;  // Started successfully
     } catch (const std::exception& e) {
-        std::cerr << "nprpc_object_send_async_receive exception: " << e.what() << std::endl;
+        NPRPC_LOG_ERROR("[SWB] nprpc_object_send_async_receive exception: {}", e.what());
         return -3;  // Failed to start
     }
 }
@@ -688,7 +695,7 @@ void* nprpc_create_object_from_components(
         auto* obj = nprpc::Object::from_string(oid_str);
         return obj;
     } catch (const std::exception& e) {
-        std::cerr << "nprpc_create_object_from_components exception: " << e.what() << std::endl;
+        NPRPC_LOG_ERROR("[SWB] nprpc_create_object_from_components exception: {}", e.what());
         return nullptr;
     } catch (...) {
         return nullptr;
@@ -747,10 +754,10 @@ int nprpc_create_object_from_flat(
         return 1;  // Success with valid object
     } catch (const nprpc::Exception& e) {
         // This is thrown when endpoint selection fails
-        std::cerr << "nprpc_create_object_from_flat: " << e.what() << std::endl;
+        NPRPC_LOG_ERROR("[SWB] nprpc_create_object_from_flat: {}", e.what());
         return -3;  // Cannot select endpoint
     } catch (const std::exception& e) {
-        std::cerr << "nprpc_create_object_from_flat exception: " << e.what() << std::endl;
+        NPRPC_LOG_ERROR("[SWB] nprpc_create_object_from_flat exception: {}", e.what());
         return -4;  // Other exception
     } catch (...) {
         return -5;  // Unknown exception
@@ -856,10 +863,10 @@ uint64_t nprpc_generate_stream_id() {
 void* nprpc_get_stream_manager(void* session_ctx) {
     auto* ctx = static_cast<nprpc::SessionContext*>(session_ctx);
     if (!ctx) {
-        NPRPC_LOG_WARN("[SWIFT] nprpc_get_stream_manager: session_ctx is null");
+        NPRPC_LOG_WARN("[SWB] nprpc_get_stream_manager: session_ctx is null");
         return nullptr;
     }
-    NPRPC_LOG_INFO("[SWIFT] nprpc_get_stream_manager: stream_manager={}", (void*)ctx->stream_manager);
+    NPRPC_LOG_INFO("[SWB] nprpc_get_stream_manager: stream_manager={}", (void*)ctx->stream_manager);
     return ctx->stream_manager;
 }
 
@@ -870,11 +877,11 @@ void nprpc_stream_manager_send_chunk(
     uint32_t data_size,
     uint64_t sequence)
 {
-    NPRPC_LOG_INFO("[SWIFT] send_chunk: stream_id={} data_size={} sequence={}", stream_id, data_size, sequence);
+    NPRPC_LOG_INFO("[SWB] send_chunk: stream_id={} data_size={} sequence={}", stream_id, data_size, sequence);
 
     auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
     if (!mgr) {
-        NPRPC_LOG_ERROR("[SWIFT] send_chunk: stream_manager is null");
+        NPRPC_LOG_ERROR("[SWB] send_chunk: stream_manager is null");
         return;
     }
 
@@ -887,7 +894,7 @@ void nprpc_stream_manager_send_chunk(
 }
 
 void nprpc_stream_manager_send_complete(void* stream_manager, uint64_t stream_id, uint64_t final_sequence) {
-    NPRPC_LOG_INFO("[SWIFT] send_complete: stream_id={} final_sequence={}", stream_id, final_sequence);
+    NPRPC_LOG_INFO("[SWB] send_complete: stream_id={} final_sequence={}", stream_id, final_sequence);
     auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
     if (!mgr) return;
 
@@ -975,7 +982,7 @@ struct SwiftStreamReader : public nprpc::StreamReaderBase {
         on_error_callback(on_error) {}
 
     void on_chunk_received(nprpc::flat_buffer fb) override {
-        NPRPC_LOG_INFO("[SWIFT] SwiftStreamReader::on_chunk_received");
+        NPRPC_LOG_INFO("[SWB] SwiftStreamReader::on_chunk_received");
         // Extract data from StreamChunk
         // Chunk layout: Header (16) + stream_id (8) + sequence (8) + data vector header (8) + window_size (4)
         constexpr size_t header_size = 16;
@@ -989,7 +996,7 @@ struct SwiftStreamReader : public nprpc::StreamReaderBase {
         uint32_t data_rel_offset = *reinterpret_cast<const uint32_t*>(chunk_ptr + 16);
         uint32_t data_count = *reinterpret_cast<const uint32_t*>(chunk_ptr + 20);
 
-        NPRPC_LOG_INFO("[SWIFT] Chunk: data_count={}", data_count);
+        NPRPC_LOG_INFO("[SWB] Chunk: data_count={}", data_count);
 
         if (data_count > 0 && on_chunk_callback) {
             const void* data_ptr = chunk_ptr + 16 + data_rel_offset;
@@ -1018,17 +1025,17 @@ void nprpc_stream_register_reader(
     void (*on_complete)(void*),
     void (*on_error)(void*, uint32_t))
 {
-    NPRPC_LOG_INFO("[SWIFT] nprpc_stream_register_reader: stream_id={}", stream_id);
+    NPRPC_LOG_INFO("[SWB] nprpc_stream_register_reader: stream_id={}", stream_id);
     auto* obj = static_cast<nprpc::Object*>(object_ptr);
     if (!obj) {
-        NPRPC_LOG_ERROR("[SWIFT] nprpc_stream_register_reader: object_ptr is null");
+        NPRPC_LOG_ERROR("[SWB] nprpc_stream_register_reader: object_ptr is null");
         return;
     }
 
     // Get session from object's endpoint
     auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
     if (!session || !session->ctx().stream_manager) {
-        NPRPC_LOG_ERROR("[SWIFT] nprpc_stream_register_reader: no session or stream_manager");
+        NPRPC_LOG_ERROR("[SWB] nprpc_stream_register_reader: no session or stream_manager");
         return;
     }
 
@@ -1036,7 +1043,7 @@ void nprpc_stream_register_reader(
     // Note: Memory ownership is transferred to stream_manager
     auto* reader = new SwiftStreamReader(context, on_chunk, on_complete, on_error);
     session->ctx().stream_manager->register_reader(stream_id, reader);
-    NPRPC_LOG_INFO("[SWIFT] nprpc_stream_register_reader: Reader registered with stream_manager={}", (void*)session->ctx().stream_manager);
+    NPRPC_LOG_INFO("[SWB] nprpc_stream_register_reader: Reader registered with stream_manager={}", (void*)session->ctx().stream_manager);
 }
 
 int nprpc_stream_send_init(

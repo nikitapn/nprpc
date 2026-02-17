@@ -9,7 +9,6 @@ import CNprpc
 class BuildConfig {
     var logLevel: LogLevel = .info
     var hostname: String = ""
-    var threadPoolSize: UInt16 = 4
 
     // TCP
     var tcpPort: UInt16 = 0
@@ -48,10 +47,6 @@ public protocol RpcBuilderProtocol {
     @discardableResult
     func withHostname(_ hostname: String) -> Self
 
-    /// Set number of threads in io_context thread pool
-    @discardableResult
-    func setThreadPoolSize(_ size: UInt16) -> Self
-    
     /// Enable client to accept self-signed server certificates
     @discardableResult
     func enableSslClientSelfSignedCert(_ certPath: String) -> Self
@@ -95,12 +90,6 @@ extension RpcBuilderInternal {
         return self
     }
 
-    @discardableResult
-    public func setThreadPoolSize(_ size: UInt16) -> Self {
-        config.threadPoolSize = size
-        return self
-    }
-    
     @discardableResult
     public func enableSslClientSelfSignedCert(_ certPath: String) -> Self {
         config.sslClientSelfSignedCertPath = certPath
@@ -169,11 +158,10 @@ extension RpcBuilderInternal {
         cxxConfig.ssl_client_self_signed_cert_path = std.string(config.sslClientSelfSignedCertPath)
         
         // Create RpcHandle and initialize with config
-        // Thread pool size: 0 = manual mode (must call run()), >0 = auto background threads
         let handle = UnsafeMutablePointer<nprpc_swift.RpcHandle>.allocate(capacity: 1)
         handle.initialize(to: nprpc_swift.RpcHandle())
         
-        guard handle.pointee.initialize(&cxxConfig, Int(config.threadPoolSize)) else {
+        guard handle.pointee.initialize(&cxxConfig) else {
             handle.deinitialize(count: 1)
             handle.deallocate()
             throw RuntimeError(message: "Failed to initialize NPRPC runtime")

@@ -24,14 +24,14 @@ do {
             .enableHttp3()
             .rootDir("/tmp/nprpc_http3_test")
         .build()
-    
+
     print("✓ NPRPC configured successfully")
     print("  - Protocol: HTTP/3 (QUIC)")
     print("  - Address: https://localhost:3000")
     print("  - TLS: Enabled")
     print("  - Root: /tmp/nprpc_http3_test")
     print()
-    
+
     // Create test HTML file in root directory
     let testHtml = """
     <!DOCTYPE html>
@@ -91,7 +91,7 @@ do {
     </body>
     </html>
     """
-    
+
     // Ensure root directory exists
     let rootDir = "/tmp/nprpc_http3_test"
     try? FileManager.default.createDirectory(
@@ -103,13 +103,13 @@ do {
         atomically: true,
         encoding: .utf8
     )
-    
+
     print("✓ Created test content at \(rootDir)/index.html")
     print()
     print("Server is running in background (4 worker threads)...")
     print("Press Ctrl+C to stop")
     print()
-    
+
     // Set up signal handling for graceful shutdown
     let signalSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
     signalSource.setEventHandler {
@@ -120,11 +120,12 @@ do {
     }
     signal(SIGINT, SIG_IGN)
     signalSource.resume()
-    
+
+    // Start 4 worker threads for handling requests
+    try rpc.startThreadPool(4) 
     // Keep the process alive while server runs in background thread pool
-    // (With default thread pool size of 4, rpc.run() is a no-op)
     dispatchMain()
-    
+
 } catch {
     print("❌ Error: \(error)")
     exit(1)

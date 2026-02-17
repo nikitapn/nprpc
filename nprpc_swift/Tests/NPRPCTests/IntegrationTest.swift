@@ -13,28 +13,27 @@ final class IntegrationTests: XCTestCase {
 
     override class func setUp() {
         super.setUp()
-        print("Setting up integration tests (class-wide)...")
         do {
             rpc = try RpcBuilder()
                 .setLogLevel(.info)
                 .withHostname("localhost")
                 .withTcp(16000)
-                // TODO: Fix crash during websocket shutdown
                 .withHttp(16001)
-                // .withQuic(16002)
-                //     .ssl(certFile: "/workspace/certs/out/localhost.crt",
-                //          keyFile: "/workspace/certs/out/localhost.key")
+                .withQuic(16002)
+                    .ssl(certFile: "/workspace/certs/out/localhost.crt",
+                         keyFile: "/workspace/certs/out/localhost.key")
                 .build()
             // Give the TCP listener time to start accepting connections
             Thread.sleep(forTimeInterval: 0.1)
             poa = try rpc!.createPoa(maxObjects: 100)
+            // Start the thread pool to process incoming RPCs (use 4 threads for testing)
+            try rpc!.startThreadPool(4)
         } catch {
             fatalError("Failed to set up test environment: \(error)")
         }
     }
 
     override class func tearDown() {
-        print("Tearing down integration tests (class-wide)...")
         // Rpc/Poa will be cleaned up when deinit is called
         rpc = nil
         poa = nil
@@ -88,7 +87,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestShapeServant()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
+        let oid = try Self.poa!.activateObject(servant, flags: .allowWebSocket)
 
         // Create ShapeService client proxy from oid
         guard let obj = NPRPCObject.fromObjectId(oid) else {
@@ -503,7 +502,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestNestedServantImpl()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
+        let oid = try Self.poa!.activateObject(servant, flags: .allowQuic)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -647,20 +646,18 @@ final class IntegrationTests: XCTestCase {
             var receivedArg1: UInt32 = 0
             var receivedArg2: String = ""
             var method2Arg1: UInt32 = 0
-            
+
             override func method1(arg1: UInt32, arg2: String) {
-                print("AsyncTestImpl: method1 called with arg1=\(arg1), arg2=\(arg2)")
                 receivedArg1 = arg1
                 receivedArg2 = arg2
             }
-            
+
             override func method2(arg1: UInt32) -> String {
-                print("AsyncTestImpl: method2 called with arg1=\(arg1)")
                 method2Arg1 = arg1
                 return "Response for \(arg1)"
             }
         }
-        
+
         // Create and activate servant
         let servant = AsyncTestImpl()
         let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
@@ -669,34 +666,32 @@ final class IntegrationTests: XCTestCase {
             return
         }
         let client = narrow(obj, to: AsyncTest.self)!
-        
+
         // Test 1: Async method with no return value
         // await blocks until the RPC completes and servant has executed
         await client.method1(arg1: 42, arg2: "Hello async!")
         XCTAssertEqual(servant.receivedArg1, 42)
         XCTAssertEqual(servant.receivedArg2, "Hello async!")
-        
+
         // Test 2: Async method with output value
         // Async methods with outputs throw because they need to wait for a response
         let result = try await client.method2(arg1: 123)
         XCTAssertEqual(servant.method2Arg1, 123)
         XCTAssertEqual(result, "Response for 123")
-        
+
         // Test 3: Multiple concurrent async calls
         servant.receivedArg1 = 0
         servant.receivedArg2 = ""
-        
+
         async let call1: Void = client.method1(arg1: 100, arg2: "First")
         async let call2: Void = client.method1(arg1: 200, arg2: "Second")
         async let call3: Void = client.method1(arg1: 300, arg2: "Third")
-        
+
         // Wait for all calls to complete
         _ = await (call1, call2, call3)
-        
+
         // All calls have completed - the last received values depend on execution order
         XCTAssertTrue(servant.receivedArg1 >= 100, "At least one async call should have completed")
-        
-        print("Async test completed successfully!")
     }
 
     /// Test bad input validation for untrusted interfaces
@@ -706,10 +701,9 @@ final class IntegrationTests: XCTestCase {
         class TestBadInputImpl: TestBadInputServant {
             override func in_(a: [UInt8]) {
                 // This should never be called - the safety check should reject the input
-                print("TestBadInputImpl: in_ called with \(a.count) bytes")
             }
         }
-        
+
         // Create and activate servant
         let servant = TestBadInputImpl()
         let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
@@ -718,47 +712,47 @@ final class IntegrationTests: XCTestCase {
             return
         }
         let client = narrow(obj, to: TestBadInput.self)!
-        
+
         // Create a malformed buffer (similar to C++ test)
         let buffer = FlatBuffer()
         buffer.prepare(2048)
         buffer.commit(40)  // Header (16) + CallHeader (24) = 40 bytes
-        
+
         guard let data = buffer.data else {
             XCTFail("Failed to get buffer data")
             return
         }
-        
+
         // Write message header (16 bytes starting at offset 0)
         data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)    // size (set later)
         data.storeBytes(of: impl.MessageId.functionCall.rawValue, toByteOffset: 4, as: Int32.self)  // msg_id: FunctionCall
         data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: Int32.self)    // msg_type: Request
         data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self)   // reserved
-        
+
         // Write call header (starting at offset 16)
         data.storeBytes(of: client.poaIdx, toByteOffset: 16, as: UInt16.self)     // poa_idx
         data.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)            // interface_idx
         data.storeBytes(of: UInt8(0), toByteOffset: 19, as: UInt8.self)            // function_idx
         data.storeBytes(of: client.objectId, toByteOffset: 24, as: UInt64.self)   // object_id
-        
+
         // Commit additional space for the "payload"
         buffer.commit(1024)
-        
+
         // Get fresh data pointer after commit
         guard let finalData = buffer.data else {
             XCTFail("Failed to get buffer data after commit")
             return
         }
-        
+
         // Set correct size in header (total size - 4 bytes for size field itself)
         finalData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
-        
+
         // Write malformed vector at offset 32 (where input struct begins)
         // Vector format: [relative_offset: u32, count: u32]
         // Set count to 0xDEADBEEF (much larger than buffer size)
         finalData.storeBytes(of: UInt32(8), toByteOffset: 32, as: UInt32.self)          // relative offset
         finalData.storeBytes(of: UInt32(0xDEADBEEF), toByteOffset: 36, as: UInt32.self) // count (malicious!)
-        
+
         // Send the malformed buffer - should get ExceptionBadInput
         do {
             try client.sendReceive(buffer: buffer, timeout: client.timeout)
@@ -766,7 +760,6 @@ final class IntegrationTests: XCTestCase {
             XCTFail("Expected ExceptionBadInput to be thrown")
         } catch is ExceptionBadInput {
             // Expected - test passed
-            print("Bad input test passed: ExceptionBadInput was correctly thrown")
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
@@ -779,25 +772,22 @@ final class IntegrationTests: XCTestCase {
         // TestStreams servant implementation
         class TestStreamsImpl: TestStreamsServant {
             override func getByteStream(size: UInt64) -> AsyncStream<UInt8> {
-                print("[SWIFT] getByteStream called with size: \(size)")
                 return AsyncStream { continuation in
                     // Produce 'size' bytes (capped at 256 for test)
                     let count = min(size, 256)
                     for i in 0..<count {
-                        print("[SWIFT] Producing byte \(i & 0xFF)")
                         continuation.yield(UInt8(i & 0xFF))
                     }
-                    print("[SWIFT] Finished producing stream of \(count) bytes")
                     continuation.finish()
                 }
             }
         }
-        
+
         // Create and activate servant
         let servant = TestStreamsImpl()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowWebSocket)
+        let oid = try Self.poa!.activateObject(servant, flags: .allowWebSocket) // Use WebSocket for streaming test
         XCTAssertEqual(oid.class_id, "nprpc_test/nprpc.test.TestStreams")
-        
+
         // Create client proxy
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
@@ -805,24 +795,18 @@ final class IntegrationTests: XCTestCase {
         }
         let client = narrow(obj, to: TestStreams.self)!
         XCTAssertEqual(client.classId, "nprpc_test/nprpc.test.TestStreams")
-        
+
         // Test full round-trip: call streaming method and consume the stream
         let stream = try client.getByteStream(size: 5)
         var receivedValues: [UInt8] = []
-        
+
         for try await value in stream {
-            print("[SWIFT] Received byte: \(value)")
             receivedValues.append(value)
         }
-
-        print("[SWIFT] Stream finished. Total bytes received: \(receivedValues.count)")
-        
         // Verify we received all expected values
         XCTAssertEqual(receivedValues.count, 5, "Should receive 5 bytes from stream")
         for i in 0..<5 {
             XCTAssertEqual(receivedValues[i], UInt8(i), "Byte \(i) should be \(i)")
         }
-        
-        print("Stream test completed successfully! Received \(receivedValues.count) values")
     }
 }
