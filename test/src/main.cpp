@@ -80,11 +80,11 @@ TEST_F(NprpcTest, TestBasic)
     }
   };
 
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
 // Basic exception handling

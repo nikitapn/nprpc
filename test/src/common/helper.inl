@@ -204,7 +204,7 @@ inline
         std::uint32_t flags,
         const std::string& object_name = "nprpc_test_object"
     ) {
-        bind(servant, flags, object_name);
+        bind<T>(servant, flags, object_name);
 
         nprpc::Object* raw;
         auto nameserver = rpc->get_nameserver("127.0.0.1");

@@ -1,5 +1,5 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
-// This file is a part of npsystem (Distributed Control System) and covered by LICENSING file in the topmost directory
+// SPDX-License-Identifier: MIT
 
 // Marshalling helper functions for the new simplified approach
 import { FlatBuffer, HeapViews, _alloc, _alloc1 } from './flat_buffer';

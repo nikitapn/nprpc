@@ -1,5 +1,10 @@
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MIT
+
 import { FlatBuffer } from './flat_buffer';
 import { MyPromise } from "./utils";
+import { StreamManager, StreamReader, bytes_deserializer } from './stream';
+export { StreamReader, bytes_deserializer } from './stream';
 import {
   impl, detail, oid_t, poa_idx_t,
   LogLevel,
@@ -131,6 +136,7 @@ export class Connection {
   ws: WebSocket;
   pending_requests: Map<number, PendingRequest>;
   next_request_id: number;
+  stream_manager: StreamManager;
 
   private async perform_request(request_id: number, buffer: FlatBuffer) {
     // Inject request ID into the message header
@@ -182,10 +188,36 @@ export class Connection {
         console.warn("Received response for unknown request ID:", request_id);
       }
     } else {
-      // Store the original request ID to preserve it in the response
+      const msg_id = buf.read_msg_id();
+
+      // Stream messages are fire-and-forget (no reply needed)
+      switch (msg_id) {
+        case impl.MessageId.StreamDataChunk: {
+          const chunk = impl.unmarshal_StreamChunk(buf, header_size);
+          this.stream_manager.on_chunk_received(chunk.stream_id, chunk.data, chunk.sequence);
+          return;
+        }
+        case impl.MessageId.StreamCompletion: {
+          const msg = impl.unmarshal_StreamComplete(buf, header_size);
+          this.stream_manager.on_stream_complete(msg.stream_id);
+          return;
+        }
+        case impl.MessageId.StreamError: {
+          const msg = impl.unmarshal_StreamError(buf, header_size);
+          this.stream_manager.on_stream_error(msg.stream_id, msg.error_code);
+          return;
+        }
+        case impl.MessageId.StreamCancellation: {
+          const msg = impl.unmarshal_StreamCancel(buf, header_size);
+          this.stream_manager.on_stream_complete(msg.stream_id); // treat as completion
+          return;
+        }
+      }
+
+      // Remaining messages require a reply - store request_id to echo back
       const request_id = buf.read_request_id();
       
-      switch (buf.read_msg_id()) {
+      switch (msg_id) {
         case impl.MessageId.FunctionCall: {
           let ch = impl.unmarshal_CallHeader(buf, header_size);
 
@@ -246,19 +278,21 @@ export class Connection {
   }
 
   private on_close() { 
-    // Cancel all pending requests on connection close
-    for (const [request_id, pending_request] of this.pending_requests) {
+    // Cancel all pending requests and streams on connection close
+    for (const [, pending_request] of this.pending_requests) {
       pending_request.promise.set_exception(new Error("Connection closed") as any);
     }
     this.pending_requests.clear();
+    this.stream_manager.cancel_all();
   }
 
   private on_error(ev: Event) {
-    // Cancel all pending requests on connection error
-    for (const [request_id, pending_request] of this.pending_requests) {
+    // Cancel all pending requests and streams on connection error
+    for (const [, pending_request] of this.pending_requests) {
       pending_request.promise.set_exception(new Error("Connection error") as any);
     }
     this.pending_requests.clear();
+    this.stream_manager.cancel_all();
   }
 
   constructor(endpoint: EndPoint) {
@@ -279,6 +313,7 @@ export class Connection {
     this.ws.onclose = this.on_close.bind(this);
     this.ws.onmessage = this.on_read.bind(this);
     this.ws.onerror = this.on_error.bind(this);
+    this.stream_manager = new StreamManager();
   }
 }
 
@@ -317,6 +352,45 @@ export class Rpc {
 
   public async call(endpoint: EndPoint, buffer: FlatBuffer, timeout_ms: number = 2500): Promise<any> {
     return this.get_connection(endpoint).send_receive(buffer, timeout_ms);
+  }
+
+  /**
+   * Initiate a server→client stream. Sends StreamInitialization and returns a StreamReader.
+   * Generated stubs should use this instead of calling rpc.call() directly for stream methods.
+   */
+  public async open_stream<T = Uint8Array>(
+    endpoint: EndPoint,
+    poa_idx: number,
+    object_id: bigint,
+    interface_idx: number,
+    func_idx: number,
+    timeout_ms: number = 2500,
+    deserialize: (data: Uint8Array) => T = bytes_deserializer as unknown as (data: Uint8Array) => T
+  ): Promise<StreamReader<T>> {
+    const conn = this.get_connection(endpoint);
+    const stream_id = conn.stream_manager.generate_stream_id();
+    const reader = conn.stream_manager.create_reader(stream_id, deserialize);
+
+    const buf = FlatBuffer.create();
+    const init_size = 32; // StreamInit fixed layout: stream_id(8)+poa_idx(2)+pad(6)+object_id(8)+func_idx(1)+pad(7)
+    buf.prepare(header_size + init_size);
+    buf.commit(header_size + init_size);
+    buf.write_msg_id(impl.MessageId.StreamInitialization);
+    buf.write_msg_type(impl.MessageType.Request);
+    impl.marshal_StreamInit(buf, header_size, {
+      stream_id,
+      poa_idx,
+      interface_idx,
+      object_id,
+      func_idx,
+    });
+    buf.write_len(buf.size - 4);
+
+    // send_receive will block until the server sends the ACK (Success)
+    await conn.send_receive(buf, timeout_ms);
+
+    // After ACK, chunks will arrive asynchronously via on_read → stream_manager
+    return reader;
   }
 
   /** @internal */
