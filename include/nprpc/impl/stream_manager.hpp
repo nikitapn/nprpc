@@ -12,6 +12,8 @@
 #include <nprpc_base.hpp>
 #include <nprpc/export.hpp>
 
+#include <boost/asio/any_io_executor.hpp>
+
 namespace nprpc {
 
 class SessionContext;
@@ -30,13 +32,11 @@ public:
   using SendNativeStreamCallback = std::function<void(flat_buffer&&)>;
   // Callback type for sending datagrams (unreliable stream data)
   using SendDatagramCallback = std::function<bool(flat_buffer&&)>;
-  // Callback type for posting async work
-  using PostCallback = std::function<void(std::function<void()>)>;
 
   // Generate unique stream ID (client-side)
   static uint64_t generate_stream_id();
 
-  explicit StreamManager(SessionContext& session);
+  StreamManager(SessionContext& session, boost::asio::any_io_executor executor);
   ~StreamManager();
 
   // Set the callback for sending on main stream (control messages)
@@ -47,9 +47,6 @@ public:
 
   // Set the callback for sending datagrams (unreliable stream data)
   void set_send_datagram_callback(SendDatagramCallback callback) { send_datagram_callback_ = std::move(callback); }
-
-  // Set the callback for posting async work (must be called by Session after construction)
-  void set_post_callback(PostCallback callback) { post_callback_ = std::move(callback); }
 
   // Server-side: register outgoing stream (with optional unreliable flag)
   void register_stream(uint64_t stream_id,
@@ -80,10 +77,10 @@ public:
 
 private:
   SessionContext& session_;
+  boost::asio::any_io_executor executor_;
   SendCallback send_callback_;
   SendNativeStreamCallback send_native_stream_callback_;
   SendDatagramCallback send_datagram_callback_;
-  PostCallback post_callback_;
 
   // Active outgoing streams (server-side)
   struct StreamInfo {

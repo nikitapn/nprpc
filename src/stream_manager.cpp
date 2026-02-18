@@ -26,8 +26,8 @@ uint64_t StreamManager::generate_stream_id()
   return random_base ^ (++counter);
 }
 
-StreamManager::StreamManager(SessionContext& session)
-    : session_(session)
+StreamManager::StreamManager(SessionContext& session, boost::asio::any_io_executor executor)
+    : session_(session), executor_(executor)
 {
 }
 
@@ -47,31 +47,20 @@ void StreamManager::register_stream(uint64_t stream_id,
 
   // Post the stream pumping to run asynchronously AFTER the reply is sent
   // This ensures the client receives the StreamInit reply before any data chunks
-  if (post_callback_) {
-    post_callback_([this, stream_id, raw_writer]() {
+  boost::asio::co_spawn(executor_,
+    [this, stream_id, raw_writer]() -> boost::asio::awaitable<void> {
       // Pump the stream - call resume() until the coroutine is done
       // Each resume() runs to the next co_yield and sends a chunk
       while (!raw_writer->is_done()) {
         raw_writer->resume();
+        // Yield to ioc between every chunk — processes incoming msgs, timers, etc.
+        co_await boost::asio::post(executor_, boost::asio::use_awaitable);
       }
-
-      // Clean up after completion
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        writers_.erase(stream_id);
-      }
-    });
-  } else {
-    // Fallback to synchronous if no post callback (shouldn't happen in normal use)
-    NPRPC_LOG_WARN("StreamManager: No post_callback set, pumping synchronously");
-    while (!raw_writer->is_done()) {
-      raw_writer->resume();
-    }
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard lock(mutex_);
       writers_.erase(stream_id);
-    }
-  }
+    },
+    boost::asio::detached
+  );
 }
 
 bool StreamManager::is_stream_unreliable(uint64_t stream_id) const

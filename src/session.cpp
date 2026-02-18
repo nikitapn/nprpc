@@ -42,7 +42,7 @@ Session::Session(boost::asio::any_io_executor executor)
     : timeout_timer_{executor}
     , inactive_timer_{executor}
 {
-  ctx_.stream_manager = new impl::StreamManager(ctx_);
+  ctx_.stream_manager = new impl::StreamManager(ctx_, executor);
   // Set up send callback for control messages - uses main stream
   ctx_.stream_manager->set_send_callback([this](flat_buffer&& fb) {
     this->send_main_stream_message(std::move(fb));
@@ -50,10 +50,6 @@ Session::Session(boost::asio::any_io_executor executor)
   // Set up native stream callback for data - uses native QUIC streams if available
   ctx_.stream_manager->set_send_native_stream_callback([this](flat_buffer&& fb) {
     this->send_stream_message(std::move(fb));
-  });
-  // Set up post callback - use executor to post async work
-  ctx_.stream_manager->set_post_callback([executor](std::function<void()> work) {
-    boost::asio::post(executor, std::move(work));
   });
 }
 
