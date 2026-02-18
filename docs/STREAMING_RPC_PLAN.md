@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add support for server-to-client streaming RPC calls, enabling efficient transfer of large files, logs, and continuous data streams over all NPRPC transports with C++20 coroutine support.
+Add support for all three streaming modes — server-to-client, client-to-server, and bidirectional — over all NPRPC transports with C++20 coroutine support on both sides.
 
 ## Goals
 
@@ -10,29 +10,49 @@ Add support for server-to-client streaming RPC calls, enabling efficient transfe
 2. **Backpressure** - Prevent unbounded buffering, allow client to control flow
 3. **Multiplexing** - Interleave stream chunks with regular RPC calls without blocking
 4. **Transport agnostic** - Work seamlessly over TCP, WebSocket, HTTP, shared memory, UDP (where applicable)
-5. **Clean API** - C++20 coroutines on server, async iterators on client
+5. **Clean API** - C++20 coroutines on server, async iterators/generators on client (C++, Swift, TypeScript)
 6. **Lifecycle management** - Proper cleanup on cancellation, errors, disconnection
+7. **All three streaming directions** - `server_stream`, `client_stream`, `bidi_stream`
 
 ## IDL Syntax
 
+Three streaming keywords are supported. All allow regular `in` parameters that are transmitted in the `StreamInit` handshake before the stream opens — the server can validate them and raise exceptions before any data flows.
+
 ```npidl
-interface TestStream {
-    // Server streams chunks until complete or cancelled
-    stream<vector<u8>> GetFile(filename: in string);
-    
-    // Multiple parameters allowed
-    stream<LogEntry> GetLogs(since: in u64, filter: in string);
-    
-    // Exceptions allowed
-    stream<DataChunk> GetData(id: in u32) raises (NotFound, PermissionDenied);
+interface FileServer {
+    // ── Server → Client ──────────────────────────────────────────────────────
+    // Server streams chunks until complete or cancelled.
+    // Renamed from the original `stream<T>` to be explicit.
+    server_stream<vector<u8>> DownloadFile(filename: in string);
+
+    // Multiple init parameters allowed
+    server_stream<LogEntry> GetLogs(since: in u64, filter: in string);
+
+    // Exceptions allowed (raised during StreamInit, before stream opens)
+    server_stream<DataChunk> GetData(id: in u32) raises (NotFound, PermissionDenied);
+
+    // ── Client → Server ──────────────────────────────────────────────────────
+    // Client streams chunks to server; server processes and returns a scalar reply.
+    // Init parameters describe the upload before bytes start flowing.
+    void UploadFile(fileName: in string, client_stream<vector<u8>> data);
+
+    // ── Bidirectional ─────────────────────────────────────────────────────────
+    // Both sides stream simultaneously over the same logical stream_id.
+    // Classic use-cases: TCP proxying, chat, shell-over-RPC.
+    bidi_stream<vector<u8>, vector<u8>> OpenTunnel(host: in string, port: in u16);
 }
 ```
 
 **Constraints:**
-- `stream<T>` only allowed as return type (not in/out parameters)
+- Stream types are only valid as the primary data channel of a method, not as arbitrary `in`/`out` parameters
+- `client_stream<T>` and `bidi_stream<In,Out>` replace the return type (the scalar reply is void or comes after the stream closes for `client_stream`)
 - Stream element type `T` must be a valid IDL type (primitives, messages, vectors)
-- Streams are unidirectional: server → client
-- Client can cancel at any time via explicit call or disconnect
+- Either side can cancel at any time; cancellation propagates to both ends
+- Initial `in` parameters (before stream opens) support the full exception mechanism
+
+### Backward compatibility
+
+The original `stream<T>` keyword is kept as an alias for `server_stream<T>` so existing IDL files continue to compile unchanged.
 
 ## Phase 1: Core Protocol & IDL (Week 1)
 
@@ -1083,11 +1103,159 @@ BENCHMARK(NPRPC_StreamFile_TCP);
 
 ## Future Enhancements (Post-v1)
 
-1. **Bidirectional streaming** - client can also stream to server
-2. **JavaScript/TypeScript support** - async iterators in browser/Node
-3. **Compression** - optional gzip/zstd for network transports
-4. **Resume capability** - restart interrupted transfers
-5. **Multi-stream parallel downloads** - split large files across streams
+1. **Compression** - optional gzip/zstd for network transports
+2. **Resume capability** - restart interrupted transfers
+3. **Multi-stream parallel downloads** - split large files across streams
+
+---
+
+## Phase 8: Client Streaming & Bidirectional Streams
+
+> **Status:** Planned. Server streaming (Phase 1–7) must be complete first.
+
+### 8.1 New IDL keywords
+
+| Keyword | Chunks: client→server | Chunks: server→client | Init args |
+|---|---|---|---|
+| `server_stream<T>` | — | ✓ | ✓ |
+| `client_stream<T>` | ✓ | — | ✓ |
+| `bidi_stream<In,Out>` | ✓ | ✓ | ✓ |
+
+### 8.2 Wire protocol change
+
+Add a `stream_kind` field to `StreamInit` (1 byte, no existing field reuse):
+
+```npidl
+message StreamInit {
+  stream_id: u64;
+  poa_idx: poa_idx_t;
+  interface_idx: ifs_idx_t;
+  object_id: oid_t;
+  func_idx: fn_idx_t;
+  stream_kind: u8;  // 0=server_stream, 1=client_stream, 2=bidi_stream  ← NEW
+  // init params follow (serialized as normal RPC args)
+}
+```
+
+Existing `StreamDataChunk` / `StreamCompletion` / `StreamError` / `StreamCancellation` messages are direction-agnostic and require **no changes** — they carry a `stream_id` and the routing logic in `StreamManager` determines who receives them.
+
+### 8.3 C++ runtime changes
+
+**`StreamManager`** (`include/nprpc/impl/stream_manager.hpp`):
+- `StreamInfo` gains an optional `StreamReaderBase* reader` for bidi streams (server also reads incoming chunks)
+- New `register_bidi_stream(stream_id, writer, reader)` method
+- `on_chunk_received` checks both `readers_` map and `writers_[id].reader` (bidi server reader)
+
+**New header `include/nprpc/bidi_stream.hpp`**:
+```cpp
+// Owning pair given to server-side bidi handler
+template<typename TIn, typename TOut>
+struct BidiStream {
+    StreamReader<TIn>  reader;   // server reads what client sends
+    StreamWriter<TOut> writer;   // server writes to client
+};
+```
+
+**Session dispatch** (`src/session.cpp`):
+- `handle_stream_init` checks `stream_kind` and calls the appropriate registration path
+
+### 8.4 Generated C++ stubs
+
+```cpp
+// client_stream — server receives, returns scalar after stream closes
+virtual nprpc::task<void> UploadFile(
+    std::string_view fileName,
+    nprpc::StreamReader<std::vector<uint8_t>>& stream) = 0;
+
+// Client proxy:
+nprpc::StreamWriter<std::vector<uint8_t>> UploadFile(std::string_view fileName);
+
+// bidi_stream — both sides active simultaneously
+virtual nprpc::task<void> OpenTunnel(
+    std::string_view host, uint16_t port,
+    nprpc::BidiStream<std::vector<uint8_t>, std::vector<uint8_t>>& stream) = 0;
+
+// Client proxy:
+std::pair<nprpc::StreamWriter<std::vector<uint8_t>>,
+          nprpc::StreamReader<std::vector<uint8_t>>>
+OpenTunnel(std::string_view host, uint16_t port);
+```
+
+### 8.5 TypeScript runtime changes
+
+**New `StreamWriter<T>`** (`nprpc_js/src/stream.ts`):
+```typescript
+export class StreamWriter<T> {
+  constructor(
+    private readonly connection: Connection,
+    private readonly stream_id: bigint,
+    private readonly serialize: (value: T) => Uint8Array
+  ) {}
+
+  async write(chunk: T): Promise<void> { /* send StreamDataChunk */ }
+  async close(): Promise<void>          { /* send StreamCompletion */ }
+  async abort(code: number): Promise<void> { /* send StreamError */ }
+}
+```
+
+**`Rpc.open_bidi_stream<In,Out>()`** (`nprpc_js/src/nprpc.ts`):
+```typescript
+public async open_bidi_stream<In, Out>(
+  endpoint, poa_idx, object_id, interface_idx, func_idx,
+  serialize: (v: In) => Uint8Array,
+  deserialize: (d: Uint8Array) => Out
+): Promise<{ writer: StreamWriter<In>; reader: StreamReader<Out> }>
+```
+
+### 8.6 Swift runtime changes
+
+- `StreamWriter<T>` class wrapping `AsyncStream.Continuation` — write pumps `send_chunk` on the session
+- `BidiStream<In, Out>` struct pairing reader + writer
+- Update `Poa.swift` dispatch to pass `BidiStream` for bidi methods
+- npidl Swift codegen for `bidi_stream<>` and `client_stream<>` methods
+
+### 8.7 npidl compiler changes
+
+- Parse `client_stream<T>` and `bidi_stream<In,Out>` in grammar
+- Extend `Method` AST node: `stream_kind: StreamKind` enum (`Server | Client | Bidi`), `stream_in_type`, `stream_out_type`
+- C++ codegen: emit `BidiStream<In,Out>` parameter for bidi, `StreamReader<T>` for client_stream
+- TS codegen: emit `open_bidi_stream(...)` / `open_client_stream(...)` calls
+- Swift codegen: emit `StreamWriter<T>` / `BidiStream<In,Out>` return types
+- Keep `stream<T>` as alias for `server_stream<T>`
+
+### 8.8 Motivating real-world example
+
+The `nscalc/idl/proxy.npidl` SOCKS5 proxy currently uses a `SessionCallbacks` reverse-servant pattern (register a callback object, get `OnDataReceived` called back). With bidi streams this collapses to:
+
+```npidl
+// Before: 3 interfaces, session_id coordination, reverse servant
+// After:
+interface User {
+  bidi_stream<vector<u8>, vector<u8>> OpenTunnel(host: in string, port: in u16);
+}
+```
+
+Benefits:
+- No `RegisterCallbacks` / `session_id` management
+- Each tunnel is an independent stream object (no shared mutable map)
+- Tunnel lifetime = stream lifetime (RAII)
+- Exception from `EstablishTunnel` (DNS error, refused) propagates in `StreamInit` reply before any data flows
+
+### 8.9 Execution order
+
+```
+1. IDL: add stream_kind to StreamInit, regenerate nprpc_base stubs    (30 min)
+2. C++: StreamManager bidi routing (register_bidi_stream)              (1–2 h)
+3. C++: BidiStream<In,Out> header + session dispatch                   (1 h)
+4. C++: client-side StreamWriter (wraps send_chunk on connection)      (1 h)
+5. npidl: parse new keywords, extend AST, emit C++ stubs               (2–3 h)
+6. TS: StreamWriter<T> + open_bidi_stream / open_client_stream         (1 h)
+7. npidl: emit TS stubs                                                (1 h)
+8. Swift: StreamWriter + BidiStream + codegen                          (2–3 h)
+9. Test: update proxy.npidl, write integration test                    (1–2 h)
+```
+
+All existing `server_stream` / `stream<T>` tests must continue passing throughout — the new paths are additive.
 
 ## Open Questions
 
