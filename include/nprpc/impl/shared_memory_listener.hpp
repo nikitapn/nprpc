@@ -29,18 +29,21 @@ struct SharedMemoryHandshake {
 
   uint32_t magic;
   uint32_t version;
-  char channel_id[64]; // UUID for the dedicated client-server channel
+  char channel_id[64];    // UUID for the dedicated client-server channel
+  char ready_flag_shm[64]; // Name of the client-owned one-page shm with the ready atomic
 
   SharedMemoryHandshake()
       : magic(MAGIC)
       , version(VERSION)
   {
-    channel_id[0] = '\0';
+    channel_id[0]     = '\0';
+    ready_flag_shm[0] = '\0';
   }
 
   bool is_valid() const
   {
-    return magic == MAGIC && version == VERSION && channel_id[0] != '\0';
+    return magic == MAGIC && version == VERSION &&
+           channel_id[0] != '\0' && ready_flag_shm[0] != '\0';
   }
 };
 

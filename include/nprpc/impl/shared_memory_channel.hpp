@@ -77,6 +77,14 @@ public:
 
   ~SharedMemoryChannel();
 
+  /**
+   * @brief Start the receive thread.
+   *
+   * Must be called after on_data_received / on_data_received_view is set,
+   * so the read loop never sees a null callback.
+   */
+  void start_reading();
+
   // Non-copyable, movable
   SharedMemoryChannel(const SharedMemoryChannel&) = delete;
   SharedMemoryChannel& operator=(const SharedMemoryChannel&) = delete;

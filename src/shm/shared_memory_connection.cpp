@@ -308,6 +308,9 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
     pop_and_execute_next_task();
   };
 
+  // All callbacks are wired — now it is safe to start the receive thread.
+  channel_->start_reading();
+
   start_timeout_timer();
 }
 

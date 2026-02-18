@@ -84,6 +84,7 @@ bool NodeWorkerManager::start(const std::string& handler_path,
         [this](const LockFreeRingBuffer::ReadView& view) {
           handle_response(view);
         };
+    channel_->start_reading();
 
     // Determine working directory - use parent of handler_path to find
     // node_modules Structure: client/build/index.js, node_modules is at

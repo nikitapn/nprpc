@@ -7,6 +7,9 @@
 #include <nprpc/impl/shared_memory_channel.hpp>
 #include <nprpc/impl/shared_memory_listener.hpp>
 
+#include <boost/interprocess/mapped_region.hpp>
+#include <boost/interprocess/shared_memory_object.hpp>
+
 namespace nprpc::impl {
 
 SharedMemoryListener::SharedMemoryListener(boost::asio::io_context& ioc,
@@ -132,6 +135,7 @@ void SharedMemoryListener::handle_connection_request(
     const SharedMemoryHandshake& handshake)
 {
   std::string channel_id(handshake.channel_id);
+  std::string ready_flag_shm(handshake.ready_flag_shm);
 
   NPRPC_LOG_INFO("SharedMemoryListener: Accepting connection on channel: {}",
                  channel_id);
@@ -145,10 +149,28 @@ void SharedMemoryListener::handle_connection_request(
     NPRPC_LOG_INFO("SharedMemoryListener: Channel created successfully: {}",
                    channel_id);
 
-    // Call accept handler immediately in this thread
-    // This ensures on_data_received is set before any messages arrive
+    // Wire up on_data_received BEFORE signaling the client.
+    // The channel's read_thread starts inside the ctor, so once the client
+    // is unblocked it can immediately send data — the handler must already
+    // be set at that point.
     if (accept_handler_) {
       accept_handler_(std::move(channel));
+    }
+
+    // Signal the client that the rings exist AND the server-side handler is
+    // fully installed. The release-store is the synchronization barrier:
+    // everything above is sequenced-before this store, and the client's
+    // acquire-load ensures it sees all of it.
+    try {
+      namespace bip = boost::interprocess;
+      bip::shared_memory_object ready_shm(
+          bip::open_only, ready_flag_shm.c_str(), bip::read_write);
+      bip::mapped_region ready_region(ready_shm, bip::read_write);
+      auto* flag = static_cast<std::atomic<uint32_t>*>(ready_region.get_address());
+      flag->store(1u, std::memory_order_release);
+    } catch (const std::exception& e) {
+      NPRPC_LOG_ERROR("SharedMemoryListener: Failed to signal ready flag: {}",
+                      e.what());
     }
 
   } catch (const std::exception& e) {
@@ -172,50 +194,70 @@ connect_to_shared_memory_listener(boost::asio::io_context& ioc,
   NPRPC_LOG_INFO("Connecting to listener: {} with channel: {}", listener_name,
                  channel_id);
 
-  // Create our side of the channel first (client doesn't create queues yet)
-  // We'll wait for the server to create them
+  // Create a one-page shm segment holding a single atomic<uint32_t>.
+  // The server will store 1 into it (release) once the ring buffers exist,
+  // so we can spin on it (acquire) instead of polling with sleeps.
+  namespace bip = boost::interprocess;
+  std::string ready_flag_name = "/nprpc_ready_" + channel_id;
+
+  bip::shared_memory_object::remove(ready_flag_name.c_str()); // clean up any stale
+  bip::shared_memory_object ready_shm(
+      bip::create_only, ready_flag_name.c_str(), bip::read_write);
+  ready_shm.truncate(sizeof(std::atomic<uint32_t>));
+  bip::mapped_region ready_region(ready_shm, bip::read_write);
+  auto* ready_flag = new (ready_region.get_address()) std::atomic<uint32_t>(0);
+
+  // RAII cleanup of the ready-flag shm on scope exit
+  auto cleanup_ready = [&]() noexcept {
+    try { bip::shared_memory_object::remove(ready_flag_name.c_str()); }
+    catch (...) {}
+  };
 
   // Prepare handshake
   SharedMemoryHandshake handshake;
   std::strncpy(handshake.channel_id, channel_id.c_str(),
                sizeof(handshake.channel_id) - 1);
   handshake.channel_id[sizeof(handshake.channel_id) - 1] = '\0';
+  std::strncpy(handshake.ready_flag_shm, ready_flag_name.c_str(),
+               sizeof(handshake.ready_flag_shm) - 1);
+  handshake.ready_flag_shm[sizeof(handshake.ready_flag_shm) - 1] = '\0';
 
   try {
-    // Open the listener's accept ring
+    // Open the listener's accept ring and send the connection request
     std::string accept_ring_name = make_shm_name(listener_name, "accept");
     auto accept_ring = LockFreeRingBuffer::open(accept_ring_name);
 
-    // Send connection request
     if (!accept_ring->try_write(&handshake, sizeof(handshake))) {
+      cleanup_ready();
       throw std::runtime_error("Failed to send connection request to "
                                "listener (ring buffer full)");
     }
 
-    NPRPC_LOG_INFO("Sent connection request, waiting for server to create ring "
-                   "buffers...");
+    NPRPC_LOG_INFO("Sent connection request, waiting for server ready signal...");
 
-    // Poll for ring buffer existence (wait for server to create them)
-    std::unique_ptr<SharedMemoryChannel> channel;
+    // Spin-wait for the server's release-store on the ready flag.
     auto start = std::chrono::steady_clock::now();
-
-    while (!channel) {
-      try {
-        channel = std::make_unique<SharedMemoryChannel>(ioc, channel_id,
-                                                        /*is_server=*/false,
-                                                        /*create_rings=*/false);
-        break;
-      } catch ([[maybe_unused]] const std::exception& ex) {
-        // Ring buffers don't exist yet, wait and retry
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-        auto elapsed = std::chrono::steady_clock::now() - start;
-        if (elapsed > std::chrono::seconds(5)) {
-          throw std::runtime_error(
-              "Timeout waiting for server to create ring buffers");
-        }
+    while (ready_flag->load(std::memory_order_acquire) == 0u) {
+#if defined(__x86_64__) || defined(__i386__)
+      __builtin_ia32_pause();
+#elif defined(__aarch64__) || defined(__arm__)
+      asm volatile("yield" ::: "memory");
+#endif
+      auto elapsed = std::chrono::steady_clock::now() - start;
+      if (elapsed > std::chrono::seconds(5)) {
+        cleanup_ready();
+        throw std::runtime_error(
+            "Timeout waiting for server to create ring buffers");
       }
     }
+    // At this point the server has completed all mmap/ring-buffer setup
+    // (sequenced-before the release store), so we can safely open them.
+    auto channel = std::make_unique<SharedMemoryChannel>(ioc, channel_id,
+                                                         /*is_server=*/false,
+                                                         /*create_rings=*/false);
+    // Caller sets on_data_received[_view] and then calls start_reading().
+    // We don't start it here because the callback isn't wired yet.
+    cleanup_ready();
 
     NPRPC_LOG_INFO("Connected to listener with dedicated channel: {}",
                    channel_id);
@@ -223,6 +265,7 @@ connect_to_shared_memory_listener(boost::asio::io_context& ioc,
     return channel;
 
   } catch (const std::exception& e) {
+    cleanup_ready();
     NPRPC_LOG_ERROR("Failed to connect to listener: {}", e.what());
     throw std::runtime_error(std::string("Connection failed: ") + e.what());
   }

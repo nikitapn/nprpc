@@ -42,9 +42,8 @@ SharedMemoryChannel::SharedMemoryChannel(boost::asio::io_context& ioc,
       std::cout << "Opened ring buffers: " << send_ring_name_ << ", "
                 << recv_ring_name_ << std::endl;
     }
-
-    // Start read thread with blocking read
-    read_thread_ = std::make_unique<std::thread>([this]() { read_loop(); });
+    // NOTE: read_thread_ is NOT started here.
+    // Call start_reading() after wiring up on_data_received[_view].
 
   } catch (const std::exception& e) {
     std::cerr << "Failed to create/open ring buffers: " << e.what()
@@ -53,6 +52,14 @@ SharedMemoryChannel::SharedMemoryChannel(boost::asio::io_context& ioc,
     throw std::runtime_error(
         std::string("SharedMemoryChannel initialization failed: ") + e.what());
   }
+}
+
+void SharedMemoryChannel::start_reading()
+{
+  if (read_thread_) {
+    return; // already started
+  }
+  read_thread_ = std::make_unique<std::thread>([this]() { read_loop(); });
 }
 
 SharedMemoryChannel::~SharedMemoryChannel()

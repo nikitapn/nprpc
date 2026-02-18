@@ -160,12 +160,15 @@ public:
    */
   void start()
   {
-    // Set up the channel to call our handler when data arrives
+    // Set up the channel to call our handler when data arrives.
+    // start_reading() is called AFTER the callback is set so the read
+    // thread never observes a null handler.
     channel_->on_data_received_view =
         [this, self = shared_from_this()](
             const LockFreeRingBuffer::ReadView& read_view) {
           on_message_received(read_view);
         };
+    channel_->start_reading();
   }
 
   ~SharedMemoryServerSession()
