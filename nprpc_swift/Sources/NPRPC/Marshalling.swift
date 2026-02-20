@@ -24,23 +24,6 @@ public func marshal_fundamental_vector<T>(buffer: FlatBuffer, offset: Int, vecto
     }
 }
 
-public func marshal_struct_vector<T>(
-    buffer: FlatBuffer,
-    offset: Int,
-    vector: [T],
-    elementSize: Int,
-    elementAlignment: Int,
-    marshalElement: (FlatBuffer, Int, T) -> Void
-) {
-    let dataOffset = _alloc(buffer: buffer, vectorOffset: offset, count: vector.count, elementSize: elementSize, align: elementAlignment)
-
-    if vector.count > 0 {
-        for (index, element) in vector.enumerated() {
-            marshalElement(buffer, dataOffset + index * elementSize, element)
-        }
-    }
-}
-
 public func unmarshal_fundamental_vector<T>(buffer: UnsafeRawPointer, offset: Int) -> [T] {
     let dataOffset = Int(buffer.load(fromByteOffset: offset + 0, as: UInt32.self)) + offset
     let count = Int(buffer.load(fromByteOffset: offset + 4, as: UInt32.self))
@@ -56,6 +39,23 @@ public func unmarshal_fundamental_vector<T>(buffer: UnsafeRawPointer, offset: In
     }
 
     return result
+}
+
+public func marshal_struct_vector<T>(
+    buffer: FlatBuffer,
+    offset: Int,
+    vector: [T],
+    elementSize: Int,
+    elementAlignment: Int,
+    marshalElement: (FlatBuffer, Int, T) -> Void
+) {
+    let dataOffset = _alloc(buffer: buffer, vectorOffset: offset, count: vector.count, elementSize: elementSize, align: elementAlignment)
+
+    if vector.count > 0 {
+        for (index, element) in vector.enumerated() {
+            marshalElement(buffer, dataOffset + index * elementSize, element)
+        }
+    }
 }
 
 public func unmarshal_struct_vector<T>(
@@ -81,11 +81,12 @@ public func unmarshal_struct_vector<T>(
 
 // MARK: - Array Marshalling
 
-public func marshal_fundamental_array<T>(buffer: UnsafeMutableRawPointer, offset: Int, array: [T]) {
+public func marshal_fundamental_array<T>(buffer: FlatBuffer, offset: Int, array: [T], count: Int) {
+    guard let data = buffer.data else { return }
     array.withUnsafeBytes { bytes in
-        buffer.advanced(by: offset).copyMemory(
+        data.advanced(by: offset).copyMemory(
             from: bytes.baseAddress!,
-            byteCount: array.count * MemoryLayout<T>.stride
+            byteCount: count * MemoryLayout<T>.stride
         )
     }
 }

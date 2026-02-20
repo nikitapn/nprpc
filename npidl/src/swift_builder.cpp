@@ -33,6 +33,11 @@ bool needs_marshalling(AstTypeDecl* type) {
 }
 } // anonymous namespace
 
+static std::string make_unique_variable_name(const std::string& base) {
+  static int counter = 0;
+  return base + std::to_string(counter++);
+}
+
 SwiftBuilder::SwiftBuilder(Context* ctx, std::filesystem::path out_dir)
     : Builder(ctx)
     , out_dir_(std::move(out_dir))
@@ -1413,12 +1418,19 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
     auto [ut_size, ut_align] = get_type_size_align(wt);
     const int field_offset = align_offset(v_align, offset, v_size);
 
+    // Check array size and warn if mismatch, then copy only what fits
+    out << bl() << "if " << field_access << ".count != " << arr->length << " {\n" << bb(false);
+    out << bl() << "print(\"Warning: Array field '" << f->name << "' has invalid size: expected " << arr->length << ", got \\(" << field_access << ".count). Copying only \\(min(" << field_access << ".count, " << arr->length << ")) elements.\")\n";
+    out << eb();
+    const std::string count_name = make_unique_variable_name("actualCount");
+    out << bl() << "let " << count_name << " = min(" << field_access << ".count, " << arr->length << ")\n";
+
     if (is_fundamental(wt)) {
-      out << bl() << "NPRPC.marshal_fundamental_array(buffer: buf, offset: offset + " << field_offset << ", array: " << field_access << ")\n";
+      out << bl() << "NPRPC.marshal_fundamental_array(buffer: buffer, offset: offset + " << field_offset << ", array: " << field_access << ", count: " << count_name << ")\n";
     } else {
       auto flat_struct = cflat(wt);
       std::string type_name = flat_struct ? flat_struct->name : "<unknown>";
-      out << bl() << "for i in 0..<" << arr->length << bb();
+      out << bl() << "for i in 0..<" << count_name << " " << bb();
       out << bl() << "marshal_" << type_name << "(buffer: buffer, offset: offset + " << field_offset << " + i * " << ut_size << ", data: " << field_access << "[i])\n";
       out << eb();
     }
@@ -1540,7 +1552,7 @@ void SwiftBuilder::emit_marshal_function(AstStructDecl* s)
       break;
     }
   }
-  
+
   if (needs_buf) {
     out << bl() << "guard let buf = buffer.data else { return }\n";
   }
@@ -1614,8 +1626,7 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
     if (is_fundamental(wt)) {
       out << bl() << field_name << " = NPRPC.unmarshal_fundamental_array(buffer: buffer, offset: offset + " << field_offset << ", count: " << arr->length << ")\n";
     } else {
-      out << bl() << field_name << " = (0..<" << arr->length << ").map { i in\n";
-      out << bb();
+      out << bl() << field_name << " = (0..<" << arr->length << ").map { i in\n" <<  bb(false);
       out << bl() << "unmarshal_" << cflat(wt)->name << "(buffer: buffer, offset: offset + " << field_offset << " + i * " << ut_size << ")\n";
       out << eb();
     }

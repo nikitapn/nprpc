@@ -15,7 +15,7 @@ final class IntegrationTests: XCTestCase {
         super.setUp()
         do {
             rpc = try RpcBuilder()
-                .setLogLevel(.info)
+                .setLogLevel(.warn)
                 .withHostname("localhost")
                 .withTcp(16000)
                 .withHttp(16001)
@@ -535,6 +535,177 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(nested.y.y.x, "level2")
         XCTAssertEqual(nested.y.y.y, [10, 20, 30, 40, 50])
         XCTAssertEqual(nested.y.y.z, 0xDEADBEEFCAFEBABE)
+    }
+
+    func testArrays() throws {
+        class TestArraysServantImpl: FixedSizeArrayTestServant {
+            var inFixedArray_receivedA: [UInt32] = []
+            var inFixedArrayOfStructs_receivedA: [SimpleStruct] = []
+
+            override func inFixedArray(a: [UInt32]) throws {
+                inFixedArray_receivedA = a
+             }
+
+            override func outFixedArray() throws -> [UInt32] {
+                return [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+            }
+
+            override func outTwoFixedArrays() throws -> ([UInt32], [UInt32]) {
+                return ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                    [10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
+            }
+
+            override func inFixedArrayOfStructs(a: [SimpleStruct]) throws {
+                inFixedArrayOfStructs_receivedA = a
+            }
+
+            override func outFixedArrayOfStructs() throws -> [SimpleStruct] {
+                return [
+                    SimpleStruct(id: 10),
+                    SimpleStruct(id: 20),
+                    SimpleStruct(id: 30),
+                    SimpleStruct(id: 40),
+                    SimpleStruct(id: 50)
+                ]
+            }
+
+            override func outTwoFixedArraysOfStructs() throws -> ([SimpleStruct], [AAA]) {
+                let array1 = [
+                    SimpleStruct(id: 1),
+                    SimpleStruct(id: 2),
+                    SimpleStruct(id: 3),
+                    SimpleStruct(id: 4),
+                    SimpleStruct(id: 5)
+                ]
+                let array2 = [
+                    AAA(a: 10, b: "a", c: "x"),
+                    AAA(a: 20, b: "b", c: "y"),
+                    AAA(a: 30, b: "c", c: "z"),
+                    AAA(a: 40, b: "d", c: "w"),
+                    AAA(a: 50, b: "e", c: "v")
+                ]
+                return (array1, array2)
+            }
+        }
+
+        let servant = TestArraysServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+        let client = narrow(obj, to: FixedSizeArrayTest.self)!
+        // Test InFixedArray
+        let fixedArray: [UInt32] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        try client.inFixedArray(a: fixedArray)
+        XCTAssertEqual(servant.inFixedArray_receivedA, fixedArray)
+
+        // Test OutFixedArray
+        let outArray = try client.outFixedArray()
+        XCTAssertEqual(outArray, [10, 20, 30, 40, 50, 60, 70, 80, 90, 100])
+
+        // Test OutTwoFixedArrays
+        let (outArray1, outArray2) = try client.outTwoFixedArrays()
+        XCTAssertEqual(outArray1, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        XCTAssertEqual(outArray2, [10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
+
+        // Test InFixedArrayOfStructs
+        let structArray = [
+            SimpleStruct(id: 1),
+            SimpleStruct(id: 2),
+            SimpleStruct(id: 3),
+            SimpleStruct(id: 4),
+            SimpleStruct(id: 5)
+        ]
+        try client.inFixedArrayOfStructs(a: structArray)
+        XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA.count, structArray.count)
+        for i in 0..<structArray.count {
+            XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[i].id, structArray[i].id)
+        }
+
+        // Test OutFixedArrayOfStructs
+        let outStructArray = try client.outFixedArrayOfStructs()
+        XCTAssertEqual(outStructArray.count, 5)
+        XCTAssertEqual(outStructArray[0].id, 10)
+        XCTAssertEqual(outStructArray[1].id, 20)
+        XCTAssertEqual(outStructArray[2].id, 30)
+        XCTAssertEqual(outStructArray[3].id, 40)
+        XCTAssertEqual(outStructArray[4].id, 50)
+
+        // Test OutTwoFixedArraysOfStructs
+        let (outStructArray1, outStructArray2) = try client.outTwoFixedArraysOfStructs()
+        XCTAssertEqual(outStructArray1.count, 5)
+        XCTAssertEqual(outStructArray1[0].id, 1)
+        XCTAssertEqual(outStructArray1[1].id, 2)
+        XCTAssertEqual(outStructArray1[2].id, 3)
+        XCTAssertEqual(outStructArray1[3].id, 4)
+        XCTAssertEqual(outStructArray1[4].id, 5)
+        XCTAssertEqual(outStructArray2.count, 5)
+        XCTAssertEqual(outStructArray2[0].a, 10)
+        XCTAssertEqual(outStructArray2[0].b, "a")
+        XCTAssertEqual(outStructArray2[0].c, "x")
+        XCTAssertEqual(outStructArray2[1].a, 20)
+        XCTAssertEqual(outStructArray2[1].b, "b")
+        XCTAssertEqual(outStructArray2[1].c, "y")
+        XCTAssertEqual(outStructArray2[2].a, 30)
+        XCTAssertEqual(outStructArray2[2].b, "c")
+        XCTAssertEqual(outStructArray2[2].c, "z")
+        XCTAssertEqual(outStructArray2[3].a, 40)
+        XCTAssertEqual(outStructArray2[3].b, "d")
+        XCTAssertEqual(outStructArray2[3].c, "w")
+        XCTAssertEqual(outStructArray2[4].a, 50)
+        XCTAssertEqual(outStructArray2[4].b, "e")
+        XCTAssertEqual(outStructArray2[4].c, "v")
+
+        // Tests that the servant correctly handles receiving arrays of the expected fixed size, and that it correctly returns arrays of the expected fixed size.
+        // The test also verifies that the contents of the arrays are correctly transmitted and received, ensuring that the marshalling and unmarshalling of fixed-size arrays works as intended.
+
+        // Test 1: Send array with FEWER elements than expected (3 instead of 10)
+        // Should print warning and copy only 3 elements
+        let smallArray: [UInt32] = [100, 200, 300]
+        try client.inFixedArray(a: smallArray)
+        XCTAssertEqual(servant.inFixedArray_receivedA.count, 10, "Should receive 5 elements sent")
+        XCTAssertEqual(servant.inFixedArray_receivedA[0], 100)
+        XCTAssertEqual(servant.inFixedArray_receivedA[1], 200)
+        XCTAssertEqual(servant.inFixedArray_receivedA[2], 300)
+
+        // Test 2: Send array with MORE elements than expected (12 instead of 10)
+        // Should print warning and copy only first 10 elements
+        let largeArray: [UInt32] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        try client.inFixedArray(a: largeArray)
+        XCTAssertEqual(servant.inFixedArray_receivedA.count, 10, "Should receive only 10 elements (max size)")
+        for i in 0..<10 {
+            XCTAssertEqual(servant.inFixedArray_receivedA[i], UInt32(i + 1), "Element \(i) should be \(i + 1)")
+        }
+
+        // Test 3: Send struct array with fewer elements (3 instead of 10)
+        let smallStructArray = [
+            SimpleStruct(id: 42),
+            SimpleStruct(id: 43),
+            SimpleStruct(id: 44)
+        ]
+        try client.inFixedArrayOfStructs(a: smallStructArray)
+        XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA.count, 5, "Should receive 5 struct elements sent")
+        // The first 3 elements should be from the sent array, and the remaining should be garbage/default values (since the servant's array is fixed size 5)
+        XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[0].id, 42)
+        XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[1].id, 43)
+        XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[2].id, 44)
+
+        // Test 4: Send struct array with more elements (7 instead of 5)
+        let largeStructArray = [
+            SimpleStruct(id: 1),
+            SimpleStruct(id: 2),
+            SimpleStruct(id: 3),
+            SimpleStruct(id: 4),
+            SimpleStruct(id: 5),
+            SimpleStruct(id: 6),
+            SimpleStruct(id: 7),
+        ]
+        try client.inFixedArrayOfStructs(a: largeStructArray)
+        XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA.count, 5, "Should receive only 5 struct elements (max size)")
+        for i in 0..<5 {
+            XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[i].id, UInt32(i + 1), "Element \(i) should be \(i + 1)")
+        }
     }
 
     func testObjects() async throws {

@@ -180,3 +180,14 @@ interface AsyncTest {
 	// In C++ the exception would be in the callback parameters.
 	// async Method3(arg1: u32) raises (AssertionFailed);
 }
+
+interface FixedSizeArrayTest {
+	// Test fixed size array of 10 integers
+	void InFixedArray(a: u32[10]) raises (AssertionFailed);
+	void OutFixedArray(a: out u32[10]) raises (AssertionFailed);
+	void OutTwoFixedArrays(a: out u32[10], b: out u32[10]) raises (AssertionFailed);
+
+	void InFixedArrayOfStructs(a: SimpleStruct[5]) raises (AssertionFailed);
+	void OutFixedArrayOfStructs(a: out SimpleStruct[5]) raises (AssertionFailed);
+	void OutTwoFixedArraysOfStructs(a: out SimpleStruct[5], b: out AAA[5]) raises (AssertionFailed);
+}
