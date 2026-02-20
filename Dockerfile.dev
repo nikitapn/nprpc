@@ -131,6 +131,37 @@ COPY --from=swift-builder /workspace/nprpc_swift /opt/nprpc_swift
 # Copy built Swift artifacts
 COPY --from=swift-builder /workspace/nprpc_swift/.build/release /opt/nprpc_swift/.build/release
 
+# ---------------------------------------------------------------------------
+# Swap in the installed Package.swift (uses .systemLibrary for CNprpc) so
+# downstream packages never recompile nprpc_bridge.cpp.
+# The build Package.swift (with .target) was used above in swift-builder.
+# Also create module.modulemap + pkg-config for the .systemLibrary target.
+# ---------------------------------------------------------------------------
+COPY --from=swift-builder /workspace/nprpc_swift/Package.installed.swift /opt/nprpc_swift/Package.swift
+RUN cat > /opt/nprpc_swift/Sources/CNprpc/module.modulemap << 'EOF'
+module CNprpc {
+    header "include/nprpc_bridge.hpp"
+    export *
+}
+EOF
+
+RUN cat > /opt/nprpc/lib/pkgconfig/nprpc-swift.pc << 'EOF'
+Name: nprpc-swift
+Description: NPRPC C++ bridge for Swift (pre-built)
+Version: 1.0.0
+Cflags: -I/opt/nprpc/include -I/opt/boost/include -std=c++23
+Libs: -L/opt/nprpc/lib -L/opt/boost/lib -lnprpc -lssl -lcrypto -Wl,-rpath,/opt/nprpc/lib -Wl,-rpath,/opt/boost/lib
+EOF
+
+# ---------------------------------------------------------------------------
+# swift:6.2.3 already ships an 'ubuntu' user at UID/GID 1000.
+# Make /opt trees group-readable and give ubuntu ownership of /project so
+# `docker run --user $(id -u):$(id -g)` writes .build/ files as the host user.
+# ---------------------------------------------------------------------------
+RUN chown -R root:ubuntu /opt/nprpc /opt/nprpc_swift /opt/boost && \
+    chmod -R g+rX /opt/nprpc /opt/nprpc_swift /opt/boost && \
+    mkdir -p /project && chown ubuntu:ubuntu /project
+
 # Set environment variables for easy discovery
 ENV BOOST_ROOT=/opt/boost
 ENV NPRPC_ROOT=/opt/nprpc
@@ -146,6 +177,7 @@ set(nprpc_DIR /opt/nprpc/lib/cmake/nprpc)\n\
 list(APPEND CMAKE_PREFIX_PATH /opt/nprpc)\n\
 list(APPEND CMAKE_PREFIX_PATH /opt/boost)\n" > /opt/nprpc-toolchain.cmake
 
+USER ubuntu
 WORKDIR /project
 
 # Verify installation
@@ -153,6 +185,8 @@ RUN npidl --version && echo "✓ npidl installed" && \
     test -f /opt/nprpc/lib/libnprpc.so && echo "✓ libnprpc.so found" && \
     test -d /opt/nprpc/include/nprpc && echo "✓ Headers found" && \
     test -f /opt/nprpc_swift/Package.swift && echo "✓ Swift package found" && \
+    test -f /opt/nprpc_swift/Sources/CNprpc/module.modulemap && echo "✓ CNprpc modulemap found" && \
+    test -f /opt/nprpc/lib/pkgconfig/nprpc-swift.pc && echo "✓ pkg-config nprpc-swift found" && \
     swift --version
 
 CMD ["/bin/bash"]
