@@ -333,10 +333,19 @@ void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type,
 void CppBuilder::emit_parameter_type_for_servant_callback(AstFunctionArgument* arg,
                                                           std::ostream& os)
 {
-  auto const input = (arg->modifier == ArgumentModifier::In);
+  auto const input = arg->modifier == ArgumentModifier::In;
+
   emit_parameter_type_for_servant_callback_r(arg->type, os, input);
-  if (!input && (arg->type->id != FieldType::Vector && arg->type->id != FieldType::Object &&
-                 arg->type->id != FieldType::String && arg->type->id != FieldType::Optional && arg->type->id != FieldType::Struct)) {
+
+  // These are always passed as Direct types, so no need for reference
+  if (!input &&
+      arg->type->id != FieldType::Vector &&
+      arg->type->id != FieldType::Array &&
+      arg->type->id != FieldType::Object &&
+      arg->type->id != FieldType::String &&
+      arg->type->id != FieldType::Optional &&
+      arg->type->id != FieldType::Struct)
+  {
     os << '&';
   }
 }
@@ -520,9 +529,12 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
     [[fallthrough]];
   case FieldType::Array: {
     auto wt = cwt(type)->type;
+    // Vectors need parentheses to call the .data() method, while arrays don't
+    const std::string_view vec_accessor =
+      type->id == FieldType::Array ? accessor : "().";
     if (is_flat(wt)) {
       auto [size, align] = get_type_size_align(wt);
-      os << bd << "memcpy(" << op1 << "().data(), " << op2 << ".data(), " << op2 << ".size() * "
+      os << bd << "memcpy(" << op1 << vec_accessor << "data(), " << op2 << ".data(), " << op2 << ".size() * "
          << size << ");\n";
     } else if (wt->id == FieldType::String) {
       os << bd << "{\n"
@@ -536,7 +548,7 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
       os << bd << "++it;\n" << (bd -= 1) << "}\n" << (bd -= 1) << "}\n";
     } else {
       os << bd << "{\n"
-         << (bd += 1) << "auto span = " << op1 << "();\n"
+         << (bd += 1) << "auto span = " << op1 << (type->id == FieldType::Array ? ";\n" : "();\n")
          << bd << "auto it = " << op2 << ".begin();\n"
          << bd << "for (auto e : span) {\n";
 
@@ -1811,7 +1823,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       auto real_type = arg->type;
       if (real_type->id == FieldType::Alias)
         real_type = calias(real_type)->get_real_type();
-      return real_type->id == FieldType::Struct;
+      return real_type->id == FieldType::Struct || real_type->id == FieldType::Array;
     };
 
     // For flat output structs with Struct-type outputs, we need to prepare

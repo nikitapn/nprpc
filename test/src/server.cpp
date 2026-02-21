@@ -78,6 +78,10 @@ int main(int argc, char** argv)
   TestObjectsImpl test_objects(nprpctest::poa);
   nprpctest::bind<nprpc::test::TestObjects>(test_objects, flags, "nprpc_test_objects");
 
+  #include "common/tests/fixed_arrays.inl"
+  TestFixedSizeArrayTestImpl test_fixed_size_array_test;
+  nprpctest::bind<nprpc::test::FixedSizeArrayTest>( test_fixed_size_array_test, flags, "nprpc_test_fixed_size_array_test");
+
   // Capture interrupt signal to allow graceful shutdown
   signal(SIGINT, [](int signum) {
     std::cout << "Interrupt signal (" << signum << ") received." << std::endl;

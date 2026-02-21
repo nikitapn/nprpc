@@ -211,6 +211,69 @@ TEST_F(NprpcTest, TestNested)
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
+TEST_F(NprpcTest, TestFixedSizeArrays)
+{
+  #include "common/tests/fixed_arrays.inl"
+  TestFixedSizeArrayTestImpl servant;
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+    try {
+      auto obj = bind_and_resolve<nprpc::test::FixedSizeArrayTest>(servant, flags);
+
+      std::array<uint32_t, 10> input_array;
+      std::iota(input_array.begin(), input_array.end(), 1); // Fill with 1,2,3,4,5,6,7,8,9,10
+
+      // InFixedArray test - verifies that fixed-size array is correctly received and that data is not corrupted
+      obj->InFixedArray(input_array);
+
+      // OutFixedArray test - verifies that fixed-size array is correctly handled in both directions and that data is not corrupted
+      obj->OutFixedArray(input_array);
+      for (size_t i = 0; i < input_array.size(); ++i) {
+        EXPECT_EQ(input_array[i], i + 1);
+      }
+
+      // OutTwoFixedArrays test - verifies that multiple fixed-size arrays are correctly handled and that data is not corrupted
+      std::array<uint32_t, 10> second_array;
+      obj->OutTwoFixedArrays(input_array, second_array);
+      for (size_t i = 0; i < input_array.size(); ++i) {
+        EXPECT_EQ(input_array[i], i + 1);
+        EXPECT_EQ(second_array[i], (i + 1) * 10);
+      }
+
+      // InFixedArrayOfStructs test - verifies that fixed-size array of structs is correctly received and that data is not corrupted
+      std::array<nprpc::test::SimpleStruct, 5> struct_array;
+      for (size_t i = 0; i < struct_array.size(); ++i) {
+        struct_array[i].id = i + 1;
+      }
+      obj->InFixedArrayOfStructs(struct_array);
+
+      // OutFixedArrayOfStructs test - verifies that fixed-size array of structs is correctly handled in both directions and that data is not corrupted
+      obj->OutFixedArrayOfStructs(struct_array);
+      for (size_t i = 0; i < struct_array.size(); ++i) {
+        EXPECT_EQ(struct_array[i].id, i + 1);
+      }
+
+      // OutTwoFixedArraysOfStructs test - verifies that multiple fixed-size arrays of structs are correctly handled and that data is not corrupted
+      std::array<nprpc::test::AAA, 5> aaa_array;
+      obj->OutTwoFixedArraysOfStructs(struct_array, aaa_array);
+      for (size_t i = 0; i < struct_array.size(); ++i) {
+        EXPECT_EQ(struct_array[i].id, i + 1);
+        EXPECT_EQ(aaa_array[i].a, (i + 1) * 10);
+        EXPECT_EQ(std::string_view(aaa_array[i].b),
+          std::string_view("str" + std::to_string((i + 1))));
+        EXPECT_EQ(std::string_view(aaa_array[i].c),
+          std::string_view("str" + std::to_string((i + 1) * 100)));
+      }
+    } catch (nprpc::Exception& ex) {
+      FAIL() << "Exception in TestFixedSizeArrays: " << ex.what();
+    }
+  };
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+}
+
 // Large message test to verify async_write fix for messages >2.6MB
 TEST_F(NprpcTest, TestLargeMessage)
 {

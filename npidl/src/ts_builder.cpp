@@ -228,6 +228,11 @@ static std::string_view fundamental_to_ts(TokenId id)
   }
 }
 
+static std::string make_unique_variable_name(const std::string& base) {
+  static int counter = 0;
+  return base + std::to_string(counter++);
+}
+
 static std::string_view get_typed_array_name(TokenId id)
 {
   switch (id) {
@@ -1624,10 +1629,11 @@ void TSBuilder::emit_field_marshal(AstFieldDecl* f,
       // For fixed-size arrays of fundamentals, copy data directly to
       // buffer
       auto typed_array_name = get_typed_array_name(cft(wt)->token_id);
-      out << bl() << "const __arr = new " << typed_array_name
+      auto __arr = make_unique_variable_name("__arr");
+      out << bl() << "const " << __arr << " = new " << typed_array_name
           << "(buf.array_buffer, offset + " << field_offset << ", "
           << arr->length << ");\n";
-      out << bl() << "__arr.set(" << field_access << ");\n";
+      out << bl() << __arr << ".set(" << field_access << ");\n";
     } else if (wt->id == FieldType::Struct) {
       // For fixed-size arrays of structs, marshal each element in place
       out << bl() << "for (let i = 0; i < " << arr->length << "; ++i) {\n"

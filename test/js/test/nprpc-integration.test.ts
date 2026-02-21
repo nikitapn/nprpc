@@ -352,6 +352,98 @@ describe('NPRPC Integration Tests', function() {
 
     }); // describe TestObjects
 
+    describe('FixedSizeArrayTest Interface', function() {
+        let testFixedArrays: test.FixedSizeArrayTest;
+
+        before(async function() {
+            testFixedArrays = await resolveTestObject('nprpc_test_fixed_size_array_test', test.FixedSizeArrayTest);
+        });
+
+        it('should accept a fixed-size array of uint32', async function() {
+            const input = new Uint32Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+            // Servant validates elements are 1..10 and throws AssertionFailed otherwise
+            await testFixedArrays.InFixedArray(input);
+        });
+
+        it('should return a fixed-size array of uint32', async function() {
+            const aRef = NPRPC.make_ref<Uint32Array>();
+            await testFixedArrays.OutFixedArray(aRef);
+            expect(aRef.value).to.be.instanceOf(Uint32Array);
+            expect(aRef.value.length).to.equal(10);
+            for (let i = 0; i < 10; i++) {
+                expect(aRef.value[i]).to.equal(i + 1);
+            }
+        });
+
+        it('should return two fixed-size arrays of uint32', async function() {
+            const aRef = NPRPC.make_ref<Uint32Array>();
+            const bRef = NPRPC.make_ref<Uint32Array>();
+            await testFixedArrays.OutTwoFixedArrays(aRef, bRef);
+            expect(aRef.value).to.be.instanceOf(Uint32Array);
+            expect(bRef.value).to.be.instanceOf(Uint32Array);
+            expect(aRef.value.length).to.equal(10);
+            expect(bRef.value.length).to.equal(10);
+            for (let i = 0; i < 10; i++) {
+                expect(aRef.value[i]).to.equal(i + 1);
+                expect(bRef.value[i]).to.equal((i + 1) * 10);
+            }
+        });
+
+        it('should accept a fixed-size array of structs', async function() {
+            const input: test.SimpleStruct[] = [];
+            for (let i = 0; i < 5; i++) {
+                input.push({ id: i + 1 });
+            }
+            // Servant validates id == i+1 and throws AssertionFailed otherwise
+            await testFixedArrays.InFixedArrayOfStructs(input);
+        });
+
+        it('should return a fixed-size array of structs', async function() {
+            const aRef = NPRPC.make_ref<test.SimpleStruct[]>();
+            await testFixedArrays.OutFixedArrayOfStructs(aRef);
+            expect(aRef.value).to.be.an('array').with.lengthOf(5);
+            for (let i = 0; i < 5; i++) {
+                expect(aRef.value[i].id).to.equal(i + 1);
+            }
+        });
+
+        it('should return two fixed-size arrays of structs', async function() {
+            const aRef = NPRPC.make_ref<test.SimpleStruct[]>();
+            const bRef = NPRPC.make_ref<test.AAA[]>();
+            await testFixedArrays.OutTwoFixedArraysOfStructs(aRef, bRef);
+            expect(aRef.value).to.be.an('array').with.lengthOf(5);
+            expect(bRef.value).to.be.an('array').with.lengthOf(5);
+            for (let i = 0; i < 5; i++) {
+                expect(aRef.value[i].id).to.equal(i + 1);
+                expect(bRef.value[i].a).to.equal((i + 1) * 10);
+                expect(bRef.value[i].b).to.equal(`str${i + 1}`);
+                expect(bRef.value[i].c).to.equal(`str${(i + 1) * 100}`);
+            }
+        });
+
+        it('should throw AssertionFailed when input array has wrong size', async function() {
+            // Send 5 elements instead of 10 - servant will throw AssertionFailed
+            const tooSmall = new Uint32Array([1, 2, 3, 4, 5]);
+            try {
+                await testFixedArrays.InFixedArray(tooSmall);
+                expect.fail('Expected AssertionFailed to be thrown');
+            } catch (error) {
+                console.log('InFixedArray call failed as expected:', error);
+            }
+        });
+
+        it('should throw AssertionFailed when input struct array has wrong size', async function() {
+            // Send 3 structs instead of 5
+            const tooSmall: test.SimpleStruct[] = [{ id: 1 }, { id: 2 }, { id: 3 }];
+            try {
+                await testFixedArrays.InFixedArrayOfStructs(tooSmall);
+                expect.fail('Expected AssertionFailed to be thrown');
+            } catch (error) {
+                console.log('InFixedArrayOfStructs call failed as expected:', error);
+            }
+        });
+    }); // describe FixedSizeArrayTest
+
     describe('HTTP Transport', function() {
         let testBasic: test.TestBasic;
         let testOptional: test.TestOptional;

@@ -167,6 +167,8 @@ template <class T, class TD> struct Span_ref {
   Ptr_ref begin() { return {buffer, first}; }
   Ptr_ref end() { return {buffer, last}; }
 
+  Ptr_ref operator[](size_t i) { return {buffer, first + static_cast<std::uint32_t>(i * sizeof(T))}; }
+
   auto size() const noexcept { return (last - first) / sizeof(T); }
 
   Span_ref(flat_buffer& b,
