@@ -100,6 +100,11 @@ RUN swift build -c release \
     -Xlinker -rpath=/opt/boost/lib \
     -Xlinker -rpath=/opt/nprpc/lib
 
+# Archive the compiled bridge object so downstream packages can link it
+# without recompiling nprpc_bridge.cpp.
+RUN ar rcs /opt/nprpc/lib/libCNprpc.a \
+    .build/release/CNprpc.build/nprpc_bridge.cpp.o
+
 # ============================================================================
 # Stage 4: Final runtime image with all artifacts
 # ============================================================================
@@ -125,6 +130,9 @@ COPY --from=boost-builder /opt/boost /opt/boost
 # Copy NPRPC C++ artifacts (libs, headers, tools, cmake configs)
 COPY --from=nprpc-builder /opt/nprpc /opt/nprpc
 
+# Copy the compiled bridge static library from swift-builder
+COPY --from=swift-builder /opt/nprpc/lib/libCNprpc.a /opt/nprpc/lib/libCNprpc.a
+
 # Copy Swift package source for dependent projects
 COPY --from=swift-builder /workspace/nprpc_swift /opt/nprpc_swift
 
@@ -149,8 +157,8 @@ RUN cat > /opt/nprpc/lib/pkgconfig/nprpc-swift.pc << 'EOF'
 Name: nprpc-swift
 Description: NPRPC C++ bridge for Swift (pre-built)
 Version: 1.0.0
-Cflags: -I/opt/nprpc/include -I/opt/boost/include -std=c++23
-Libs: -L/opt/nprpc/lib -L/opt/boost/lib -lnprpc -lssl -lcrypto -Wl,-rpath,/opt/nprpc/lib -Wl,-rpath,/opt/boost/lib
+Cflags: -I/opt/nprpc/include -I/opt/boost/include
+Libs: -L/opt/nprpc/lib -L/opt/boost/lib -lCNprpc -lnprpc -lssl -lcrypto
 EOF
 
 # ---------------------------------------------------------------------------
@@ -183,6 +191,7 @@ WORKDIR /project
 # Verify installation
 RUN npidl --version && echo "✓ npidl installed" && \
     test -f /opt/nprpc/lib/libnprpc.so && echo "✓ libnprpc.so found" && \
+    test -f /opt/nprpc/lib/libCNprpc.a  && echo "✓ libCNprpc.a found" && \
     test -d /opt/nprpc/include/nprpc && echo "✓ Headers found" && \
     test -f /opt/nprpc_swift/Package.swift && echo "✓ Swift package found" && \
     test -f /opt/nprpc_swift/Sources/CNprpc/module.modulemap && echo "✓ CNprpc modulemap found" && \
