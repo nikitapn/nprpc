@@ -933,6 +933,26 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
 
     out << bl() << "buf.write_len(buf.size - 4);\n";
 
+    // Debug hook: record call start
+    out << bl() << "const __dbg_t0 = Date.now();\n";
+    out << bl() << "const __dbg_id = (globalThis as any).__nprpc_debug?.call_start({direction:'client',"
+        << "class_id:_" << servant_iname << "._get_class(),"
+        << "poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),interface_idx,"
+        << "func_idx:" << fn->idx << ",method_name:'" << fn->name << "',"
+        << "endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,"
+           "transport:NPRPC.EndPoint.to_string(this.endpoint.type).replace('://','') as any},"
+        << "request_args:{";  
+    {
+      bool _dbg_first = true;
+      for (auto _dbg_a : fn->args) {
+        if (_dbg_a->modifier == ArgumentModifier::Out) continue;
+        if (!_dbg_first) out << ",";
+        out << _dbg_a->name << ":" << _dbg_a->name;
+        _dbg_first = false;
+      }
+    }
+    out << "},request_bytes:buf.size});\n";
+
     out << bl() << "await NPRPC.rpc.call(this.endpoint, buf, this.timeout);\n"
         << bl() << "let std_reply = NPRPC.handle_standart_reply(buf);\n";
 
@@ -999,10 +1019,18 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       }
 
       if (!fn->is_void()) {
+        // Debug hook: call_end with response payload before returning
+        out << bl() << "(globalThis as any).__nprpc_debug?.call_end(__dbg_id,"
+            << "{status:'success',duration_ms:Date.now()-__dbg_t0,response_bytes:buf.size,response_args:out});\n";
         out << bl() << "return out._1;\n";
       }
     }
 
+    // Debug hook: call_end for void-return path (no out_s, or out_s with void return)
+    if (fn->is_void()) {
+      out << bl() << "(globalThis as any).__nprpc_debug?.call_end(__dbg_id,"
+          << "{status:'success',duration_ms:Date.now()-__dbg_t0,response_bytes:buf.size});\n";
+    }
     out << eb(); // function
   }
 
@@ -1120,6 +1148,26 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
 
     out << bl() << "buf.write_len(buf.size - 4);\n\n";
 
+    // Debug hook: call_start before fetch
+    out << bl() << "const __dbg_t0 = Date.now();\n";
+    out << bl() << "const __dbg_id = (globalThis as any).__nprpc_debug?.call_start({direction:'client',"
+        << "class_id:_" << servant_iname << "._get_class(),"
+        << "poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),"
+        << "interface_idx:0,func_idx:" << fn->idx << ",method_name:'" << fn->name << "',"
+        << "endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,"
+           "transport:'http'},"
+        << "request_args:{";
+    {
+      bool _dbg_first = true;
+      for (auto _dbg_a : fn->args) {
+        if (_dbg_a->modifier == ArgumentModifier::Out) continue;
+        if (!_dbg_first) out << ",";
+        out << _dbg_a->name << ":" << _dbg_a->name;
+        _dbg_first = false;
+      }
+    }
+    out << "},request_bytes:buf.size});\n\n";
+
     // HTTP fetch instead of WebSocket
     out << bl()
         << "const url = `http${this.endpoint.is_ssl() ? 's' : "
@@ -1146,6 +1194,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       out << bl()
           << "if (std_reply != 0) throw new NPRPC.Exception(\"Unexpected "
              "reply\");\n";
+      out << bl() << "(globalThis as any).__nprpc_debug?.call_end(__dbg_id,"
+          << "{status:'success',duration_ms:Date.now()-__dbg_t0,response_bytes:buf.size});\n";
     } else {
       out << bl()
           << "if (std_reply != -1) throw new "
@@ -1181,12 +1231,16 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
           out_count++;
       }
 
+      const auto dbg_end_http = "(globalThis as any).__nprpc_debug?.call_end(__dbg_id,"
+                            "{status:'success',duration_ms:Date.now()-__dbg_t0,response_bytes:buf.size";
       if (has_ret && out_count == 0) {
+        out << bl() << dbg_end_http << ",response_args:out});\n";
         out << bl() << "return out._1;\n";
       } else if (!has_ret && out_count == 1) {
         // Single out param - always at _1 in output struct
         for (auto arg : fn->args) {
           if (arg->modifier == ArgumentModifier::Out) {
+            out << bl() << dbg_end_http << ",response_args:out});\n";
             if (arg->type->id == FieldType::Object) {
               out << bl()
                   << "return "
@@ -1200,6 +1254,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
         }
       } else {
         // Multiple returns - build object
+        out << bl() << dbg_end_http << ",response_args:out});\n";
         out << bl() << "return {";
         bool first_field = true;
         if (has_ret) {
@@ -1373,6 +1428,22 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
     if (!fn->is_void())
       emit_variable(fn->ret_value, "__ret_val", out);
 
+    // Debug hook: declared before try so __dbg_t0/__dbg_id are visible in catch
+    out << bl() << "const __dbg_t0 = Date.now();\n";
+    out << bl() << "const __dbg_id = (globalThis as any).__nprpc_debug?.call_start({direction:'server',"
+        << "class_id:_" << servant_iname << "._get_class(),"
+        << "poa_idx:obj.poa.index,object_id:String(obj.oid),"
+        << "interface_idx:0,func_idx:" << fn->idx << ",method_name:'" << fn->name << "',"
+        << "endpoint:{hostname:remote_endpoint.hostname,port:remote_endpoint.port,"
+           "transport:NPRPC.EndPoint.to_string(remote_endpoint.type).replace('://','') as any},"
+        << "request_args:";
+    if (fn->in_s) {
+      out << "ia";
+    } else {
+      out << "{}";
+    }
+    out << "});\n";
+
     if (fn->ex)
       out << bl() << "try {\n" << bb(false);
 
@@ -1448,10 +1519,14 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       out << bl() << "obuf.write_len(obuf.size - 4);\n"
           << bl() << "obuf.write_msg_id(NPRPC.impl.MessageId.Exception);\n"
           << bl() << "obuf.write_msg_type(NPRPC.impl.MessageType.Answer);\n"
+          << bl() << "(globalThis as any).__nprpc_debug?.call_end(__dbg_id,{status:'error',duration_ms:Date.now()-__dbg_t0,error:String(e)});\n"
           << bl() << "return;\n"
           << eb() // catch
           ;
     }
+    // Debug hook: call_end for success path
+    out << bl() << "(globalThis as any).__nprpc_debug?.call_end(__dbg_id,{status:'success',duration_ms:Date.now()-__dbg_t0});\n";
+
     if (!fn->out_s) {
       out << bl()
           << "NPRPC.make_simple_answer(buf, "
