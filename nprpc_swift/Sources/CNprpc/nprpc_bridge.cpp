@@ -12,6 +12,7 @@
 #include <nprpc/impl/stream_manager.hpp>
 #include <nprpc/impl/session.hpp>
 #include <nprpc/session_context.h>
+#include <nprpc/http_auth.hpp>
 
 // Use nprpc's internal logger for synchronized output
 #include "../../../src/logging.hpp"
@@ -1066,6 +1067,60 @@ int nprpc_stream_send_init(
     } catch (...) {
         return -1;
     }
+}
+
+} // extern "C"
+// ============================================================================
+// HTTP Cookie bridge implementations
+// ============================================================================
+
+extern "C" {
+
+// Thread-local buffer so the returned pointer stays valid until the next call.
+static thread_local std::string g_cookie_value;
+
+const char* nprpc_http_get_cookie(const char* name)
+{
+    if (!name) return nullptr;
+    auto val = nprpc::http::get_cookie(name);
+    if (!val.has_value()) return nullptr;
+    g_cookie_value = std::move(*val);
+    return g_cookie_value.c_str();
+}
+
+void nprpc_http_set_cookie(
+    const char* name,
+    const char* value,
+    bool        http_only,
+    bool        secure,
+    const char* same_site,
+    int32_t     max_age_seconds,
+    const char* path,
+    const char* domain)
+{
+    if (!name || !value) return;
+    nprpc::http::CookieOptions opts;
+    opts.http_only  = http_only;
+    opts.secure     = secure;
+    opts.same_site  = same_site  ? same_site  : "Strict";
+    opts.max_age    = max_age_seconds >= 0
+                        ? std::optional<int>(max_age_seconds)
+                        : std::nullopt;
+    opts.path       = (path   && path[0])   ? path   : "/";
+    opts.domain     = (domain && domain[0]) ? domain : "";
+    nprpc::http::set_cookie(name, value, opts);
+}
+
+void nprpc_http_clear_cookie(
+    const char* name,
+    const char* path,
+    const char* domain)
+{
+    if (!name) return;
+    nprpc::http::clear_cookie(
+        name,
+        (path   && path[0])   ? std::string_view(path)   : "/",
+        (domain && domain[0]) ? std::string_view(domain) : "");
 }
 
 } // extern "C"

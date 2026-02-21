@@ -5,6 +5,8 @@
 
 #include <boost/asio.hpp>
 #include <memory>
+#include <string_view>
+#include <vector>
 #include <nprpc/common.hpp>
 #include <nprpc/impl/session.hpp>
 
@@ -49,7 +51,9 @@ public:
    * @return true if processed successfully, false on error
    */
   bool process_rpc_request(const std::string& request_data,
-                           std::string& response_data);
+                           std::string& response_data,
+                           std::string_view cookies = {},
+                           std::vector<std::string>* out_set_cookies = nullptr);
 
   // HTTP sessions don't support async operations - these should never be
   // called
@@ -87,10 +91,12 @@ public:
  */
 inline bool process_http_rpc(boost::asio::io_context& ioc,
                              const std::string& request_body,
-                             std::string& response_body)
+                             std::string& response_body,
+                             std::string_view cookies = {},
+                             std::vector<std::string>* out_set_cookies = nullptr)
 {
   auto session = std::make_shared<HttpRpcSession>(ioc);
-  return session->process_rpc_request(request_body, response_body);
+  return session->process_rpc_request(request_body, response_body, cookies, out_set_cookies);
 }
 
 } // namespace nprpc::impl

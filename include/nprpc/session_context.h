@@ -6,6 +6,9 @@
 #include <nprpc/endpoint.hpp>
 #include <nprpc/export.hpp>
 #include <nprpc_base.hpp>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace nprpc {
 
@@ -42,6 +45,15 @@ struct SessionContext {
   flat_buffer *rx_buffer = nullptr, *tx_buffer = nullptr;
 
   impl::StreamManager* stream_manager = nullptr;
+
+  // HTTP-only: value of the incoming Cookie: header (valid during dispatch).
+  // Empty string_view for all non-HTTP transports (TCP/WS/SHM/UDP).
+  std::string_view cookies;
+
+  // HTTP-only: Set-Cookie header values to attach to the HTTP response.
+  // Servants append to this via nprpc::http::set_cookie().
+  // Ignored for all non-HTTP transports.
+  std::vector<std::string> set_cookies;
 };
 
 NPRPC_API SessionContext& get_context();

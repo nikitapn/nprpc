@@ -144,6 +144,27 @@ interface GameUpdates {
 
 See [UDP_TRANSPORT.md](docs/UDP_TRANSPORT.md) for details.
 
+## 🍪 Cookie-Based Authentication
+
+NPRPC supports httpOnly cookie authentication for HTTP and WebSocket transports.
+
+```cpp
+// Server-side: read a cookie
+auto token = nprpc::get_cookie("session_token");
+
+// Set a cookie
+nprpc::set_cookie("session_token", token_value, {
+    .http_only = true,
+    .secure    = true,
+    .same_site = "Strict",
+    .max_age   = 86400
+});
+```
+
+The TypeScript client automatically sends cookies with every HTTP/WebSocket RPC call (`credentials: 'include'`).
+
+See [HTTP_AUTH.md](docs/HTTP_AUTH.md) for the full C++, TypeScript, and Swift API reference.
+
 ## 🛠️ Installation
 
 ### Prerequisites

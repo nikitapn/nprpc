@@ -33,6 +33,10 @@ concept AnyWebSocketSession =
 template <AnyWebSocketSession Derived>
 class websocket_session_with_acceptor : public Derived
 {
+  // Owns the cookie string from the HTTP Upgrade request so that
+  // ctx_.cookies (a string_view) remains valid for the session lifetime.
+  std::string upgrade_cookies_;
+
   // Start accepting handshake for the WebSocket session.
   template <class Body, class Allocator>
   void do_accept(http::request<Body, http::basic_fields<Allocator>> req)
@@ -78,6 +82,14 @@ public:
   template <class Body, class Allocator>
   void run(http::request<Body, http::basic_fields<Allocator>> req)
   {
+    // Capture cookies from the HTTP Upgrade request so servants can call
+    // nprpc::http::get_cookie() on any call dispatched over this WS session.
+    auto cookie_it = req.find(http::field::cookie);
+    if (cookie_it != req.end()) {
+      upgrade_cookies_ = std::string(cookie_it->value());
+      this->ctx_.cookies = upgrade_cookies_;
+    }
+
     g_rpc->add_connection(this->shared_from_this());
     // Accept the WebSocket upgrade request
     do_accept(std::move(req));

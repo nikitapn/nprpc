@@ -15,6 +15,7 @@
 #include <format>
 #include <queue>
 #include <sstream>
+#include <vector>
 
 #include "../logging.hpp"
 
@@ -102,23 +103,35 @@ template <class Body, class Allocator>
 http::message_generator
 handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req)
 {
+  // --- CORS helpers -------------------------------------------------------
+  // When the browser sends credentials (cookies) it always includes an Origin
+  // header and requires the response to echo that exact origin back together
+  // with Access-Control-Allow-Credentials: true.  A wildcard "*" is rejected
+  // by the browser in that case.
+  auto const origin = std::string(req[http::field::origin]);
+  bool const credentialed = !origin.empty();
+
+  auto const add_cors = [&](auto& res) {
+    if (credentialed) {
+      res.set(http::field::access_control_allow_origin, origin);
+      res.set("Access-Control-Allow-Credentials", "true");
+    } else {
+      res.set(http::field::access_control_allow_origin, "*");
+    }
+    res.set(http::field::access_control_allow_methods, "POST, OPTIONS");
+    res.set(http::field::access_control_allow_headers, "Content-Type");
+  };
+
   // Helper to create success response
-  auto const rpc_response = [&req](std::string&& body_data,
-                                   bool add_cors = true) {
+  auto const rpc_response = [&](std::string&& body_data,
+                                const std::vector<std::string>& set_cookies) {
     http::response<http::string_body> res{http::status::ok, req.version()};
     res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
     res.set(http::field::content_type, "application/octet-stream");
-
-    // Add CORS headers for cross-origin requests from browsers
-    if (add_cors) {
-      res.set(http::field::access_control_allow_origin, "*");
-      res.set(http::field::access_control_allow_methods, "POST, OPTIONS");
-      res.set(http::field::access_control_allow_headers, "Content-Type");
-    }
-
-    // Advertise HTTP/3 support
+    add_cors(res);
+    for (const auto& sc : set_cookies)
+      res.insert(http::field::set_cookie, sc);
     add_alt_svc_header(res);
-
     res.keep_alive(req.keep_alive());
     res.body() = std::move(body_data);
     res.prepare_payload();
@@ -126,12 +139,12 @@ handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req)
   };
 
   // Helper for error response
-  auto const rpc_error = [&req](beast::string_view what) {
+  auto const rpc_error = [&](beast::string_view what) {
     http::response<http::string_body> res{http::status::internal_server_error,
                                           req.version()};
     res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
     res.set(http::field::content_type, "text/plain");
-    res.set(http::field::access_control_allow_origin, "*");
+    add_cors(res);
     add_alt_svc_header(res);
     res.keep_alive(req.keep_alive());
     res.body() = std::string("RPC Error: ") + std::string(what);
@@ -147,16 +160,23 @@ handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req)
       return rpc_error("Empty request body");
     }
 
+    // Extract incoming Cookie: header (empty string_view if absent)
+    auto cookie_it = req.find(http::field::cookie);
+    std::string_view cookies =
+        cookie_it != req.end() ? std::string_view(cookie_it->value()) : std::string_view{};
+
     // Process RPC request
     std::string response_body;
-    if (!process_http_rpc(g_rpc->ioc(), request_body, response_body)) {
+    std::vector<std::string> set_cookies;
+    if (!process_http_rpc(g_rpc->ioc(), request_body, response_body,
+                          cookies, &set_cookies)) {
       return rpc_error("Failed to process RPC request");
     }
 
     NPRPC_LOG_INFO("HTTP RPC: Processed request, response size: {} bytes",
                    response_body.size());
 
-    return rpc_response(std::move(response_body));
+    return rpc_response(std::move(response_body), set_cookies);
 
   } catch (const std::exception& e) {
     NPRPC_LOG_ERROR("HTTP RPC exception: {}", e.what());
@@ -217,7 +237,13 @@ handle_request(beast::string_view doc_root,
     http::response<http::empty_body> res{http::status::no_content,
                                          req.version()};
     res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
-    res.set(http::field::access_control_allow_origin, "*");
+    auto const origin = std::string(req[http::field::origin]);
+    if (!origin.empty()) {
+      res.set(http::field::access_control_allow_origin, origin);
+      res.set("Access-Control-Allow-Credentials", "true");
+    } else {
+      res.set(http::field::access_control_allow_origin, "*");
+    }
     res.set(http::field::access_control_allow_methods, "GET, POST, OPTIONS");
     res.set(http::field::access_control_allow_headers, "Content-Type");
     res.set(http::field::access_control_max_age, "86400"); // 24 hours

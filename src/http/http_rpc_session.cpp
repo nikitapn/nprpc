@@ -3,14 +3,20 @@
 
 #include "../logging.hpp"
 #include <cstring>
+#include <vector>
 #include <nprpc/impl/http_rpc_session.hpp>
 
 namespace nprpc::impl {
 
 bool HttpRpcSession::process_rpc_request(const std::string& request_data,
-                                         std::string& response_data)
+                                         std::string& response_data,
+                                         std::string_view cookies,
+                                         std::vector<std::string>* out_set_cookies)
 {
   try {
+    // Populate incoming cookies so servants can call nprpc::http::get_cookie()
+    ctx_.cookies = cookies;
+
     // FIXME: Avoid copy
     // Clear previous buffer
     rx_buffer_.consume(rx_buffer_.size());
@@ -27,6 +33,10 @@ bool HttpRpcSession::process_rpc_request(const std::string& request_data,
     auto response_span = tx_buffer_.cdata();
     response_data.assign(static_cast<const char*>(response_span.data()),
                          response_span.size());
+
+    // Forward any Set-Cookie headers queued by the servant
+    if (out_set_cookies && !ctx_.set_cookies.empty())
+      *out_set_cookies = std::move(ctx_.set_cookies);
 
     return true;
 

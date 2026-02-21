@@ -1175,6 +1175,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
         << bl() << "const response = await fetch(url, {\n"
         << bb(false) << bl() << "method: 'POST',\n"
         << bl() << "headers: { 'Content-Type': 'application/octet-stream' },\n"
+        << bl() << "credentials: 'include',\n"
         << bl() << "body: buf.array_buffer\n"
         << eb() << ");\n\n"
         << bl()

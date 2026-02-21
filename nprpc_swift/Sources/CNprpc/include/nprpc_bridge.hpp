@@ -446,4 +446,36 @@ int nprpc_stream_send_init(
     void* buffer_ptr,
     uint32_t timeout_ms);
 
+// ============================================================================
+// HTTP Cookie helpers
+// These delegate to nprpc::http::get_cookie / set_cookie / clear_cookie.
+// They are only meaningful inside a servant dispatch that arrived over HTTP
+// or WebSocket; they are safe (return nullptr / no-op) for native transports.
+// ============================================================================
+
+// Get a named cookie from the current HTTP/WS request.
+// Returns a pointer into thread-local storage, valid until the next call.
+// Returns nullptr when the cookie is absent or the session is not HTTP/WS.
+const char* nprpc_http_get_cookie(const char* name);
+
+// Queue a Set-Cookie header for the current HTTP response.
+// max_age_seconds: >=0 sets Max-Age; -1 omits it (session cookie).
+// http_only / secure: typical flags; same_site: "Strict", "Lax", or "None".
+// path: defaults to "/" when empty; domain: empty = current host only.
+void nprpc_http_set_cookie(
+    const char* name,
+    const char* value,
+    bool        http_only,
+    bool        secure,
+    const char* same_site,
+    int32_t     max_age_seconds,
+    const char* path,
+    const char* domain);
+
+// Remove a cookie on the client by setting Max-Age=0.
+void nprpc_http_clear_cookie(
+    const char* name,
+    const char* path,
+    const char* domain);
+
 } // extern "C"

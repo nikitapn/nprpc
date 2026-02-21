@@ -187,6 +187,7 @@ add_library(nprpc
   src/http/http_utils.cpp
   src/http/http_rpc_session.cpp
   src/http/http_file_cache.cpp
+  src/http/http_auth.cpp
   src/http/http3_server_msh3.cpp
   src/http/http3_server_nghttp3.cpp
   # WebSocket transport
