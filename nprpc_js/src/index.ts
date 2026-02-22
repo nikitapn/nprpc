@@ -4,7 +4,7 @@
 export { Exception } from './base'
 export * from './nprpc'
 export * from './utils'
-export { FlatBuffer, HeapViews, _alloc, _alloc1 } from './flat_buffer'
+export { FlatBuffer, _alloc, _alloc1 } from './flat_buffer'
 export * from './gen/nprpc_base'
 export * from './gen/nprpc_nameserver'
 export * from './marshal_helpers'

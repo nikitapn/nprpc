@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // Marshalling helper functions for the new simplified approach
-import { FlatBuffer, HeapViews, _alloc, _alloc1 } from './flat_buffer';
+import { FlatBuffer, _alloc, _alloc1 } from './flat_buffer';
 
 const u8enc = new TextEncoder();
 const u8dec = new TextDecoder();
@@ -10,7 +10,7 @@ const u8dec = new TextDecoder();
 export function marshal_string(buf: FlatBuffer, offset: number, str: string): void {
 	const bytes = u8enc.encode(str);
 	const data_offset = _alloc(buf, offset, bytes.length, 1, 1);
-	buf.heap.HEAPU8.set(bytes, data_offset);
+	new Uint8Array(buf.array_buffer, data_offset, bytes.length).set(bytes);
 }
 
 export function unmarshal_string(buf: FlatBuffer, offset: number): string {
@@ -26,7 +26,7 @@ export function unmarshal_string(buf: FlatBuffer, offset: number): string {
 export function marshal_typed_array(buf: FlatBuffer, offset: number, arr: TypedArray, elem_size: number, elem_align: number): void {
 	const data_offset = _alloc(buf, offset, arr.length, elem_size, elem_align);
 	const bytes = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
-	buf.heap.HEAPU8.set(bytes, data_offset);
+	new Uint8Array(buf.array_buffer, data_offset, bytes.length).set(bytes);
 }
 
 export function unmarshal_typed_array(buf: FlatBuffer, offset: number, elem_size: number): TypedArray {

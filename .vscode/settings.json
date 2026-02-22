@@ -99,5 +99,12 @@
     "system_error": "cpp",
     "typeindex": "cpp",
     "__bit_reference": "cpp"
-  }
+  },
+  // -------------------------------------------------------------------------
+  // Swift / SourceKit-LSP
+  // -------------------------------------------------------------------------
+  // Use sourcekit-lsp from inside Docker to avoid Arch GCC-15 / Foundation
+  // header incompatibility with the system Swift toolchain.
+  // The script mounts the workspace at its exact host path so all LSP URIs match.
+  "swift.sourcekit-lsp.serverPath": "${workspaceFolder}/nprpc_swift/docker-sourcekit-lsp.sh",
 }

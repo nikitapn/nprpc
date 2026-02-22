@@ -362,6 +362,15 @@ void* nprpc_poa_activate_swift_servant(
     void (*dispatch_func)(void*, void*, void*, void*, void*),
     void* session_ctx);
 
+void* nprpc_poa_activate_swift_servant_with_id(
+    void* poa_handle,
+    void* swift_servant,
+    const char* class_name,
+    uint32_t activation_flags,
+    void (*dispatch_func)(void*, void*, void*, void*, void*),
+    void* session_ctx,
+    uint64_t object_id);
+
 // ============================================================================
 // Streaming operations
 // ============================================================================

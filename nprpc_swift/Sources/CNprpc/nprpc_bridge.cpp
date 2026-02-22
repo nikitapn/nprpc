@@ -853,6 +853,39 @@ void* nprpc_poa_activate_swift_servant(
     }
 }
 
+// Activate a Swift servant in a POA with user-supplied object ID
+void* nprpc_poa_activate_swift_servant_with_id(
+    void* poa_handle,
+    void* swift_servant,
+    const char* class_name,
+    uint32_t activation_flags,
+    void (*dispatch_func)(void*, void*, void*, void*, void*),
+    void* session_ctx,
+    uint64_t object_id)
+{
+    auto* poa = static_cast<nprpc::Poa*>(poa_handle);
+    if (!poa || !swift_servant || !class_name || !dispatch_func) {
+        return nullptr;
+    }
+
+    try {
+        auto bridge = std::make_unique<SwiftServantBridge>(
+            swift_servant, class_name, dispatch_func);
+
+        auto* ctx = static_cast<nprpc::SessionContext*>(session_ctx);
+        auto oid = poa->activate_object_with_id(object_id, bridge.release(), activation_flags, ctx);
+
+        // Allocate and copy ObjectId to return to Swift
+        // Swift will need to free this memory
+        auto* oid_copy = new nprpc::ObjectId(oid);
+
+        // Return pointer to ObjectId - Swift will read it and delete it
+        return oid_copy;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 // ============================================================================
 // Streaming operations
 // ============================================================================

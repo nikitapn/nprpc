@@ -6,4 +6,4 @@ export * from './base';
 export * from './nprpc';
 export * from "./gen/nprpc_base";
 export * from './marshal_helpers';
-export { FlatBuffer, HeapViews } from './flat_buffer';
+export { FlatBuffer } from './flat_buffer';

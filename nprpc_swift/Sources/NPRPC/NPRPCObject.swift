@@ -349,7 +349,7 @@ open class NPRPCObject: Codable, @unchecked Sendable {
 }
 
 /// Narrow Object reference to a specific class (for clientside proxies)
-func narrow<T: NPRPCObject>(_ object: NPRPCObject, to type: T.Type) -> T? {
+public func narrow<T: NPRPCObject>(_ object: NPRPCObject, to type: T.Type) -> T? {
     // In a full implementation, we would check the classId against the expected interface
     // For this simplified version, we just create a new instance of T with the same handle
     if (object.classId != T.classId) {

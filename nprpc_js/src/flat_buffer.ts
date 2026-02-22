@@ -3,29 +3,11 @@
 
 import { impl } from "./gen/nprpc_base"
 
-// HeapViews for efficient TypedArray access (Emscripten-style)
-// Note: Byte arrays (HEAP8/HEAPU8) are always safe. Other views should only be used
-// with proper alignment and may fail if buffer size is not a multiple of element size.
-export class HeapViews {
-	constructor(public buffer: ArrayBuffer) {}
-	get HEAP8() { return new Int8Array(this.buffer); }
-	get HEAPU8() { return new Uint8Array(this.buffer); }
-	get HEAP16() { return new Int16Array(this.buffer, 0, Math.floor(this.buffer.byteLength / 2)); }
-	get HEAPU16() { return new Uint16Array(this.buffer, 0, Math.floor(this.buffer.byteLength / 2)); }
-	get HEAP32() { return new Int32Array(this.buffer, 0, Math.floor(this.buffer.byteLength / 4)); }
-	get HEAPU32() { return new Uint32Array(this.buffer, 0, Math.floor(this.buffer.byteLength / 4)); }
-	get HEAP64() { return new BigInt64Array(this.buffer, 0, Math.floor(this.buffer.byteLength / 8)); }
-	get HEAPU64() { return new BigUint64Array(this.buffer, 0, Math.floor(this.buffer.byteLength / 8)); }
-	get HEAPF32() { return new Float32Array(this.buffer, 0, Math.floor(this.buffer.byteLength / 4)); }
-	get HEAPF64() { return new Float64Array(this.buffer, 0, Math.floor(this.buffer.byteLength / 8)); }
-}
-
 export class FlatBuffer {
 	private capacity: number;
 	private size_: number;
 	public array_buffer: ArrayBuffer;
 	public dv: DataView;
-	private heap_views_: HeapViews | null = null;
 
 	public static from_array_buffer(array_buffer: ArrayBuffer): FlatBuffer {
 		let b = new FlatBuffer();
@@ -51,7 +33,6 @@ export class FlatBuffer {
 			new Uint8Array(new_buffer).set(new Uint8Array(this.array_buffer));
 			this.array_buffer = new_buffer;
 			this.dv = new DataView(this.array_buffer);
-			this.heap_views_ = null; // Invalidate heap views when buffer reallocates
 		}
 	}
 
@@ -101,15 +82,6 @@ export class FlatBuffer {
 		this.array_buffer = abuf;
 		this.size_ = this.capacity = abuf.byteLength;
 		this.dv = new DataView(this.array_buffer);
-		this.heap_views_ = null; // Invalidate heap views when buffer changes
-	}
-
-	// Lazy-initialized HeapViews for efficient TypedArray access
-	public get heap(): HeapViews {
-		if (!this.heap_views_) {
-			this.heap_views_ = new HeapViews(this.array_buffer);
-		}
-		return this.heap_views_;
 	}
 
 	public dump() {
