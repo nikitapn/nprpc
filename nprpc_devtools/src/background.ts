@@ -22,7 +22,7 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
-chrome.runtime.onMessage.addListener((msg, sender) => {
+chrome.runtime.onMessage.addListener((msg: { source?: string }, sender: chrome.runtime.MessageSender) => {
   if (msg?.source !== 'nprpc_content') return;
   const tabId = sender.tab?.id;
   if (tabId === undefined) return;

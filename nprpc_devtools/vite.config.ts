@@ -8,7 +8,6 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        devtools      : 'src/devtools.html',
         panel         : 'src/panel.html',
         background    : resolve(__dirname, 'src/background.ts'),
         content_script: resolve(__dirname, 'src/content_script.ts'),

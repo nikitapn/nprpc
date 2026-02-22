@@ -1,18 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { RpcEvent, DebugMsg } from './types';
+  import type { RpcEventWithKey, DebugMsg } from './types';
   import EventList   from './lib/EventList.svelte';
   import EventDetail from './lib/EventDetail.svelte';
 
   // ── State ────────────────────────────────────────────────────────
-  let events   : RpcEvent[]   = [];
-  let selected : RpcEvent | null = null;
+  let events   : RpcEventWithKey[]   = [];
+  let selected : RpcEventWithKey | null = null;
   let filter   : string = '';
   let recording: boolean = true;
   let seq      : number = 0;
 
   // Pending events keyed by id (status=pending, awaiting call_end).
-  const pending = new Map<number, RpcEvent>();
+  const pending = new Map<number, RpcEventWithKey>();
 
   // ── Message relay from background ────────────────────────────────
   onMount(() => {
@@ -27,16 +27,16 @@
       if (!recording) return;
 
       if (msg.type === 'nprpc_call_start') {
-        const ev: RpcEvent = { ...msg.data, seq: ++seq };
-        pending.set(ev.id, ev);
+        const ev: RpcEventWithKey = { ...msg.data, seq: ++seq, key: (msg.data.id | (seq << 16)) };
+        pending.set(ev.key, ev);
         events = [...events, ev];
       } else if (msg.type === 'nprpc_call_end') {
-        const ev = pending.get(msg.data.id);
+        const ev = pending.get(msg.data.id | (seq << 16));
         if (ev) {
           Object.assign(ev, msg.data);
-          pending.delete(ev.id);
+          pending.delete(ev.key);
           events = [...events]; // trigger reactivity
-          if (selected?.id === ev.id) selected = ev;
+          if (selected?.key === ev.key) selected = ev;
         }
       }
     });

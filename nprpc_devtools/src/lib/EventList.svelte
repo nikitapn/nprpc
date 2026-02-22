@@ -2,11 +2,12 @@
   import { afterUpdate } from 'svelte';
   import type { RpcEvent } from '../types';
   import { createEventDispatcher } from 'svelte';
+  import type { RpcEventWithKey } from '../types';
 
-  export let events  : RpcEvent[] = [];
-  export let selected: RpcEvent | null = null;
+  export let events  : RpcEventWithKey[] = [];
+  export let selected: RpcEventWithKey | null = null;
 
-  const dispatch = createEventDispatcher<{ select: RpcEvent }>();
+  const dispatch = createEventDispatcher<{ select: RpcEventWithKey }>();
 
   let tbody: HTMLElement;
   let userScrolled = false;
@@ -28,14 +29,14 @@
     userScrolled = !atBottom;
   }
 
-  function select(ev: RpcEvent) {
+  function select(ev: RpcEventWithKey) {
     dispatch('select', ev);
   }
 
   // Keyboard navigation
   function onKeyDown(e: KeyboardEvent) {
     if (!events.length) return;
-    const idx = selected ? events.findIndex(x => x.id === selected!.id) : -1;
+    const idx = selected ? events.findIndex(x => x.key === selected!.key) : -1;
     if (e.key === 'ArrowDown') {
       const next = events[Math.min(idx + 1, events.length - 1)];
       if (next) dispatch('select', next);
@@ -55,13 +56,13 @@
     return slash >= 0 ? class_id.slice(slash + 1) : class_id;
   }
 
-  function method_label(ev: RpcEvent): string {
+  function method_label(ev: RpcEventWithKey): string {
     const cls = short_class(ev.class_id);
     const fn  = ev.method_name ?? `fn#${ev.func_idx}`;
     return `${cls}.${fn}`;
   }
 
-  function fmt_duration(ev: RpcEvent): string {
+  function fmt_duration(ev: RpcEventWithKey): string {
     if (ev.status === 'pending') return '…';
     if (ev.duration_ms === undefined) return '—';
     if (ev.duration_ms < 1000) return `${ev.duration_ms} ms`;
@@ -74,12 +75,12 @@
     return `${(b / 1024).toFixed(1)} K`;
   }
 
-  function row_class(ev: RpcEvent): string {
+  function row_class(ev: RpcEventWithKey): string {
     const parts = ['row'];
     if (ev.direction === 'server') parts.push('server');
     if (ev.status === 'error')     parts.push('error');
     if (ev.status === 'pending')   parts.push('pending');
-    if (selected?.id === ev.id)    parts.push('selected');
+    if (selected?.key === ev.key)    parts.push('selected');
     return parts.join(' ');
   }
 </script>
@@ -104,7 +105,7 @@
     bind:this={tbody}
     on:scroll={onScroll}
   >
-    {#each events as ev (ev.id)}
+    {#each events as ev (ev.key)}
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <div
         class={row_class(ev)}

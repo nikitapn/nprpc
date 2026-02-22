@@ -47,6 +47,13 @@ export interface RpcEvent {
   response_bytes? : number;
 }
 
+type Key = {
+  /** Combination of id | (seq << 16) to get a unique, display-order-preserving */
+  key: number;
+}
+
+export type RpcEventWithKey = Omit<RpcEvent & Key, 'id'>;
+
 // ── Messages shared between inject / content / background / panel ──
 
 export interface DebugMsgCallStart {
