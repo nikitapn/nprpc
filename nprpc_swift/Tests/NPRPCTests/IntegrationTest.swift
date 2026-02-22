@@ -936,6 +936,59 @@ final class IntegrationTests: XCTestCase {
         }
     }
 
+    func testUntrusted() throws {
+        class UntrustedImpl: TestBadInputServant {
+            var in_receivedA: [UInt8] = []
+            var inStrings_receivedA: String = ""
+            var inStrings_receivedB: String = ""
+            var send_receivedMsg: ChatMessage? = nil
+
+            override func in_(a: [UInt8]) {
+                in_receivedA = a
+            }
+
+            override func inStrings(a: String, b: String) -> Bool {
+                inStrings_receivedA = a
+                inStrings_receivedB = b
+                return true
+            }
+
+            override func send(msg: ChatMessage) -> Bool   {
+                send_receivedMsg = msg
+                return false
+            }
+        }
+
+        // Create and activate servant
+        let servant = UntrustedImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+        let client = narrow(obj, to: TestBadInput.self)!
+
+        try client.in_(a: [1, 2, 3, 4, 5])
+        XCTAssertEqual(servant.in_receivedA, [1, 2, 3, 4, 5])
+
+        let result = try client.inStrings(a: "Hello", b: "World")
+        XCTAssertEqual(result, true)
+        XCTAssertEqual(servant.inStrings_receivedA, "Hello")
+        XCTAssertEqual(servant.inStrings_receivedB, "World")
+
+        let result2 = try client.send(msg: ChatMessage(
+            timestamp: 1234567890,
+            str: "Test message",
+            attachment: nil
+        ))
+
+        XCTAssertEqual(result2, false)
+        XCTAssertNotNil(servant.send_receivedMsg)
+        XCTAssertEqual(servant.send_receivedMsg?.timestamp, 1234567890)
+        XCTAssertEqual(servant.send_receivedMsg?.str, "Test message")
+        XCTAssertNil(servant.send_receivedMsg?.attachment)
+    }
+
     // Test streaming RPC methods
     // This tests the full round-trip: client sends StreamInit, servant produces stream,
     // servant dispatch pumps chunks, client receives via AsyncThrowingStream

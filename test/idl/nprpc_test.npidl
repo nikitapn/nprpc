@@ -147,9 +147,28 @@ interface TestNested {
 	TopLevel ReturnNested() raises (AssertionFailed);
 }
 
+enum ChatAttachmentType {
+  Picture,
+  File
+}
+
+message ChatAttachment {
+  type: ChatAttachmentType;
+  name: string;
+  data: vector<u8>;
+}
+
+message ChatMessage {
+  timestamp: u32;
+  str: string;
+  attachment?: ChatAttachment;
+}
+
 [trusted=false]
 interface TestBadInput {
 	void In_(a: vector<u8>);
+	boolean InStrings(a: string, b: string);
+  boolean Send(msg: in ChatMessage);
 }
 
 interface TestUnreliable {

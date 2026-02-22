@@ -14,6 +14,7 @@ import {
   ExceptionCommFailure, 
   ExceptionUnsecuredObject,
   ExceptionBadAccess,
+  ExceptionBadInput,
   EndPointType,
   unmarshal_ExceptionCommFailure
 } from "./gen/nprpc_base"
@@ -221,7 +222,7 @@ export class Connection {
         case impl.MessageId.FunctionCall: {
           let ch = impl.unmarshal_CallHeader(buf, header_size);
 
-          if (gLogLevel >= LogLevel.warn) {
+          if (gLogLevel >= LogLevel.trace) {
             console.log("FunctionCall. interface_idx: " + ch.interface_idx + " , fn_idx: " + ch.function_idx 
               + " , poa_idx: " + ch.poa_idx + " , oid: " + ch.object_id);
           }
@@ -237,7 +238,7 @@ export class Connection {
           let msg = detail.unmarshal_ObjectIdLocal(buf, header_size);
 
           //detail::ObjectIdLocal oid{ msg.poa_idx(), msg.object_id() };
-          if (gLogLevel >= LogLevel.warn) {
+          if (gLogLevel >= LogLevel.trace) {
             console.log("AddReference. poa_idx: " + msg.poa_idx + " , oid: " + msg.object_id);
           }
 
@@ -817,29 +818,47 @@ export class ReferenceList {
   }
 };
 
-
-//  0 - Success
-//  1 - exception
-// -1 - not handled
+// Helper function to handle standard reply messages (Success, Exception, Errors).
 export const handle_standart_reply = (buf: FlatBuffer): number => {
-  //if (buf.size < 8) throw new ExceptionCommFailure();
+  if (buf.size < 16)
+    throw new ExceptionBadInput();
+
   switch (buf.read_msg_id()) {
     case impl.MessageId.Success:
       return 0;
+
     case impl.MessageId.Exception:
       return 1;
+
+    // Errors should be always handled
+    // Don't forget to add case for each of them, when IDL changes
+    case impl.MessageId.Error_PoaNotExist:
+      throw new Exception("POA does not exist");
+    
     case impl.MessageId.Error_ObjectNotExist:
       throw new ExceptionObjectNotExist();
+
     case impl.MessageId.Error_CommFailure:
       let ex_obj = unmarshal_ExceptionCommFailure(buf, 16);
       throw new ExceptionCommFailure(ex_obj.what);
+
     case impl.MessageId.Error_UnknownFunctionIdx:
       throw new ExceptionUnknownFunctionIndex();
+
     case impl.MessageId.Error_UnknownMessageId:
       throw new ExceptionUnknownMessageId();
-      case impl.MessageId.Error_BadAccess:
+
+    case impl.MessageId.Error_BadAccess:
       throw new ExceptionBadAccess();
+
+    case impl.MessageId.Error_BadInput:
+      throw new ExceptionBadInput();
+
+    case impl.MessageId.Error_Unknown:
+      throw new Exception("Unknown error");
+
     default:
+      // Should be handled by caller (for example, for stream messages or simple answers)
       return -1;
   }
 }

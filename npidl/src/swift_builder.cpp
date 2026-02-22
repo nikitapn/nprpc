@@ -1769,14 +1769,16 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
       auto ftr = field->type;
       if (ftr->id == FieldType::Alias)
         ftr = calias(ftr)->get_real_type();
-      
+
+      auto [f_size, f_align] = get_type_size_align(field->type);
       if (ftr->id == FieldType::Vector || ftr->id == FieldType::String || 
           ftr->id == FieldType::Optional || ftr->id == FieldType::Struct) {
-        auto [f_size, f_align] = get_type_size_align(field->type);
         int aligned_offset = align_offset(f_align, field_offset, f_size);
-        
         std::string field_op = op + " + " + std::to_string(aligned_offset);
         emit_safety_checks_r(ftr, field_op, aligned_offset, ftr->id != FieldType::Struct);
+      } else {
+        // For other field types, just increment offset
+        align_offset(f_align, field_offset, f_size);
       }
     }
     break;
