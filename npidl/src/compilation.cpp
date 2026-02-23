@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "builder.hpp"
+#include "builtins.hpp"
 #include "cpp_builder.hpp"
 #include "parser_factory.hpp"
 #include "swift_builder.hpp"
@@ -9,6 +10,24 @@
 
 // Implementation of ICompilation and CompilationBuilder
 namespace npidl {
+
+// Parse built-in types into context. These types are always available
+// without explicit imports (e.g., nprpc::detail::ObjectId).
+// Uses an empty BuildGroup so no code is generated for builtins.
+static void load_builtins(Context& ctx)
+{
+  ctx.set_parsing_builtins(true);
+
+  builders::BuildGroup empty_builder(&ctx);
+
+  auto [source_provider, import_resolver, error_handler, lexer, parser] =
+      ParserFactory::create_test_parser(ctx, empty_builder, builtin_idl);
+
+  parser->parse();
+
+  // Reset context state for the actual file (keeps types in nm_root_)
+  ctx.reset_after_builtins();
+}
 
 struct Compilation {
   const builders::BuildGroup build_group_;
@@ -27,6 +46,13 @@ struct Compilation {
   {
     for (const auto& file : input_files_) {
       Context ctx(file);
+      
+      // Load built-in types (nprpc::detail::ObjectId, etc.)
+      // Skip for nprpc_base.npidl itself since it IS the builtins source
+      if (!ctx.is_nprpc_base()) {
+        load_builtins(ctx);
+      }
+      
       builders::BuildGroup build_group(build_group_, &ctx);
 
       // Use factory to create parser with dependencies

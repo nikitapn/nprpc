@@ -67,14 +67,14 @@ public:
 
   void assign_from_direct(const detail::flat::ObjectId_Direct& other)
   {
-    nprpc::detail::helpers::assign_from_flat_ObjectId(
-        const_cast<detail::flat::ObjectId_Direct&>(other), data_);
+    data_ = nprpc::detail::helpers::ObjectId::from_flat(
+        const_cast<detail::flat::ObjectId_Direct&>(other));
   }
 
   static void assign_to_direct(const ::nprpc::ObjectId& oid,
                                detail::flat::ObjectId_Direct& direct)
   {
-    nprpc::detail::helpers::assign_from_cpp_ObjectId(direct, oid.data_);
+    nprpc::detail::helpers::ObjectId::to_flat(direct, oid.data_);
   }
 
   auto object_id() const noexcept { return data_.object_id; }

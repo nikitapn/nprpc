@@ -198,10 +198,13 @@ static std::ostream& operator<<(std::ostream& os, const TokenId& token_id)
 
 std::ostream& operator<<(std::ostream& os, const TSBuilder::_ns& ns)
 {
-  auto [sub, level] = Namespace::substract(ns.builder.ctx_->nm_cur(), ns.nm);
-  if (sub)
-    os << sub->to_ts_namespace(level) << '.';
-  return os;
+  int level = Namespace::substract(ns.builder.ctx_->nm_cur(), ns.nm);
+  const auto path = ns.nm->construct_path(".", level);
+  if (path.size() == 0 || (path.size() == 1 && path[0] == '.')) {
+    return os;
+  }
+
+  return os << path << '.';
 }
 
 static std::string_view fundamental_to_ts(TokenId id)
@@ -753,7 +756,6 @@ void TSBuilder::finalize()
     emit_unmarshal_function(s);
     out << '\n';
   });
-  emit_struct_helpers();
 
   ofs << out.str();
 }
@@ -1318,7 +1320,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   out << bl() << "export class _" << servant_iname
       << " extends NPRPC.ObjectServant {\n"
       << bb(false) << bl() << "public static _get_class(): string { return \""
-      << ctx_->current_file() << '/' << ctx_->nm_cur()->to_ts_namespace()
+      << ctx_->current_file() << '/' << ctx_->nm_cur()->full_idl_namespace()
       << '.' /*ns(ctx_->nm_cur()) */ << ifs->name << "\"; }\n"
       << bl() << "public readonly get_class = () => { return _" << servant_iname
       << "._get_class(); }\n"
@@ -1583,13 +1585,6 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       eb() <<         // dispatch ends
       eb() << '\n'    // class ends
       ;
-}
-
-void TSBuilder::emit_struct_helpers()
-{
-  // Helper functions removed - marshal/unmarshal functions are used instead
-  // Old code generated assign_from_flat_* and assign_from_ts_* helpers that
-  // used _Direct classes
 }
 
 TSBuilder::_ns TSBuilder::ns(Namespace* nm) const { return {*this, nm}; }

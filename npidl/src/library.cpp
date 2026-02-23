@@ -682,7 +682,7 @@ class Parser : public IParser
   // is_double_colon ::= '::'
   bool is_double_colon() { return peek() == TokenId::DoubleColon; }
 
-  // get_type_namespace ::= '::' namespace_path | parent_namespace_path
+  // get_type_namespace ::= '::' namespace_path | parent_namespace_path | current_namespace_path
   // namespace_path ::= IDENTIFIER ('::' IDENTIFIER)*
   bool get_type_namespace(Namespace*& nm, Token& type)
   {
@@ -704,23 +704,35 @@ class Parser : public IParser
 
     if (first_tok == TokenId::DoubleColon) {
       flush();
-      nm = ctx_.nm_root();
+      nm = ctx_.nm_global();  // Use global root for :: prefix
       parse_namespace();
-
       return true;
     }
 
-    auto nm_parent = nm->parent();
-    if (!nm_parent)
-      return false;
+    // Check if first_tok is a child of current namespace
+    if (auto child = nm->find_child(first_tok.name); child) {
+      // Need to check if next token is :: to confirm namespace path
+      PeekGuard pg(*this);
+      if (peek() == TokenId::DoubleColon) {
+        pg.flush();
+        nm = child;
+        parse_namespace();
+        return true;
+      }
+      // Not a namespace path, fall through
+    }
 
-    if ((nm_parent = nm_parent->find_child(first_tok.name))) {
-      flush();
-      match(TokenId::DoubleColon);
-      nm = nm_parent;
-      parse_namespace();
-
-      return true;
+    // Check if first_tok is a child of global root (for builtins like nprpc::)
+    if (nm != ctx_.nm_global()) {
+      if (auto child = ctx_.nm_global()->find_child(first_tok.name); child) {
+        PeekGuard pg(*this);
+        if (peek() == TokenId::DoubleColon) {
+          pg.flush();
+          nm = child;
+          parse_namespace();
+          return true;
+        }
+      }
     }
 
     return false;
@@ -950,6 +962,8 @@ class Parser : public IParser
       s->fields.push_back(ex_id);
     }
 
+    s->is_builtin = ctx_.is_parsing_builtins();
+
     match('{');
 
     while (check(&Parser::struct_close_tag) == false) {
@@ -973,7 +987,11 @@ class Parser : public IParser
     builder_.emit((!s->is_exception() ? &builders::Builder::emit_struct
                                       : &builders::Builder::emit_exception),
                   s);
-    ctx_.nm_cur()->add(s->name, s);
+
+    auto result = ctx_.nm_cur()->add(s->name, s);
+    if (!result) {
+      throw_error(result.error());
+    }
 
     for (const auto& a : attr) {
       if (a.first == "force_helpers" && a.second == "1")
@@ -981,6 +999,7 @@ class Parser : public IParser
       else
         throw_error("Unknown attribute: " + a.first + " for struct " + s->name);
     }
+
 
     return true;
   }
@@ -1386,7 +1405,11 @@ class Parser : public IParser
     set_node_position(ifs, start_tok);
 
     ctx_.interfaces.push_back(ifs);
-    ctx_.nm_cur()->add(ifs->name, ifs);
+
+    auto result = ctx_.nm_cur()->add(ifs->name, ifs);
+    if (!result) {
+      throw_error(result.error());
+    }
 
     if (!lsp_mode_)
       builder_.generate_argument_structs(ifs);
@@ -1437,7 +1460,10 @@ class Parser : public IParser
     // Set position for the using declaration
     set_node_position(a, start_tok);
 
-    ctx_.nm_cur()->add(a->name, a);
+    auto result = ctx_.nm_cur()->add(a->name, a);
+    if (!result) {
+      throw_error(result.error());
+    }
 
     builder_.emit(&builders::Builder::emit_using, a);
 
@@ -1524,7 +1550,10 @@ class Parser : public IParser
     // Set position range for the enum declaration
     set_node_position(e, start_tok);
 
-    ctx_.nm_cur()->add(e->name, e);
+    auto result = ctx_.nm_cur()->add(e->name, e);
+    if (!result) {
+      throw_error(result.error());
+    }
 
     builder_.emit(&builders::Builder::emit_enum, e);
 

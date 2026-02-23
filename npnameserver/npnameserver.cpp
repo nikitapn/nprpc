@@ -42,7 +42,7 @@ public:
     }
 
     const auto& oid = found->second->get_data();
-    nprpc::detail::helpers::assign_from_cpp_ObjectId(obj, oid);
+    nprpc::detail::helpers::ObjectId::to_flat(obj, oid);
 
     if constexpr (NPRPC_NAMESERVER_LOG) {
       std::cout << boost::format("Resolved object: %1%\n") % obj.object_id();

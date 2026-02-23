@@ -136,10 +136,17 @@ std::tuple<int, int> get_type_size_align(AstTypeDecl* type)
   }
   case FieldType::Alias:
     return get_type_size_align(calias(type)->get_real_type());
+
+  case FieldType::Object:
+    return {size_of_object, align_of_object};
+
   default:
     assert(false);
     break;
   }
+
+  std::cerr << "Error: get_type_size_align called with unsupported type id: " << int(type->id) << "\n";
+  std::abort();
 
   return {};
 }

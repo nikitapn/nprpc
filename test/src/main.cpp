@@ -387,6 +387,7 @@ TEST_F(NprpcTest, TestBadInput)
     void In_(::nprpc::flat::Span<uint8_t> a) override {}
     bool InStrings (::nprpc::flat::Span<char> a, ::nprpc::flat::Span<char> b) override { return true; }
     bool Send (::nprpc::test::flat::ChatMessage_Direct msg) override { return true; }
+    bool SendObject (::nprpc::Object* o) override { return true; }
   } servant;
 
   auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {

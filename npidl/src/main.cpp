@@ -6,14 +6,8 @@
 
 #include <boost/program_options.hpp>
 
-#include "builder.hpp"
-#include "cpp_builder.hpp"
 #include "lsp_server.hpp"
-#include "parser_factory.hpp"
-#include "parser_implementations.hpp"
 #include "parser_interfaces.hpp"
-#include "ts_builder.hpp"
-
 #include "colored_cout.h"
 
 using namespace npidl;
@@ -21,7 +15,6 @@ using namespace npidl;
 int main(int argc, char* argv[])
 {
   namespace po = boost::program_options;
-  namespace fs = std::filesystem;
   namespace clr = nprpc::clr;
 
   std::filesystem::path output_dir;
@@ -101,7 +94,7 @@ int main(int argc, char* argv[])
               << ':' << e.line << ':' << e.col << ": " << clr::reset << e.what()
               << '\n';
   } catch (std::exception& ex) {
-    std::cerr << ex.what() << '\n';
+    std::cerr << clr::red << "Error: " << clr::reset << ex.what() << '\n';
   }
 
   return -1;

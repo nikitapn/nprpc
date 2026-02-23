@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <ios>
 #include <iostream>
 #include <set>
@@ -12,7 +13,6 @@
 #include <boost/container/small_vector.hpp>
 
 #include "cpp_builder.hpp"
-#include "arguments_builder.hpp"
 #include "utils.hpp"
 
 // clang-format off
@@ -25,14 +25,17 @@ using std::placeholders::_2;
 std::ostream& operator<<(std::ostream& os, const CppBuilder::_ns& ns)
 {
   if (ns.builder.always_full_namespace_) {
-    os << "::" << ns.nm->to_cpp17_namespace() << "::";
+    os << ns.nm->construct_path("::", 0) << "::";
     return os;
   }
-  auto [sub, level] = Namespace::substract(ns.builder.ctx_->nm_cur(), ns.nm);
 
-  if (sub)
-    os << sub->to_cpp17_namespace(level) << "::";
-  return os;
+  int level = Namespace::substract(ns.builder.ctx_->nm_cur(), ns.nm);
+  const auto path = ns.nm->construct_path("::", level);
+  if (path.size() == 0 || (path.size() == 2 && path[0] == ':' && path[1] == ':')) {
+    return os;
+  }
+
+  return os << path << "::";
 }
 
 static std::string_view fundamental_to_cpp(TokenId id)
@@ -605,7 +608,7 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
     os << bd << "{\n";
     os << bd << "  " << "auto tmp = " << op1 << "();\n";
     os << bd << "  "
-       << "::nprpc::detail::helpers::assign_from_cpp_ObjectId("
+       << "::nprpc::detail::helpers::ObjectId::to_flat("
           "tmp, "
        << op2
        << ".get_data()"
@@ -1006,6 +1009,8 @@ void CppBuilder::emit_safety_checks_r(
   case FieldType::Struct: {
     auto s = cflat(type);
 
+    // Generate total flat size check only once for the top-level wrapper _M struct
+    // and skip for nested structs, since they will be checked as part of the parent struct's size check
     if (top_type) {
       os << "  if (static_cast<std::uint32_t>(buf.size()) < " << op << ".offset() + " << s->size
          << ") goto check_failed;\n";
@@ -1018,8 +1023,11 @@ void CppBuilder::emit_safety_checks_r(
       auto ftr = field->type;
       if (ftr->id == FieldType::Alias)
         ftr = calias(ftr)->get_real_type();
+
       if (ftr->id == FieldType::Vector || ftr->id == FieldType::Optional ||
-          ftr->id == FieldType::Struct || ftr->id == FieldType::String) {
+          ftr->id == FieldType::Struct || ftr->id == FieldType::String ||
+          ftr->id == FieldType::Object)
+      {
         os << bd << "{\n";
         auto str = op + "." + field->name +
                    (ftr->id == FieldType::Vector || ftr->id == FieldType::String ? "_d()" : "()");
@@ -1029,7 +1037,17 @@ void CppBuilder::emit_safety_checks_r(
         os << bd << "}\n";
       } else if (ftr->id == FieldType::Array) {
         if (is_flat(car(ftr)->type))
-          break;
+          continue;
+        // Need to check each element in the array
+        // TODO: Test it
+        os << bd << "{\n";
+        auto str = op + "." + field->name + "()";
+        bd += 1;
+        os << bd << "auto span = " << str << ";\n";
+        os << bd << "for (auto e : span) {\n";
+        emit_safety_checks_r(car(ftr)->type, "e", os, true, false);
+        os << bd << "}\n";
+        bd -= 1;
       }
     }
 
@@ -1080,6 +1098,10 @@ void CppBuilder::emit_safety_checks_r(
 
     break;
   }
+
+  case FieldType::Object:
+    emit_safety_checks_r(ctx_->get_builtin_types_info().object_id_struct, op, os, false, false);
+    break;
 
   case FieldType::Array:
     break;
@@ -1136,9 +1158,36 @@ void CppBuilder::emit_namespace_end()
 
 void CppBuilder::emit_helpers()
 {
-  always_full_namespace(true);
-  oh << "namespace " /*<< ctx_->current_file()*/ << "helper {\n";
+  bool need_helpers = false;
   for (auto& [unused, s] : ctx_->affa_list) {
+    if (s->is_builtin)
+      continue;
+    
+    bool has_non_fundamental = false;
+    for (auto f : s->fields) {
+      assert(f->function_argument);
+      if (is_fundamental(f->type) || f->type->id == FieldType::String || f->type->id == FieldType::Object)
+        continue;
+      has_non_fundamental = true;
+      break;
+    }
+
+    if (has_non_fundamental) {
+      need_helpers = true;
+      break;
+    }
+  }
+
+  if (!need_helpers)
+    return;
+
+  always_full_namespace(true);
+  oh << "namespace helper {\n";
+  
+  for (auto& [unused, s] : ctx_->affa_list) {
+    if (s->is_builtin)
+      continue;
+
     for (auto f : s->fields) {
       assert(f->function_argument);
       if (is_fundamental(f->type) || f->type->id == FieldType::String ||
@@ -1182,34 +1231,51 @@ void CppBuilder::emit_helpers()
     }
   }
 
-  oh << "} // namespace " << ctx_->current_file() << "::helper\n";
+  oh << "}\n";
   always_full_namespace(false);
 }
 
 void CppBuilder::emit_struct_helpers()
 {
+  bool need_helpers = false;
   for (auto s : ctx_->get_structs_with_helpers()) {
-    oh << "namespace " << ns(s->nm) << "helpers {\n";
-    always_full_namespace(true);
-    auto saved_namespace = ctx_->set_namespace(s->nm);
-    oh << "inline void assign_from_flat_" << s->name << "(";
-    emit_parameter_type_for_servant_callback_r(s, oh, false);
-    oh << "& src, ";
+    if (s->is_builtin)
+      continue;
+    need_helpers = true;
+    break;
+  }
+
+  if (!need_helpers)
+    return;
+
+  for (auto s : ctx_->get_structs_with_helpers()) {
+    if (s->is_builtin)
+      continue;
+
+    oh << "namespace " << ns(s->nm) << "helpers::" << s->name << " {\n";
+    bd = 1;
+    // auto saved_namespace = ctx_->set_namespace(s->nm);
+    oh << "inline struct ";
     emit_parameter_type_for_proxy_call_r(s, oh, false);
-    oh << "& dest) {\n";
-    assign_from_flat_type(s, "dest", "src", oh, false, true);
+    oh << " from_flat(";
+    emit_parameter_type_for_servant_callback_r(s, oh, false);
+    oh << "& src) {\n  struct ";
+    emit_parameter_type_for_proxy_call_r(s, oh, false);
+    oh << " result;\n";
+    assign_from_flat_type(s, "result", "src", oh, false, true);
+    oh << "  return result;\n";
     oh << "}\n";
 
-    oh << "inline void assign_from_cpp_" << s->name << "(";
+    oh << "inline void to_flat(";
     emit_parameter_type_for_servant_callback_r(s, oh, false);
-    oh << "& dest, const ";
+    oh << "& dest, const struct ";
     emit_parameter_type_for_proxy_call_r(s, oh, false);
     oh << "& src) {\n";
     assign_from_cpp_type(s, "dest", "src", oh, false, true);
     oh << "}\n";
-    ctx_->set_namespace(saved_namespace);
-    oh << "} // namespace " << s->nm->name() << "::flat\n";
-    always_full_namespace(false);
+    // ctx_->set_namespace(saved_namespace);
+    oh << "} // namespace " << ns(s->nm) << "helpers::" << s->name << "\n\n";
+    bd = 0;
   }
 }
 
@@ -1486,7 +1552,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 
   oh << "public:\n"
         "  static std::string_view _get_class() noexcept { return \""
-     << ctx_->current_file() << '/' << ctx_->nm_cur()->to_ts_namespace() << '.' << ifs->name
+     << ctx_->current_file() << '/' << ctx_->nm_cur()->full_idl_namespace() << '.' << ifs->name
      << "\"; }\n"
         "  std::string_view get_class() const noexcept override { return I"
      << ifs->name

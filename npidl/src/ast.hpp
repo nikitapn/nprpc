@@ -13,6 +13,7 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
+#include <expected>
 
 #include "source_location.hpp"
 
@@ -119,7 +120,6 @@ class Namespace
   std::vector<std::pair<std::string, AstTypeDecl*>> types_;
   std::vector<std::pair<std::string, AstNumber>> constants_;
 
-  std::string construct_path(std::string delim, int level) const noexcept;
 
 public:
   Namespace()
@@ -160,29 +160,82 @@ public:
 
   bool is_root(const Context& ctx) const noexcept;
 
-  std::string to_cpp17_namespace(int level = -1) const noexcept
+  /** Constructs a path string by joining namespace components with the given delimiter.
+   * If start_level is specified, only include namespaces starting from that level (0-based).
+   * If level is -1, include all namespaces.
+   */
+  std::string construct_path(std::string delim, int start_level) const noexcept;
+
+  std::string to_cpp17_namespace(int start_level = -1) const noexcept
   {
-    return construct_path(std::string(2, ':'), level);
+    auto path = construct_path(std::string(2, ':'), start_level);
+    if (!path.empty() && path[0] == ':' && path[1] == ':')
+      return path.substr(2);
+    return path;
   }
 
-  std::string to_ts_namespace(int level = -1) const noexcept
+  std::string to_ts_namespace(int start_level = -1) const noexcept
   {
-    return construct_path(std::string(1, '.'), level);
+    auto path = construct_path(std::string(1, '.'), start_level);
+    if (!path.empty() && path[0] == '.')
+      return path.substr(1);
+    return path;
   }
 
-  std::string to_swift_namespace(int level = -1) const noexcept
+  std::string to_swift_namespace(int start_level = -1) const noexcept
   {
-    return construct_path(std::string(1, '.'), level);
+    return to_ts_namespace(start_level); // Swift uses the same namespace separator as TypeScript
   }
 
-  static std::pair<Namespace*, int> substract(Namespace* from, Namespace* what);
+  std::string full_idl_namespace() const noexcept
+  {
+    return to_ts_namespace(0);
+  }
 
-  std::vector<Namespace*> path() noexcept;
-  std::vector<const Namespace*> path() const noexcept;
-  Namespace* find_child(const std::string& str);
-  AstNumber* find_constant(const std::string& name);
-  AstTypeDecl* find_type(const std::string& str, bool only_this_namespace);
-  void add(const std::string& name, AstTypeDecl* type);
+  /**
+    * Returns the list of namespaces from root to this namespace.
+    */
+  template <typename Self>
+  auto path(this Self& self) noexcept
+  {
+    std::vector<Self*> result;
+    auto ptr = &self;
+    while (ptr) {
+      result.push_back(ptr);
+      ptr = ptr->parent();
+    }
+    std::reverse(result.begin(), result.end());
+    return result;
+  }
+
+  /**
+    * Finds the common ancestor of two namespaces. Returns <root> if they are in completely different branches.
+    */
+  static Namespace* find_common_ancestor(Namespace* a, Namespace* b);
+
+  /**
+    * Subtracts the common ancestor from "what" and returns the number of levels in the common ancestor.
+    * If they are in completely different branches, returns 0 and the full path of "what" is considered as the result.
+    */
+  static int substract(Namespace* from, Namespace* what);
+
+  bool has_parent(const std::string_view name) const noexcept
+  {
+    for (auto ptr = parent(); ptr; ptr = ptr->parent()) {
+      if (ptr->name() == name)
+        return true;
+    }
+    return false;
+  }
+
+  Namespace* find_child(std::string_view str);
+  AstNumber* find_constant(std::string_view name);
+  AstTypeDecl* find_type(std::string_view str, bool only_this_namespace);
+  
+  /**
+    * Adds a type to the namespace. Returns an error if a type with the same name already exists in this namespace.
+    */
+  std::expected<bool, std::string> add(const std::string& name, AstTypeDecl* type);
   void add_constant(std::string&& name, AstNumber&& number);
   Namespace* push(std::string&& s) noexcept;
   void push(Namespace* nm) noexcept
@@ -198,6 +251,8 @@ public:
     return types_;
   }
   const std::vector<Namespace*>& children() const noexcept { return children_; }
+
+  void print_debug(int indent = 0) const noexcept;
 };
 
 enum class FieldType {
@@ -400,6 +455,10 @@ struct AstStructDecl : AstTypeDecl, AstNodeWithPosition {
   bool flat = true;
   bool internal = false;
 
+  // This is set during built-in types loading to distinguish them from user-defined types with the same namespace
+  // And avoid generating helpers for built-in types when processing user-defined types in the same namespace (e.g., nprpc::ObjectId)
+  bool is_builtin = false;
+
   bool is_exception() const noexcept { return exception_id != -1; }
   const struct_id_t& get_function_struct_id();
 
@@ -554,9 +613,11 @@ using AFFAList = List<struct_id_t, AstStructDecl*>;
 
 class Context
 {
-  Namespace* nm_root_;
+  Namespace* nm_global_; // Truly global root, always anonymous
+  Namespace* nm_root_;   // User's module namespace root (point to nm_global_ or child)
   Namespace* nm_cur_;
   int exception_id_last = -1;
+  bool parsing_builtins_ = false;
 
   std::string module_name;
   int module_level = 0;
@@ -572,10 +633,16 @@ class Context
   };
   std::vector<FileContext> file_stack_;
 
+
 public:
+  struct BuiltinTypeInfo {
+    AstStructDecl* object_id_struct = nullptr;
+  } builtin_types_info_;
+
   AFFAList affa_list;
   int m_struct_n_ = 0;
   std::vector<AstStructDecl*> exceptions;
+  std::vector<AstStructDecl*> builtin_exceptions;
   std::vector<AstInterfaceDecl*> interfaces;
   std::vector<AstImportDecl*> imports; // All imports in this file
 
@@ -629,6 +696,9 @@ public:
   template<typename Self>
   auto nm_root(this Self&& self) { return self.nm_root_; }
 
+  template<typename Self>
+  auto nm_global(this Self&& self) { return self.nm_global_; }
+
   Namespace* set_namespace(Namespace* nm)
   {
     auto old = nm_cur_;
@@ -636,7 +706,8 @@ public:
     return old;
   }
 
-  auto get_structs_with_helpers() const { return structs_with_helpers_; }
+  auto get_structs_with_helpers() const noexcept { return structs_with_helpers_; }
+  bool struct_has_helpers(AstStructDecl* s) const noexcept { return structs_with_helpers_.contains(s); }
 
   void mark_struct_as_having_helpers(AstStructDecl* s)
   {
@@ -704,9 +775,12 @@ public:
     return file_stack_[file_stack_.size() - 2].file_path;
   }
 
+  AstStructDecl& get_struct_by_path(std::string_view path) const;
+
   Context(std::filesystem::path initial_file_path = "<in-memory>")
-      : nm_root_(new Namespace())
-      , nm_cur_(nm_root_)
+      : nm_global_(new Namespace(nullptr, "<root>"))  // Global root, always anonymous
+      , nm_root_(nm_global_)         // Initially points to global
+      , nm_cur_(nm_global_)
   {
     // Initialize file stack with the main file
     std::string base_name =
@@ -717,9 +791,31 @@ public:
     file_stack_.push_back(FileContext{
         .file_path = std::move(initial_file_path),
         .base_name = std::move(base_name),
-        .namespace_at_entry = nm_root_ // Main file starts at root namespace
+        .namespace_at_entry = nm_global_ // Main file starts at global root
     });
   }
+  
+  // Set parsing builtins mode. When true, module declaration creates
+  // child namespace instead of renaming root.
+  void set_parsing_builtins(bool value) noexcept { parsing_builtins_ = value; }
+  bool is_parsing_builtins() const noexcept { return parsing_builtins_; }
+
+  // Reset context state after parsing builtins.
+  // Keeps builtins in nm_global_, resets nm_root_ and nm_cur_ to global root.
+  void reset_after_builtins()
+  {
+    parsing_builtins_ = false;
+    nm_root_ = nm_global_;
+    nm_cur_ = nm_global_;
+    // Module name/level should already be 0 since builtins don't set them
+    // Don't touch file_stack_ - it was set up by constructor
+    // Don't clear exceptions/interfaces/imports - those are file-level
+    builtin_types_info_.object_id_struct = &get_struct_by_path("nprpc::detail::ObjectId");
+    exception_id_last = -1; // Reset exception ID counter after builtins
+    builtin_exceptions = std::move(exceptions); // Move built-in exceptions to separate vector
+  }
+
+  BuiltinTypeInfo get_builtin_types_info() const noexcept { return builtin_types_info_; }
 }; // Context
 
 

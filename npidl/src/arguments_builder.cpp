@@ -45,6 +45,7 @@ AstStructDecl* ArgumentsStructBuilder::make_struct(
   s->exception_id = -1; // Mark as non-exception
   s->internal = true; // Mark as internal (not user-defined)
   s->nm = ctx_->nm_cur(); // Set namespace to current namespace
+  s->is_builtin = ctx_->is_parsing_builtins(); // Mark as built-in if we're currently parsing built-ins
 
   std::transform(args.begin(), args.end(), std::back_inserter(s->fields),
                  [ix = 0, s, fn](AstFunctionArgument* arg) mutable {

@@ -764,7 +764,7 @@ NPRPC_API Object* create_object_from_flat(detail::flat::ObjectId_Direct direct,
   obj->local_ref_cnt_ = 1;
 
   auto& oid = obj->get_data();
-  nprpc::detail::helpers::assign_from_flat_ObjectId(direct, oid);
+  oid = nprpc::detail::helpers::ObjectId::from_flat(direct);
 
   if (direct.flags() &
       static_cast<nprpc::oflags_t>(detail::ObjectFlag::Tethered)) {

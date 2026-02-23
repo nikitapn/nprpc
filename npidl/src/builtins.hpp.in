@@ -1,0 +1,14 @@
+// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// SPDX-License-Identifier: MIT
+// AUTO-GENERATED from nprpc_base.npidl - do not edit manually
+
+#pragma once
+
+namespace npidl {
+
+// Embedded IDL containing core types that should always be available.
+// This string is parsed at compiler startup before any user files.
+// The types defined here can be used without explicit imports.
+constexpr const char* builtin_idl = R"(@NPRPC_BASE_IDL_CONTENT@)";
+
+} // namespace npidl

@@ -1,5 +1,13 @@
 # npidl - NPRPC Interface Definition Language compiler
 
+# Generate builtins.hpp from nprpc_base.npidl
+file(READ "${CMAKE_SOURCE_DIR}/idl/nprpc_base.npidl" NPRPC_BASE_IDL_CONTENT)
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/builtins.hpp.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/builtins.hpp"
+  @ONLY
+)
+
 # Library with the core parser logic (reusable for tests)
 add_library(npidl_core STATIC
   src/ast.hpp
@@ -33,6 +41,7 @@ add_library(npidl_core STATIC
 target_include_directories(npidl_core
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_BINARY_DIR}  # For generated builtins.hpp
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${CMAKE_SOURCE_DIR}/include/nprpc/impl/misc

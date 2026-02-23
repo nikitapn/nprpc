@@ -13,75 +13,69 @@ using namespace npidl;
 
 TEST(NPIDL, TestNamespaceSubstitution)
 {
-  auto create_namespace = [](std::string_view full_name) {
-    Namespace* cur = nullptr;
+  auto root_namespace = new Namespace(nullptr, "<root>");
+  auto create_namespace = [root_namespace](std::string_view full_name) {
+    Namespace* cur = root_namespace;
     size_t start = 0;
-    if (full_name.length() > 2 && full_name.substr(0, 2) == "::") {
+    if (full_name.length() > 2 && full_name.substr(0, 2) == "::")
       full_name = full_name.substr(2, std::string_view::npos);
-      cur = new Namespace(nullptr, "");
-    }
+
     while (start < full_name.size()) {
       size_t dot = full_name.find("::", start);
       if (dot == std::string_view::npos) {
         dot = full_name.size();
       }
       std::string_view part = full_name.substr(start, dot - start);
-      if (cur == nullptr) {
-        cur = new Namespace(nullptr, std::string(part));
-      } else {
-        cur = cur->push(std::string(part));
-      }
       start = dot + 2;
+
+      Namespace* child = cur->find_child(std::string(part));
+      if (child == nullptr) cur = cur->push(std::string(part));
+      else cur = child;
     }
     return cur;
   };
 
-  auto ns1 = create_namespace("A::B::C::D");
-  auto ns2 = create_namespace("A::B::X::Y");
-  auto sub = Namespace::substract(ns1, ns2);
-  ASSERT_NE(sub.first, nullptr);
-  EXPECT_EQ(sub.first->name(), "X");
-  EXPECT_EQ(sub.second, 2);
+  auto n1 = create_namespace("A::B::C::D");
+  auto n2 = create_namespace("A::B::X::Y");
+  int level = Namespace::substract(n1, n2);
+  EXPECT_EQ(level, 3);
+  EXPECT_EQ(n2->to_cpp17_namespace(level), "X::Y");
 
-  auto ns3 = create_namespace("A::B::C::D::E::F");
-  auto ns4 = create_namespace("A::B::C");
-  auto sub2 = Namespace::substract(ns3, ns4);
-  ASSERT_EQ(sub2.first, nullptr);
-  EXPECT_EQ(sub2.second, 3);
+  n1 = create_namespace("A::B::C::D::E::F");
+  n2 = create_namespace("A::B::C");
+  level = Namespace::substract(n1, n2);
+  EXPECT_EQ(level, 4);
+  EXPECT_EQ(n2->to_cpp17_namespace(level), "");
 
-  auto ns5 = create_namespace("X::Y::Z");
-  auto ns6 = create_namespace("X::Y::Z");
-  auto sub3 = Namespace::substract(ns5, ns6);
-  EXPECT_EQ(sub3.first, nullptr);
-  EXPECT_EQ(sub3.second, 3);
+  n1 = create_namespace("X::Y::Z");
+  n2 = create_namespace("X::Y::Z");
+  level = Namespace::substract(n1, n2);
+  EXPECT_EQ(level, 4);
+  EXPECT_EQ(n2->to_cpp17_namespace(level), "");
 
-  auto ns7 = create_namespace("M::N::O");
-  auto ns8 = create_namespace("M::N::O::P");
-  auto sub4 = Namespace::substract(ns7, ns8);
-  ASSERT_NE(sub4.first, nullptr);
-  EXPECT_EQ(sub4.first->name(), "P");
-  EXPECT_EQ(sub4.second, 3);
+  n1 = create_namespace("M::N::O");
+  n2 = create_namespace("M::N::O::P");
+  level = Namespace::substract(n1, n2);
+  EXPECT_EQ(level, 4);
+  EXPECT_EQ(n2->to_cpp17_namespace(level), "P");
 
-  auto ns9 = create_namespace("Q::R::S::T");
-  auto ns10 = create_namespace("M::N::Q");
-  auto sub5 = Namespace::substract(ns9, ns10);
-  ASSERT_NE(sub5.first, nullptr);
-  EXPECT_EQ(sub5.first->name(), "M");
-  EXPECT_EQ(sub5.second, 0);
+  n1 = create_namespace("Q::R::S::T");
+  n2 = create_namespace("M::N::Q");
+  level = Namespace::substract(n1, n2);
+  EXPECT_EQ(level, 0);
+  EXPECT_EQ(n2->to_cpp17_namespace(level), "::M::N::Q");
 
-  auto ns11 = create_namespace("nprpc");
-  auto ns12 = create_namespace("nprpc::detail");
+  n1 = create_namespace("nprpc");
+  n2 = create_namespace("nprpc::detail::helpers");
+  level = Namespace::substract(n1, n2);
+  EXPECT_EQ(level, 2);
+  EXPECT_EQ(n2->to_cpp17_namespace(level), "detail::helpers");
 
-  std::cout << ns11->to_cpp17_namespace() << " vs "
-            << ns12->to_cpp17_namespace() << std::endl;
-  std::cout << "Lengths: " << ns11->length() << " vs " << ns12->length()
-            << std::endl;
-
-  auto sub6 = Namespace::substract(ns11, ns12);
-  ASSERT_NE(sub6.first, nullptr);
-  EXPECT_EQ(sub6.first->name(), "detail");
-  EXPECT_EQ(sub6.second, 1);
-  EXPECT_EQ(sub6.first->to_cpp17_namespace(sub6.second), "detail");
+  n1 = create_namespace("myinterface::something");
+  n2 = create_namespace("nprpc::detail::helpers");
+  level = Namespace::substract(n1, n2);
+  EXPECT_EQ(level, 0);
+  EXPECT_EQ(n2->to_cpp17_namespace(level), "::nprpc::detail::helpers");
 }
 
 // TEST(NPIDL, TestErrorRecovery) {

@@ -46,10 +46,13 @@ SwiftBuilder::SwiftBuilder(Context* ctx, std::filesystem::path out_dir)
 
 std::ostream& operator<<(std::ostream& os, const SwiftBuilder::_ns& ns)
 {
-  auto [sub, level] = Namespace::substract(ns.builder.ctx_->nm_cur(), ns.nm);
-  if (sub)
-    os << sub->to_swift_namespace(level) << '.';
-  return os;
+  int level = Namespace::substract(ns.builder.ctx_->nm_cur(), ns.nm);
+  const auto path = ns.nm->construct_path(".", level);
+  if (path.size() == 0 || (path.size() == 1 && path[0] == '.')) {
+    return os;
+  }
+
+  return os << path << '.';
 }
 
 SwiftBuilder::_ns SwiftBuilder::ns(Namespace* nm) const
@@ -426,7 +429,7 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
 void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 {
   const std::string class_name = swift_type_name(ifs->name);
-  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->to_ts_namespace() + '.' + ifs->name;
+  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->full_idl_namespace() + '.' + ifs->name;
 
   // Check if client proxy can conform to protocol
   // A method causes non-conformance if:
@@ -869,7 +872,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
   out << bl() << "public override init() { super.init() }\n\n";
 
   // getClass() override - return the fully qualified interface class name
-  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->to_ts_namespace() + '.' + ifs->name;
+  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->full_idl_namespace() + '.' + ifs->name;
   out << bl() << "public override func getClass() -> String " << bb();
   out << bl() << "return \"" << class_id << "\"\n";
   out << eb() << "\n";
@@ -1770,15 +1773,14 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
       if (ftr->id == FieldType::Alias)
         ftr = calias(ftr)->get_real_type();
 
-      auto [f_size, f_align] = get_type_size_align(field->type);
-      if (ftr->id == FieldType::Vector || ftr->id == FieldType::String || 
-          ftr->id == FieldType::Optional || ftr->id == FieldType::Struct) {
-        int aligned_offset = align_offset(f_align, field_offset, f_size);
+      auto [f_size, f_align] = get_type_size_align(ftr);
+      int aligned_offset = align_offset(f_align, field_offset, f_size);
+      if (ftr->id == FieldType::Vector || ftr->id == FieldType::Array ||
+          ftr->id == FieldType::String || ftr->id == FieldType::Optional ||
+          ftr->id == FieldType::Struct || ftr->id == FieldType::Object)
+      {
         std::string field_op = op + " + " + std::to_string(aligned_offset);
         emit_safety_checks_r(ftr, field_op, aligned_offset, ftr->id != FieldType::Struct);
-      } else {
-        // For other field types, just increment offset
-        align_offset(f_align, field_offset, f_size);
       }
     }
     break;
@@ -1851,6 +1853,10 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
     emit_safety_checks_r(real_type, op, offset, top_type);
     break;
   }
+
+  case FieldType::Object:
+    emit_safety_checks_r(ctx_->builtin_types_info_.object_id_struct, op, offset, false);
+    break;
 
   default:
     break;
