@@ -4,10 +4,6 @@
   "version": "1.0",
   "description": "Inspect NPRPC calls in real time – request/response arguments, timings, object identity.",
   "devtools_page": "devtools.html",
-  "background": {
-    "service_worker": "background.js",
-    "type": "module"
-  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],

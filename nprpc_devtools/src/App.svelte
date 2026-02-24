@@ -14,16 +14,12 @@
   // Pending events keyed by id (status=pending, awaiting call_end).
   const pending = new Map<number, RpcEventWithKey>();
 
-  // ── Message relay from background ────────────────────────────────
+  // ── Direct connection to content script (no background SW) ─────────
   onMount(() => {
-    const port = chrome.runtime.connect({ name: 'panel' });
+    let port: chrome.runtime.Port;
+    const tabId = chrome.devtools.inspectedWindow.tabId;
 
-    port.postMessage({
-      type : 'panel_init',
-      tabId: chrome.devtools.inspectedWindow.tabId,
-    });
-
-    port.onMessage.addListener((msg: DebugMsg) => {
+    const onMessage = (msg: DebugMsg) => {
       if (!recording) return;
 
       if (msg.type === 'nprpc_call_start') {
@@ -39,13 +35,21 @@
           if (selected?.key === ev.key) selected = ev;
         }
       }
-    });
+    };
 
-    port.onDisconnect.addListener(() => {
-      // background service-worker restarted; reconnect on next interaction
-    });
+    const connect = () => {
+      port = chrome.tabs.connect(tabId, { name: 'nprpc_devtools' });
+      port.onMessage.addListener(onMessage);
+      port.onDisconnect.addListener(() => {
+        // page navigated/reloaded — re-inject happens automatically,
+        // reconnect after a short delay to let the content script settle.
+        pending.clear();   // drop any calls that were in-flight before reload
+        setTimeout(connect, 500);
+      });
+    };
 
-    return () => port.disconnect();
+    connect();
+    return () => port?.disconnect();
   });
 
   // ── Actions ──────────────────────────────────────────────────────
