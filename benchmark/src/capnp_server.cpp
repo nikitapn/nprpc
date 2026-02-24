@@ -51,13 +51,12 @@ protected:
   }
 };
 
-static bool g_shutdown_requested = false;
+static kj::Own<kj::PromiseFulfiller<void>> g_shutdownFulfiller;
 
 void signalHandler(int signum)
 {
-  std::cout << "[capnp_server] Shutdown signal received (" << signum << ")"
-            << std::endl;
-  g_shutdown_requested = true;
+  std::cout << "[capnp_server] Shutdown signal received (" << signum << ")\n";
+  if (g_shutdownFulfiller) g_shutdownFulfiller->fulfill();
 }
 
 int main(int argc, const char* argv[])
@@ -76,13 +75,13 @@ int main(int argc, const char* argv[])
   std::cout << "[capnp_server] Cap'n Proto Benchmark Server is running on "
             << argv[1] << std::endl;
 
-  // Run until shutdown
-  auto& waitScope = server.getWaitScope();
-  while (!g_shutdown_requested) {
-    waitScope.poll();
-    usleep(10000); // 10ms
-  }
+  // Set up a promise-based shutdown trigger and block the event loop on it.
+  // Previously the loop used usleep(10000) which caused ~10ms latency on
+  // every request because the server was sleeping between polls.
+  auto paf = kj::newPromiseAndFulfiller<void>();
+  g_shutdownFulfiller = kj::mv(paf.fulfiller);
+  paf.promise.wait(server.getWaitScope());
 
-  std::cout << "[capnp_server] Server shutting down..." << std::endl;
+  std::cout << "[capnp_server] Server shutting down...\n";
   return 0;
 }

@@ -578,66 +578,15 @@ await manager.RegisterProcessor(processor); // Pass servant as parameter
 
 NPRPC includes comprehensive benchmarks comparing against gRPC and Cap'n Proto.
 
-*Benchmarks built with -O3 optimization. Results from November 2025.*
-
-### Benchmark Results
-
-#### Empty Call Latency (no payload)
-| Framework | Time | Calls/sec |
-|-----------|------|-----------|
-| **NPRPC UDP** | **76 μs** | **38.8k/s** |
-| **NPRPC TCP** | 119 μs | 55.2k/s |
-| **NPRPC WebSocket** | 127 μs | 47.9k/s |
-| **NPRPC SharedMemory** | 131 μs | 60.9k/s |
-| gRPC | 332 μs | 16.7k/s |
-| Cap'n Proto | 10,185 μs | 16.0k/s |
-
-#### Call With Return Value
-| Framework | Time | Calls/sec |
-|-----------|------|-----------|
-| **NPRPC TCP** | 117 μs | 55.6k/s |
-| **NPRPC WebSocket** | 126 μs | 48.7k/s |
-| **NPRPC SharedMemory** | 136 μs | 54.0k/s |
-| gRPC | 329 μs | 16.9k/s |
-| Cap'n Proto | 10,197 μs | 15.1k/s |
-
-#### Large Data Transfer (1 MB payload)
-| Framework | Time | Throughput |
-|-----------|------|------------|
-| **NPRPC SharedMemory** | **0.85 ms** | **4.50 GiB/s** |
-| gRPC | 2.64 ms | 2.42 GiB/s |
-| **NPRPC TCP** | 9.39 ms | 843 MiB/s |
-| Cap'n Proto | 11.9 ms | 1.56 GiB/s |
-| **NPRPC WebSocket** | 82.8 ms | 2.69 GiB/s |
-
-#### Large Data Transfer (10 MB payload)
-| Framework | Time | Throughput |
-|-----------|------|------------|
-| gRPC | 13.8 ms | 2.27 GiB/s |
-| **NPRPC SharedMemory** | 17.6 ms | 2.59 GiB/s |
-| **NPRPC TCP** | 18.4 ms | 1.91 GiB/s |
-| Cap'n Proto | 29.5 ms | 1.04 GiB/s |
-| **NPRPC WebSocket** | 43.3 ms | 2.23 GiB/s |
-
-**Key Takeaways:**
-- **UDP is fastest** for fire-and-forget calls at 76μs latency
-- NPRPC is **3-4x faster** than gRPC for RPC calls
-- NPRPC SharedMemory achieves **4.50 GiB/s** throughput for 1MB payloads
-- Cap'n Proto has high latency due to 10ms polling interval
-
 ### Running Benchmarks
 
 ```bash
-# Build with benchmarks
-cmake -DNPRPC_BUILD_TESTS=ON ..
-cmake --build .
-
 # Run all benchmarks
-./benchmark/nprpc_benchmarks
+./run_benchmarks.sh
 
 # Run specific benchmark suite
-./benchmark/nprpc_benchmarks --benchmark_filter=LargeData
-./benchmark/nprpc_benchmarks --benchmark_filter=EmptyCall
+./run_benchmarks.sh --benchmark_filter=LargeData
+./run_benchmarks.sh --benchmark_filter=EmptyCall
 ```
 
 See [`benchmark/README.md`](benchmark/README.md) for detailed benchmark documentation.

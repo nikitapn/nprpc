@@ -4,8 +4,6 @@
 #include "common.hpp"
 
 #include <benchmark/benchmark.h>
-#include <memory>
-#include <thread>
 
 namespace {
 // Shared benchmark fixture
@@ -226,7 +224,7 @@ BENCHMARK_REGISTER_F(LatencyFixture,
     ->Arg(2) // WebSocket
     // ->Arg(3)  // UDP
     ->Arg(4) // QUIC
-    ->Unit(benchmark::kMicrosecond);
+    ->UseRealTime()->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(LatencyFixture,
                      CallWithReturn)
@@ -234,7 +232,7 @@ BENCHMARK_REGISTER_F(LatencyFixture,
     ->Arg(1)
     ->Arg(2)
     ->Arg(4) // QUIC
-    ->Unit(benchmark::kMicrosecond);
+    ->UseRealTime()->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(LatencyFixture,
                      SmallStringCall)
@@ -242,7 +240,7 @@ BENCHMARK_REGISTER_F(LatencyFixture,
     ->Arg(1)
     ->Arg(2)
     ->Arg(4) // QUIC
-    ->Unit(benchmark::kMicrosecond);
+    ->UseRealTime()->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(LatencyFixture,
                      NestedDataCall)
@@ -250,7 +248,7 @@ BENCHMARK_REGISTER_F(LatencyFixture,
     ->Arg(1)
     ->Arg(2)
     ->Arg(4) // QUIC
-    ->Unit(benchmark::kMicrosecond);
+    ->UseRealTime()->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(LatencyFixture,
                      LargeData1MB)
@@ -258,7 +256,7 @@ BENCHMARK_REGISTER_F(LatencyFixture,
     ->Arg(1)
     ->Arg(2)
     ->Arg(4) // QUIC
-    ->Unit(benchmark::kMillisecond);
+    ->UseRealTime()->Unit(benchmark::kMillisecond);
 
 BENCHMARK_REGISTER_F(LatencyFixture,
                      LargeData10MB)
@@ -266,7 +264,7 @@ BENCHMARK_REGISTER_F(LatencyFixture,
     ->Arg(1)
     ->Arg(2)
     ->Arg(4) // QUIC
-    ->Unit(benchmark::kMillisecond);
+    ->UseRealTime()->Unit(benchmark::kMillisecond);
 
 /* RESULTS:
 --------------------------------------------------------------------------------------

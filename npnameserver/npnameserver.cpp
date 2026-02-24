@@ -12,7 +12,7 @@
 #include <boost/format.hpp>
 
 #ifndef NPRPC_NAMESERVER_LOG
-#define NPRPC_NAMESERVER_LOG 1
+# define NPRPC_NAMESERVER_LOG 0
 #endif
 
 class NameserverImpl : public nprpc::common::INameserver_Servant
@@ -60,7 +60,7 @@ int main()
 
   try {
     auto rpc = nprpc::RpcBuilder()
-                   .set_log_level(nprpc::LogLevel::trace)
+                   .set_log_level(nprpc::LogLevel::error)
                    .with_tcp(15000)
                    .with_http(15001)
                    .build(ioc);

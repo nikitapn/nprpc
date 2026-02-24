@@ -189,19 +189,19 @@ BENCHMARK_DEFINE_F(GrpcLatencyFixture, LargeData10MB)(benchmark::State& state)
 
 // Register benchmarks
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, EmptyCall)
-    ->Unit(benchmark::kMicrosecond);
+    ->UseRealTime()->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, CallWithReturn)
-    ->Unit(benchmark::kMicrosecond);
+    ->UseRealTime()->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, SmallStringCall)
-    ->Unit(benchmark::kMicrosecond);
+    ->UseRealTime()->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, NestedDataCall)
-    ->Unit(benchmark::kMicrosecond);
+    ->UseRealTime()->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, LargeData1MB)
-    ->Unit(benchmark::kMillisecond);
+    ->UseRealTime()->Unit(benchmark::kMillisecond);
 
 BENCHMARK_REGISTER_F(GrpcLatencyFixture, LargeData10MB)
-    ->Unit(benchmark::kMillisecond);
+    ->UseRealTime()->Unit(benchmark::kMillisecond);

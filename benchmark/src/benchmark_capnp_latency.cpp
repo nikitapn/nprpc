@@ -78,8 +78,8 @@ BENCHMARK_DEFINE_F(CapnpLatencyFixture,
     benchmark::DoNotOptimize(response.getResult());
   }
 
-  state.counters["bytes_per_second"] = benchmark::Counter(
-      state.iterations() * testData.size(), benchmark::Counter::kIsRate);
+  state.counters["bytes_per_second"] =
+      benchmark::Counter(state.iterations() * testData.size(), benchmark::Counter::kIsRate);
   state.counters["calls/sec"] =
       benchmark::Counter(state.iterations(), benchmark::Counter::kIsRate);
   state.SetLabel("Cap'n Proto");
@@ -163,14 +163,14 @@ BENCHMARK_DEFINE_F(CapnpLatencyFixture, LargeData10MB)(benchmark::State& state)
 }
 
 BENCHMARK_REGISTER_F(CapnpLatencyFixture, EmptyCall)
-    ->Unit(benchmark::kMicrosecond);
+    ->UseRealTime()->Unit(benchmark::kMicrosecond);
 BENCHMARK_REGISTER_F(CapnpLatencyFixture, CallWithReturn)
-    ->Unit(benchmark::kMicrosecond);
+    ->UseRealTime()->Unit(benchmark::kMicrosecond);
 BENCHMARK_REGISTER_F(CapnpLatencyFixture, SmallStringCall)
-    ->Unit(benchmark::kMicrosecond);
+    ->UseRealTime()->Unit(benchmark::kMicrosecond);
 BENCHMARK_REGISTER_F(CapnpLatencyFixture, NestedDataCall)
-    ->Unit(benchmark::kMicrosecond);
+    ->UseRealTime()->Unit(benchmark::kMicrosecond);
 BENCHMARK_REGISTER_F(CapnpLatencyFixture, LargeData1MB)
-    ->Unit(benchmark::kMillisecond);
+    ->UseRealTime()->Unit(benchmark::kMillisecond);
 BENCHMARK_REGISTER_F(CapnpLatencyFixture, LargeData10MB)
-    ->Unit(benchmark::kMillisecond);
+    ->UseRealTime()->Unit(benchmark::kMillisecond);

@@ -254,7 +254,9 @@ int main(int argc, char** argv)
   std::cout << "\n=== NPRPC Benchmark Environment Setup ===\n";
 
   // Initialize global RPC instance
-  g_rpc = nprpc::RpcBuilder().build(thread_pool::get_instance().ctx());
+  g_rpc = nprpc::RpcBuilder()
+    .set_log_level(nprpc::LogLevel::error)
+    .build(thread_pool::get_instance().ctx());
 
   nprpc::benchmark::BenchmarkServerManager server;
 
