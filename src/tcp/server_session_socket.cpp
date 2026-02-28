@@ -30,12 +30,11 @@ class Session_Socket : public nprpc::impl::Session,
   };
 
   tcp::socket socket_;
-  uint32_t size_to_read_ = 0;
   std::deque<std::unique_ptr<work>> write_queue_;
 
   flat_buffer rx_buffer_{flat_buffer::default_initial_size()};
   flat_buffer tx_buffer_{flat_buffer::default_initial_size()};
-
+  std::uint32_t size_to_read_ = 0;
 public:
   // Simple socket sessions are not duplex, it's assumed that client is also
   // can accept new connetions from the server, so we don't need to handle
@@ -170,25 +169,35 @@ public:
       return;
     }
 
-    assert(len == 4);
+    if (len < 16) {
+      fail(boost::asio::error::invalid_argument, "read size header");
+      return;
+    }
+    
+    auto body_len = *(uint32_t*)rx_buffer_.data().data();
 
-    if (size_to_read_ > max_message_size) {
+    if (body_len > max_message_size) {
       NPRPC_LOG_ERROR("Rejected oversized message: {} bytes (max: {} bytes)",
-                      size_to_read_, max_message_size);
+                      body_len, max_message_size);
       return;
     }
 
-    *(uint32_t*)rx_buffer_.data().data() = size_to_read_;
-    rx_buffer_.commit(4);
-
-    do_read_body();
+    if (body_len == len - 4) {
+      // No more data to read, process immediately
+      rx_buffer_.commit(len);
+      size_to_read_ = 0;
+      on_read_body(boost::system::error_code(), 0);
+    } else {
+      size_to_read_ = body_len;
+      rx_buffer_.commit(4);
+      on_read_body(boost::system::error_code(), len - 4);
+    }
   }
 
   void do_read_size()
   {
     rx_buffer_.consume(rx_buffer_.size());
-    rx_buffer_.prepare(4);
-    socket_.async_read_some(net::mutable_buffer(&size_to_read_, 4),
+    socket_.async_read_some(rx_buffer_.prepare(1024),
                             std::bind(&Session_Socket::on_read_size,
                                       shared_from_this(), std::placeholders::_1,
                                       std::placeholders::_2));
@@ -200,6 +209,8 @@ public:
       : Session(socket.get_executor())
       , socket_(std::move(socket))
   {
+    socket_.set_option(net::ip::tcp::no_delay(true));
+
     auto endpoint = socket_.remote_endpoint();
     ctx_.remote_endpoint =
         EndPoint(EndPointType::TcpTethered,

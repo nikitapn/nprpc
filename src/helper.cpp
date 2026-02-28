@@ -49,6 +49,12 @@ sync_socket_connect(const EndPoint& endpoint,
           ("Could not connect to the socket (ep=" + selected_endpoint.address().to_string() + 
            ":" + std::to_string(selected_endpoint.port()) + "): " + ec.message()).c_str());
     }
+
+    socket.set_option(net::ip::tcp::no_delay(true), ec);
+    if (ec) {
+      throw nprpc::Exception(
+          ("Could not set TCP_NODELAY option: " + ec.message()).c_str());
+    } 
   }
 
   return selected_endpoint;

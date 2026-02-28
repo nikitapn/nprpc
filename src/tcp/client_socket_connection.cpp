@@ -194,13 +194,12 @@ void SocketConnection::do_read_size()
 {
   auto& buf = current_rx_buffer();
   buf.consume(buf.size());
-  buf.prepare(4);
 
   timeout_timer_.expires_after(timeout_);
-  socket_.async_read_some(net::mutable_buffer(&rx_size_, 4),
-                          std::bind(&SocketConnection::on_read_size,
-                                    shared_from_this(), std::placeholders::_1,
-                                    std::placeholders::_2));
+  socket_.async_read_some(buf.prepare(1024),
+                           std::bind(&SocketConnection::on_read_size,
+                                     shared_from_this(), std::placeholders::_1,
+                                     std::placeholders::_2));
 }
 
 void SocketConnection::do_read_body()
@@ -226,9 +225,15 @@ void SocketConnection::on_read_size(const boost::system::error_code& ec,
     return;
   }
 
-  assert(len == 4);
+ if (len < 16) {
+    fail(boost::asio::error::invalid_argument, "read size header");
+    return;
+  }
 
-  if (rx_size_ > max_message_size) {
+  auto& buf = current_rx_buffer();
+  auto body_len = *(uint32_t*)buf.data().data();
+
+  if (body_len > max_message_size) {
     fail(boost::asio::error::no_buffer_space, "rx_size_ > max_message_size");
     if (!wq_.empty()) {
       (*wq_.front()).on_failed(ec);
@@ -237,11 +242,16 @@ void SocketConnection::on_read_size(const boost::system::error_code& ec,
     return;
   }
 
-  auto& buf = current_rx_buffer();
-  *static_cast<uint32_t*>(buf.data().data()) = rx_size_;
-  buf.commit(4);
-
-  do_read_body();
+  if (body_len == len - 4) {
+    // No more data to read, process immediately
+    buf.commit(len);
+    rx_size_ = 0;
+    on_read_body(boost::system::error_code(), 0);
+  } else {
+    rx_size_ = body_len;
+    buf.commit(4);
+    on_read_body(boost::system::error_code(), len - 4);
+  }
 }
 
 void SocketConnection::on_read_body(const boost::system::error_code& ec,
