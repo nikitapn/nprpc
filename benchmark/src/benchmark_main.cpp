@@ -254,8 +254,12 @@ int main(int argc, char** argv)
   std::cout << "\n=== NPRPC Benchmark Environment Setup ===\n";
 
   // Initialize global RPC instance
+  // with_tcp(0) = no server listener; with_uring_if enables the uring client
+  // path so outgoing connections use io_uring instead of Asio work-queue.
+  const bool use_uring_client = ::getenv("NPRPC_URING") != nullptr;
   g_rpc = nprpc::RpcBuilder()
     .set_log_level(nprpc::LogLevel::error)
+    .with_tcp(0).with_uring_if(use_uring_client)
     .build(thread_pool::get_instance().ctx());
 
   nprpc::benchmark::BenchmarkServerManager server;

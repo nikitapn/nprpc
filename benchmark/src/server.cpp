@@ -67,8 +67,8 @@ public:
   void stop_nameserver()
   {
     if (nameserver_pid > 0) {
-      std::cout << LOG_PREFIX "Stopping nameserver with PID: " << nameserver_pid
-                << std::endl;
+      // std::cout << LOG_PREFIX "Stopping nameserver with PID: " << nameserver_pid
+                // << std::endl;
       kill(nameserver_pid, SIGTERM);
 
       // Wait for the process to terminate
@@ -98,10 +98,12 @@ public:
 
     try {
       // Use the new RpcBuilder API
+      const bool use_epoll = ::getenv("NPRPC_EPOLL") != nullptr;
+      const bool use_uring  = ::getenv("NPRPC_URING")  != nullptr;
       rpc = nprpc::RpcBuilder()
                 .set_log_level(nprpc::LogLevel::error)
                 .with_hostname("localhost")
-                .with_tcp(22222)
+                .with_tcp(22222).with_epoll_if(use_epoll).with_uring_if(use_uring)
                 .with_http(22223)
                 .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                      "/home/nikita/projects/nprpc/certs/out/localhost.key")
@@ -147,7 +149,7 @@ class ServerControlImpl : public ::nprpc::benchmark::IServerControl_Servant
 {
   void Shutdown() override
   {
-    std::cout << LOG_PREFIX "Shutdown requested" << std::endl;
+    // std::cout << LOG_PREFIX "Shutdown requested" << std::endl;
     {
       std::lock_guard<std::mutex> lk(cv_m);
       shutdown_requested = true;
@@ -225,7 +227,7 @@ int main(int argc, char** argv)
   std::unique_lock<std::mutex> lk(cv_m);
   cv.wait(lk, [] { return shutdown_requested; });
 
-  std::cout << LOG_PREFIX "Server shutting down..." << std::endl;
+  // std::cout << LOG_PREFIX "Server shutting down..." << std::endl;
 
   // Give some time for the client to receive the response
   std::this_thread::sleep_for(std::chrono::seconds(1));

@@ -61,8 +61,8 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # Find liburing via pkg-config (required for io_uring support in Boost.Asio)
-# find_package(PkgConfig REQUIRED)
-# pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
 
 # Custom Boost directory support (for Docker/CI builds with local Boost)
 if(DEFINED BOOST_DIR)
@@ -188,6 +188,9 @@ add_library(nprpc
   # TCP transport
   src/tcp/client_socket_connection.cpp
   src/tcp/server_session_socket.cpp
+  src/tcp/server_epoll.cpp
+  src/tcp/server_uring.cpp
+  src/tcp/client_uring_connection.cpp
   # HTTP transport
   src/http/http_server.cpp
   src/http/http_utils.cpp
@@ -291,7 +294,7 @@ target_link_libraries(nprpc
     OpenSSL::SSL
     OpenSSL::Crypto
     Boost::headers
-    # PkgConfig::uring
+    PkgConfig::uring
 )
 
 # MsQuic linking

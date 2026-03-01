@@ -85,7 +85,7 @@ public:
 
     void stop_nameserver() {
         if (nameserver_pid > 0) {
-            std::cout << "Stopping nameserver with PID: " << nameserver_pid << std::endl;
+            // std::cout << "Stopping nameserver with PID: " << nameserver_pid << std::endl;
             kill(nameserver_pid, SIGTERM);
 
             // Wait for the process to terminate

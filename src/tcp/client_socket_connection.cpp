@@ -1,6 +1,7 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include <boost/asio/read.hpp>
 #include <boost/asio/write.hpp>
 
 #include <nprpc/common.hpp>
@@ -202,8 +203,13 @@ void SocketConnection::do_read_size()
 
 void SocketConnection::do_read_body()
 {
+  // Set timeout once for the entire body read — NOT per-chunk.
+  // async_read reads exactly rx_size_ bytes in a single composed operation,
+  // avoiding ~2*N timer cancel/reschedule + io_context dispatches (where N is
+  // the number of OS TCP segments for the message body, ~80 for 10MB default).
   timeout_timer_.expires_after(timeout_);
-  socket_.async_read_some(current_rx_buffer().prepare(rx_size_),
+  boost::asio::async_read(socket_,
+                          current_rx_buffer().prepare(rx_size_),
                           std::bind(&SocketConnection::on_read_body,
                                     shared_from_this(), std::placeholders::_1,
                                     std::placeholders::_2));
@@ -317,6 +323,13 @@ SocketConnection::SocketConnection(const EndPoint& endpoint,
   ctx_.remote_endpoint = endpoint;
   timeout_timer_.expires_after(std::chrono::system_clock::duration::max());
   endpoint_ = sync_socket_connect(endpoint, socket_);
+
+  // Large socket buffers: avoids ~80 TCP-window-fill cycles for 10MB messages.
+  // gRPC uses 4MB by default; without this, auto-tuning takes several RTTs.
+  constexpr int kLargeBuf = 4 * 1024 * 1024;
+  boost::system::error_code ec;
+  socket_.set_option(boost::asio::socket_base::receive_buffer_size(kLargeBuf), ec);
+  socket_.set_option(boost::asio::socket_base::send_buffer_size(kLargeBuf), ec);
 
   start_timeout_timer();
 }

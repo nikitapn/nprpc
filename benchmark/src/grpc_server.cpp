@@ -20,7 +20,7 @@ class ServerControlServiceImpl final
                   const grpc::benchmark::ShutdownRequest* request,
                   grpc::benchmark::ShutdownResponse* response) override
   {
-    std::cout << "Shutdown requested" << std::endl;
+    // std::cout << "Shutdown requested" << std::endl;
     // Signal server to shutdown (handled in main)
     return Status::OK;
   }

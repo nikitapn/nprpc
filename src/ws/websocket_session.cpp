@@ -36,8 +36,7 @@ void fail(beast::error_code ec, char const* what)
   if (ec == beast::error::timeout)
     return;
 
-  std::cerr << "[nprpc] WebSocketSession: " << what << ": " << ec.message()
-            << '\n';
+  NPRPC_LOG_INFO("WebSocketSession: {}: {}", what, ec.message());
 }
 
 template <class Derived> void WebSocketSession<Derived>::do_read()
@@ -90,11 +89,17 @@ void WebSocketSession<Derived>::on_read(
     rx_buffer_.size(), static_cast<uint32_t>(header.msg_id()), static_cast<uint32_t>(header.msg_type()), request_id);
 
   if (header.msg_type() == nprpc::impl::MessageType::Request) {
-    // Handle incoming request
-    flat_buffer tx_buffer{flat_buffer::default_initial_size()};
+    // Handle incoming request.
+    // Pre-size tx_buffer based on the last response we sent — after warm-up
+    // this eliminates repeated doubling realloc/memcpy for large responses.
+    flat_buffer tx_buffer{last_tx_size_};
     bool needs_reply = handle_request(rx_buffer_, tx_buffer);
 
     if (needs_reply) {
+      // Track size for next call before the buffer is moved out.
+      last_tx_size_ = std::max(tx_buffer.size(),
+                               std::size_t{flat_buffer::default_initial_size()});
+
       // Queue response for sending
       std::function<void(const boost::system::error_code&)> completion_handler =
           [](const boost::system::error_code&) {};
@@ -226,8 +231,7 @@ template <class Derived> void WebSocketSession<Derived>::timeout_action()
       flat_buffer empty_response{};
       it->second.completion_handler(boost::asio::error::timed_out,
                                     empty_response);
-      std::cout << "[nprpc] WebSocketSession: Timing out request ID: "
-                << it->first << '\n';
+      NPRPC_LOG_WARN("WebSocketSession: Timing out request ID: {}", it->first);
       it = pending_requests_.erase(it);
     } else {
       ++it;

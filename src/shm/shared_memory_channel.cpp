@@ -6,6 +6,8 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/shared_memory_channel.hpp>
 
+#include "../logging.hpp"
+
 namespace nprpc::impl {
 
 SharedMemoryChannel::SharedMemoryChannel(boost::asio::io_context& ioc,
@@ -31,23 +33,19 @@ SharedMemoryChannel::SharedMemoryChannel(boost::asio::io_context& ioc,
       recv_ring_ =
           LockFreeRingBuffer::create(recv_ring_name_, RING_BUFFER_SIZE);
 
-      std::cout << "Created ring buffers: " << send_ring_name_ << ", "
-                << recv_ring_name_ << " (" << RING_BUFFER_SIZE << " bytes each)"
-                << std::endl;
+      NPRPC_LOG_INFO("Created ring buffers: {} , {} ({} bytes each)", send_ring_name_, recv_ring_name_, RING_BUFFER_SIZE);
     } else {
       // Open existing ring buffers
       send_ring_ = LockFreeRingBuffer::open(send_ring_name_);
       recv_ring_ = LockFreeRingBuffer::open(recv_ring_name_);
 
-      std::cout << "Opened ring buffers: " << send_ring_name_ << ", "
-                << recv_ring_name_ << std::endl;
+      NPRPC_LOG_INFO("Opened ring buffers: {} , {}", send_ring_name_, recv_ring_name_);
     }
     // NOTE: read_thread_ is NOT started here.
     // Call start_reading() after wiring up on_data_received[_view].
 
   } catch (const std::exception& e) {
-    std::cerr << "Failed to create/open ring buffers: " << e.what()
-              << std::endl;
+    NPRPC_LOG_ERROR("Failed to create/open ring buffers: {}", e.what());
     cleanup_rings();
     throw std::runtime_error(
         std::string("SharedMemoryChannel initialization failed: ") + e.what());
@@ -104,14 +102,13 @@ bool SharedMemoryChannel::send(const void* data, uint32_t size)
     bool sent = send_ring_->try_write(data, size);
 
     if (!sent) {
-      std::cerr << "SharedMemoryChannel: Ring buffer full, message dropped"
-                << std::endl;
+      NPRPC_LOG_WARN("SharedMemoryChannel: Ring buffer full, message dropped");
     }
 
     return sent;
 
   } catch (const std::exception& e) {
-    std::cerr << "SharedMemoryChannel send error: " << e.what() << std::endl;
+    NPRPC_LOG_ERROR("SharedMemoryChannel send error: {}", e.what());
     return false;
   }
 }
@@ -210,9 +207,7 @@ void SharedMemoryChannel::read_loop()
       if (bytes_read > 0) {
         // Validate message size (security check)
         if (bytes_read > MAX_MESSAGE_SIZE) {
-          std::cerr << "SharedMemoryChannel: Rejected oversized message: "
-                    << bytes_read << " bytes (max: " << MAX_MESSAGE_SIZE << ")"
-                    << std::endl;
+          NPRPC_LOG_ERROR("SharedMemoryChannel: Rejected oversized message: {} bytes (max: {} bytes)", bytes_read, MAX_MESSAGE_SIZE);
           continue;
         }
 
@@ -228,8 +223,7 @@ void SharedMemoryChannel::read_loop()
       }
     } catch (const std::exception& e) {
       if (running_) {
-        std::cerr << "SharedMemoryChannel receive error: " << e.what()
-                  << std::endl;
+        NPRPC_LOG_ERROR("SharedMemoryChannel read error: {}", e.what());
       }
       break;
     }

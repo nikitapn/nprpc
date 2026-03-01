@@ -30,7 +30,7 @@ class ServerControlImpl : public ::nprpc::test::IServerControl_Servant
 {
   void Shutdown() override
   {
-    std::cout << "Shutdown requested" << std::endl;
+    // std::cout << "Shutdown requested" << std::endl;
     {
       std::lock_guard lk(cv_m);
       shutdown_requested = 1;
@@ -93,7 +93,7 @@ int main(int argc, char** argv)
   std::unique_lock lk(cv_m);
   cv.wait(lk, [] { return shutdown_requested; });
 
-  std::cout << "Server shutting down..." << std::endl;
+  // std::cout << "Server shutting down..." << std::endl;
 
   // Give some time for the client to receive the response
   if (shutdown_requested == 1)

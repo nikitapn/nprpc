@@ -11,6 +11,13 @@
 #include "logging.hpp"
 #include <nprpc_nameserver.hpp>
 
+#if defined(__linux__)
+namespace nprpc::impl {
+std::shared_ptr<Session> make_uring_client_connection(
+    const EndPoint& endpoint, boost::asio::any_io_executor ex);
+} // namespace nprpc::impl
+#endif
+
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
@@ -174,6 +181,8 @@ NPRPC_API Rpc* RpcBuilderBase::build(boost::asio::io_context& ioc)
   g_cfg.listen_quic_port = cfg_.quic_port;
   g_cfg.http3_enabled = cfg_.http3_enabled;
   g_cfg.ssr_enabled = cfg_.ssr_enabled;
+  g_cfg.use_epoll_tcp = cfg_.use_epoll_tcp;
+  g_cfg.use_uring_tcp = cfg_.use_uring_tcp;
   g_cfg.http_cert_file = cfg_.http_cert_file;
   g_cfg.http_key_file = cfg_.http_key_file;
   g_cfg.http_root_dir = cfg_.http_root_dir;
@@ -303,6 +312,12 @@ RpcImpl::get_session(const EndPoint& endpoint)
         "TCP "
         "connection");
   case EndPointType::Tcp:
+#if defined(__linux__)
+    if (g_cfg.use_uring_tcp) {
+      con = make_uring_client_connection(endpoint, ioc_.get_executor());
+      break;
+    }
+#endif
     con = std::make_shared<SocketConnection>(
         endpoint,
         boost::asio::ip::tcp::socket(boost::asio::make_strand(ioc_)));
@@ -664,7 +679,7 @@ bool RpcImpl::close_session(Session* session)
       it != opened_sessions_.end()) {
     opened_sessions_.erase(it);
   } else {
-    NPRPC_LOG_ERROR("Error: session not found");
+    NPRPC_LOG_WARN("Error: session not found");
     return false;
   }
   return true;
