@@ -1,13 +1,11 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include <boost/asio/write.hpp>
+
 #include <nprpc/common.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/stream_manager.hpp>
-
-#include <boost/asio/write.hpp>
-#include <future>
-#include <iostream>
 
 #include "helper.hpp"
 

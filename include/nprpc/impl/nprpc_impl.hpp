@@ -12,6 +12,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <optional>
 #include <stdexcept>
 #include <variant>
@@ -168,16 +169,19 @@ class RpcImpl : public Rpc
   std::mutex poas_mut_;
   std::array<std::shared_ptr<PoaImpl>, max_poa_objects> poas_;
   std::array<bool, max_poa_objects> poas_created_;
-  mutable std::mutex connections_mut_;
+  mutable std::shared_mutex connections_mut_;
   std::vector<std::shared_ptr<Session>> opened_sessions_;
 
 public:
   uint16_t port() const noexcept { return g_cfg.listen_tcp_port; }
   uint16_t websocket_port() const noexcept { return g_cfg.listen_http_port; }
 
-  void add_connection(std::shared_ptr<Session>&& session)
+  template <typename SessionSharedPtr>
+  requires std::is_convertible_v<std::remove_reference_t<SessionSharedPtr>, std::shared_ptr<Session>>
+  void add_connection(SessionSharedPtr&& session)
   {
-    opened_sessions_.push_back(std::move(session));
+    std::unique_lock<std::shared_mutex> lk(connections_mut_);
+    opened_sessions_.push_back(std::forward<SessionSharedPtr>(session));
   }
 
   bool has_session(const EndPoint& endpoint) const noexcept;

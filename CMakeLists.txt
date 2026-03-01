@@ -60,6 +60,10 @@ endif()
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
+# Find liburing via pkg-config (required for io_uring support in Boost.Asio)
+# find_package(PkgConfig REQUIRED)
+# pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+
 # Custom Boost directory support (for Docker/CI builds with local Boost)
 if(DEFINED BOOST_DIR)
   message(STATUS "Using custom Boost directory: ${BOOST_DIR}")
@@ -168,6 +172,8 @@ endforeach()
 add_custom_target(nprpc_copy_headers
   DEPENDS ${nprpc_stub_COPIED_HEADERS}
 )
+
+# add_definitions(-DBOOST_ASIO_HAS_IO_URING -DBOOST_ASIO_DISABLE_EPOLL)
 
 # Main library target
 add_library(nprpc
@@ -285,6 +291,7 @@ target_link_libraries(nprpc
     OpenSSL::SSL
     OpenSSL::Crypto
     Boost::headers
+    # PkgConfig::uring
 )
 
 # MsQuic linking

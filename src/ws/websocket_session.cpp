@@ -1,7 +1,9 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
-#include <future>
+#include <condition_variable>
+#include <mutex>
+
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/websocket_session.hpp>
 #include "../logging.hpp"
@@ -49,6 +51,7 @@ template <class Derived> void WebSocketSession<Derived>::do_read()
   }
 
   rx_buffer_.consume(rx_buffer_.size()); // Clear the buffer before reading
+  rx_buffer_.prepare(128 * 1024);
 
   derived().ws().async_read(
       rx_buffer_, beast::bind_front_handler(&WebSocketSession::on_read,
@@ -88,7 +91,8 @@ void WebSocketSession<Derived>::on_read(
 
   if (header.msg_type() == nprpc::impl::MessageType::Request) {
     // Handle incoming request
-    bool needs_reply = handle_request(rx_buffer_, tx_buffer_);
+    flat_buffer tx_buffer{flat_buffer::default_initial_size()};
+    bool needs_reply = handle_request(rx_buffer_, tx_buffer);
 
     if (needs_reply) {
       // Queue response for sending
@@ -96,8 +100,8 @@ void WebSocketSession<Derived>::on_read(
           [](const boost::system::error_code&) {};
 
       // Inject request ID into the response header
-      inject_request_id(tx_buffer_, request_id);
-      write_queue_.emplace_back(std::move(tx_buffer_),
+      inject_request_id(tx_buffer, request_id);
+      write_queue_.emplace_back(std::move(tx_buffer),
                                 std::move(completion_handler));
       do_write();
     }
@@ -239,17 +243,22 @@ void WebSocketSession<Derived>::send_receive(flat_buffer& buffer,
 
   // dump_message(buffer, false);
 
-  std::promise<std::pair<boost::system::error_code, flat_buffer>> promise;
-  auto future = promise.get_future();
+  std::condition_variable cv;
+  std::mutex mtx;
+  std::optional<std::pair<boost::system::error_code, flat_buffer>> result;
 
   send_receive_async(
       std::move(buffer),
-      [&promise](const boost::system::error_code& ec, flat_buffer& response) {
-        promise.set_value({ec, std::move(response)});
+      [&](const boost::system::error_code& ec, flat_buffer& response) {
+        std::lock_guard<std::mutex> lock(mtx);
+        result = std::make_pair(ec, std::move(response));
+        cv.notify_one();
       },
       timeout_ms);
 
-  auto [ec, response] = future.get();
+  std::unique_lock<std::mutex> lock(mtx);
+  cv.wait(lock, [&] { return result.has_value(); });
+  auto [ec, response] = std::move(*result);
 
   if (!ec) {
     buffer = std::move(response);
@@ -263,8 +272,9 @@ void WebSocketSession<Derived>::send_receive(flat_buffer& buffer,
 template <class Derived>
 void WebSocketSession<Derived>::send_receive_async(
     flat_buffer&& buffer,
-    std::optional<std::function<void(const boost::system::error_code&,
-                                     flat_buffer&)>>&& completion_handler,
+    std::optional<
+      std::function<void(const boost::system::error_code&, flat_buffer&)>
+      >&& completion_handler,
     uint32_t timeout_ms)
 {
   assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
@@ -302,10 +312,6 @@ void WebSocketSession<Derived>::send_receive_async(
                 // Writing failed, remove pending request and notify
                 auto it = pending_requests_.find(request_id);
                 if (it != pending_requests_.end()) {
-                  std::cerr << "[nprpc] WebSocketSession: Write "
-                               "failed for request ID: "
-                            << request_id << ", error: " << ec.message()
-                            << '\n';
                   flat_buffer empty_response{};
                   it->second.completion_handler(ec, empty_response);
                   pending_requests_.erase(it);

@@ -5,8 +5,9 @@
 
 #ifdef NPRPC_QUIC_ENABLED
 
-#include <boost/asio.hpp>
+#include <boost/asio/any_io_executor.hpp>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -59,12 +60,47 @@ private:
 };
 
 /**
+ * Context for zero-copy sends. Keeps the flat_buffer alive until
+ * MsQuic SEND_COMPLETE fires, avoiding an extra memcpy + allocation.
+ */
+struct SendContext {
+  flat_buffer buffer;
+  QUIC_BUFFER quic_buf;
+
+  // Zero-copy: move an existing flat_buffer, point QUIC_BUFFER at its data
+  explicit SendContext(flat_buffer&& buf)
+      : buffer(std::move(buf))
+  {
+    auto cd = buffer.cdata();
+    quic_buf.Length = static_cast<uint32_t>(cd.size());
+    quic_buf.Buffer = const_cast<uint8_t*>(
+        static_cast<const uint8_t*>(cd.data()));
+  }
+
+  // Copy from raw pointer into a flat_buffer, point QUIC_BUFFER at that copy
+  SendContext(const void* data, size_t len)
+      : buffer(len)
+  {
+    auto mb = buffer.prepare(len);
+    std::memcpy(mb.data(), data, len);
+    buffer.commit(len);
+    auto cd = buffer.cdata();
+    quic_buf.Length = static_cast<uint32_t>(cd.size());
+    quic_buf.Buffer = const_cast<uint8_t*>(
+        static_cast<const uint8_t*>(cd.data()));
+  }
+};
+
+/**
  * QUIC Connection - client side
  *
  * Manages a QUIC connection to a server.
  * Uses streams for RPC calls and optionally datagrams for fire-and-forget.
  * Supports native QUIC streams for streaming RPC - the server opens dedicated
  * streams for each NPRPC stream, which the client accepts and routes data from.
+ *
+ * No dependency on boost::asio::io_context. All callbacks are invoked directly
+ * on MsQuic's internal threads, eliminating context switches.
  */
 class NPRPC_API QuicConnection
     : public std::enable_shared_from_this<QuicConnection>
@@ -79,7 +115,7 @@ public:
   // Callback for received datagrams (unreliable stream data)
   using DatagramCallback = std::function<void(std::vector<uint8_t>&&)>;
 
-  QuicConnection(boost::asio::io_context& ioc);
+  QuicConnection();
   ~QuicConnection();
 
   // Connect to server
@@ -89,6 +125,9 @@ public:
 
   // Send/receive for RPC - blocking style
   void send_receive(flat_buffer& buffer, uint32_t timeout_ms);
+
+  // Zero-copy send on main stream (takes ownership of buffer until SEND_COMPLETE)
+  bool send_zero_copy(flat_buffer&& buffer);
 
   // Send data on a stream (reliable)
   void async_send_stream(const uint8_t* data,
@@ -118,8 +157,6 @@ public:
 
   bool is_connected() const { return connected_; }
 
-  boost::asio::io_context& io_context() { return ioc_; }
-
 private:
   friend class QuicListener;
 
@@ -143,7 +180,6 @@ private:
   void process_receive_buffer();
   void process_data_stream_buffer(HQUIC stream);
 
-  boost::asio::io_context& ioc_;
   HQUIC connection_ = nullptr;
   HQUIC configuration_ = nullptr;
   HQUIC stream_ = nullptr; // Main bidirectional stream for RPC
@@ -182,6 +218,10 @@ private:
  * accepted QUIC connection. It handles RPC request/response pairs.
  * Supports native QUIC streams for streaming RPC - each NPRPC stream
  * gets its own dedicated QUIC stream for zero head-of-line blocking.
+ *
+ * No dependency on boost::asio::io_context. Callbacks invoked directly
+ * on MsQuic threads — servant dispatch runs inline, removing one context
+ * switch per RPC.
  */
 class NPRPC_API QuicServerConnection
     : public std::enable_shared_from_this<QuicServerConnection>
@@ -190,8 +230,7 @@ public:
   using MessageCallback = std::function<void(std::vector<uint8_t>&&)>;
   using DatagramCallback = std::function<void(std::vector<uint8_t>&&)>;
 
-  QuicServerConnection(boost::asio::io_context& ioc,
-                       HQUIC connection,
+  QuicServerConnection(HQUIC connection,
                        HQUIC configuration);
   ~QuicServerConnection();
 
@@ -203,6 +242,9 @@ public:
 
   // Send response data on main RPC stream
   bool send(const void* data, size_t len);
+
+  // Zero-copy send on main stream (takes ownership of buffer until SEND_COMPLETE)
+  bool send_zero_copy(flat_buffer&& buffer);
 
   // Native QUIC stream management for streaming RPC
   // Opens a new dedicated QUIC stream for an NPRPC stream
@@ -243,7 +285,6 @@ private:
   void handle_data_stream_event(HQUIC stream, uint64_t stream_id, QUIC_STREAM_EVENT* event);
   void process_receive_buffer();
 
-  boost::asio::io_context& ioc_;
   HQUIC connection_;
   HQUIC configuration_;
   HQUIC stream_ = nullptr;  // Main RPC stream
@@ -276,8 +317,7 @@ public:
   using AcceptCallback =
       std::function<void(std::shared_ptr<QuicServerConnection>)>;
 
-  QuicListener(boost::asio::io_context& ioc,
-               const std::string& cert_file,
+  QuicListener(const std::string& cert_file,
                const std::string& key_file);
   ~QuicListener();
 
@@ -300,7 +340,6 @@ private:
 
   void handle_listener_event(QUIC_LISTENER_EVENT* event);
 
-  boost::asio::io_context& ioc_;
   HQUIC listener_ = nullptr;
   HQUIC configuration_ = nullptr;
 

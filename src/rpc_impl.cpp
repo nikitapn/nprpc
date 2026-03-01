@@ -251,7 +251,7 @@ void RpcImpl::destroy()
   // destructor -> close() -> close_session() -> lock connections_mut_
   std::vector<std::shared_ptr<Session>> sessions_to_destroy;
   {
-    std::lock_guard<std::mutex> lk(connections_mut_);
+    std::shared_lock<std::shared_mutex> lk(connections_mut_);
     for (auto& session : opened_sessions_) {
       session->shutdown();
     }
@@ -283,51 +283,52 @@ void RpcImpl::destroy_poa(Poa* poa)
 NPRPC_API std::shared_ptr<Session>
 RpcImpl::get_session(const EndPoint& endpoint)
 {
-  std::shared_ptr<Session> con;
   {
-    std::lock_guard<std::mutex> lk(connections_mut_);
+    // Fast path: check if session already exists for this endpoint
+    std::shared_lock<std::shared_mutex> lk(connections_mut_);
     if (auto it = std::find_if(opened_sessions_.begin(), opened_sessions_.end(),
-                               [&endpoint](auto const& ptr) {
-                                 return ptr->remote_endpoint() == endpoint;
-                               });
+                              [&endpoint](auto const& ptr) {
+                                return ptr->remote_endpoint() == endpoint;
+                              });
         it != opened_sessions_.end()) {
-      con = (*it);
-    } else {
-      switch (endpoint.type()) {
-      case EndPointType::TcpTethered:
-        throw nprpc::ExceptionCommFailure(
-            "nprpc::impl::RpcImpl::get_session: Cannot create tethered "
-            "TCP "
-            "connection");
-      case EndPointType::Tcp:
-        con = std::make_shared<SocketConnection>(
-            endpoint,
-            boost::asio::ip::tcp::socket(boost::asio::make_strand(ioc_)));
-        break;
-      case EndPointType::WebSocket:
-        con = make_client_plain_websocket_session(endpoint, ioc_);
-        break;
-      case EndPointType::SecuredWebSocket:
-        con = make_client_ssl_websocket_session(endpoint, ioc_);
-        break;
-      case EndPointType::SharedMemory:
-        con = std::make_shared<SharedMemoryConnection>(endpoint, ioc_);
-        break;
-#ifdef NPRPC_QUIC_ENABLED
-      case EndPointType::Quic:
-        con = make_quic_client_session(endpoint, ioc_);
-        break;
-#endif
-      default:
-        throw nprpc::ExceptionCommFailure(
-            "nprpc::impl::RpcImpl::get_session: Unknown endpoint "
-            "type: " +
-            std::to_string(static_cast<int>(endpoint.type())));
-      }
-
-      opened_sessions_.push_back(con);
+      return (*it);
     }
   }
+
+  std::shared_ptr<Session> con;
+  switch (endpoint.type()) {
+  case EndPointType::TcpTethered:
+    throw nprpc::ExceptionCommFailure(
+        "nprpc::impl::RpcImpl::get_session: Cannot create tethered "
+        "TCP "
+        "connection");
+  case EndPointType::Tcp:
+    con = std::make_shared<SocketConnection>(
+        endpoint,
+        boost::asio::ip::tcp::socket(boost::asio::make_strand(ioc_)));
+    break;
+  case EndPointType::WebSocket:
+    con = make_client_plain_websocket_session(endpoint, ioc_);
+    break;
+  case EndPointType::SecuredWebSocket:
+    con = make_client_ssl_websocket_session(endpoint, ioc_);
+    break;
+  case EndPointType::SharedMemory:
+    con = std::make_shared<SharedMemoryConnection>(endpoint, ioc_);
+    break;
+#ifdef NPRPC_QUIC_ENABLED
+   case EndPointType::Quic:
+    con = make_quic_client_session(endpoint, ioc_);
+    break;
+#endif
+   default:
+     throw nprpc::ExceptionCommFailure(
+         "nprpc::impl::RpcImpl::get_session: Unknown endpoint "
+         "type: " +
+         std::to_string(static_cast<int>(endpoint.type())));
+  }
+
+  add_connection(con);
   return con;
 }
 
@@ -631,7 +632,7 @@ NPRPC_API std::optional<ObjectGuard> RpcImpl::get_object(poa_idx_t poa_idx,
 
 bool RpcImpl::has_session(const EndPoint& endpoint) const noexcept
 {
-  std::lock_guard<std::mutex> lk(connections_mut_);
+  std::shared_lock<std::shared_mutex> lk(connections_mut_);
   return std::find_if(opened_sessions_.begin(), opened_sessions_.end(),
                       [endpoint](auto const& ptr) {
                         return ptr->remote_endpoint() == endpoint;
@@ -654,7 +655,7 @@ NPRPC_API SessionContext* RpcImpl::get_object_session_context(Object* obj)
 
 bool RpcImpl::close_session(Session* session)
 {
-  std::lock_guard<std::mutex> lk(connections_mut_);
+  std::unique_lock<std::shared_mutex> lk(connections_mut_);
   if (auto it = std::find_if(opened_sessions_.begin(), opened_sessions_.end(),
                              [session](auto const& ptr) {
                                return ptr->remote_endpoint() ==

@@ -64,3 +64,46 @@ single thread
 The ~12µs difference is essentially the OS thread scheduling latency — the time between promise.set_value() and the blocked thread actually running again. This is a fundamental cost of the cross-thread promise/future pattern.
 
 This is exactly the argument for the coroutine refactor: with co_await the client call suspends the coroutine (not the OS thread), and the io_context thread resumes it inline when the response arrives — same pattern as Cap'n Proto, same latency profile, but keeping NPRPC's much cheaper serialization.
+
+
+
+
+--------------------------------------------------------------------------------------------------------
+Benchmark                                              Time             CPU   Iterations UserCounters...
+--------------------------------------------------------------------------------------------------------
+LatencyFixture/EmptyCall/0/real_time                34.0 us         4.94 us        20621 calls/sec=29.4164k/s SharedMemory
+LatencyFixture/EmptyCall/1/real_time                59.8 us         5.49 us        11929 calls/sec=16.7332k/s TCP
+LatencyFixture/EmptyCall/2/real_time                71.5 us         6.10 us         9594 calls/sec=13.9873k/s WebSocket
+LatencyFixture/EmptyCall/4/real_time                 124 us         9.16 us         5604 calls/sec=8.03926k/s QUIC
+LatencyFixture/CallWithReturn/0/real_time           33.6 us         4.93 us        20925 calls/sec=29.7905k/s SharedMemory
+LatencyFixture/CallWithReturn/1/real_time           59.4 us         5.74 us        11677 calls/sec=16.8447k/s TCP
+LatencyFixture/CallWithReturn/2/real_time           71.5 us         5.72 us         9773 calls/sec=13.9805k/s WebSocket
+LatencyFixture/CallWithReturn/4/real_time            124 us         9.14 us         5713 calls/sec=8.05769k/s QUIC
+LatencyFixture/SmallStringCall/0/real_time          33.4 us         4.92 us        20667 bytes_per_second=2.85617Mi/s calls/sec=29.9491k/s SharedMemory
+LatencyFixture/SmallStringCall/1/real_time          59.7 us         5.57 us        11628 bytes_per_second=1.59775Mi/s calls/sec=16.7536k/s TCP
+LatencyFixture/SmallStringCall/2/real_time          72.1 us         6.11 us         9894 bytes_per_second=1.32353Mi/s calls/sec=13.8782k/s WebSocket
+LatencyFixture/SmallStringCall/4/real_time           129 us         9.10 us         5322 bytes_per_second=755.375Ki/s calls/sec=7.73504k/s QUIC
+LatencyFixture/NestedDataCall/0/real_time           34.1 us         5.12 us        20459
+LatencyFixture/NestedDataCall/1/real_time           61.8 us         5.96 us        11688
+LatencyFixture/NestedDataCall/2/real_time           73.2 us         6.37 us         9425
+LatencyFixture/NestedDataCall/4/real_time            126 us         9.66 us         5525
+LatencyFixture/LargeData1MB/0/real_time            0.345 ms        0.157 ms         2019 bytes_per_second=2.82752Gi/s calls/sec=2.89538k/s SharedMemory
+LatencyFixture/LargeData1MB/1/real_time             5.57 ms        0.875 ms          108 bytes_per_second=179.387Mi/s calls/sec=179.387/s TCP
+LatencyFixture/LargeData1MB/2/real_time             88.7 ms        0.213 ms           13 bytes_per_second=11.2771Mi/s calls/sec=11.2771/s WebSocket
+LatencyFixture/LargeData1MB/4/real_time             4.79 ms        0.284 ms          146 bytes_per_second=208.752Mi/s calls/sec=208.752/s QUIC
+LatencyFixture/LargeData10MB/0/real_time            6.52 ms         3.55 ms           91 bytes_per_second=1.49849Gi/s calls/sec=153.446/s SharedMemory
+LatencyFixture/LargeData10MB/1/real_time            19.9 ms         4.64 ms           42 bytes_per_second=502.586Mi/s calls/sec=50.2586/s TCP
+LatencyFixture/LargeData10MB/2/real_time             161 ms         2.89 ms            6 bytes_per_second=62.1172Mi/s calls/sec=6.21172/s WebSocket
+LatencyFixture/LargeData10MB/4/real_time            56.2 ms         5.85 ms            9 bytes_per_second=178.043Mi/s calls/sec=17.8043/s QUIC
+GrpcLatencyFixture/EmptyCall/real_time               193 us         56.5 us         3565 calls/sec=5.18309k/s gRPC
+GrpcLatencyFixture/CallWithReturn/real_time          204 us         58.8 us         3580 calls/sec=4.91129k/s gRPC
+GrpcLatencyFixture/SmallStringCall/real_time         198 us         60.7 us         3435 bytes_per_second=492.581Ki/s calls/sec=5.04403k/s gRPC
+GrpcLatencyFixture/NestedDataCall/real_time          210 us         62.8 us         3415 calls/sec=4.75726k/s gRPC
+GrpcLatencyFixture/LargeData1MB/real_time           2.42 ms        0.543 ms          294 bytes_per_second=412.964Mi/s calls/sec=412.964/s gRPC
+GrpcLatencyFixture/LargeData10MB/real_time          14.8 ms         4.62 ms           35 bytes_per_second=674Mi/s calls/sec=67.4/s gRPC
+CapnpLatencyFixture/EmptyCall/real_time             53.1 us         26.7 us        13381 calls/sec=18.8444k/s Cap'n Proto
+CapnpLatencyFixture/CallWithReturn/real_time        54.5 us         27.4 us        13745 calls/sec=18.3569k/s Cap'n Proto
+CapnpLatencyFixture/SmallStringCall/real_time       58.4 us         29.7 us        12068 bytes_per_second=325.454k/s calls/sec=17.1291k/s Cap'n Proto
+CapnpLatencyFixture/NestedDataCall/real_time        57.6 us         29.2 us        13422 calls/sec=17.3465k/s Cap'n Proto
+CapnpLatencyFixture/LargeData1MB/real_time         0.531 ms        0.426 ms         1250 bytes_per_second=1.84054Gi/s calls/sec=1.88471k/s Cap'n Proto
+CapnpLatencyFixture/LargeData10MB/real_time         13.1 ms         10.3 ms           54 bytes_per_second=766.112Mi/s calls/sec=76.6112/s Cap'n Proto

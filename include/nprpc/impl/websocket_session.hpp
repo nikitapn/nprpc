@@ -57,8 +57,7 @@ template <class Derived> class WebSocketSession : public Session
   std::atomic<bool> reading_{false};
   std::atomic<bool> writing_{false};
 
-  flat_buffer rx_buffer_{flat_buffer::default_initial_size()};
-  flat_buffer tx_buffer_{flat_buffer::default_initial_size()};
+  flat_buffer rx_buffer_{128 * 1024}; // Start with 128KB buffer for incoming messages
 
   Derived& derived() { return static_cast<Derived&>(*this); }
 

@@ -591,21 +591,28 @@ public:
     swap(a.has_read_view_, b.has_read_view_);
   }
 
-  static constexpr std::size_t default_initial_size() noexcept { return 512; }
+  static constexpr std::size_t default_initial_size() noexcept { return 1024; }
+
+  friend std::size_t read_size_helper(nprpc::flat_buffer& buf, std::size_t max_size);
 };
+
+inline std::size_t read_size_helper(nprpc::flat_buffer& buf, std::size_t max_size) {
+    // Request at least 64KB per read, up to available capacity
+    return std::min(max_size, std::max<std::size_t>(65536, buf.capacity() - buf.size()));
+}
 
 } // namespace nprpc
 
 #include <boost/beast/core/detail/config.hpp>
 #include <boost/beast/core/impl/read_size.hpp>
 
+namespace boost::beast::detail {
 // Probably a bug in /usr/include/boost/beast/core/detect_ssl.hpp:601:30.
 // Error says: "Note: there are 2 candidates but it's refering to read_size()
 // overloads inside boost::beast::detail namespace" So we provide an explicit
 // specialization for boost::beast::detail::read_size to resolve the ambiguity
 // I have no idea why this is needed for custom flat_buffer but not for
 // boost::beast::flat_buffer
-namespace boost::beast::detail {
 template <class DynamicBuffer>
 std::size_t read_size(DynamicBuffer& buffer, std::size_t max_size)
 {

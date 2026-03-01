@@ -14,13 +14,7 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cstdlib>
-#include <deque>
-#include <functional>
-#include <future>
-#include <iostream>
 #include <memory>
-#include <optional>
 #include <string>
 
 namespace nprpc::impl {
@@ -59,6 +53,14 @@ class websocket_session_with_acceptor : public Derived
     opt.server_enable = true;
     this->ws().set_option(opt);
 
+    // Instead of Beast's per-read/write timeouts (expensive under io_uring),
+    // rely on session-level timers
+    websocket::stream_base::timeout ws_timeout;
+    ws_timeout.handshake_timeout = std::chrono::seconds(30);
+    ws_timeout.idle_timeout = std::chrono::seconds(300);
+    ws_timeout.keep_alive_pings = true;
+    this->ws().set_option(ws_timeout);
+
     // Accept the websocket handshake
     this->ws().async_accept(
         req,
@@ -74,6 +76,7 @@ class websocket_session_with_acceptor : public Derived
       this->close();
       return fail(ec, "accept");
     }
+    beast::get_lowest_layer(this->ws()).expires_never();
     this->start_read_loop();
   }
 
