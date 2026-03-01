@@ -174,6 +174,7 @@ NPRPC_API Rpc* RpcBuilderBase::build(boost::asio::io_context& ioc)
   g_cfg.listen_quic_port = cfg_.quic_port;
   g_cfg.http3_enabled = cfg_.http3_enabled;
   g_cfg.ssr_enabled = cfg_.ssr_enabled;
+  g_cfg.use_epoll_tcp = cfg_.use_epoll_tcp;
   g_cfg.http_cert_file = cfg_.http_cert_file;
   g_cfg.http_key_file = cfg_.http_key_file;
   g_cfg.http_root_dir = cfg_.http_root_dir;

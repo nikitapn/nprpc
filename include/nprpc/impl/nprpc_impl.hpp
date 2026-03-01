@@ -39,6 +39,7 @@ struct Config {
   uint16_t listen_quic_port = 0;
   bool http3_enabled = false; // Enable HTTP/3 on same port as HTTP
   bool ssr_enabled = false;   // Enable node worker for SSR
+  bool use_epoll_tcp = false; // Use raw epoll server instead of Asio (Linux only)
   std::string http_cert_file; // TLS cert for HTTP/3
   std::string http_key_file;  // TLS key for HTTP/3
   std::string quic_cert_file;

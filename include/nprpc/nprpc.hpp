@@ -357,6 +357,9 @@ struct BuildConfig {
   std::string quic_cert_file;
   std::string quic_key_file;
   std::string ssl_client_self_signed_cert_path;
+
+  // TCP transport tuning
+  bool use_epoll_tcp = false; // Use raw epoll server instead of Asio (Linux only)
 };
 
 class RpcBuilderHttp;
@@ -411,6 +414,22 @@ public:
   explicit RpcBuilderTcp(impl::BuildConfig& cfg)
       : RpcBuilderBase(cfg)
   {
+  }
+
+  /// Use a raw epoll I/O loop instead of Boost.Asio for incoming TCP
+  /// connections.  Removes per-read dispatch overhead from io_context.
+  /// Linux only.  Default: off.
+  RpcBuilderTcp& with_epoll() noexcept
+  {
+    cfg_.use_epoll_tcp = true;
+    return *this;
+  }
+
+  /// Conditionally enable the epoll server.
+  RpcBuilderTcp& with_epoll_if(bool condition) noexcept
+  {
+    if (condition) cfg_.use_epoll_tcp = true;
+    return *this;
   }
 };
 

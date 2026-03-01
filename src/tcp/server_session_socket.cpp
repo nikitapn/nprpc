@@ -1,6 +1,7 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include <boost/asio/read.hpp>
 #include <boost/asio/write.hpp>
 #include <boost/beast/core/bind_handler.hpp>
 #include <cassert>
@@ -156,10 +157,13 @@ public:
 
   void do_read_body()
   {
-    socket_.async_read_some(rx_buffer_.prepare(size_to_read_),
-                            std::bind(&Session_Socket::on_read_body,
-                                      shared_from_this(), std::placeholders::_1,
-                                      std::placeholders::_2));
+    // async_read reads exactly size_to_read_ bytes in one composed operation,
+    // avoiding repeated timer cancel/reschedule and io_context dispatches.
+    boost::asio::async_read(
+        socket_, rx_buffer_.prepare(size_to_read_),
+        std::bind(&Session_Socket::on_read_body,
+                  shared_from_this(), std::placeholders::_1,
+                  std::placeholders::_2));
   }
 
   void on_read_size(const boost::system::error_code& ec, size_t len)
@@ -210,6 +214,13 @@ public:
       , socket_(std::move(socket))
   {
     socket_.set_option(net::ip::tcp::no_delay(true));
+
+    // Large socket buffers: same rationale as client — avoids stop-and-go
+    // window cycling for large payloads.
+    constexpr int kLargeBuf = 4 * 1024 * 1024;
+    boost::system::error_code ec;
+    socket_.set_option(boost::asio::socket_base::receive_buffer_size(kLargeBuf), ec);
+    socket_.set_option(boost::asio::socket_base::send_buffer_size(kLargeBuf), ec);
 
     auto endpoint = socket_.remote_endpoint();
     ctx_.remote_endpoint =
@@ -264,12 +275,20 @@ public:
 
 static std::shared_ptr<Acceptor> g_tcp_acceptor;
 
+// Forward declarations for the raw-epoll alternative (server_epoll.cpp)
+extern void init_socket_epoll(unsigned short port);
+extern void stop_socket_epoll();
+
 void init_socket(net::io_context& ioc)
 {
   NPRPC_LOG_INFO("init_socket called with g_cfg.listen_tcp_port={}", g_cfg.listen_tcp_port);
   if (g_cfg.listen_tcp_port == 0) {
     NPRPC_LOG_INFO("TCP listen port is not set, skipping socket server "
                    "initialization.");
+    return;
+  }
+  if (g_cfg.use_epoll_tcp) {
+    init_socket_epoll(g_cfg.listen_tcp_port);
     return;
   }
   g_tcp_acceptor = std::make_shared<Acceptor>(ioc, g_cfg.listen_tcp_port);
@@ -279,6 +298,10 @@ void init_socket(net::io_context& ioc)
 
 void stop_socket_listener()
 {
+  if (g_cfg.use_epoll_tcp) {
+    stop_socket_epoll();
+    return;
+  }
   if (g_tcp_acceptor) {
     g_tcp_acceptor->stop();
     g_tcp_acceptor.reset();

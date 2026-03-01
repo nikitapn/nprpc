@@ -98,10 +98,11 @@ public:
 
     try {
       // Use the new RpcBuilder API
+      const bool use_epoll = ::getenv("NPRPC_EPOLL") != nullptr;
       rpc = nprpc::RpcBuilder()
                 .set_log_level(nprpc::LogLevel::error)
                 .with_hostname("localhost")
-                .with_tcp(22222)
+                .with_tcp(22222).with_epoll_if(use_epoll)
                 .with_http(22223)
                 .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                      "/home/nikita/projects/nprpc/certs/out/localhost.key")

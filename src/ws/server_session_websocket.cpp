@@ -48,10 +48,13 @@ class websocket_session_with_acceptor : public Derived
           res.set(http::field::server, std::string(BOOST_BEAST_VERSION_STRING));
         }));
 
-    websocket::permessage_deflate opt;
-    opt.client_enable = true;
-    opt.server_enable = true;
-    this->ws().set_option(opt);
+    // permessage_deflate is disabled: NPRPC sends binary flatbuffer data that
+    // does not benefit from compression, and zlib overhead (~200 MB/s) makes
+    // large-message latency 5-10x worse with no size win.
+    // websocket::permessage_deflate opt;
+    // opt.client_enable = true;
+    // opt.server_enable = true;
+    // this->ws().set_option(opt);
 
     // Instead of Beast's per-read/write timeouts (expensive under io_uring),
     // rely on session-level timers

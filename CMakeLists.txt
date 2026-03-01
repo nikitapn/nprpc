@@ -188,6 +188,7 @@ add_library(nprpc
   # TCP transport
   src/tcp/client_socket_connection.cpp
   src/tcp/server_session_socket.cpp
+  src/tcp/server_epoll.cpp
   # HTTP transport
   src/http/http_server.cpp
   src/http/http_utils.cpp
