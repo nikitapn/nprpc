@@ -274,6 +274,70 @@ TEST_F(NprpcTest, TestFixedSizeArrays)
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
 }
 
+// Zero-copy out-direct test — verifies OwnedSpan and OwnedDirect wrappers
+TEST_F(NprpcTest, TestDirect)
+{
+#include "common/tests/direct.inl"
+  TestDirectImpl servant;
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+    try {
+      auto obj = bind_and_resolve<nprpc::test::TestDirect>(servant, flags);
+
+      // --- GetBytes: out direct vector<u8> → OwnedSpan<uint8_t> ---
+      ::nprpc::flat::OwnedSpan<uint8_t> bytes;
+      obj->GetBytes(256, bytes);
+      EXPECT_EQ(bytes.size(), 256u);
+      for (uint32_t i = 0; i < 256; ++i)
+        EXPECT_EQ(bytes.data()[i], static_cast<uint8_t>(i % 256));
+
+      // --- GetBytesFixedArray: out direct u8[256] → Span<uint8_t> ---
+      obj->GetBytesFixedArray(bytes);
+      EXPECT_EQ(bytes.size(), 256u);
+      for (uint32_t i = 0; i < 256; ++i)
+        EXPECT_EQ(bytes.data()[i], static_cast<uint8_t>(i % 256));
+
+      // --- GetFlatStruct: out direct FlatStruct → OwnedDirect<FlatStruct_Direct> ---
+      ::nprpc::flat::OwnedDirect<nprpc::test::flat::FlatStruct_Direct> fs;
+      obj->GetFlatStruct(fs);
+      EXPECT_TRUE(fs.valid());
+      EXPECT_EQ(fs.get().a(), 42);
+      EXPECT_EQ(fs.get().b(), 100u);
+      EXPECT_EQ(fs.get().c(), 3.14f);
+
+      // --- GetString: out direct string → OwnedDirect<String_Direct1> ---
+      ::nprpc::flat::OwnedDirect<::nprpc::flat::String_Direct1> str;
+      obj->GetString(str);
+      EXPECT_TRUE(str.valid());
+      EXPECT_EQ(std::string_view(str.get()()), "Hello, direct!"sv);
+
+      // --- GetStructArray: out direct vector<SimpleStruct> → OwnedDirect<Vector_Direct2<...>> ---
+      ::nprpc::flat::OwnedDirect<::nprpc::flat::Vector_Direct2<
+          nprpc::test::flat::SimpleStruct,
+          nprpc::test::flat::SimpleStruct_Direct>> arr;
+      obj->GetStructArray(5, arr);
+      EXPECT_TRUE(arr.valid());
+      auto span = arr.get()();
+      EXPECT_EQ(span.size(), 5u);
+      for (uint32_t i = 0; i < 5; ++i)
+        EXPECT_EQ((*span[i]).id(), i + 1);
+
+      // --- GetFundamentalDirect: 'direct' on u32 is demoted to plain out ---
+      // The compiler emits a warning; proxy/servant use a regular reference.
+      uint32_t fund_val = 0;
+      obj->GetFundamentalDirect(fund_val);
+      EXPECT_EQ(fund_val, 777u);
+
+    } catch (nprpc::Exception& ex) {
+      FAIL() << "Exception in TestDirect: " << ex.what();
+    }
+  };
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+}
+
 // Large message test to verify async_write fix for messages >2.6MB
 TEST_F(NprpcTest, TestLargeMessage)
 {

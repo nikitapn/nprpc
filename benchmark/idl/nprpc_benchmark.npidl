@@ -36,7 +36,11 @@ interface Benchmark {
   Employee ProcessEmployee(employee: Employee);
 
   // Large data benchmark
-  vector<u8> ProcessLargeData(data: vector<u8>);
+  // vector<u8> ProcessLargeData(data: vector<u8>);
+  // We use an out parameter for the result to avoid unnecessary copying
+  // of large data in the generated code, which can be significant for large buffers.
+  // and this what capnp does
+  void ProcessLargeData(data: vector<u8>, result: out direct vector<u8>);
 }
 
 

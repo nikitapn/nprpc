@@ -182,8 +182,8 @@ BENCHMARK_DEFINE_F(LatencyFixture, LargeData1MB)(benchmark::State& state)
   std::fill(data.begin(), data.end(), 0x42);
 
   for (auto _ : state) {
-    auto result =
-        proxy_->ProcessLargeData({data.data(), data.data() + data.size()});
+    ::nprpc::flat::OwnedSpan<uint8_t> result;
+    proxy_->ProcessLargeData({data.data(), data.data() + data.size()}, result);
     benchmark::DoNotOptimize(result);
   }
 
@@ -203,8 +203,8 @@ BENCHMARK_DEFINE_F(LatencyFixture, LargeData10MB)(benchmark::State& state)
   std::fill(data.begin(), data.end(), 0x42);
 
   for (auto _ : state) {
-    auto result =
-        proxy_->ProcessLargeData({data.data(), data.data() + data.size()});
+    ::nprpc::flat::OwnedSpan<uint8_t> result;
+    proxy_->ProcessLargeData({data.data(), data.data() + data.size()}, result);
     benchmark::DoNotOptimize(result);
   }
 

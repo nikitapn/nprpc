@@ -173,13 +173,13 @@ class BenchmarkServerImpl : public ::nprpc::benchmark::IBenchmark_Servant
     return result;
   }
 
-  std::vector<uint8_t>
-  ProcessLargeData(::nprpc::flat::Span<uint8_t> data) override
+  void ProcessLargeData(
+      ::nprpc::flat::Span<uint8_t> data,
+      ::nprpc::flat::Vector_Direct1<uint8_t> result) override
   {
-    // Echo back the data
-    std::vector<uint8_t> result(data.size());
-    std::memcpy(result.data(), data.data(), data.size());
-    return result;
+    result.length(data.size());
+    auto span = result();
+    std::memcpy(span.data(), data.data(), data.size());
   }
 };
 

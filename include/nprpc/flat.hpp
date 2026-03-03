@@ -334,6 +334,8 @@ public:
     return v().check_size_align(buffer_.data().data(), max_buffer_size);
   }
 
+  std::uint32_t offset() const noexcept { return offset_; }
+
   Vector_Direct(flat_buffer& buffer, std::uint32_t offset)
       : buffer_(buffer)
       , offset_(offset)
@@ -521,6 +523,72 @@ inline Span<T> make_span(std::vector<T, Alloc>& v) noexcept
 {
   return {v.data(), v.data() + v.size()};
 }
+
+/// Owns a flat_buffer (via shared_ptr) and exposes a zero-copy span view.
+/// Used as the parameter type for 'out direct vector<T>' (primitive element)
+/// RPC arguments so the receive buffer is never copied.
+template<typename T>
+class OwnedSpan
+{
+  std::shared_ptr<::nprpc::flat_buffer> buf_;
+  T* first_ = nullptr;
+  T* last_  = nullptr;
+
+public:
+  OwnedSpan() = default;
+
+  OwnedSpan(std::shared_ptr<::nprpc::flat_buffer> buf, Span<T> span) noexcept
+      : buf_(std::move(buf))
+      , first_(span.first)
+      , last_(span.last)
+  {
+  }
+
+  T*       data()  const noexcept { return first_; }
+  uint32_t size()  const noexcept { return static_cast<uint32_t>(last_ - first_); }
+  T*       begin() const noexcept { return first_; }
+  T*       end()   const noexcept { return last_;  }
+
+  T&       operator[](size_t i)       { return first_[i]; }
+  const T& operator[](size_t i) const { return first_[i]; }
+
+  bool valid() const noexcept { return buf_ != nullptr; }
+
+  /// Keeps the underlying buffer alive (e.g. for async use after the RPC call).
+  std::shared_ptr<::nprpc::flat_buffer> buffer() const noexcept { return buf_; }
+
+  operator Span<T>()       noexcept { return {first_, last_}; }
+  operator Span<const T>() const noexcept { return {first_, last_}; }
+};
+
+/// Generic zero-copy buffer owner for any flat Direct accessor type.
+/// Used for 'out direct struct/array/string/optional' RPC arguments.
+/// Stores the shared_ptr that keeps the receive buffer alive, plus the
+/// absolute byte offset at which the Direct object lives.  The Direct
+/// accessor TD is reconstructed cheaply on every call to get().
+template<typename TD>
+class OwnedDirect
+{
+  std::shared_ptr<::nprpc::flat_buffer> buf_;
+  uint32_t offset_ = 0;
+
+public:
+  OwnedDirect() = default;
+
+  OwnedDirect(std::shared_ptr<::nprpc::flat_buffer> buf, uint32_t offset) noexcept
+      : buf_(std::move(buf))
+      , offset_(offset)
+  {
+  }
+
+  /// Creates a Direct accessor view into the owned buffer. Very cheap
+  /// (returns by value — TD only holds a buffer& and a uint32_t).
+  TD get() noexcept { return TD(*buf_, offset_); }
+
+  bool valid() const noexcept { return buf_ != nullptr; }
+
+  std::shared_ptr<::nprpc::flat_buffer> buffer() const noexcept { return buf_; }
+};
 
 } // namespace nprpc::flat
 

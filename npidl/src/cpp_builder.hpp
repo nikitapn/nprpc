@@ -34,8 +34,16 @@ private:
   void emit_parameter_type_for_proxy_call_r(AstTypeDecl* type,
                                             std::ostream& os,
                                             bool input);
+
   void emit_parameter_type_for_proxy_call(AstFunctionArgument* arg,
                                           std::ostream& os);
+
+  void emit_parameter_type_for_proxy_call_direct(AstFunctionArgument* arg,
+                                                 std::ostream& os);
+
+  /// Emits the proxy-side zero-copy type for an 'out direct' argument type:
+  /// OwnedSpan<T> for vector<primitive/enum>, OwnedDirect<TD> for all others.
+  void emit_owned_direct_type(AstTypeDecl* type, std::ostream& os);
 
   void emit_parameter_type_for_servant_callback_r(AstTypeDecl* type,
                                                   std::ostream& os,
@@ -60,6 +68,11 @@ private:
   void emit_type(AstTypeDecl* type, std::ostream& os);
   void emit_flat_type(AstTypeDecl* type, std::ostream& os);
   void emit_direct_type(AstTypeDecl* type, std::ostream& os);
+
+  /// Shared output-side logic for proxy_call / proxy_udp_reliable_call.
+  /// Emits the buf_ptr / Direct-out setup and all out-arg assignments,
+  /// including OwnedSpan/OwnedDirect for 'direct' annotated arguments.
+  void emit_proxy_out_assignments(AstFunctionDecl* fn);
 
   void emit_accessors(const std::string& flat_name,
                       AstFieldDecl* f,

@@ -211,3 +211,23 @@ interface FixedSizeArrayTest {
 	void OutFixedArrayOfStructs(a: out SimpleStruct[5]) raises (AssertionFailed);
 	void OutTwoFixedArraysOfStructs(a: out SimpleStruct[5], b: out AAA[5]) raises (AssertionFailed);
 }
+
+interface TestDirect {
+	// out direct vector<u8> → OwnedSpan<uint8_t> (zero-copy primitive vector)
+	void GetBytes(size: u32, result: out direct vector<u8>) raises (AssertionFailed);
+
+	// out direct vector<u8> → OwnedSpan<uint8_t> (zero-copy primitive vector)
+	void GetBytesFixedArray(result: out direct u8[256]) raises (AssertionFailed);
+
+	// out direct flat struct → OwnedDirect<FlatStruct_Direct>
+	void GetFlatStruct(result: out direct FlatStruct) raises (AssertionFailed);
+
+	// out direct string → OwnedDirect<String_Direct1>
+	void GetString(result: out direct string) raises (AssertionFailed);
+
+	// out direct vector<struct> → OwnedDirect<Vector_Direct2<...>>
+	void GetStructArray(count: u32, result: out direct vector<SimpleStruct>) raises (AssertionFailed);
+
+	// ill formed cases: does not make sense to return a direct value for primitive types, and should be rejected by the compiler ?
+	void GetFundamentalDirect(result: out direct u32) raises (AssertionFailed);
+}

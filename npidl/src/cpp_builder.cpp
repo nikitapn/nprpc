@@ -237,6 +237,44 @@ void CppBuilder::emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, st
     os << '&';
 }
 
+void CppBuilder::emit_owned_direct_type(AstTypeDecl* type, std::ostream& os)
+{
+  // Resolve alias to its underlying type before any classification.
+  if (type->id == FieldType::Alias)
+    type = calias(type)->get_real_type();
+
+  // A bare fundamental or enum has no flat-buffer Direct type and is tiny —
+  // zero-copy makes no sense.  Warn and fall back to a plain C++ reference.
+  if (type->id == FieldType::Fundamental || type->id == FieldType::Enum) {
+    std::cerr << "npidl warning: 'direct' on a fundamental/enum out parameter "
+                 "has no effect and will be treated as a regular 'out'.\n";
+    emit_type(type, os);
+    return;
+  }
+
+  // Primitive/enum vector → OwnedSpan (most common zero-copy case)
+  if (type->id == FieldType::Vector || type->id == FieldType::Array) {
+    auto wt = cwt(type)->real_type();
+    if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
+      os << "::nprpc::flat::OwnedSpan<";
+      emit_flat_type(wt, os);
+      os << ">";
+      return;
+    }
+  }
+  // Everything else → OwnedDirect<TD> where TD is the corresponding _Direct type
+  os << "::nprpc::flat::OwnedDirect<";
+  emit_direct_type(type, os);
+  os << ">";
+}
+
+void CppBuilder::emit_parameter_type_for_proxy_call_direct(AstFunctionArgument* arg, std::ostream& os)
+{
+  // Only called for 'out direct' arguments.
+  assert(arg->modifier == ArgumentModifier::Out);
+  emit_owned_direct_type(arg->type, os);
+}
+
 void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type,
                                                             std::ostream& os,
                                                             const bool input)
@@ -1295,6 +1333,84 @@ void CppBuilder::emit_function_arguments(
   os << ')';
 };
 
+void CppBuilder::emit_proxy_out_assignments(AstFunctionDecl* fn)
+{
+  assert(fn->out_s);
+
+  // Fundamentals/enums with 'direct' are demoted to regular out params; they
+  // must not trigger the buffer-ownership move.
+  auto is_real_direct = [](const AstFunctionArgument* a) {
+    auto* t = a->type;
+    if (t->id == FieldType::Alias) t = calias(t)->get_real_type();
+    return a->direct &&
+           t->id != FieldType::Fundamental &&
+           t->id != FieldType::Enum;
+  };
+  bool has_direct_out = std::any_of(fn->out_args.begin(), fn->out_args.end(), is_real_direct);
+
+  if (has_direct_out) {
+    // Move ownership of the receive buffer so Owned* wrappers can keep it alive.
+    oc << "  auto buf_ptr = std::make_shared<::nprpc::flat_buffer>(std::move(buf));\n";
+    oc << "  " << fn->out_s->name << "_Direct out(*buf_ptr, sizeof(::nprpc::impl::Header));\n";
+  } else {
+    oc << "  " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
+  }
+
+  int ix = fn->is_void() ? 0 : 1;
+  bd = 2;
+  for (auto out : fn->args) {
+    if (out->modifier == ArgumentModifier::In)
+      continue;
+    const int field_idx = ++ix;
+    const std::string field_ref = "out._" + std::to_string(field_idx);
+
+    // Resolve alias for all type-id checks in this block.
+    auto* eff_type = out->type;
+    if (eff_type->id == FieldType::Alias) eff_type = calias(eff_type)->get_real_type();
+
+    if (out->direct && eff_type->id != FieldType::Fundamental && eff_type->id != FieldType::Enum) {
+      // Zero-copy path: wrap the owned buffer.
+      const bool is_prim_vec =
+          (eff_type->id == FieldType::Vector || eff_type->id == FieldType::Array) &&
+          (cwt(eff_type)->real_type()->id == FieldType::Fundamental ||
+           cwt(eff_type)->real_type()->id == FieldType::Enum);
+
+      if (is_prim_vec) {
+        // OwnedSpan<T> — constructed from Span<T> returned by _N()
+        oc << "  " << out->name << " = ::nprpc::flat::OwnedSpan<";
+        emit_flat_type(cwt(eff_type)->real_type(), oc);
+        oc << ">(buf_ptr, " << field_ref << "());\n";
+      } else {
+        // OwnedDirect<TD> — constructed from the absolute offset of the
+        // Direct accessor.  Types with a separate _d() accessor (Vector of
+        // structs, Array, String) expose it via _N_d().offset(); the rest
+        // (Struct, Optional) via _N().offset().
+        const bool has_d_accessor =
+            (eff_type->id == FieldType::Vector ||
+             eff_type->id == FieldType::Array  ||
+             eff_type->id == FieldType::String);
+        oc << "  " << out->name << " = ::nprpc::flat::OwnedDirect<";
+        emit_direct_type(out->type, oc);
+        oc << ">(buf_ptr, " << field_ref;
+        oc << (has_d_accessor ? "_d().offset()" : "().offset()");
+        oc << ");\n";
+      }
+    } else {
+      assign_from_flat_type(out->type, out->name, field_ref, oc, false,
+                            eff_type->id == FieldType::Object);
+    }
+  }
+
+  if (!fn->is_void()) {
+    oc << bd;
+    emit_type(fn->ret_value, oc);
+    oc << " __ret_value;\n";
+    assign_from_flat_type(fn->ret_value, "__ret_value", "out._1", oc, false,
+                          fn->ret_value->id == FieldType::Object);
+    oc << "  return __ret_value;\n";
+  }
+}
+
 void CppBuilder::proxy_call(AstFunctionDecl* fn)
 {
   oc << "  session->send_receive(buf, this->get_timeout());\n"
@@ -1311,26 +1427,7 @@ void CppBuilder::proxy_call(AstFunctionDecl* fn)
     oc << "  if (std_reply != -1) {\n"
           "    throw ::nprpc::Exception(\"Unknown Error\");\n"
           "  }\n";
-
-    oc << "  " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
-
-    int ix = fn->is_void() ? 0 : 1;
-    bd = 2;
-    for (auto out : fn->args) {
-      if (out->modifier == ArgumentModifier::In)
-        continue;
-      assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), oc, false,
-                            out->type->id == FieldType::Object && out->direct == false);
-    }
-
-    if (!fn->is_void()) {
-      oc << bd;
-      emit_type(fn->ret_value, oc);
-      oc << " __ret_value;\n";
-      assign_from_flat_type(fn->ret_value, "__ret_value", "out._1", oc, false,
-                            fn->ret_value->id == FieldType::Object);
-      oc << "  return __ret_value;\n";
-    }
+    emit_proxy_out_assignments(fn);
   }
 }
 
@@ -1365,26 +1462,7 @@ void CppBuilder::proxy_udp_reliable_call(AstFunctionDecl* fn)
     oc << "  if (std_reply != -1) {\n"
           "    throw ::nprpc::Exception(\"Unknown Error\");\n"
           "  }\n";
-
-    oc << "  " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
-
-    int ix = fn->is_void() ? 0 : 1;
-    bd = 2;
-    for (auto out : fn->args) {
-      if (out->modifier == ArgumentModifier::In)
-        continue;
-      assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), oc, false,
-                            out->type->id == FieldType::Object && out->direct == false);
-    }
-
-    if (!fn->is_void()) {
-      oc << bd;
-      emit_type(fn->ret_value, oc);
-      oc << " __ret_value;\n";
-      assign_from_flat_type(fn->ret_value, "__ret_value", "out._1", oc, false,
-                            fn->ret_value->id == FieldType::Object);
-      oc << "  return __ret_value;\n";
-    }
+    emit_proxy_out_assignments(fn);
   }
 }
 
@@ -1509,8 +1587,14 @@ std::string_view CppBuilder::proxy_arguments(AstFunctionDecl* fn)
 
   std::stringstream ss;
   if (!fn->is_async || !fn->is_reliable) {
-    emit_function_arguments(
-        fn, ss, std::bind(&CppBuilder::emit_parameter_type_for_proxy_call, this, _1, _2));
+    emit_function_arguments(fn, ss, [this](AstFunctionArgument* arg, std::ostream& os) {
+      if (arg->modifier == ArgumentModifier::Out && arg->direct) {
+        emit_parameter_type_for_proxy_call_direct(arg, os);
+        os << '&';
+      } else {
+        emit_parameter_type_for_proxy_call(arg, os);
+      }
+    });
   } else {
     size_t out_args_size = fn->out_args.size();
     ss << "(std::optional<std::function<void(";
