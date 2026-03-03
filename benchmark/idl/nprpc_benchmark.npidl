@@ -27,6 +27,7 @@ message Employee {
   skills: vector<string>;
 }
 
+[trusted=false]
 interface Benchmark {
   void Ping();
   u32 Func1(a: u32, b: u32);

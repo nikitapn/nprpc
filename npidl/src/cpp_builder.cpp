@@ -1734,7 +1734,18 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       continue;
     }
 
-    oc << "  ::nprpc::flat_buffer buf;\n";
+    // For sync reliable calls bind the TLS bump arena to avoid malloc/realloc
+    // during request serialization.  Async calls skip this because the buffer
+    // is moved into the io_context and the calling thread can reset the arena
+    // immediately after returning — which would corrupt in-flight data.
+    if (fn->is_reliable && !fn->is_async) {
+      oc << "  auto& __arena = ::nprpc::impl::tls_bump_arena();\n"
+            "  __arena.reset();\n"
+            "  ::nprpc::flat_buffer buf;\n"
+            "  buf.set_arena(&__arena);\n";
+    } else {
+      oc << "  ::nprpc::flat_buffer buf;\n";
+    }
 
     const auto fixed_size = get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
     const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);

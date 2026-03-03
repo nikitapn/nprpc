@@ -10,6 +10,7 @@
 
 #include <boost/asio/buffer.hpp>
 
+#include <nprpc/bump_arena.hpp>
 #include <nprpc/export.hpp>
 
 namespace nprpc {
@@ -101,6 +102,12 @@ private:
   std::size_t read_view_read_idx_ = 0;
   bool has_read_view_ = false;
 
+  // Optional bump arena for sync-call request serialization.
+  // Set by the generated proxy code before prepare(); cleared to nullptr
+  // (never owned) so the arena outlives the buffer naturally (TLS lifetime).
+  impl::BumpArena* arena_    = nullptr;
+  bool             arena_backed_ = false; // true when buffer_ points into the arena slab
+
   static constexpr std::size_t default_growth_factor = 2;
   static constexpr std::size_t min_allocation = 512;
 
@@ -174,7 +181,41 @@ private:
     std::size_t new_cap = std::max(capacity_ * default_growth_factor, required);
     new_cap = std::max(new_cap, min_allocation);
 
-    // Allocate new buffer
+    // --- Arena path ---
+    if (arena_) {
+      if (buffer_ == nullptr) {
+        // First allocation: grab a slab slice.
+        if (auto* p = arena_->alloc(new_cap)) {
+          buffer_      = p;
+          capacity_    = new_cap;
+          in_          = 0;
+          out_         = 0;
+          arena_backed_ = true;
+          return;
+        }
+        // Slab exhausted — fall through to heap.
+      } else if (arena_backed_) {
+        // Subsequent grow: try to extend in-place at the arena tip.
+        // This avoids the memcpy when serializing nested strings/vectors.
+        if (arena_->try_extend(buffer_, capacity_, new_cap)) {
+          capacity_ = new_cap;
+          return;
+        }
+        // Can't extend — spill to heap (copy existing data, don't free arena slice).
+        std::uint8_t* new_buf = new std::uint8_t[new_cap];
+        if (current_size > 0)
+          std::memcpy(new_buf, buffer_ + in_, current_size);
+        // buffer_ is arena memory — do NOT delete[]
+        buffer_       = new_buf;
+        in_           = 0;
+        out_          = current_size;
+        capacity_     = new_cap;
+        arena_backed_ = false;
+        return;
+      }
+    }
+
+    // --- Normal heap path ---
     std::uint8_t* new_buf = new std::uint8_t[new_cap];
 
     // Copy existing data
@@ -183,13 +224,14 @@ private:
     }
 
     // Free old buffer
-    delete[] buffer_;
+    if (!arena_backed_) delete[] buffer_;
 
     // Update pointers
     buffer_ = new_buf;
     in_ = 0;
     out_ = current_size;
     capacity_ = new_cap;
+    arena_backed_ = false;
   }
 
 public:
@@ -231,6 +273,8 @@ public:
       , endpoint_(other.endpoint_)
       , reservation_write_idx_(other.reservation_write_idx_)
       , has_reservation_(other.has_reservation_)
+      , arena_(other.arena_)
+      , arena_backed_(other.arena_backed_)
   {
     other.buffer_ = nullptr;
     other.in_ = 0;
@@ -242,13 +286,15 @@ public:
     other.endpoint_ = nullptr;
     other.reservation_write_idx_ = 0;
     other.has_reservation_ = false;
+    other.arena_ = nullptr;
+    other.arena_backed_ = false;
   }
 
   /// Move assignment
   flat_buffer& operator=(flat_buffer&& other) noexcept
   {
     if (this != &other) {
-      delete[] buffer_;
+      if (!arena_backed_) delete[] buffer_;
 
       buffer_ = other.buffer_;
       in_ = other.in_;
@@ -260,6 +306,8 @@ public:
       endpoint_ = other.endpoint_;
       reservation_write_idx_ = other.reservation_write_idx_;
       has_reservation_ = other.has_reservation_;
+      arena_ = other.arena_;
+      arena_backed_ = other.arena_backed_;
 
       other.buffer_ = nullptr;
       other.in_ = 0;
@@ -271,6 +319,8 @@ public:
       other.endpoint_ = nullptr;
       other.reservation_write_idx_ = 0;
       other.has_reservation_ = false;
+      other.arena_ = nullptr;
+      other.arena_backed_ = false;
     }
     return *this;
   }
@@ -301,8 +351,7 @@ public:
   ~flat_buffer()
   {
     commit_read_if_needed();
-    delete[] buffer_; // Safe even if nullptr
-                      // view_base_ is not owned, don't delete
+    if (!arena_backed_) delete[] buffer_; // arena memory is owned by the TLS slab
   }
 
   //--------------------------------------------------------------------------
@@ -450,9 +499,10 @@ public:
                 std::size_t write_idx = 0,
                 bool has_reservation = false)
   {
-    // Release owned memory if any
-    delete[] buffer_;
-    buffer_ = nullptr;
+    // Release owned memory if any (never delete arena-backed memory).
+    if (!arena_backed_) delete[] buffer_;
+    buffer_       = nullptr;
+    arena_backed_ = false;
     in_ = 0;
     out_ = 0;
     capacity_ = 0;
@@ -474,9 +524,10 @@ public:
                           void* ring_buffer,
                           std::size_t read_idx)
   {
-    // Release owned memory if any
-    delete[] buffer_;
-    buffer_ = nullptr;
+    // Release owned memory if any (never delete arena-backed memory).
+    if (!arena_backed_) delete[] buffer_;
+    buffer_       = nullptr;
+    arena_backed_ = false;
     in_ = 0;
     out_ = 0;
     capacity_ = 0;
@@ -502,6 +553,11 @@ public:
 
   /// Check if this buffer has a pending read to commit
   bool has_pending_read() const noexcept { return has_read_view_; }
+
+  /// Associate a bump arena with this buffer for the upcoming sync call.
+  /// Must be called before the first prepare().  The arena is not owned;
+  /// it is the caller's responsibility to reset it at the next call entry.
+  void set_arena(impl::BumpArena* arena) noexcept { arena_ = arena; }
 
   /// Convert from view mode to owned mode (makes a copy)
   void detach_view()
