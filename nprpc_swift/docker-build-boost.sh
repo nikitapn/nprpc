@@ -8,8 +8,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+DOCKER_IMAGE_NAME="nprpc-swift-ubuntu"
+
 echo "Building Boost in Docker container..."
-docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace nprpc-swift-ubuntu bash -c '
+docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace ${DOCKER_IMAGE_NAME} bash -c '
     set -e
     
     echo "=== Downloading Boost 1.89.0 ==="

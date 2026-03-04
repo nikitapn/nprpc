@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NPRPC_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$NPRPC_ROOT/.build_ubuntu_swift"
-
+DOCKER_IMAGE_NAME="nprpc-swift-ubuntu"
 # Check if libnprpc.so exists
 if [ ! -f "$BUILD_DIR/libnprpc.so" ]; then
   echo "Error: libnprpc.so not found at $BUILD_DIR"
@@ -25,7 +25,7 @@ fi
 if [ "$RUN_TESTS" = true ]; then
   docker run --rm -v         \
     "$NPRPC_ROOT:/workspace" \
-     nprpc-swift-ubuntu bash -c '
+     ${DOCKER_IMAGE_NAME} bash -c '
       set -e
       cd /workspace/nprpc_swift
       export LD_LIBRARY_PATH=/workspace/.build_ubuntu_swift
@@ -39,7 +39,7 @@ if [ "$RUN_TESTS" = true ]; then
 else
   docker run --rm -v         \
     "$NPRPC_ROOT:/workspace" \
-     nprpc-swift-ubuntu bash -c '
+     ${DOCKER_IMAGE_NAME} bash -c '
       set -e
       cd /workspace/nprpc_swift
       export LD_LIBRARY_PATH=/workspace/.build_ubuntu_swift

@@ -5,6 +5,7 @@ FROM swift:6.2.3
 RUN apt-get update && apt-get install -y \
     cmake \
     libssl-dev \
+    liburing-dev \
     pkg-config \
     sudo \
     && rm -rf /var/lib/apt/lists/*

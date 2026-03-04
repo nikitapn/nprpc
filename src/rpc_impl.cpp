@@ -432,33 +432,22 @@ NPRPC_API void RpcImpl::call_udp_reliable(const EndPoint& endpoint,
     auto udp_conn = get_udp_connection(ioc_, std::string(endpoint.hostname()),
                                        endpoint.port());
 
-    // Use condition variable for lower overhead than promise/future
-    std::mutex mtx;
-    std::condition_variable cv;
-    bool done = false;
+    std::atomic_bool done{false};
     boost::system::error_code result_ec;
 
     udp_conn->send_reliable(
         buffer, // Pass reference - caller is blocked, no copy needed for
                 // first send
         [&](const boost::system::error_code& ec, flat_buffer& response) {
-          {
-            std::lock_guard<std::mutex> lock(mtx);
-            result_ec = ec;
-            if (!ec) {
-              buffer = std::move(response);
-            }
-            done = true;
-          }
-          cv.notify_one();
+          result_ec = ec;
+          if (!ec) buffer = std::move(response);
+          done.store(true, std::memory_order_release);
+          done.notify_one();
         },
         timeout_ms, max_retries);
 
     // Wait for completion
-    {
-      std::unique_lock<std::mutex> lock(mtx);
-      cv.wait(lock, [&done] { return done; });
-    }
+    done.wait(false);
 
     if (result_ec) {
       throw nprpc::Exception(std::string("UDP reliable call failed: ") +

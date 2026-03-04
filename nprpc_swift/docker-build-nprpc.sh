@@ -21,14 +21,14 @@ if [ -z "$IS_DOCKER_BUILT" ] || [ "$REBUILD_DOCKER" = true ]; then
         --build-arg USER_ID=$(id -u) \
         --build-arg GROUP_ID=$(id -g) \
         --build-arg USERNAME=$(id -un) \
-        -t nprpc-swift-ubuntu "$PROJECT_ROOT"
+        -t "$DOCKER_IMAGE_NAME" "$PROJECT_ROOT"
 else
     echo "Docker image '$DOCKER_IMAGE_NAME' already exists. Skipping build."
 fi
 
 echo ""
 echo "Running build in container..."
-docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace nprpc-swift-ubuntu bash -c '
+docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace ${DOCKER_IMAGE_NAME} bash -c '
     set -e
     
     echo "=== Swift Version ==="
@@ -90,4 +90,4 @@ docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace nprpc-swift-ubuntu b
 
 echo ""
 echo "Done! To enter the container for manual testing:"
-echo "  docker run --rm -it -v \"$SCRIPT_DIR:/workspace\" -w /workspace nprpc-swift-ubuntu bash"
+echo "  docker run --rm -it -v \"$SCRIPT_DIR:/workspace\" -w /workspace ${DOCKER_IMAGE_NAME} bash"

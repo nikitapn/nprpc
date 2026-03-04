@@ -8,7 +8,6 @@
 #include <boost/asio/any_io_executor.hpp>
 #include <condition_variable>
 #include <cstring>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <msquic.h>

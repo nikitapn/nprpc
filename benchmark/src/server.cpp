@@ -1,7 +1,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
-#include <future>
 #include <iostream>
 #include <signal.h>
 #include <sys/wait.h>

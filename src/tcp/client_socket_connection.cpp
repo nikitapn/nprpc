@@ -23,9 +23,7 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
     SocketConnection& this_;
     uint32_t timeout_ms;
 
-    std::mutex mtx;
-    std::condition_variable cv;
-    bool done = false;
+    std::atomic_bool done{false};
     boost::system::error_code result;
 
     void operator()() noexcept override
@@ -45,30 +43,23 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 
     void on_failed(const boost::system::error_code& ec) noexcept override
     {
-      {
-        std::lock_guard<std::mutex> lock(mtx);
-        result = ec;
-        done = true;
-      }
-      cv.notify_one();
+      result = ec;
+      done.store(true, std::memory_order_release);
+      done.notify_one();
     }
 
     void on_executed() noexcept override
     {
-      {
-        std::lock_guard<std::mutex> lock(mtx);
-        result = boost::system::error_code{};
-        done = true;
-      }
-      cv.notify_one();
+      result = boost::system::error_code{};
+      done.store(true, std::memory_order_release);
+      done.notify_one();
     }
 
     flat_buffer& buffer() noexcept override { return buf; };
 
     boost::system::error_code wait()
     {
-      std::unique_lock<std::mutex> lock(mtx);
-      cv.wait(lock, [this] { return done; });
+      done.wait(false);
       return result;
     }
 

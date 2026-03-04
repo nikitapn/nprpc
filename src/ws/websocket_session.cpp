@@ -1,9 +1,6 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
-#include <condition_variable>
-#include <mutex>
-
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/websocket_session.hpp>
 #include "../logging.hpp"
@@ -247,21 +244,19 @@ void WebSocketSession<Derived>::send_receive(flat_buffer& buffer,
 
   // dump_message(buffer, false);
 
-  std::condition_variable cv;
-  std::mutex mtx;
+  std::atomic_bool done{false};
   std::optional<std::pair<boost::system::error_code, flat_buffer>> result;
 
   send_receive_async(
       std::move(buffer),
       [&](const boost::system::error_code& ec, flat_buffer& response) {
-        std::lock_guard<std::mutex> lock(mtx);
         result = std::make_pair(ec, std::move(response));
-        cv.notify_one();
+        done.store(true, std::memory_order_release);
+        done.notify_one();
       },
       timeout_ms);
 
-  std::unique_lock<std::mutex> lock(mtx);
-  cv.wait(lock, [&] { return result.has_value(); });
+  done.wait(false);
   auto [ec, response] = std::move(*result);
 
   if (!ec) {
