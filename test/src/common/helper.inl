@@ -123,7 +123,7 @@ public:
                 .set_log_level(nprpc::LogLevel::trace)
                 .with_hostname("localhost")
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
-                .with_tcp(22222)
+                .with_tcp(22222).with_uring()
                 .with_udp(22224)
                 .with_http(22223)
                     .root_dir("/home/nikita/projects/nprpc/test/http")
