@@ -185,6 +185,13 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
           // Error_BadInput properly
           make_simple_answer(ctx_, MessageId::Error_BadInput, request_id);
         }
+        // Propagate request_id to response: generated dispatch code only sets
+        // msg_type = Answer, never request_id. make_simple_answer already does
+        // this for void/error paths, but non-void dispatch responses need it too.
+        if (tx_buffer.size() >= sizeof(impl::flat::Header)) {
+          static_cast<impl::flat::Header*>(tx_buffer.data().data())->request_id =
+              request_id;
+        }
         reset_context();
         not_found = false;
       }
