@@ -202,11 +202,17 @@ BENCHMARK_DEFINE_F(LatencyFixture, LargeData10MB)(benchmark::State& state)
   std::vector<uint8_t> data(10 * 1024 * 1024); // 10 MB
   std::fill(data.begin(), data.end(), 0x42);
 
-  for (auto _ : state) {
-    ::nprpc::flat::OwnedSpan<uint8_t> result;
-    proxy_->ProcessLargeData({data.data(), data.data() + data.size()}, result);
-    benchmark::DoNotOptimize(result);
-  }
+  auto wait = [&] () -> nprpc::Task<void>
+  {
+    for (auto _ : state) {
+      ::nprpc::flat::OwnedSpan<uint8_t> result;
+      co_await proxy_->ProcessLargeDataAsync(
+          {data.data(), data.data() + data.size()}, result);
+      benchmark::DoNotOptimize(result);
+    }
+  };
+
+  wait().get();
 
   state.SetLabel(GetTransportName(transport_));
   state.SetBytesProcessed(state.iterations() * data.size());

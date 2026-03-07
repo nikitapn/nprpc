@@ -1333,7 +1333,7 @@ void CppBuilder::emit_function_arguments(
   os << ')';
 };
 
-void CppBuilder::emit_proxy_out_assignments(AstFunctionDecl* fn)
+void CppBuilder::emit_proxy_out_assignments(AstFunctionDecl* fn, bool use_co_return)
 {
   assert(fn->out_s);
 
@@ -1407,7 +1407,7 @@ void CppBuilder::emit_proxy_out_assignments(AstFunctionDecl* fn)
     oc << " __ret_value;\n";
     assign_from_flat_type(fn->ret_value, "__ret_value", "out._1", oc, false,
                           fn->ret_value->id == FieldType::Object);
-    oc << "  return __ret_value;\n";
+    oc << (use_co_return ? "  co_return __ret_value;\n" : "  return __ret_value;\n");
   }
 }
 
@@ -1428,6 +1428,26 @@ void CppBuilder::proxy_call(AstFunctionDecl* fn)
           "    throw ::nprpc::Exception(\"Unknown Error\");\n"
           "  }\n";
     emit_proxy_out_assignments(fn);
+  }
+}
+
+void CppBuilder::proxy_call_coro(AstFunctionDecl* fn)
+{
+  oc << "  co_await session->send_receive_coro(buf, this->get_timeout());\n"
+        "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n";
+
+  if (fn->ex)
+    oc << "  if (std_reply == 1) " << ctx_->current_file() << "_throw_exception(buf);\n";
+
+  if (!fn->out_s) {
+    oc << "  if (std_reply != 0) {\n"
+          "    throw ::nprpc::Exception(\"Unknown Error\");\n"
+          "  }\n";
+  } else {
+    oc << "  if (std_reply != -1) {\n"
+          "    throw ::nprpc::Exception(\"Unknown Error\");\n"
+          "  }\n";
+    emit_proxy_out_assignments(fn, true);
   }
 }
 
@@ -1547,37 +1567,9 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
 
 void CppBuilder::proxy_async_call(AstFunctionDecl* fn)
 {
+  // Fire-and-forget: no reply expected, no handler parameter.
   oc << "  ::nprpc::impl::g_rpc->call_async(this->get_endpoint(), "
-        "std::move(buf), !handler ? std::nullopt : "
-        "std::make_optional([handler "
-        "= move(handler)] (\n"
-        "    const boost::system::error_code& ec, ::nprpc::flat_buffer& buf) "
-        "{\n";
-
-  if (fn->out_args.empty() == false) {
-    // not implemented for now...
-    assert(false);
-
-    bd = 4;
-
-    oc << "    " << fn->out_s->name << "_Direct out(buf, sizeof(::nprpc::impl::Header));\n";
-
-    for (auto arg : fn->out_args) {
-      oc << bd;
-      emit_parameter_type_for_proxy_call_r(arg->type, oc, false);
-      oc << " " << arg->name << ";\n";
-    }
-
-    size_t ix = 0;
-    for (auto out : fn->out_args) {
-      assign_from_flat_type(out->type, out->name, "out._" + std::to_string(++ix), oc, false,
-                            out->type->id == FieldType::Object && out->direct == false);
-    }
-  } else {
-    oc << bd << "(*handler)();\n";
-  }
-
-  oc << "}), get_timeout());\n";
+        "std::move(buf), std::nullopt, get_timeout());\n";
 }
 
 std::string_view CppBuilder::proxy_arguments(AstFunctionDecl* fn)
@@ -1586,36 +1578,16 @@ std::string_view CppBuilder::proxy_arguments(AstFunctionDecl* fn)
     return it->second;
 
   std::stringstream ss;
-  if (!fn->is_async || !fn->is_reliable) {
-    emit_function_arguments(fn, ss, [this](AstFunctionArgument* arg, std::ostream& os) {
-      if (arg->modifier == ArgumentModifier::Out && arg->direct) {
-        emit_parameter_type_for_proxy_call_direct(arg, os);
-        os << '&';
-      } else {
-        emit_parameter_type_for_proxy_call(arg, os);
-      }
-    });
-  } else {
-    size_t out_args_size = fn->out_args.size();
-    ss << "(std::optional<std::function<void(";
-    for (auto arg : fn->out_args) {
-      emit_parameter_type_for_proxy_call(arg, ss);
-      if (--out_args_size)
-        ss << ", ";
+  // All methods (sync, async fire-and-forget, coro) use the same plain
+  // argument list — no handler parameter.
+  emit_function_arguments(fn, ss, [this](AstFunctionArgument* arg, std::ostream& os) {
+    if (arg->modifier == ArgumentModifier::Out && arg->direct) {
+      emit_parameter_type_for_proxy_call_direct(arg, os);
+      os << '&';
+    } else {
+      emit_parameter_type_for_proxy_call(arg, os);
     }
-    ss << ")>> handler";
-
-    size_t in_args_size = fn->in_args.size();
-    if (in_args_size)
-      ss << ", ";
-    for (auto arg : fn->in_args) {
-      emit_parameter_type_for_proxy_call(arg, ss);
-      ss << ' ' << arg->name;
-      if (--in_args_size)
-        ss << ", ";
-    }
-    ss << ')';
-  }
+  });
 
   return proxy_arguments_.emplace(fn, ss.str()).first->second;
 }
@@ -1709,6 +1681,13 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
     oh << ' ' << fn->name << " ";
     oh << proxy_arguments(fn) << ";\n";
+    // Coroutine variant for reliable, non-async, non-stream TCP methods
+    if (!fn->is_async && !fn->is_stream && fn->is_reliable && !ifs->is_udp) {
+      oh << "  ::nprpc::Task<";
+      emit_type(fn->ret_value, oh);
+      oh << "> " << fn->name << "Async ";
+      oh << proxy_arguments(fn) << ";\n";
+    }
   }
 
   oh << "};\n\n";
@@ -1815,6 +1794,59 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
 
     oc << "}\n\n";
+
+    // Emit coroutine (Async) variant for reliable, non-async, non-stream TCP methods
+    if (!fn->is_async && !fn->is_stream && fn->is_reliable && !ifs->is_udp) {
+      oc << "::nprpc::Task<";
+      emit_type(fn->ret_value, oc);
+      oc << ">\n";
+      oc << ns(ctx_->nm_cur()) << ifs->name << "::" << fn->name << "Async";
+      oc << proxy_arguments(fn) << " {\n";
+      // Coro: plain heap buffer — no TLS arena (unsafe across co_await thread switch)
+      oc << "  ::nprpc::flat_buffer buf;\n";
+      oc << "  auto session = "
+            "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n"
+            "  if "
+            "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, "
+         << capacity
+         << "))\n"
+            "    buf.prepare("
+         << capacity
+         << ");\n"
+            "  {\n"
+            "    buf.commit("
+         << fixed_size
+         << ");\n"
+            "    "
+            "static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = "
+            "::nprpc::impl::MessageId::FunctionCall;\n"
+            "  static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type ="
+            "::nprpc::impl::MessageType::Request;\n"
+            "  }\n"
+            "  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));\n"
+            "  __ch.object_id() = this->object_id();\n"
+            "  __ch.poa_idx() = this->poa_idx();\n"
+            "  __ch.interface_idx() = interface_idx_;\n"
+            "  __ch.function_idx() = "
+         << fn->idx << ";\n";
+      if (fn->in_s) {
+        oc << "  " << fn->in_s->name << "_Direct _(buf," << get_arguments_offset() << ");\n";
+      }
+      {
+        int ix = 0;
+        for (auto in : fn->args) {
+          if (in->modifier == ArgumentModifier::Out)
+            continue;
+          bd = 1;
+          assign_from_cpp_type(in->type, "_._" + std::to_string(++ix), in->name, oc);
+        }
+      }
+      oc << "  static_cast<::nprpc::impl::Header*>(buf.data().data())->size "
+            "= "
+            "static_cast<uint32_t>(buf.size() - 4);\n";
+      proxy_call_coro(fn);
+      oc << "}\n\n";
+    }
   }
 
   // Servant dispatch

@@ -13,6 +13,7 @@
 #include <nprpc/common.hpp>
 #include <nprpc/flat_buffer.hpp>
 #include <nprpc/session_context.h>
+#include <nprpc/task.hpp>
 
 namespace nprpc::impl {
 
@@ -35,6 +36,16 @@ protected:
 
 public:
   virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms) = 0;
+
+  // Coroutine variant — suspends the caller until the response arrives.
+  // Default implementation wraps the blocking send_receive(); concrete
+  // transports (UringClientConnection) override with a true suspension.
+  virtual nprpc::Task<> send_receive_coro(flat_buffer& buffer,
+                                          uint32_t timeout_ms)
+  {
+    send_receive(buffer, timeout_ms);
+    co_return;
+  }
 
   virtual void send_receive_async(
       flat_buffer&& buffer,

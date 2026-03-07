@@ -116,7 +116,16 @@ class UringClientConnection
                                      flat_buffer&)>> handler;
   };
 
-  using PendingEntry = std::variant<SyncWaiter*, std::unique_ptr<AsyncWaiter>>;
+  // Stack-allocated in the coroutine frame of send_receive_coro().
+  // Reader moves the response buffer, sets status, then posts h.resume()
+  // to exec_ so the coroutine continues on the io_context thread pool.
+  struct CoroWaiter {
+    flat_buffer*            buf_out;
+    std::coroutine_handle<> continuation;
+    int                     status{0}; // 0=pending, 1=ok, -1=error
+  };
+
+  using PendingEntry = std::variant<SyncWaiter*, std::unique_ptr<AsyncWaiter>, CoroWaiter*>;
 
   // ---- members -------------------------------------------------------------
 
@@ -128,7 +137,7 @@ class UringClientConnection
   std::unordered_map<uint32_t, PendingEntry> pending_requests_;
 
   int      fd_        = -1;
-  io_uring ring_send_ = {};  // sends only; SINGLE_ISSUER via send_mutex_
+  io_uring ring_send_ = {};  // sends only; serialised via send_mutex_
 
   EndPoint                     remote_endpoint_;
   boost::asio::any_io_executor exec_;
@@ -199,13 +208,15 @@ class UringClientConnection
       }
     };
 
-    // ring_send_: SINGLE_ISSUER (send_mutex_ guarantees one issuer at a time).
+    // ring_send_: multi-thread safe via send_mutex_.
+    // Do NOT use IORING_SETUP_SINGLE_ISSUER: send_mutex_ serialises senders,
+    // but the submitting thread can change (e.g. a coroutine continuation may
+    // resume on an io_context thread different from the original caller).
+    // SINGLE_ISSUER would let the kernel lock sends to the first submitter thread
+    // and return -EEXIST for any other, causing a SIGSEGV inside liburing.
     // No COOP_TASKRUN: sync senders spin-poll send CQEs.
     {
       io_uring_params p{};
-#ifdef IORING_SETUP_SINGLE_ISSUER
-      p.flags |= IORING_SETUP_SINGLE_ISSUER;
-#endif
       try_init(ring_send_, p, "send");
     }
 
@@ -399,6 +410,9 @@ class UringClientConnection
         if constexpr (std::is_same_v<T, SyncWaiter*>) {
           w->status.store(-1, std::memory_order_release);
           w->status.notify_one();
+        } else if constexpr (std::is_same_v<T, CoroWaiter*>) {
+          w->status = -1;
+          boost::asio::post(exec_, [h = w->continuation]() { h.resume(); });
         } else {
           boost::asio::post(exec_,
             [waiter = std::move(w)]() mutable {
@@ -441,6 +455,10 @@ class UringClientConnection
           *w->buf_out = std::move(buf);
           w->status.store(1, std::memory_order_release);
           w->status.notify_one();
+        } else if constexpr (std::is_same_v<T, CoroWaiter*>) {
+          *w->buf_out = std::move(buf);
+          w->status = 1;
+          boost::asio::post(exec_, [h = w->continuation]() { h.resume(); });
         } else {
           w->recv_buf = std::move(buf);
           boost::asio::post(exec_,
@@ -529,6 +547,63 @@ public:
       close();
       throw nprpc::ExceptionCommFailure();
     }
+  }
+
+  nprpc::Task<> send_receive_coro(flat_buffer& buffer,
+                                   uint32_t /*timeout_ms*/) override
+  {
+    assert(*reinterpret_cast<const uint32_t*>(buffer.data().data()) ==
+           buffer.size() - 4);
+
+    const uint32_t rid =
+        next_request_id_.fetch_add(1, std::memory_order_relaxed);
+    inject_request_id(buffer, rid);
+
+    // Awaiter lives in the coroutine frame.  await_suspend() registers the
+    // CoroWaiter, sends, and either suspends (ok) or returns false (error,
+    // resume immediately with status=-1).
+    struct SendAndAwait {
+      UringClientConnection* self;
+      uint32_t               rid;
+      flat_buffer&           buffer;
+      CoroWaiter             waiter{};  // frame-local; pointer stored in map
+
+      bool await_ready() noexcept { return false; }
+
+      bool await_suspend(std::coroutine_handle<> h) noexcept {
+        waiter.buf_out      = &buffer;
+        waiter.continuation = h;
+        waiter.status       = 0;
+
+        // Register BEFORE send (lost-wakeup guard).
+        {
+          std::lock_guard lk(self->pending_mutex_);
+          self->pending_requests_.emplace(rid, &waiter);
+        }
+
+        bool ok;
+        {
+          std::lock_guard lk(self->send_mutex_);
+          auto cb = buffer.cdata();
+          ok = self->do_send_all(
+              static_cast<const char*>(cb.data()), cb.size());
+        }
+
+        if (!ok) {
+          std::lock_guard lk(self->pending_mutex_);
+          self->pending_requests_.erase(rid);
+          waiter.status = -1;
+          return false;  // resume immediately; await_resume() throws
+        }
+        return true;  // suspend; reader will resume via exec_
+      }
+
+      void await_resume() {
+        if (waiter.status < 0) throw nprpc::ExceptionCommFailure();
+      }
+    };
+
+    co_await SendAndAwait{this, rid, buffer};
   }
 
   void send_receive_async(

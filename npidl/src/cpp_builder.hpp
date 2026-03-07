@@ -72,7 +72,7 @@ private:
   /// Shared output-side logic for proxy_call / proxy_udp_reliable_call.
   /// Emits the buf_ptr / Direct-out setup and all out-arg assignments,
   /// including OwnedSpan/OwnedDirect for 'direct' annotated arguments.
-  void emit_proxy_out_assignments(AstFunctionDecl* fn);
+  void emit_proxy_out_assignments(AstFunctionDecl* fn, bool use_co_return = false);
 
   void emit_accessors(const std::string& flat_name,
                       AstFieldDecl* f,
@@ -89,6 +89,7 @@ private:
                             bool top_type = false);
 
   void proxy_call(AstFunctionDecl* fn);
+  void proxy_call_coro(AstFunctionDecl* fn);  // coroutine variant
   void proxy_async_call(AstFunctionDecl* fn);
   void proxy_udp_call(AstFunctionDecl* fn); // Fire-and-forget UDP call
   void

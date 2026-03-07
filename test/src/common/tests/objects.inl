@@ -26,7 +26,7 @@ public:
     
     // Store the object for later release
     received_object_ = nprpc::ObjectPtr<nprpc::test::SimpleObject>(simple_obj);
-    received_object_->SetValue({}, 42);
+    received_object_->SetValue(42);
   }
 
   void ReleaseReceivedObject() override {
@@ -54,8 +54,8 @@ public:
     }
 
     // Now you can call methods on the objects
-    obj1->SetValue({}, 100);
-    obj2->SetValue({}, 200);
+    obj1->SetValue(100);
+    obj2->SetValue(200);
     
     // Release references when done
     obj1->release();

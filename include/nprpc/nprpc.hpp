@@ -20,6 +20,7 @@
 #include <nprpc/endpoint.hpp>
 #include <nprpc/flat_buffer.hpp>
 #include <nprpc/object_ptr.hpp>
+#include <nprpc/task.hpp>
 #include <nprpc/serialization/serialization.h>
 #include <nprpc/session_context.h>
 #include <nprpc/utils.hpp>
