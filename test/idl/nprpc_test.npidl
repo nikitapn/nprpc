@@ -185,6 +185,7 @@ interface TestStreams {
 	[unreliable]
 	stream<u8> GetByteStream(size: u64);
 	stream<AAA> GetObjectStream(count: u32);
+	stream<direct AAA> GetObjectStreamDirect(count: u32);
 }
 
 interface AsyncTest {

@@ -157,6 +157,15 @@ public:
         return value;
       }
       return std::nullopt;
+    } else if constexpr (::nprpc::flat::is_owned_direct_v<T>) {
+      // For stream<direct Foo>: move the whole chunk flat_buffer into an owning
+      // shared_ptr — zero copy. Compute the offset of the payload data within
+      // fb before the move (the pointer stays valid until fb is destroyed).
+      const auto offset = static_cast<uint32_t>(
+          reinterpret_cast<const uint8_t*>(data_span.data()) -
+          reinterpret_cast<const uint8_t*>(fb.data().data()));
+      auto owned_buf = std::make_shared<flat_buffer>(std::move(fb));
+      return T(std::move(owned_buf), offset);
     } else {
       // For complex types, call the generated deserialization free function
       // found via ADL in namespace nprpc_stream.

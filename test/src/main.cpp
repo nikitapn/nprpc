@@ -944,6 +944,23 @@ TEST_F(NprpcTest, TestObjectStream)
         EXPECT_EQ(received[i].c, "value_" + std::to_string(i));
       }
 
+      // Test direct stream - verifies that OwnedDirect wrapper can be used with streaming APIs and that data is correctly received without corruption
+      auto reader_direct = obj->GetObjectStreamDirect(kCount);
+
+      std::vector<::nprpc::flat::OwnedDirect<nprpc::test::flat::AAA_Direct>> received_direct;
+      received_direct.reserve(kCount);
+
+      for (auto& item : reader_direct) {
+        received_direct.push_back(item);
+      }
+
+      ASSERT_EQ(received_direct.size(), kCount);
+      for (uint32_t i = 0; i < kCount; ++i) {
+        EXPECT_EQ(received_direct[i].get().a(), i);
+        EXPECT_EQ((std::string)received_direct[i].get().b(), "name_" + std::to_string(i));
+        EXPECT_EQ((std::string)received_direct[i].get().c(), "value_" + std::to_string(i));
+      }
+
       std::cout << "Object stream test passed for transport" << std::endl;
 
     } catch (nprpc::Exception& ex) {

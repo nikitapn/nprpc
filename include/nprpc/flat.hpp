@@ -590,6 +590,14 @@ public:
   std::shared_ptr<::nprpc::flat_buffer> buffer() const noexcept { return buf_; }
 };
 
+/// Type trait to detect OwnedDirect<D> at compile time.
+template<typename T>
+struct is_owned_direct : std::false_type {};
+template<typename D>
+struct is_owned_direct<OwnedDirect<D>> : std::true_type {};
+template<typename T>
+inline constexpr bool is_owned_direct_v = is_owned_direct<T>::value;
+
 } // namespace nprpc::flat
 
 #endif // NPRPC_FLAT_HPP_

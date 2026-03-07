@@ -20,4 +20,10 @@ public:
             co_yield std::move(obj);
         }
     }
+
+  ::nprpc::StreamWriter<nprpc::test::AAA> GetObjectStreamDirect(uint32_t count) override {
+        // For testing, direct and non-direct can share the same implementation.
+        // The generated code will handle the zero-copy path for the direct version.
+        return GetObjectStream(count); 
+    }
 };
