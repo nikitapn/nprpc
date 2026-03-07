@@ -3,8 +3,8 @@
 
 import { FlatBuffer } from './flat_buffer';
 import { MyPromise } from "./utils";
-import { StreamManager, StreamReader, bytes_deserializer } from './stream';
-export { StreamReader, bytes_deserializer } from './stream';
+import { BidiStream, StreamManager, StreamReader, StreamWriter, bytes_deserializer } from './stream';
+export { BidiStream, StreamReader, StreamWriter, bytes_deserializer } from './stream';
 import {
   impl, detail, oid_t, poa_idx_t,
   LogLevel,
@@ -210,7 +210,7 @@ export class Connection {
         }
         case impl.MessageId.StreamCancellation: {
           const msg = impl.unmarshal_StreamCancel(buf, header_size);
-          this.stream_manager.on_stream_complete(msg.stream_id); // treat as completion
+          this.stream_manager.on_stream_cancel(msg.stream_id);
           return;
         }
       }
@@ -231,6 +231,30 @@ export class Connection {
           if (obj) {
             //console.log(obj);
             obj.dispatch(buf, this.endpoint, false);
+          }
+          break;
+        }
+        case impl.MessageId.StreamInitialization: {
+          const init = impl.unmarshal_StreamInit(buf, header_size);
+
+          if (gLogLevel >= LogLevel.trace) {
+            console.log(
+              "StreamInitialization. interface_idx: " + init.interface_idx +
+              " , fn_idx: " + init.func_idx +
+              " , poa_idx: " + init.poa_idx +
+              " , oid: " + init.object_id +
+              " , kind: " + init.stream_kind,
+            );
+          }
+
+          const obj = get_object(buf, init.poa_idx, init.object_id);
+          if (obj) {
+            const dispatch_stream = (obj as any).dispatch_stream;
+            if (typeof dispatch_stream === 'function') {
+              dispatch_stream.call(obj, buf, this.endpoint, false);
+            } else {
+              make_simple_answer(buf, impl.MessageId.Error_UnknownFunctionIdx);
+            }
           }
           break;
         }
@@ -314,7 +338,7 @@ export class Connection {
     this.ws.onclose = this.on_close.bind(this);
     this.ws.onmessage = this.on_read.bind(this);
     this.ws.onerror = this.on_error.bind(this);
-    this.stream_manager = new StreamManager();
+    this.stream_manager = new StreamManager(payload => this.ws.send(payload));
   }
 }
 
@@ -327,8 +351,6 @@ export class Rpc {
   /** @internal */
   private poa_list_: Poa[];
 
-
-  /** @internal */
   get_connection(endpoint: EndPoint): Connection {
     let existed = this.opened_connections_.find(c => c.endpoint.equal(endpoint));
     if (existed) return existed;
@@ -355,43 +377,63 @@ export class Rpc {
     return this.get_connection(endpoint).send_receive(buffer, timeout_ms);
   }
 
-  /**
-   * Initiate a server→client stream. Sends StreamInitialization and returns a StreamReader.
-   * Generated stubs should use this instead of calling rpc.call() directly for stream methods.
-   */
-  public async open_stream<T = Uint8Array>(
+  public async open_server_stream<T>(
     endpoint: EndPoint,
-    poa_idx: number,
-    object_id: bigint,
-    interface_idx: number,
-    func_idx: number,
-    timeout_ms: number = 2500,
-    deserialize: (data: Uint8Array) => T = bytes_deserializer as unknown as (data: Uint8Array) => T
+    buf: FlatBuffer,
+    stream_id: bigint,
+    timeout_ms: number,
+    deserialize: (data: Uint8Array) => T,
   ): Promise<StreamReader<T>> {
     const conn = this.get_connection(endpoint);
-    const stream_id = conn.stream_manager.generate_stream_id();
     const reader = conn.stream_manager.create_reader(stream_id, deserialize);
+    try {
+      await conn.send_receive(buf, timeout_ms);
+      if (handle_standart_reply(buf) !== 0) {
+        throw new Exception("Unexpected stream initialization reply");
+      }
+      return reader;
+    } catch (error) {
+      reader.cancel();
+      throw error;
+    }
+  }
 
-    const buf = FlatBuffer.create();
-    const init_size = 32; // StreamInit fixed layout: stream_id(8)+poa_idx(2)+pad(6)+object_id(8)+func_idx(1)+pad(7)
-    buf.prepare(header_size + init_size);
-    buf.commit(header_size + init_size);
-    buf.write_msg_id(impl.MessageId.StreamInitialization);
-    buf.write_msg_type(impl.MessageType.Request);
-    impl.marshal_StreamInit(buf, header_size, {
-      stream_id,
-      poa_idx,
-      interface_idx,
-      object_id,
-      func_idx,
-    });
-    buf.write_len(buf.size - 4);
-
-    // send_receive will block until the server sends the ACK (Success)
+  public async open_client_stream<T>(
+    endpoint: EndPoint,
+    buf: FlatBuffer,
+    stream_id: bigint,
+    timeout_ms: number,
+    serialize: (value: T) => Uint8Array,
+  ): Promise<StreamWriter<T>> {
+    const conn = this.get_connection(endpoint);
+    const writer = conn.stream_manager.create_writer(stream_id, serialize);
     await conn.send_receive(buf, timeout_ms);
+    if (handle_standart_reply(buf) !== 0) {
+      throw new Exception("Unexpected stream initialization reply");
+    }
+    return writer;
+  }
 
-    // After ACK, chunks will arrive asynchronously via on_read → stream_manager
-    return reader;
+  public async open_bidi_stream<TIn, TOut>(
+    endpoint: EndPoint,
+    buf: FlatBuffer,
+    stream_id: bigint,
+    timeout_ms: number,
+    serialize: (value: TIn) => Uint8Array,
+    deserialize: (data: Uint8Array) => TOut,
+  ): Promise<BidiStream<TIn, TOut>> {
+    const conn = this.get_connection(endpoint);
+    const stream = conn.stream_manager.create_bidi_stream(stream_id, serialize, deserialize);
+    try {
+      await conn.send_receive(buf, timeout_ms);
+      if (handle_standart_reply(buf) !== 0) {
+        throw new Exception("Unexpected stream initialization reply");
+      }
+      return stream;
+    } catch (error) {
+      stream.reader.cancel();
+      throw error;
+    }
   }
 
   /** @internal */
@@ -766,6 +808,7 @@ export abstract class ObjectServant {
   ref_cnt_: number;
 
   public abstract dispatch(buf: FlatBuffer, endpoint: EndPoint, from_parent: boolean): void;
+  public abstract dispatch_stream(buf: FlatBuffer, endpoint: EndPoint, from_parent: boolean): void;
   public abstract get_class(): string;
 
   public get poa(): Poa { return this.poa_; }

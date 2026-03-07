@@ -91,6 +91,26 @@ describe('NPRPC Integration Tests', function() {
         }
     }
 
+    async function collectStream<T>(reader: AsyncIterable<T>): Promise<T[]> {
+        const values: T[] = [];
+        for await (const value of reader) {
+            values.push(value);
+        }
+        return values;
+    }
+
+    async function waitFor(predicate: () => boolean, timeoutMs: number = 5000): Promise<void> {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            if (predicate()) {
+                return;
+            }
+            await new Promise(resolve => setTimeout(resolve, 25));
+        }
+
+        throw new Error(`Condition was not met within ${timeoutMs}ms`);
+    }
+
     describe('TestBasic Interface', function() {
         let testBasic: test.TestBasic;
 
@@ -341,14 +361,27 @@ describe('NPRPC Integration Tests', function() {
             const oid1 = poa.activate_object(simpleObject1);
             const oid2 = poa.activate_object(simpleObject2);
 
-            // Create NestedObjects structure
             const nestedObjects: test.NestedObjects = {
                 object1: new NPRPC.ObjectProxy(oid1),
                 object2: new NPRPC.ObjectProxy(oid2)
             };
 
-            // Send the nested objects to the server
             await testObjects.SendNestedObjects(nestedObjects);
+
+            await waitFor(() => simpleObject1.value === 100 && simpleObject2.value === 200);
+            expect(simpleObject1.value).to.equal(100);
+            expect(simpleObject2.value).to.equal(200);
+
+            const swappedNestedObjects: test.NestedObjects = {
+                object1: new NPRPC.ObjectProxy(oid2),
+                object2: new NPRPC.ObjectProxy(oid1)
+            };
+
+            await testObjects.SendNestedObjects(swappedNestedObjects);
+
+            await waitFor(() => simpleObject1.value === 200 && simpleObject2.value === 100);
+            expect(simpleObject1.value).to.equal(200);
+            expect(simpleObject2.value).to.equal(100);
         });
 
     }); // describe TestObjects
@@ -444,6 +477,63 @@ describe('NPRPC Integration Tests', function() {
             }
         });
     }); // describe FixedSizeArrayTest
+
+    describe('TestStreams Interface', function() {
+        it('should receive a byte stream', async function() {
+            const testStreams = await resolveTestObject('streams_test', test.TestStreams);
+            const chunks: Uint8Array[] = await collectStream(await testStreams.GetByteStream(5n));
+            const received = chunks.map(chunk => {
+                expect(chunk).to.be.instanceOf(Uint8Array);
+                expect(chunk.length).to.equal(1);
+                return chunk[0];
+            });
+
+            expect(received).to.deep.equal([0, 1, 2, 3, 4]);
+        });
+
+        it('should deserialize streamed AAA objects correctly', async function() {
+            const testStreams = await resolveTestObject('object_stream_test', test.TestStreams);
+            const count = 4;
+            const received: test.AAA[] = await collectStream(await testStreams.GetObjectStream(count));
+
+            expect(received).to.have.lengthOf(count);
+            for (let i = 0; i < count; i++) {
+                expect(received[i].a).to.equal(i);
+                expect(received[i].b).to.equal(`name_${i}`);
+                expect(received[i].c).to.equal(`value_${i}`);
+            }
+        });
+
+        it('should upload a client byte stream', async function() {
+            const testStreams = await resolveTestObject('client_stream_test', test.TestStreams);
+            const writer = await testStreams.UploadByteStream(5n);
+
+            for (const value of [1, 2, 3, 4, 5]) {
+                writer.write(Uint8Array.of(value));
+            }
+            writer.close();
+        });
+
+        it('should echo a bidi byte stream', async function() {
+            const testStreams = await resolveTestObject('bidi_stream_test', test.TestStreams);
+            const mask = 0x5A;
+            const stream = await testStreams.EchoByteStream(mask);
+
+            for (const value of [10, 11, 12, 13]) {
+                stream.writer.write(Uint8Array.of(value));
+            }
+            stream.writer.close();
+
+            const chunks: Uint8Array[] = await collectStream(stream.reader);
+            const received = chunks.map(chunk => {
+                expect(chunk).to.be.instanceOf(Uint8Array);
+                expect(chunk.length).to.equal(1);
+                return chunk[0];
+            });
+
+            expect(received).to.deep.equal([10 ^ mask, 11 ^ mask, 12 ^ mask, 13 ^ mask]);
+        });
+    }); // describe TestStreams
 
     describe('HTTP Transport', function() {
         let testBasic: test.TestBasic;

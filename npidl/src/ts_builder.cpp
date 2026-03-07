@@ -14,8 +14,6 @@ static std::string_view fundamental_to_ts(TokenId id);
 
 using std::placeholders::_1;
 using std::placeholders::_2;
-using std::placeholders::_3;
-using std::placeholders::_4;
 
 static const int token_mod_addr = std::ios_base::xalloc();
 
@@ -445,6 +443,189 @@ void TSBuilder::emit_parameter_type_for_servant(AstFunctionArgument* arg,
     os << '>';
 }
 
+void TSBuilder::emit_stream_value_type(AstTypeDecl* type, std::ostream& os)
+{
+  auto* real_type = type->id == FieldType::Alias ? calias(type)->get_real_type() : type;
+  if (real_type->id == FieldType::Fundamental &&
+      cft(real_type)->token_id == TokenId::UInt8) {
+    os << "Uint8Array";
+  } else {
+    emit_type(type, os);
+  }
+}
+
+void TSBuilder::emit_stream_reader_type(AstStreamDecl* stream,
+                                        std::ostream& os)
+{
+  os << "NPRPC.StreamReader<";
+  emit_stream_value_type(stream->stream_out_type(), os);
+  os << '>';
+}
+
+void TSBuilder::emit_stream_writer_type(AstTypeDecl* type, std::ostream& os)
+{
+  os << "NPRPC.StreamWriter<";
+  emit_stream_value_type(type, os);
+  os << '>';
+}
+
+void TSBuilder::emit_stream_proxy_return_type(AstFunctionDecl* fn,
+                                              std::ostream& os)
+{
+  auto* stream = fn->stream_decl;
+  assert(stream != nullptr);
+
+  switch (fn->stream_kind) {
+  case StreamKind::Server:
+    emit_stream_reader_type(stream, os);
+    break;
+  case StreamKind::Client:
+    emit_stream_writer_type(stream->stream_in_type(), os);
+    break;
+  case StreamKind::Bidi:
+    os << "NPRPC.BidiStream<";
+    emit_stream_value_type(stream->stream_in_type(), os);
+    os << ", ";
+    emit_stream_value_type(stream->stream_out_type(), os);
+    os << '>';
+    break;
+  default:
+    assert(false);
+  }
+}
+
+void TSBuilder::emit_stream_serializer(AstTypeDecl* type, std::ostream& os)
+{
+  switch (type->id) {
+  case FieldType::Fundamental: {
+    auto token = cft(type)->token_id;
+    switch (token) {
+    case TokenId::Boolean:
+      os << "((value: boolean) => Uint8Array.of(value ? 1 : 0))";
+      break;
+    case TokenId::Int8:
+      os << "((value: number) => new Uint8Array(Int8Array.of(value).buffer))";
+      break;
+    case TokenId::UInt8:
+      os << "((value: Uint8Array) => value)";
+      break;
+    case TokenId::Int16:
+      os << "((value: number) => { const buffer = new ArrayBuffer(2); const view = new DataView(buffer); view.setInt16(0, value, true); return new Uint8Array(buffer); })";
+      break;
+    case TokenId::UInt16:
+      os << "((value: number) => { const buffer = new ArrayBuffer(2); const view = new DataView(buffer); view.setUint16(0, value, true); return new Uint8Array(buffer); })";
+      break;
+    case TokenId::Int32:
+      os << "((value: number) => { const buffer = new ArrayBuffer(4); const view = new DataView(buffer); view.setInt32(0, value, true); return new Uint8Array(buffer); })";
+      break;
+    case TokenId::UInt32:
+      os << "((value: number) => { const buffer = new ArrayBuffer(4); const view = new DataView(buffer); view.setUint32(0, value, true); return new Uint8Array(buffer); })";
+      break;
+    case TokenId::Int64:
+      os << "((value: bigint) => { const buffer = new ArrayBuffer(8); const view = new DataView(buffer); view.setBigInt64(0, value, true); return new Uint8Array(buffer); })";
+      break;
+    case TokenId::UInt64:
+      os << "((value: bigint) => { const buffer = new ArrayBuffer(8); const view = new DataView(buffer); view.setBigUint64(0, value, true); return new Uint8Array(buffer); })";
+      break;
+    case TokenId::Float32:
+      os << "((value: number) => { const buffer = new ArrayBuffer(4); const view = new DataView(buffer); view.setFloat32(0, value, true); return new Uint8Array(buffer); })";
+      break;
+    case TokenId::Float64:
+      os << "((value: number) => { const buffer = new ArrayBuffer(8); const view = new DataView(buffer); view.setFloat64(0, value, true); return new Uint8Array(buffer); })";
+      break;
+    default:
+      assert(false);
+    }
+    break;
+  }
+  case FieldType::Enum:
+    emit_stream_serializer(cenum(type), os);
+    break;
+  case FieldType::Alias:
+    emit_stream_serializer(calias(type)->get_real_type(), os);
+    break;
+  case FieldType::String:
+    os << "((value: string) => { const buf = NPRPC.FlatBuffer.create(128); buf.commit(8); NPRPC.marshal_string(buf, 0, value); return new Uint8Array(buf.array_buffer, 0, buf.size); })";
+    break;
+  case FieldType::Struct: {
+    auto* s = cflat(type);
+    const auto initial_capacity = s->size + 128;
+    os << "((value: ";
+    emit_type(type, os);
+    os << ") => { const buf = NPRPC.FlatBuffer.create(" << initial_capacity
+       << "); buf.commit(" << s->size << "); marshal_" << s->name
+       << "(buf, 0, value); return new Uint8Array(buf.array_buffer, 0, buf.size); })";
+    break;
+  }
+  default:
+    assert(false);
+  }
+}
+
+void TSBuilder::emit_stream_deserializer(AstTypeDecl* type, std::ostream& os)
+{
+  switch (type->id) {
+  case FieldType::Fundamental: {
+    auto token = cft(type)->token_id;
+    switch (token) {
+    case TokenId::Boolean:
+      os << "((data: Uint8Array) => data[0] !== 0)";
+      break;
+    case TokenId::Int8:
+      os << "((data: Uint8Array) => new DataView(data.buffer, data.byteOffset, data.byteLength).getInt8(0))";
+      break;
+    case TokenId::UInt8:
+      os << "NPRPC.bytes_deserializer";
+      break;
+    case TokenId::Int16:
+      os << "((data: Uint8Array) => new DataView(data.buffer, data.byteOffset, data.byteLength).getInt16(0, true))";
+      break;
+    case TokenId::UInt16:
+      os << "((data: Uint8Array) => new DataView(data.buffer, data.byteOffset, data.byteLength).getUint16(0, true))";
+      break;
+    case TokenId::Int32:
+      os << "((data: Uint8Array) => new DataView(data.buffer, data.byteOffset, data.byteLength).getInt32(0, true))";
+      break;
+    case TokenId::UInt32:
+      os << "((data: Uint8Array) => new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(0, true))";
+      break;
+    case TokenId::Int64:
+      os << "((data: Uint8Array) => new DataView(data.buffer, data.byteOffset, data.byteLength).getBigInt64(0, true))";
+      break;
+    case TokenId::UInt64:
+      os << "((data: Uint8Array) => new DataView(data.buffer, data.byteOffset, data.byteLength).getBigUint64(0, true))";
+      break;
+    case TokenId::Float32:
+      os << "((data: Uint8Array) => new DataView(data.buffer, data.byteOffset, data.byteLength).getFloat32(0, true))";
+      break;
+    case TokenId::Float64:
+      os << "((data: Uint8Array) => new DataView(data.buffer, data.byteOffset, data.byteLength).getFloat64(0, true))";
+      break;
+    default:
+      assert(false);
+    }
+    break;
+  }
+  case FieldType::Enum:
+    emit_stream_deserializer(cenum(type), os);
+    break;
+  case FieldType::Alias:
+    emit_stream_deserializer(calias(type)->get_real_type(), os);
+    break;
+  case FieldType::String:
+    os << "((data: Uint8Array) => NPRPC.unmarshal_string(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0))";
+    break;
+  case FieldType::Struct: {
+    auto* s = cflat(type);
+    os << "((data: Uint8Array) => unmarshal_" << s->name
+       << "(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0))";
+    break;
+  }
+  default:
+    assert(false);
+  }
+}
+
 void TSBuilder::assign_from_ts_type(AstTypeDecl* type,
                                     std::string op1,
                                     std::string op2,
@@ -810,10 +991,15 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
 
   auto emit_function_arguments =
       [](bool ts, AstFunctionDecl* fn, std::ostream& os,
-         std::function<void(AstFunctionArgument*, std::ostream & os)> emitter) {
+         std::function<void(AstFunctionArgument*, std::ostream & os)> emitter,
+         bool skip_stream = false) {
         os << '(';
         size_t ix = 0;
         for (auto arg : fn->args) {
+          if (skip_stream && arg->type->id == FieldType::Stream)
+            continue;
+          if (ix > 0)
+            os << ", ";
           os << arg->name;
           if (!ts)
             os << ": ";
@@ -822,8 +1008,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
                        ? "?: "
                        : ": ");
           emitter(arg, os);
-          if (++ix != fn->args.size())
-            os << ", ";
+          ++ix;
         }
         os << ')';
       };
@@ -867,12 +1052,21 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       emit_function_arguments(
           false, fn, out,
           std::bind(&TSBuilder::emit_parameter_type_for_proxy_call, this, _1,
-                    _2));
-      out << ": Promise<" << emit_type(fn->ret_value) << "> {\n"
+                    _2),
+          fn->is_stream && fn->stream_kind != StreamKind::Server);
+      out << ": Promise<";
+      if (fn->is_stream) {
+        emit_stream_proxy_return_type(fn, out);
+      } else {
+        out << emit_type(fn->ret_value);
+      }
+      out << "> {\n"
           << bb(false) << bl() << (!fn->is_void() ? "return " : "")
           << inherited_ifs.first->name << ".prototype." << fn->name
           << ".bind(this,";
       for (auto arg : fn->args) {
+        if (fn->is_stream && arg->type->id == FieldType::Stream)
+          continue;
         out << arg->name << ',';
       }
       out << inherited_ifs.second << ")();\n" << eb();
@@ -881,8 +1075,106 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   // proxy object functions definitions
   out << '\n';
   for (auto& fn : ifs->fns) {
-    if (fn->is_stream)
-      continue; // skip stream functions for now
+    if (fn->is_stream) {
+      int visible_arg_count = 0;
+      for (auto arg : fn->args) {
+        if (fn->stream_kind != StreamKind::Server && arg->type->id == FieldType::Stream)
+          continue;
+        ++visible_arg_count;
+      }
+
+      out << bl() << "public async " << fn->name;
+      emit_function_arguments(
+          true, fn, out,
+          std::bind(&TSBuilder::emit_parameter_type_for_proxy_call, this, _1,
+                    _2),
+          fn->stream_kind != StreamKind::Server);
+      out << ": Promise<";
+      emit_stream_proxy_return_type(fn, out);
+      out << "> {\n"
+          << bb(false) << bl()
+          << "const interface_idx = (arguments.length == " << visible_arg_count
+          << " ? 0 : arguments[arguments.length - 1]);\n"
+          << bl() << "const conn = NPRPC.rpc.get_connection(this.endpoint);\n"
+          << bl() << "const stream_id = conn.stream_manager.generate_stream_id();\n";
+
+      const auto fixed_size =
+          get_stream_init_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
+      const auto capacity =
+          fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
+
+      out << bl() << "const buf = NPRPC.FlatBuffer.create();\n"
+          << bl() << "buf.prepare(" << capacity << ");\n"
+          << bl() << "buf.commit(" << fixed_size << ");\n"
+          << bl() << "buf.write_msg_id(NPRPC.impl.MessageId.StreamInitialization);\n"
+          << bl() << "buf.write_msg_type(NPRPC.impl.MessageType.Request);\n"
+          << bl() << "NPRPC.impl.marshal_StreamInit(buf, " << size_of_header << ", {\n"
+          << bb(false) << bl() << "stream_id,\n"
+          << bl() << "poa_idx: this.data.poa_idx,\n"
+          << bl() << "interface_idx,\n"
+          << bl() << "object_id: this.data.object_id,\n"
+          << bl() << "func_idx: " << fn->idx << ",\n"
+          << bl() << "stream_kind: NPRPC.impl.StreamKind.";
+
+      switch (fn->stream_kind) {
+      case StreamKind::Server:
+        out << "Server";
+        break;
+      case StreamKind::Client:
+        out << "Client";
+        break;
+      case StreamKind::Bidi:
+        out << "Bidi";
+        break;
+      default:
+        assert(false);
+      }
+
+      out << "\n" << eb(false) << bl() << "});\n";
+
+      if (fn->in_s) {
+        out << bl() << "marshal_" << fn->in_s->name << "(buf, "
+            << get_stream_init_arguments_offset() << ", {";
+
+        int ix = 0;
+        for (auto in : fn->args) {
+          if (in->modifier == ArgumentModifier::Out || in->type->id == FieldType::Stream)
+            continue;
+          if (ix > 0)
+            out << ", ";
+          out << "_" << (ix + 1) << ": " << in->name;
+          ++ix;
+        }
+        out << "});\n";
+      }
+
+      out << bl() << "buf.write_len(buf.size - 4);\n";
+
+      switch (fn->stream_kind) {
+      case StreamKind::Server:
+        out << bl() << "return await NPRPC.rpc.open_server_stream(this.endpoint, buf, stream_id, this.timeout, ";
+        emit_stream_deserializer(fn->stream_decl->stream_out_type(), out);
+        out << ");\n";
+        break;
+      case StreamKind::Client:
+        out << bl() << "return await NPRPC.rpc.open_client_stream(this.endpoint, buf, stream_id, this.timeout, ";
+        emit_stream_serializer(fn->stream_decl->stream_in_type(), out);
+        out << ");\n";
+        break;
+      case StreamKind::Bidi:
+        out << bl() << "return await NPRPC.rpc.open_bidi_stream(this.endpoint, buf, stream_id, this.timeout, ";
+        emit_stream_serializer(fn->stream_decl->stream_in_type(), out);
+        out << ", ";
+        emit_stream_deserializer(fn->stream_decl->stream_out_type(), out);
+        out << ");\n";
+        break;
+      default:
+        assert(false);
+      }
+
+      out << eb();
+      continue;
+    }
 
     out << bl() << "public async " << fn->name;
     emit_function_arguments(
@@ -1305,10 +1597,64 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   }
   out << bb();
   for (auto fn : ifs->fns) {
-    if (fn->is_stream)
-      continue; // skip stream functions for now
-
     out << bl() << fn->name;
+    if (fn->is_stream) {
+      out << '(';
+      size_t ix = 0;
+      for (auto arg : fn->args) {
+        if (ix > 0)
+          out << ", ";
+        out << arg->name << (arg->is_optional() ? "?: " : ": ");
+        if (arg->type->id == FieldType::Stream) {
+          if (fn->stream_kind == StreamKind::Client) {
+            out << "NPRPC.StreamReader<";
+            emit_stream_value_type(fn->stream_decl->stream_in_type(), out);
+            out << ">";
+          } else {
+            out << "NPRPC.BidiStream<";
+            emit_stream_value_type(fn->stream_decl->stream_out_type(), out);
+            out << ", ";
+            emit_stream_value_type(fn->stream_decl->stream_in_type(), out);
+            out << ">";
+          }
+        } else {
+          emit_parameter_type_for_servant(arg, out);
+        }
+        ++ix;
+      }
+      if (fn->stream_kind == StreamKind::Bidi) {
+        if (ix > 0)
+          out << ", ";
+        out << "stream: NPRPC.BidiStream<";
+        emit_stream_value_type(fn->stream_decl->stream_out_type(), out);
+        out << ", ";
+        emit_stream_value_type(fn->stream_decl->stream_in_type(), out);
+        out << ">";
+      }
+      out << ")";
+
+      switch (fn->stream_kind) {
+      case StreamKind::Server:
+        out << ": AsyncIterable<";
+        emit_stream_value_type(fn->stream_decl->stream_out_type(), out);
+        out << "> | Iterable<";
+        emit_stream_value_type(fn->stream_decl->stream_out_type(), out);
+        out << "> | Promise<AsyncIterable<";
+        emit_stream_value_type(fn->stream_decl->stream_out_type(), out);
+        out << "> | Iterable<";
+        emit_stream_value_type(fn->stream_decl->stream_out_type(), out);
+        out << ">>;\n";
+        break;
+      case StreamKind::Client:
+      case StreamKind::Bidi:
+        out << ": void | Promise<void>;\n";
+        break;
+      default:
+        assert(false);
+      }
+      continue;
+    }
+
     emit_function_arguments(
         false, fn, out,
         std::bind(&TSBuilder::emit_parameter_type_for_servant, this, _1, _2));
@@ -1330,6 +1676,11 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
          "NPRPC.EndPoint, from_parent: boolean) => {\n"
       << bb(false) << bl() << "_" << servant_iname
       << "._dispatch(this, buf, remote_endpoint, from_parent);\n"
+      << eb() << bl()
+      << "public readonly dispatch_stream = (buf: NPRPC.FlatBuffer, "
+        "remote_endpoint: NPRPC.EndPoint, from_parent: boolean) => {\n"
+      << bb(false) << bl() << "_" << servant_iname
+      << "._dispatch_stream(this, buf, remote_endpoint, from_parent);\n"
       << eb() << bl() << "static _dispatch(obj: _" << servant_iname
       << ", buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, "
          "from_parent: boolean): void {\n"
@@ -1583,8 +1934,210 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       << eb(false) << // default ends
       eb() <<         // switch block ends
       eb() <<         // dispatch ends
-      eb() << '\n'    // class ends
-      ;
+      bl() << "static _dispatch_stream(obj: _" << servant_iname
+      << ", buf: NPRPC.FlatBuffer, remote_endpoint: NPRPC.EndPoint, "
+         "from_parent: boolean): void {\n"
+      << bb(false)
+      << bl() << "const init = NPRPC.impl.unmarshal_StreamInit(buf, "
+      << size_of_header << ");\n"
+      << bl() << "const function_idx = init.func_idx;\n";
+
+  if (!ifs->plist.empty()) {
+    out << bl() << "if (from_parent == false) {\n"
+        << bb(false) << bl() << "switch(init.interface_idx) {\n"
+        << bb(false) << bl() << "case 0:\n"
+        << bb(false) << bl() << "break;\n"
+        << eb(false);
+
+    int ix = 1;
+    auto select_stream_interface = [&ix, this, ifs](AstInterfaceDecl* i) {
+      if (i == ifs)
+        return;
+      out << bl() << "case " << ix << ":\n"
+          << bb(false) << bl() << "_I" << i->name
+          << "_Servant._dispatch_stream(obj, buf, remote_endpoint, true);\n"
+          << bl() << "return;\n"
+          << eb(false);
+      ++ix;
+    };
+
+    dfs_interface(select_stream_interface, ifs);
+
+    out << bl() << "default:\n"
+        << bb(false) << bl() << "throw \"unknown interface\";\n"
+        << eb(false) << eb() << eb();
+  }
+
+  out << bl() << "const conn = NPRPC.rpc.get_connection(remote_endpoint);\n"
+      << bl() << "switch(function_idx) {\n" << bb(false);
+
+  for (auto fn : ifs->fns) {
+    if (!fn->is_stream)
+      continue;
+
+    out << bl() << "case " << fn->idx << ": {\n" << bb(false);
+
+    if (fn->in_s) {
+      bool in_needs_endpoint = false;
+      for (auto f : fn->in_s->fields) {
+        if (f->type->id == FieldType::Struct) {
+          auto nested = cflat(f->type);
+          if (nested->fields.empty() || !nested->fields[0]->function_argument) {
+            if (contains_object(f->type)) {
+              in_needs_endpoint = true;
+              break;
+            }
+          }
+        }
+      }
+      if (in_needs_endpoint) {
+        out << bl() << "const ia = unmarshal_" << fn->in_s->name << "(buf, "
+            << get_stream_init_arguments_offset() << ", remote_endpoint);\n";
+      } else {
+        out << bl() << "const ia = unmarshal_" << fn->in_s->name << "(buf, "
+            << get_stream_init_arguments_offset() << ");\n";
+      }
+    }
+
+    switch (fn->stream_kind) {
+    case StreamKind::Server:
+      out << bl() << "const writer = conn.stream_manager.create_writer(init.stream_id, ";
+      emit_stream_serializer(fn->stream_decl->stream_out_type(), out);
+      out << ");\n"
+          << bl() << "NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);\n"
+          << bl() << "void (async () => {\n"
+          << bb(false)
+          << bl() << "try {\n"
+          << bb(false)
+          << bl() << "const source = await (obj as any)." << fn->name << "(";
+      {
+        size_t in_ix = 0;
+        bool first_arg = true;
+        for (auto arg : fn->args) {
+          if (arg->modifier == ArgumentModifier::Out || arg->type->id == FieldType::Stream)
+            continue;
+          if (!first_arg)
+            out << ", ";
+          ++in_ix;
+          if (arg->type->id == FieldType::Object) {
+            out << "NPRPC.create_object_from_oid(ia._" << in_ix << ", remote_endpoint)";
+          } else {
+            out << "ia._" << in_ix;
+          }
+          first_arg = false;
+        }
+        if (fn->stream_kind == StreamKind::Bidi) {
+          if (!first_arg)
+            out << ", ";
+          out << "stream";
+        }
+      }
+      out << ");\n"
+          << bl() << "for await (const chunk of source as any) {\n"
+          << bb(false) << bl() << "writer.write(chunk);\n" << eb()
+          << bl() << "writer.close();\n"
+          << eb(false)
+          << bl() << "} catch (e) {\n"
+          << bb(false)
+          << bl() << "writer.abort();\n"
+          << bl() << "console.error('Stream handler failed', e);\n"
+          << eb()
+          << bl() << "})();\n"
+          << bl() << "return;\n";
+      break;
+    case StreamKind::Client:
+      out << bl() << "const reader = conn.stream_manager.create_reader(init.stream_id, ";
+      emit_stream_deserializer(fn->stream_decl->stream_in_type(), out);
+      out << ");\n"
+          << bl() << "NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);\n"
+          << bl() << "void (async () => {\n"
+          << bb(false)
+          << bl() << "try {\n"
+          << bb(false)
+          << bl() << "await (obj as any)." << fn->name << "(";
+      {
+        size_t in_ix = 0;
+        bool first_arg = true;
+        for (auto arg : fn->args) {
+          if (!first_arg)
+            out << ", ";
+          if (arg->type->id == FieldType::Stream) {
+            out << "reader";
+          } else {
+            ++in_ix;
+            if (arg->type->id == FieldType::Object) {
+              out << "NPRPC.create_object_from_oid(ia._" << in_ix << ", remote_endpoint)";
+            } else {
+              out << "ia._" << in_ix;
+            }
+          }
+          first_arg = false;
+        }
+      }
+      out << ");\n"
+          << eb(false)
+          << bl() << "} catch (e) {\n"
+          << bb(false)
+          << bl() << "reader.cancel();\n"
+          << bl() << "console.error('Stream handler failed', e);\n"
+          << eb()
+          << bl() << "})();\n"
+          << bl() << "return;\n";
+      break;
+    case StreamKind::Bidi:
+      out << bl() << "const stream = conn.stream_manager.create_bidi_stream(init.stream_id, ";
+      emit_stream_serializer(fn->stream_decl->stream_out_type(), out);
+      out << ", ";
+      emit_stream_deserializer(fn->stream_decl->stream_in_type(), out);
+      out << ");\n"
+          << bl() << "NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);\n"
+          << bl() << "void (async () => {\n"
+          << bb(false)
+          << bl() << "try {\n"
+          << bb(false)
+          << bl() << "await (obj as any)." << fn->name << "(";
+      {
+        size_t in_ix = 0;
+        bool first_arg = true;
+        for (auto arg : fn->args) {
+          if (!first_arg)
+            out << ", ";
+          {
+            ++in_ix;
+            if (arg->type->id == FieldType::Object) {
+              out << "NPRPC.create_object_from_oid(ia._" << in_ix << ", remote_endpoint)";
+            } else {
+              out << "ia._" << in_ix;
+            }
+          }
+          first_arg = false;
+        }
+        if (!first_arg)
+          out << ", ";
+        out << "stream";
+      }
+      out << ");\n"
+          << eb(false)
+          << bl() << "} catch (e) {\n"
+          << bb(false)
+          << bl() << "stream.writer.abort();\n"
+          << bl() << "stream.reader.cancel();\n"
+          << bl() << "console.error('Stream handler failed', e);\n"
+          << eb()
+          << bl() << "})();\n"
+          << bl() << "return;\n";
+      break;
+    default:
+      assert(false);
+    }
+
+    out << eb();
+  }
+
+  out << bl() << "default:\n"
+      << bb(false) << bl()
+      << "NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Error_UnknownFunctionIdx);\n"
+      << eb(false) << eb() << eb() << eb() << '\n';
 }
 
 TSBuilder::_ns TSBuilder::ns(Namespace* nm) const { return {*this, nm}; }

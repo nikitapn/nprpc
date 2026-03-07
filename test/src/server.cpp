@@ -78,6 +78,19 @@ int main(int argc, char** argv)
   TestFixedSizeArrayTestImpl test_fixed_size_array_test;
   nprpctest::bind<nprpc::test::FixedSizeArrayTest>( test_fixed_size_array_test, flags, "nprpc_test_fixed_size_array_test");
 
+  #include "common/tests/streams.inl"
+  TestStreamsImpl test_streams;
+  nprpctest::bind<nprpc::test::TestStreams>(test_streams, flags, "streams_test");
+
+  TestStreamsImpl test_object_streams;
+  nprpctest::bind<nprpc::test::TestStreams>(test_object_streams, flags, "object_stream_test");
+
+  TestStreamsImpl test_client_streams;
+  nprpctest::bind<nprpc::test::TestStreams>(test_client_streams, flags, "client_stream_test");
+
+  TestStreamsImpl test_bidi_streams;
+  nprpctest::bind<nprpc::test::TestStreams>(test_bidi_streams, flags, "bidi_stream_test");
+
   // Capture interrupt signal to allow graceful shutdown
   signal(SIGINT, [](int signum) {
     std::cout << "Interrupt signal (" << signum << ") received." << std::endl;

@@ -33,6 +33,12 @@ private:
                                           std::ostream& os);
   void emit_parameter_type_for_servant(AstFunctionArgument* arg,
                                        std::ostream& os);
+  void emit_stream_value_type(AstTypeDecl* type, std::ostream& os);
+  void emit_stream_reader_type(AstStreamDecl* stream, std::ostream& os);
+  void emit_stream_writer_type(AstTypeDecl* type, std::ostream& os);
+  void emit_stream_proxy_return_type(AstFunctionDecl* fn, std::ostream& os);
+  void emit_stream_serializer(AstTypeDecl* type, std::ostream& os);
+  void emit_stream_deserializer(AstTypeDecl* type, std::ostream& os);
 
   void assign_from_ts_type(AstTypeDecl* type,
                            std::string op1,
