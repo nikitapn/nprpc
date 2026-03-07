@@ -35,6 +35,25 @@ class websocket_session_with_acceptor : public Derived
   template <class Body, class Allocator>
   void do_accept(http::request<Body, http::basic_fields<Allocator>> req)
   {
+    // Disable auto-fragmentation: Beast's default splits every message into
+    // 4 KB fragments, causing 2,560 async_write calls for a 10 MB payload.
+    // With auto_fragment(false), one async_write covers the whole message and
+    // the kernel handles TCP segmentation internally.
+    this->ws().auto_fragment(false);
+
+    // Large write buffer = large masking/copy buffer for client→server sends.
+    // Default 4 KB means 2,560 XOR+copy passes for 10 MB; 4 MB = ~3 passes.
+    this->ws().write_buffer_bytes(4 * 1024 * 1024);
+
+    // TCP_NODELAY + enlarged socket buffers on the underlying TCP socket.
+    // Without TCP_NODELAY, Nagle's algorithm stalls the 4 KB micro-sends.
+    {
+      auto& sock = beast::get_lowest_layer(this->ws()).socket();
+      sock.set_option(net::ip::tcp::no_delay(true));
+      sock.set_option(net::socket_base::send_buffer_size(4 * 1024 * 1024));
+      sock.set_option(net::socket_base::receive_buffer_size(4 * 1024 * 1024));
+    }
+
     // Set suggested timeout settings for the websocket
     this->ws().set_option(
         websocket::stream_base::timeout::suggested(beast::role_type::server));

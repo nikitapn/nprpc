@@ -57,7 +57,10 @@ template <class Derived> class WebSocketSession : public Session
   std::atomic<bool> reading_{false};
   std::atomic<bool> writing_{false};
 
-  flat_buffer rx_buffer_{128 * 1024}; // Start with 128KB buffer for incoming messages
+  // Pre-allocate 4 MB so Beast's accumulated-frame reassembly never triggers
+  // the doubling/memcpy cascade for payloads up to 4 MB (e.g. the benchmark's
+  // 10 MB message causes only 1-2 doublings instead of ~7).
+  flat_buffer rx_buffer_{4 * 1024 * 1024};
   // Tracks the last response size so the next tx_buffer is pre-sized,
   // eliminating repeated realloc/memcpy for large responses after warm-up.
   std::size_t last_tx_size_{flat_buffer::default_initial_size()};

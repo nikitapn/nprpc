@@ -18,6 +18,15 @@ make_client_plain_websocket_session(const EndPoint& endpoint,
   auto ws = future.get();
   auto session = std::make_shared<ClientPlainWebSocketSession>(
       std::move(*ws.release()), endpoint);
+  // Mirror the server-side performance settings.
+  session->ws().auto_fragment(false);
+  session->ws().write_buffer_bytes(4 * 1024 * 1024);
+  {
+    auto& sock = beast::get_lowest_layer(session->ws()).socket();
+    sock.set_option(net::ip::tcp::no_delay(true));
+    sock.set_option(net::socket_base::send_buffer_size(4 * 1024 * 1024));
+    sock.set_option(net::socket_base::receive_buffer_size(4 * 1024 * 1024));
+  }
   session->start_read_loop();
   return session;
 }
@@ -33,6 +42,9 @@ make_client_ssl_websocket_session(const EndPoint& endpoint,
   auto ws = future.get();
   auto session = std::make_shared<ClientSSLWebSocketSession>(
       std::move(*ws.release()), endpoint);
+  // Mirror the server-side performance settings (SSL layer wraps TCP).
+  session->ws().auto_fragment(false);
+  session->ws().write_buffer_bytes(4 * 1024 * 1024);
   session->start_read_loop();
   return session;
 }
