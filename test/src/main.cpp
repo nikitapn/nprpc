@@ -919,6 +919,42 @@ TEST_F(NprpcTest, TestStreams)
   // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
 }
 
+TEST_F(NprpcTest, TestObjectStream)
+{
+#include "common/tests/streams.inl"
+  TestStreamsImpl servant;
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+    try {
+      auto obj = bind_and_resolve<nprpc::test::TestStreams>(servant, flags, "object_stream_test");
+
+      constexpr uint32_t kCount = 4;
+      auto reader = obj->GetObjectStream(kCount);
+
+      std::vector<nprpc::test::AAA> received;
+      received.reserve(kCount);
+
+      for (auto& item : reader) {
+        received.push_back(item);
+      }
+
+      ASSERT_EQ(received.size(), kCount);
+      for (uint32_t i = 0; i < kCount; ++i) {
+        EXPECT_EQ(received[i].a, i);
+        EXPECT_EQ(received[i].b, "name_" + std::to_string(i));
+        EXPECT_EQ(received[i].c, "value_" + std::to_string(i));
+      }
+
+      std::cout << "Object stream test passed for transport" << std::endl;
+
+    } catch (nprpc::Exception& ex) {
+      FAIL() << "Exception in TestObjectStream: " << ex.what();
+    }
+  };
+
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+}
+
 } // namespace nprpctest
 
 int main(int argc, char** argv)

@@ -17,6 +17,14 @@
 #include <nprpc/impl/stream_manager.hpp>
 #include <nprpc_base.hpp>
 
+// Primary template for stream chunk deserialization.
+// npidl generates explicit specializations (inline, in the generated header)
+// for each non-fundamental struct type used as a stream element.
+namespace nprpc_stream {
+template <typename T>
+T deserialize(::nprpc::flat_buffer& buf);
+} // namespace nprpc_stream
+
 namespace nprpc {
 
 template <typename T>
@@ -150,12 +158,10 @@ public:
       }
       return std::nullopt;
     } else {
-      // For complex types, use Direct accessor pattern
-      // TODO: implement for complex types - need to return a wrapper
-      // that holds the buffer and provides Direct-style access
-      static_assert(std::is_fundamental_v<T>, 
-          "Only fundamental types supported for streaming currently");
-      return std::nullopt;
+      // For complex types, call the generated deserialization free function
+      // found via ADL in namespace nprpc_stream.
+      // npidl emits: namespace nprpc_stream { template<> T deserialize<T>(nprpc::flat_buffer&); }
+      return nprpc_stream::deserialize<T>(fb);
     }
   }
 
@@ -213,11 +219,13 @@ public:
 
   void cancel()
   {
-    if (cancelled_)
-      return;
-    cancelled_ = true;
-
-    // Send cancel message to server
+    {
+      std::lock_guard lock(mutex_);
+      if (cancelled_ || completed_)
+        return;
+      cancelled_ = true;
+    }
+    // Send cancel message to server only if the stream hadn't already completed
     if (session_.stream_manager) {
       session_.stream_manager->send_cancel(stream_id_);
     }

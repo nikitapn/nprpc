@@ -12,6 +12,14 @@
 #include <nprpc/stream_base.hpp>
 #include <nprpc/impl/stream_manager.hpp>
 
+// Primary template for stream chunk serialization.
+// npidl generates explicit specializations (inline, in the generated header)
+// for each non-fundamental struct type used as a stream element.
+namespace nprpc_stream {
+template <typename T>
+::nprpc::flat_buffer serialize(const T& value);
+} // namespace nprpc_stream
+
 namespace nprpc {
 
 // Typed stream writer with coroutine support
@@ -116,9 +124,15 @@ public:
                                                  0 // sequence
             );
           } else {
-            // TODO: Handle complex types via serialization
-            static_assert(std::is_trivially_copyable_v<T>, 
-                "StreamWriter<T>: T must be trivially copyable or std::vector<uint8_t> for now");
+            // Complex type: call the generated nprpc_stream::serialize<T> specialisation.
+            auto __buf = nprpc_stream::serialize<T>(coro_.promise().current_value_);
+            auto __span = __buf.data();
+            coro_.promise().manager_->send_chunk(
+                coro_.promise().stream_id_,
+                std::span<const uint8_t>(
+                    reinterpret_cast<const uint8_t*>(__span.data()),
+                    __span.size()),
+                0);
           }
 
           coro_.promise().has_value_ = false;

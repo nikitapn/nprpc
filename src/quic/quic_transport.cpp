@@ -705,9 +705,13 @@ void QuicConnection::handle_data_stream_event(HQUIC stream, QUIC_STREAM_EVENT* e
     
   case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE: {
     NPRPC_LOG_DEBUG("[QUIC] Client: Data stream shutdown complete");
-    // Remove from map
-    std::lock_guard lock(data_streams_mutex_);
-    data_streams_.erase(stream);
+    {
+      std::lock_guard lock(data_streams_mutex_);
+      data_streams_.erase(stream);
+    }
+    // Must call StreamClose to release the handle; this allows the connection's
+    // rundown to complete and unblocks MsQuicRegistrationClose on teardown.
+    QuicApi::instance().api()->StreamClose(stream);
     break;
   }
   

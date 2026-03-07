@@ -33,7 +33,7 @@ message FlatStruct {
 }
 
 [force_helpers=1]
-message AAA{
+message AAA {
 	a: u32;
 	b: string;
 	c: string;
@@ -184,7 +184,7 @@ interface TestUnreliable {
 interface TestStreams {
 	[unreliable]
 	stream<u8> GetByteStream(size: u64);
-	// stream<AAA> GetObjectStream(count: u32);
+	stream<AAA> GetObjectStream(count: u32);
 }
 
 interface AsyncTest {

@@ -379,6 +379,7 @@ struct AstAliasDecl : AstWrapType, AstNodeWithPosition {
 };
 
 struct AstStreamDecl : AstWrapType {
+  bool direct = false;  // stream<direct T> — zero-copy OwnedDirect path
   AstStreamDecl()
       : AstWrapType(nullptr)
   {

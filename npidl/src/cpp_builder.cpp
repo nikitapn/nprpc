@@ -995,6 +995,14 @@ void CppBuilder::finalize()
     ocpp << "} // module " << ctx_->nm_root()->to_cpp17_namespace() << "\n";
   }
 
+  // Emit nprpc_stream::deserialize<T> / serialize<T> specialisations outside any IDL namespace.
+  // They must be at file scope so the primary templates in stream_reader.hpp / stream_writer.hpp
+  // are visible and the specialisations end up in ::nprpc_stream, not in the IDL namespace.
+  for (auto fn : stream_codec_fns_) {
+    emit_stream_deserialize(fn);
+    emit_stream_serialize(fn);
+  }
+
   oh << "\n#endif";
 
   // Emit exception throwing function
@@ -1508,6 +1516,12 @@ void CppBuilder::proxy_udp_reliable_async_call(AstFunctionDecl* fn)
         "  }));\n";
 }
 
+// Forward declaration — defined after emit_interface in this translation unit.
+static void emit_stream_reader_type(
+    CppBuilder& b, AstFunctionDecl* fn, std::ostream& os,
+    std::function<void(AstTypeDecl*, std::ostream&)> emitType,
+    std::function<void(AstTypeDecl*, std::ostream&)> emitDirectType);
+
 void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
 {
   oc << "  auto session = "
@@ -1516,9 +1530,11 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
 
   // Create StreamReader BEFORE sending StreamInit to avoid race condition
   // where chunks arrive before the reader is registered
-  oc << "  ::nprpc::StreamReader<";
-  emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oc);
-  oc << "> reader(session->ctx(), stream_id);\n";
+  oc << "  ";
+  emit_stream_reader_type(*this, fn, oc,
+    [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
+    [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
+  oc << " reader(session->ctx(), stream_id);\n";
 
   const auto args_offset = get_stream_init_arguments_offset();
   const auto fixed_size = args_offset + (fn->in_s ? fn->in_s->size : 0);
@@ -1590,6 +1606,102 @@ std::string_view CppBuilder::proxy_arguments(AstFunctionDecl* fn)
   });
 
   return proxy_arguments_.emplace(fn, ss.str()).first->second;
+}
+
+// Helper: emit the StreamReader<...> return type for the proxy declaration/definition.
+// For non-direct: StreamReader<ElemType>  (value type; C++ ergonomic)
+// For direct:     StreamReader<::nprpc::flat::OwnedDirect<ElemType_Direct>>  (zero-copy)
+static void emit_stream_reader_type(
+    CppBuilder& b, AstFunctionDecl* fn, std::ostream& os,
+    std::function<void(AstTypeDecl*, std::ostream&)> emitType,
+    std::function<void(AstTypeDecl*, std::ostream&)> emitDirectType)
+{
+  auto* sd = static_cast<AstStreamDecl*>(fn->ret_value);
+  os << "::nprpc::StreamReader<";
+  if (sd->direct) {
+    os << "::nprpc::flat::OwnedDirect<";
+    emitDirectType(sd->type, os);
+    os << ">";
+  } else {
+    emitType(sd->type, os);
+  }
+  os << ">";
+}
+
+void CppBuilder::emit_stream_deserialize(AstFunctionDecl* fn)
+{
+  auto* sd = static_cast<AstStreamDecl*>(fn->ret_value);
+  // Only needed for non-fundamental, non-direct element types.
+  auto* elem = sd->type;
+  if (elem->id == FieldType::Alias) elem = calias(elem)->get_real_type();
+  if (elem->id == FieldType::Fundamental || elem->id == FieldType::Enum) return;
+  if (sd->direct) return; // OwnedDirect path needs no deserializer
+
+  // Fully-qualified names are required because we emit inside namespace nprpc_stream.
+  auto bd_saved = bd; bd = 1;
+  always_full_namespace(true);
+
+  oh << "namespace nprpc_stream {\n";
+  oh << "template<>\n";
+  oh << "inline ";
+  emit_type(sd->type, oh);
+  oh << " deserialize<";
+  emit_type(sd->type, oh);
+  oh << ">(::nprpc::flat_buffer& buf) {\n";
+  oh << "  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));\n";
+  oh << "  auto __span = __chunk.data();\n";
+  oh << "  ::nprpc::flat_buffer __elem_buf;\n";
+  oh << "  auto __mb = __elem_buf.prepare(__span.size());\n";
+  oh << "  std::memcpy(__mb.data(), __span.data(), __span.size());\n";
+  oh << "  __elem_buf.commit(__span.size());\n";
+  oh << "  ";
+  emit_type(sd->type, oh);
+  oh << " __result;\n";
+  oh << "  ";
+  emit_direct_type(sd->type, oh);
+  oh << " __d(__elem_buf, 0);\n";
+  // top_object=true: __d is the Direct object itself, use . not ().
+  assign_from_flat_type(sd->type, "__result", "__d", oh, false, true);
+  oh << "  return __result;\n";
+  oh << "}\n} // namespace nprpc_stream\n\n";
+
+  always_full_namespace(false);
+  bd = bd_saved;
+}
+
+void CppBuilder::emit_stream_serialize(AstFunctionDecl* fn)
+{
+  auto* sd = static_cast<AstStreamDecl*>(fn->ret_value);
+  // Only needed for non-fundamental, non-direct element types.
+  auto* elem = sd->type;
+  if (elem->id == FieldType::Alias) elem = calias(elem)->get_real_type();
+  if (elem->id == FieldType::Fundamental || elem->id == FieldType::Enum) return;
+  if (sd->direct) return;
+
+  auto* s = cflat(sd->type);
+  auto bd_saved = bd; bd = 1;
+  always_full_namespace(true);
+
+  oh << "namespace nprpc_stream {\n";
+  oh << "template<>\n";
+  oh << "inline ::nprpc::flat_buffer serialize<";
+  emit_type(sd->type, oh);
+  oh << ">(const ";
+  emit_type(sd->type, oh);
+  oh << "& value) {\n";
+  oh << "  ::nprpc::flat_buffer __buf;\n";
+  oh << "  __buf.prepare(" << s->size << (s->flat ? "" : " + 128") << ");\n";
+  oh << "  __buf.commit(" << s->size << ");\n";
+  oh << "  ";
+  emit_direct_type(sd->type, oh);
+  oh << " __d(__buf, 0);\n";
+  // top_type=true: __d is the Direct object itself, use . not ().
+  assign_from_cpp_type(sd->type, "__d", "value", oh, false, true);
+  oh << "  return __buf;\n";
+  oh << "}\n} // namespace nprpc_stream\n\n";
+
+  always_full_namespace(false);
+  bd = bd_saved;
 }
 
 void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
@@ -1673,9 +1785,9 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   for (auto& fn : ifs->fns) {
     oh << "  ";
     if (fn->is_stream) {
-      oh << "::nprpc::StreamReader<";
-      emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oh);
-      oh << ">";
+      emit_stream_reader_type(*this, fn, oh,
+        [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
+        [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
     } else {
       emit_type(fn->ret_value, oh);
     }
@@ -1696,10 +1808,15 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   // auto const nm = ctx_->nm_cur()->to_cpp17_namespace();
 
   for (auto fn : ifs->fns) {
+    // Collect stream functions for nprpc_stream codec emission at file end (outside any namespace)
     if (fn->is_stream) {
-      oc << "::nprpc::StreamReader<";
-      emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oc);
-      oc << ">";
+      stream_codec_fns_.push_back(fn);
+    }
+
+    if (fn->is_stream) {
+      emit_stream_reader_type(*this, fn, oc,
+        [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
+        [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
     } else {
       emit_type(fn->ret_value, oc);
     }

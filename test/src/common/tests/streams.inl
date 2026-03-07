@@ -9,4 +9,15 @@ public:
         }
         // Coroutine ends naturally, triggering stream completion
     }
+
+    // Server-side: yield 'count' AAA objects
+    nprpc::StreamWriter<nprpc::test::AAA> GetObjectStream(uint32_t count) override {
+        for (uint32_t i = 0; i < count; ++i) {
+            nprpc::test::AAA obj;
+            obj.a = i;
+            obj.b = "name_" + std::to_string(i);
+            obj.c = "value_" + std::to_string(i);
+            co_yield std::move(obj);
+        }
+    }
 };

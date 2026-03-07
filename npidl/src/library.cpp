@@ -797,6 +797,9 @@ class Parser : public IParser
       flush();
       type = new AstStreamDecl();
       match('<');
+      // Optional 'direct' keyword: stream<direct T> → zero-copy OwnedDirect path
+      if (check(&Parser::one, TokenId::OutDirect))
+        static_cast<AstStreamDecl*>(type)->direct = true;
       if (!check(&Parser::type_decl,
                  std::ref(static_cast<AstStreamDecl*>(type)->type)))
         throw_error("Expected a type declaration inside stream<...>");
