@@ -14,7 +14,7 @@ void ArgumentsStructBuilder::make_arguments_structs(AstFunctionDecl* fn)
 
   // Note: Streaming functions don't have traditional return values - they
   // return a StreamReader on the client side, not output parameters.
-  if (!fn->is_void() && !fn->is_stream) {
+  if (!fn->is_void() && fn->stream_kind == StreamKind::None) {
     auto ret = new AstFunctionArgument();
     ret->name = "ret_val";
     ret->modifier = ArgumentModifier::Out;
@@ -23,6 +23,8 @@ void ArgumentsStructBuilder::make_arguments_structs(AstFunctionDecl* fn)
   }
 
   for (auto arg : fn->args) {
+    if (arg->type->id == FieldType::Stream)
+      continue;
     if (arg->modifier == ArgumentModifier::In)
       in_args.push_back(arg);
     else

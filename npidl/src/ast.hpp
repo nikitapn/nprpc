@@ -83,7 +83,10 @@ enum class TokenId {
   Module,
   Import,
   QuotedString,
-  Stream
+  Stream,
+  ServerStream,
+  ClientStream,
+  BidiStream
 };
 
 struct AstStructDecl;
@@ -378,8 +381,41 @@ struct AstAliasDecl : AstWrapType, AstNodeWithPosition {
   }
 };
 
+enum class StreamKind {
+  None,
+  Server,
+  Client,
+  Bidi
+};
+
 struct AstStreamDecl : AstWrapType {
   bool direct = false;  // stream<direct T> — zero-copy OwnedDirect path
+  StreamKind kind = StreamKind::Server;
+  AstTypeDecl* input_type = nullptr;
+
+  AstTypeDecl* stream_in_type() const noexcept
+  {
+    switch (kind) {
+    case StreamKind::Client:
+      return type;
+    case StreamKind::Bidi:
+      return input_type;
+    default:
+      return nullptr;
+    }
+  }
+
+  AstTypeDecl* stream_out_type() const noexcept
+  {
+    switch (kind) {
+    case StreamKind::Server:
+    case StreamKind::Bidi:
+      return type;
+    default:
+      return nullptr;
+    }
+  }
+
   AstStreamDecl()
       : AstWrapType(nullptr)
   {
@@ -585,6 +621,9 @@ struct AstFunctionDecl : AstNodeWithPosition {
   // [unreliable] attribute maybe used for UDP and quic methods
   bool is_reliable = true;
   bool is_stream;
+  StreamKind stream_kind = StreamKind::None;
+  AstStreamDecl* stream_decl = nullptr;
+  AstFunctionArgument* stream_arg = nullptr;
 
   bool is_void() const noexcept { return ret_value->id == FieldType::Void; }
   bool is_throwing() const noexcept { return ex != nullptr; }

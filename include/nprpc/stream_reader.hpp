@@ -228,15 +228,19 @@ public:
 
   void cancel()
   {
+    bool should_send_cancel = false;
     {
       std::lock_guard lock(mutex_);
-      if (cancelled_ || completed_)
+      if (cancelled_)
         return;
+      should_send_cancel = !completed_;
       cancelled_ = true;
     }
-    // Send cancel message to server only if the stream hadn't already completed
     if (session_.stream_manager) {
-      session_.stream_manager->send_cancel(stream_id_);
+      session_.stream_manager->unregister_reader(stream_id_, this);
+      if (should_send_cancel) {
+        session_.stream_manager->send_cancel(stream_id_);
+      }
     }
   }
 

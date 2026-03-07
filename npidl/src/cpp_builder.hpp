@@ -106,7 +106,9 @@ private:
       AstFunctionDecl* fn); // Blocking reliable UDP call with ACK
   void proxy_udp_reliable_async_call(
       AstFunctionDecl* fn); // Async reliable UDP call with ACK
-  void proxy_stream_call(AstFunctionDecl* fn); // Streaming call
+    void proxy_stream_call(AstFunctionDecl* fn); // Server-streaming call
+    void proxy_client_stream_call(AstFunctionDecl* fn);
+    void proxy_bidi_stream_call(AstFunctionDecl* fn);
   std::string_view proxy_arguments(AstFunctionDecl* fn);
   static void emit_function_arguments(
       AstFunctionDecl* fn,

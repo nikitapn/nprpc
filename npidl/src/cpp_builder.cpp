@@ -941,8 +941,10 @@ void CppBuilder::finalize()
 
   if (!ctx_->is_nprpc_base()) {
     ofs_hpp << "#include <nprpc/nprpc.hpp>\n";
+    ofs_hpp << "#include <nprpc/bidi_stream.hpp>\n";
     ofs_hpp << "#include <nprpc/stream_writer.hpp>\n";
     ofs_hpp << "#include <nprpc/stream_reader.hpp>\n\n";
+    ofs_hpp << "#include <thread>\n\n";
   } else {
     ofs_hpp << "#include <nprpc/exception.hpp>\n";
     ofs_hpp << "#include <string_view>\n\n";
@@ -1331,12 +1333,15 @@ void CppBuilder::emit_function_arguments(
     std::function<void(AstFunctionArgument*, std::ostream& os)> emitter)
 {
   os << "(";
-  size_t ix = 0;
+  bool first = true;
   for (auto arg : fn->args) {
+    if (arg->type->id == FieldType::Stream)
+      continue;
+    if (!first)
+      os << ", ";
+    first = false;
     emitter(arg, os);
     os << " " << arg->name;
-    if (++ix != fn->args.size())
-      os << ", ";
   }
   os << ')';
 };
@@ -1518,12 +1523,50 @@ void CppBuilder::proxy_udp_reliable_async_call(AstFunctionDecl* fn)
 
 // Forward declaration — defined after emit_interface in this translation unit.
 static void emit_stream_reader_type(
-    CppBuilder& b, AstFunctionDecl* fn, std::ostream& os,
+    CppBuilder& b, AstStreamDecl* sd, std::ostream& os,
     std::function<void(AstTypeDecl*, std::ostream&)> emitType,
     std::function<void(AstTypeDecl*, std::ostream&)> emitDirectType);
 
+static void emit_stream_writer_type(
+    CppBuilder& b, AstTypeDecl* type, std::ostream& os,
+    std::function<void(AstTypeDecl*, std::ostream&)> emitType)
+{
+  os << "::nprpc::StreamWriter<";
+  emitType(type, os);
+  os << ">";
+}
+
+static void emit_stream_proxy_return_type(CppBuilder& b,
+                                          AstFunctionDecl* fn,
+                                          std::ostream& os,
+                                          std::function<void(AstTypeDecl*, std::ostream&)> emitType,
+                                          std::function<void(AstTypeDecl*, std::ostream&)> emitDirectType)
+{
+  auto* sd = fn->stream_decl;
+  assert(sd != nullptr);
+
+  switch (fn->stream_kind) {
+  case StreamKind::Server:
+    emit_stream_reader_type(b, sd, os, emitType, emitDirectType);
+    break;
+  case StreamKind::Client:
+    emit_stream_writer_type(b, sd->stream_in_type(), os, emitType);
+    break;
+  case StreamKind::Bidi:
+    os << "std::pair<";
+    emit_stream_writer_type(b, sd->stream_in_type(), os, emitType);
+    os << ", ";
+    emit_stream_reader_type(b, sd, os, emitType, emitDirectType);
+    os << ">";
+    break;
+  default:
+    assert(false);
+  }
+}
+
 void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
 {
+  auto* sd = fn->stream_decl;
   oc << "  auto session = "
         "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n";
   oc << "  auto stream_id = ::nprpc::impl::StreamManager::generate_stream_id();\n";
@@ -1531,7 +1574,7 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
   // Create StreamReader BEFORE sending StreamInit to avoid race condition
   // where chunks arrive before the reader is registered
   oc << "  ";
-  emit_stream_reader_type(*this, fn, oc,
+  emit_stream_reader_type(*this, sd, oc,
     [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
     [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
   oc << " reader(session->ctx(), stream_id);\n";
@@ -1558,6 +1601,7 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
         "  init.object_id() = this->object_id();\n"
         "  init.func_idx() = "
      << fn->idx << ";\n";
+  oc << "  init.stream_kind() = ::nprpc::impl::StreamKind::Server;\n";
 
   // Serialize input arguments
   if (fn->in_s) {
@@ -1581,6 +1625,113 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
   oc << "  return reader;\n";
 }
 
+  void CppBuilder::proxy_client_stream_call(AstFunctionDecl* fn)
+  {
+    auto* sd = fn->stream_decl;
+    oc << "  auto session = "
+      "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n";
+    oc << "  auto stream_id = ::nprpc::impl::StreamManager::generate_stream_id();\n";
+    oc << "  ";
+    emit_stream_writer_type(*this, sd->stream_in_type(), oc,
+    [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); });
+    oc << " writer(session->ctx(), stream_id);\n";
+
+    const auto args_offset = get_stream_init_arguments_offset();
+    const auto fixed_size = args_offset + (fn->in_s ? fn->in_s->size : 0);
+    const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
+
+    oc << "  ::nprpc::flat_buffer buf;\n"
+      "  buf.prepare(" << capacity << ");\n"
+      "  buf.commit(" << fixed_size << ");\n";
+
+    oc << "  auto* header = "
+      "static_cast<::nprpc::impl::Header*>(buf.data().data());\n"
+      "  header->msg_id = ::nprpc::impl::MessageId::StreamInitialization;\n"
+      "  header->msg_type = ::nprpc::impl::MessageType::Request;\n";
+
+    oc << "  ::nprpc::impl::flat::StreamInit_Direct init(buf, "
+      "sizeof(::nprpc::impl::Header));\n"
+      "  init.stream_id() = stream_id;\n"
+      "  init.poa_idx() = this->poa_idx();\n"
+      "  init.interface_idx() = interface_idx_;\n"
+      "  init.object_id() = this->object_id();\n"
+      "  init.func_idx() = "
+       << fn->idx << ";\n"
+      "  init.stream_kind() = ::nprpc::impl::StreamKind::Client;\n";
+
+    if (fn->in_s) {
+      oc << "  " << fn->in_s->name << "_Direct _(buf," << args_offset << ");\n";
+      int ix = 0;
+      for (auto in : fn->args) {
+    if (in->modifier == ArgumentModifier::Out || in == fn->stream_arg)
+      continue;
+    bd = 1;
+    assign_from_cpp_type(in->type, "_._" + std::to_string(++ix), in->name, oc);
+      }
+    }
+
+    oc << "  header->size = static_cast<uint32_t>(buf.size() - 4);\n";
+    oc << "  ::nprpc::impl::g_rpc->call_async(this->get_endpoint(), "
+      "std::move(buf), std::nullopt, this->get_timeout());\n";
+    oc << "  return writer;\n";
+  }
+
+  void CppBuilder::proxy_bidi_stream_call(AstFunctionDecl* fn)
+  {
+    auto* sd = fn->stream_decl;
+    oc << "  auto session = "
+      "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n";
+    oc << "  auto stream_id = ::nprpc::impl::StreamManager::generate_stream_id();\n";
+    oc << "  ";
+    emit_stream_writer_type(*this, sd->stream_in_type(), oc,
+    [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); });
+    oc << " writer(session->ctx(), stream_id);\n";
+    oc << "  ";
+    emit_stream_reader_type(*this, sd, oc,
+    [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
+    [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
+    oc << " reader(session->ctx(), stream_id);\n";
+
+    const auto args_offset = get_stream_init_arguments_offset();
+    const auto fixed_size = args_offset + (fn->in_s ? fn->in_s->size : 0);
+    const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
+
+    oc << "  ::nprpc::flat_buffer buf;\n"
+      "  buf.prepare(" << capacity << ");\n"
+      "  buf.commit(" << fixed_size << ");\n";
+
+    oc << "  auto* header = "
+      "static_cast<::nprpc::impl::Header*>(buf.data().data());\n"
+      "  header->msg_id = ::nprpc::impl::MessageId::StreamInitialization;\n"
+      "  header->msg_type = ::nprpc::impl::MessageType::Request;\n";
+
+    oc << "  ::nprpc::impl::flat::StreamInit_Direct init(buf, "
+      "sizeof(::nprpc::impl::Header));\n"
+      "  init.stream_id() = stream_id;\n"
+      "  init.poa_idx() = this->poa_idx();\n"
+      "  init.interface_idx() = interface_idx_;\n"
+      "  init.object_id() = this->object_id();\n"
+      "  init.func_idx() = "
+       << fn->idx << ";\n"
+      "  init.stream_kind() = ::nprpc::impl::StreamKind::Bidi;\n";
+
+    if (fn->in_s) {
+      oc << "  " << fn->in_s->name << "_Direct _(buf," << args_offset << ");\n";
+      int ix = 0;
+      for (auto in : fn->args) {
+    if (in->modifier == ArgumentModifier::Out)
+      continue;
+    bd = 1;
+    assign_from_cpp_type(in->type, "_._" + std::to_string(++ix), in->name, oc);
+      }
+    }
+
+    oc << "  header->size = static_cast<uint32_t>(buf.size() - 4);\n";
+    oc << "  ::nprpc::impl::g_rpc->call_async(this->get_endpoint(), "
+      "std::move(buf), std::nullopt, this->get_timeout());\n";
+    oc << "  return { std::move(writer), std::move(reader) };\n";
+  }
+
 void CppBuilder::proxy_async_call(AstFunctionDecl* fn)
 {
   // Fire-and-forget: no reply expected, no handler parameter.
@@ -1597,6 +1748,8 @@ std::string_view CppBuilder::proxy_arguments(AstFunctionDecl* fn)
   // All methods (sync, async fire-and-forget, coro) use the same plain
   // argument list — no handler parameter.
   emit_function_arguments(fn, ss, [this](AstFunctionArgument* arg, std::ostream& os) {
+    if (arg->type->id == FieldType::Stream)
+      return;
     if (arg->modifier == ArgumentModifier::Out && arg->direct) {
       emit_parameter_type_for_proxy_call_direct(arg, os);
       os << '&';
@@ -1612,11 +1765,10 @@ std::string_view CppBuilder::proxy_arguments(AstFunctionDecl* fn)
 // For non-direct: StreamReader<ElemType>  (value type; C++ ergonomic)
 // For direct:     StreamReader<::nprpc::flat::OwnedDirect<ElemType_Direct>>  (zero-copy)
 static void emit_stream_reader_type(
-    CppBuilder& b, AstFunctionDecl* fn, std::ostream& os,
+  CppBuilder& b, AstStreamDecl* sd, std::ostream& os,
     std::function<void(AstTypeDecl*, std::ostream&)> emitType,
     std::function<void(AstTypeDecl*, std::ostream&)> emitDirectType)
 {
-  auto* sd = static_cast<AstStreamDecl*>(fn->ret_value);
   os << "::nprpc::StreamReader<";
   if (sd->direct) {
     os << "::nprpc::flat::OwnedDirect<";
@@ -1630,9 +1782,11 @@ static void emit_stream_reader_type(
 
 void CppBuilder::emit_stream_deserialize(AstFunctionDecl* fn)
 {
-  auto* sd = static_cast<AstStreamDecl*>(fn->ret_value);
+  auto* sd = fn->stream_decl;
+  if (sd == nullptr || sd->stream_out_type() == nullptr)
+    return;
   // Only needed for non-fundamental, non-direct element types.
-  auto* elem = sd->type;
+  auto* elem = sd->stream_out_type();
   if (elem->id == FieldType::Alias) elem = calias(elem)->get_real_type();
   if (elem->id == FieldType::Fundamental || elem->id == FieldType::Enum) return;
   if (sd->direct) return; // OwnedDirect path needs no deserializer
@@ -1644,9 +1798,9 @@ void CppBuilder::emit_stream_deserialize(AstFunctionDecl* fn)
   oh << "namespace nprpc_stream {\n";
   oh << "template<>\n";
   oh << "inline ";
-  emit_type(sd->type, oh);
+  emit_type(sd->stream_out_type(), oh);
   oh << " deserialize<";
-  emit_type(sd->type, oh);
+  emit_type(sd->stream_out_type(), oh);
   oh << ">(::nprpc::flat_buffer& buf) {\n";
   oh << "  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));\n";
   oh << "  auto __span = __chunk.data();\n";
@@ -1655,13 +1809,13 @@ void CppBuilder::emit_stream_deserialize(AstFunctionDecl* fn)
   oh << "  std::memcpy(__mb.data(), __span.data(), __span.size());\n";
   oh << "  __elem_buf.commit(__span.size());\n";
   oh << "  ";
-  emit_type(sd->type, oh);
+  emit_type(sd->stream_out_type(), oh);
   oh << " __result;\n";
   oh << "  ";
-  emit_direct_type(sd->type, oh);
+  emit_direct_type(sd->stream_out_type(), oh);
   oh << " __d(__elem_buf, 0);\n";
   // top_object=true: __d is the Direct object itself, use . not ().
-  assign_from_flat_type(sd->type, "__result", "__d", oh, false, true);
+  assign_from_flat_type(sd->stream_out_type(), "__result", "__d", oh, false, true);
   oh << "  return __result;\n";
   oh << "}\n} // namespace nprpc_stream\n\n";
 
@@ -1671,32 +1825,35 @@ void CppBuilder::emit_stream_deserialize(AstFunctionDecl* fn)
 
 void CppBuilder::emit_stream_serialize(AstFunctionDecl* fn)
 {
-  auto* sd = static_cast<AstStreamDecl*>(fn->ret_value);
+  auto* sd = fn->stream_decl;
+  if (sd == nullptr)
+    return;
   // Only needed for non-fundamental, non-direct element types.
-  auto* elem = sd->type;
+  auto* stream_type = sd->stream_in_type() ? sd->stream_in_type() : sd->stream_out_type();
+  auto* elem = stream_type;
   if (elem->id == FieldType::Alias) elem = calias(elem)->get_real_type();
   if (elem->id == FieldType::Fundamental || elem->id == FieldType::Enum) return;
   if (sd->direct) return;
 
-  auto* s = cflat(sd->type);
+  auto* s = cflat(stream_type);
   auto bd_saved = bd; bd = 1;
   always_full_namespace(true);
 
   oh << "namespace nprpc_stream {\n";
   oh << "template<>\n";
   oh << "inline ::nprpc::flat_buffer serialize<";
-  emit_type(sd->type, oh);
+  emit_type(stream_type, oh);
   oh << ">(const ";
-  emit_type(sd->type, oh);
+  emit_type(stream_type, oh);
   oh << "& value) {\n";
   oh << "  ::nprpc::flat_buffer __buf;\n";
   oh << "  __buf.prepare(" << s->size << (s->flat ? "" : " + 128") << ");\n";
   oh << "  __buf.commit(" << s->size << ");\n";
   oh << "  ";
-  emit_direct_type(sd->type, oh);
+  emit_direct_type(stream_type, oh);
   oh << " __d(__buf, 0);\n";
   // top_type=true: __d is the Direct object itself, use . not ().
-  assign_from_cpp_type(sd->type, "__d", "value", oh, false, true);
+  assign_from_cpp_type(stream_type, "__d", "value", oh, false, true);
   oh << "  return __buf;\n";
   oh << "}\n} // namespace nprpc_stream\n\n";
 
@@ -1731,15 +1888,55 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   for (auto fn : ifs->fns) {
     oh << "  virtual ";
     if (fn->is_stream) {
-      oh << "::nprpc::StreamWriter<";
-      emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oh);
-      oh << ">";
+      switch (fn->stream_kind) {
+      case StreamKind::Server:
+        emit_stream_writer_type(*this, fn->stream_decl->stream_out_type(), oh,
+          [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); });
+        break;
+      case StreamKind::Client:
+      case StreamKind::Bidi:
+        oh << "void";
+        break;
+      default:
+        assert(false);
+      }
     } else {
       emit_type(fn->ret_value, oh);
     }
     oh << ' ' << fn->name << " ";
-    emit_function_arguments(
-        fn, oh, std::bind(&CppBuilder::emit_parameter_type_for_servant_callback, this, _1, _2));
+    if (fn->is_stream && fn->stream_kind != StreamKind::Server) {
+      oh << '(';
+      bool first = true;
+      for (auto arg : fn->args) {
+        if (arg->type->id == FieldType::Stream)
+          continue;
+        if (!first)
+          oh << ", ";
+        first = false;
+        emit_type(arg->type, oh);
+        oh << ' ' << arg->name;
+      }
+      if (fn->stream_kind == StreamKind::Client) {
+        if (!first)
+          oh << ", ";
+        emit_stream_reader_type(*this, fn->stream_decl, oh,
+          [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
+          [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
+        oh << ' ' << fn->stream_arg->name;
+      } else if (fn->stream_kind == StreamKind::Bidi) {
+        if (!first)
+          oh << ", ";
+        oh << "::nprpc::BidiStream<";
+        emit_type(fn->stream_decl->stream_in_type(), oh);
+        oh << ", ";
+        emit_type(fn->stream_decl->stream_out_type(), oh);
+        oh << "> stream";
+      }
+      oh << ')';
+    } else {
+      emit_function_arguments(
+          fn, oh, std::bind(&CppBuilder::emit_parameter_type_for_servant_callback, this, _1, _2));
+    }
     oh << " = 0;\n";
   }
 
@@ -1785,7 +1982,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   for (auto& fn : ifs->fns) {
     oh << "  ";
     if (fn->is_stream) {
-      emit_stream_reader_type(*this, fn, oh,
+      emit_stream_proxy_return_type(*this, fn, oh,
         [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
         [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
     } else {
@@ -1814,7 +2011,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
 
     if (fn->is_stream) {
-      emit_stream_reader_type(*this, fn, oc,
+      emit_stream_proxy_return_type(*this, fn, oc,
         [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
         [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
     } else {
@@ -1825,7 +2022,19 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 
     // Stream methods use different protocol flow
     if (fn->is_stream) {
-      proxy_stream_call(fn);
+      switch (fn->stream_kind) {
+      case StreamKind::Server:
+        proxy_stream_call(fn);
+        break;
+      case StreamKind::Client:
+        proxy_client_stream_call(fn);
+        break;
+      case StreamKind::Bidi:
+        proxy_bidi_stream_call(fn);
+        break;
+      default:
+        assert(false);
+      }
       oc << "}\n\n";
       continue;
     }
@@ -1993,26 +2202,98 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
            << get_stream_init_arguments_offset() << ");\n";
       }
 
-      // Call servant method with parameters
-      oc << "        auto writer = " << fn->name << "(";
-      int in_ix = 0;
-      for (auto arg : fn->args) {
-        if (arg->modifier == ArgumentModifier::Out)
-          continue;
-        if (in_ix > 0)
-          oc << ", ";
-        oc << "ia._" << ++in_ix << "()";
-      }
-      oc << ");\n";
+      if (fn->stream_kind == StreamKind::Server) {
+        oc << "        auto writer = " << fn->name << "(";
+        int in_ix = 0;
+        for (auto arg : fn->args) {
+          if (arg->modifier == ArgumentModifier::Out)
+            continue;
+          if (in_ix > 0)
+            oc << ", ";
+          oc << "ia._" << ++in_ix << "()";
+        }
+        oc << ");\n";
 
-      // Register writer with stream manager and start streaming
-      oc << "        writer.set_manager(ctx.stream_manager, "
-            "init.stream_id());\n";
-      oc << "        ctx.stream_manager->register_stream(init.stream_id(), "
-            "std::make_unique<::nprpc::StreamWriter<";
-      emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, oc);
-      // Pass unreliable flag: !is_reliable means unreliable
-      oc << ">>(std::move(writer)), " << (fn->is_reliable ? "false" : "true") << ");\n";
+        oc << "        writer.set_manager(ctx.stream_manager, "
+              "init.stream_id());\n";
+        oc << "        ctx.stream_manager->register_stream(init.stream_id(), "
+              "std::make_unique<::nprpc::StreamWriter<";
+        emit_type(fn->stream_decl->stream_out_type(), oc);
+        oc << ">>(std::move(writer)), " << (fn->is_reliable ? "false" : "true") << ");\n";
+      } else {
+        int in_ix = 0;
+        int stable_ix = 0;
+        for (auto arg : fn->args) {
+          if (arg->modifier == ArgumentModifier::Out || arg->type->id == FieldType::Stream)
+            continue;
+          oc << "        ";
+          emit_type(arg->type, oc);
+          oc << " __arg" << ++stable_ix << ";\n";
+          bd = 1;
+          assign_from_flat_type(arg->type,
+                                "__arg" + std::to_string(stable_ix),
+                                "ia._" + std::to_string(++in_ix),
+                                oc);
+          oc << "\n";
+        }
+
+        if (fn->stream_kind == StreamKind::Client) {
+          oc << "        ";
+          emit_stream_reader_type(*this, fn->stream_decl, oc,
+            [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
+            [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
+          oc << " __stream(ctx, init.stream_id());\n";
+          oc << "        std::thread([this";
+          for (int i = 1; i <= stable_ix; ++i) {
+            oc << ", __arg" << i << " = std::move(__arg" << i << ")";
+          }
+          oc << ", __stream = std::move(__stream)]() mutable {\n";
+          oc << "          this->" << fn->name << "(";
+          bool first = true;
+          for (int i = 1; i <= stable_ix; ++i) {
+            if (!first)
+              oc << ", ";
+            first = false;
+            oc << "std::move(__arg" << i << ")";
+          }
+          if (!first)
+            oc << ", ";
+          oc << "std::move(__stream));\n";
+          oc << "        }).detach();\n";
+        } else {
+          oc << "        ";
+          emit_stream_reader_type(*this, fn->stream_decl, oc,
+            [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
+            [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
+          oc << " __reader(ctx, init.stream_id());\n";
+          oc << "        ";
+          emit_stream_writer_type(*this, fn->stream_decl->stream_out_type(), oc,
+            [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); });
+          oc << " __writer(ctx, init.stream_id());\n";
+          oc << "        ::nprpc::BidiStream<";
+          emit_type(fn->stream_decl->stream_in_type(), oc);
+          oc << ", ";
+          emit_type(fn->stream_decl->stream_out_type(), oc);
+          oc << "> __stream(std::move(__reader), std::move(__writer));\n";
+          oc << "        std::thread([this";
+          for (int i = 1; i <= stable_ix; ++i) {
+            oc << ", __arg" << i << " = std::move(__arg" << i << ")";
+          }
+          oc << ", __stream = std::move(__stream)]() mutable {\n";
+          oc << "          this->" << fn->name << "(";
+          bool first = true;
+          for (int i = 1; i <= stable_ix; ++i) {
+            if (!first)
+              oc << ", ";
+            first = false;
+            oc << "std::move(__arg" << i << ")";
+          }
+          if (!first)
+            oc << ", ";
+          oc << "std::move(__stream));\n";
+          oc << "        }).detach();\n";
+        }
+      }
 
       oc << "        break;\n";
       oc << "      }\n";

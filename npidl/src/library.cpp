@@ -272,6 +272,9 @@ class Lexer : public ILexer
         {"module"sv, TokenId::Module},
         {"import"sv, TokenId::Import},
         {"stream"sv, TokenId::Stream},
+        {"server_stream"sv, TokenId::ServerStream},
+        {"client_stream"sv, TokenId::ClientStream},
+        {"bidi_stream"sv, TokenId::BidiStream},
     };
 
     static constexpr Map<std::string_view, TokenId,
@@ -794,17 +797,46 @@ class Parser : public IParser
       match('>');
       return true;
     case TokenId::Stream:
+    case TokenId::ServerStream:
+    case TokenId::ClientStream:
+    case TokenId::BidiStream: {
       flush();
       type = new AstStreamDecl();
+      switch (t.id) {
+      case TokenId::Stream:
+      case TokenId::ServerStream:
+        static_cast<AstStreamDecl*>(type)->kind = StreamKind::Server;
+        break;
+      case TokenId::ClientStream:
+        static_cast<AstStreamDecl*>(type)->kind = StreamKind::Client;
+        break;
+      case TokenId::BidiStream:
+        static_cast<AstStreamDecl*>(type)->kind = StreamKind::Bidi;
+        break;
+      default:
+        break;
+      }
       match('<');
-      // Optional 'direct' keyword: stream<direct T> → zero-copy OwnedDirect path
       if (check(&Parser::one, TokenId::OutDirect))
         static_cast<AstStreamDecl*>(type)->direct = true;
-      if (!check(&Parser::type_decl,
-                 std::ref(static_cast<AstStreamDecl*>(type)->type)))
-        throw_error("Expected a type declaration inside stream<...>");
+      auto* stream = static_cast<AstStreamDecl*>(type);
+      if (stream->kind == StreamKind::Bidi) {
+        if (stream->direct)
+          throw_error("'direct' is only supported for stream<T> / server_stream<T>");
+        if (!check(&Parser::type_decl, std::ref(stream->input_type)))
+          throw_error("Expected input type declaration inside bidi_stream<In, Out>");
+        match(',');
+        if (!check(&Parser::type_decl, std::ref(stream->type)))
+          throw_error("Expected output type declaration inside bidi_stream<In, Out>");
+      } else {
+        if (stream->kind == StreamKind::Client && stream->direct)
+          throw_error("'direct' is not supported for client_stream<T>");
+        if (!check(&Parser::type_decl, std::ref(stream->type)))
+          throw_error("Expected a type declaration inside stream<...>");
+      }
       match('>');
       return true;
+    }
     case TokenId::String:
       flush();
       type = new AstStringDecl();
@@ -1185,7 +1217,7 @@ class Parser : public IParser
     f = new AstFunctionDecl();
     f->ret_value = ret_type;
     f->is_async = is_async;
-    f->is_stream = ret_type->id == FieldType::Stream;
+    f->is_stream = false;
     auto name_tok = match(TokenId::Identifier);
     f->name = name_tok.name;
 
@@ -1225,6 +1257,38 @@ class Parser : public IParser
           break;
         match(',');
       }
+    }
+
+    if (ret_type->id == FieldType::Stream) {
+      auto* stream = static_cast<AstStreamDecl*>(ret_type);
+      if (stream->kind == StreamKind::Client)
+        throw_error("client_stream<T> is only allowed as an input parameter");
+      f->is_stream = true;
+      f->stream_kind = stream->kind;
+      f->stream_decl = stream;
+    }
+
+    for (size_t i = 0; i < f->args.size(); ++i) {
+      auto* arg_ptr = f->args[i];
+      if (arg_ptr->type->id != FieldType::Stream)
+        continue;
+
+      auto* stream = static_cast<AstStreamDecl*>(arg_ptr->type);
+      if (stream->kind != StreamKind::Client)
+        throw_error("Only client_stream<T> is allowed as a function parameter");
+      if (arg_ptr->modifier != ArgumentModifier::In)
+        throw_error("client_stream<T> must be declared as an input parameter");
+      if (i + 1 != f->args.size())
+        throw_error("client_stream<T> must be the last parameter");
+      if (f->stream_decl)
+        throw_error("Only one streaming channel is allowed per method");
+      if (!f->is_void())
+        throw_error("client_stream<T> methods must return void in the current runtime");
+
+      f->is_stream = true;
+      f->stream_kind = stream->kind;
+      f->stream_decl = stream;
+      f->stream_arg = arg_ptr;
     }
 
     auto tok = peek();

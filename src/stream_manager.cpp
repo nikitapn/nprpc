@@ -80,6 +80,16 @@ void StreamManager::register_reader(uint64_t stream_id,
   readers_[stream_id] = reader;
 }
 
+void StreamManager::unregister_reader(uint64_t stream_id,
+                                      StreamReaderBase* reader)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = readers_.find(stream_id);
+  if (it != readers_.end() && it->second == reader) {
+    readers_.erase(it);
+  }
+}
+
 void StreamManager::on_chunk_received(flat_buffer&& fb)
 {
   flat::StreamChunk_Direct chunk(fb, sizeof(flat::Header));
@@ -118,6 +128,12 @@ void StreamManager::on_stream_error(uint64_t stream_id, uint32_t error_code, fla
 void StreamManager::on_stream_cancel(uint64_t stream_id)
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  auto reader_it = readers_.find(stream_id);
+  if (reader_it != readers_.end()) {
+    reader_it->second->on_complete();
+    readers_.erase(reader_it);
+  }
+
   auto it = writers_.find(stream_id);
   if (it != writers_.end()) {
     it->second.writer->cancel();

@@ -7,8 +7,10 @@
 #include <exception>
 #include <mutex>
 #include <optional>
+#include <utility>
 #include <variant>
 
+#include <nprpc/session_context.h>
 #include <nprpc/stream_base.hpp>
 #include <nprpc/impl/stream_manager.hpp>
 
@@ -73,8 +75,19 @@ public:
   {
   }
 
+    StreamWriter(SessionContext& session, uint64_t stream_id)
+      : client_manager_(session.stream_manager)
+      , client_stream_id_(stream_id)
+        , client_closed_(false)
+    {
+    }
+
   StreamWriter(StreamWriter&& other) noexcept
       : coro_(std::exchange(other.coro_, {}))
+      , client_manager_(std::exchange(other.client_manager_, nullptr))
+      , client_stream_id_(std::exchange(other.client_stream_id_, 0))
+      , sequence_(std::exchange(other.sequence_, 0))
+      , client_closed_(std::exchange(other.client_closed_, true))
   {
   }
 
@@ -87,6 +100,9 @@ public:
   // Resume execution (called by StreamManager when ready to send)
   void resume() override
   {
+    if (!coro_)
+      return;
+
     if (coro_ && !coro_.done()) {
       coro_.resume();
 
@@ -101,58 +117,28 @@ public:
           }
         } else {
           if (coro_.promise().manager_) {
-            // TODO: track sequence number
             coro_.promise().manager_->send_complete(coro_.promise().stream_id_,
-                                                    0);
+                                                    sequence_ == 0 ? 0 : sequence_ - 1);
           }
         }
       } else if (coro_.promise().has_value_) {
-        // Yielded a value, send it
-        if (coro_.promise().manager_) {
-          // Serialize T to bytes depending on type
-          if constexpr (std::is_same_v<T, std::vector<uint8_t>>) {
-            // Vector of bytes - send directly
-            coro_.promise().manager_->send_chunk(coro_.promise().stream_id_,
-                                                 coro_.promise().current_value_,
-                                                 0 // sequence
-            );
-          } else if constexpr (std::is_trivially_copyable_v<T>) {
-            // Scalar or POD type - send as raw bytes
-            const auto* data_ptr = reinterpret_cast<const uint8_t*>(&coro_.promise().current_value_);
-            coro_.promise().manager_->send_chunk(coro_.promise().stream_id_,
-                                                 std::span<const uint8_t>(data_ptr, sizeof(T)),
-                                                 0 // sequence
-            );
-          } else {
-            // Complex type: call the generated nprpc_stream::serialize<T> specialisation.
-            auto __buf = nprpc_stream::serialize<T>(coro_.promise().current_value_);
-            auto __span = __buf.data();
-            coro_.promise().manager_->send_chunk(
-                coro_.promise().stream_id_,
-                std::span<const uint8_t>(
-                    reinterpret_cast<const uint8_t*>(__span.data()),
-                    __span.size()),
-                0);
-          }
-
+        if (auto* manager = coro_.promise().manager_) {
+          send_value(*manager,
+                     coro_.promise().stream_id_,
+                     coro_.promise().current_value_);
           coro_.promise().has_value_ = false;
-          // Resume again to continue (unless we want to yield per chunk)
-          // If we yield per chunk, we should resume?
-          // The coroutine is suspended at yield_value.
-          // We just consumed the value.
-          // We should NOT resume immediately if we want to give control back to
-          // event loop? But usually we want to pump as fast as possible until
-          // blocked. For now, let's just return and let StreamManager call
-          // resume again? StreamManager doesn't have a loop. So we should
-          // probably resume again immediately? But recursion risk? Better to
-          // loop here.
           resume();
         }
       }
     }
   }
 
-  bool is_done() const override { return !coro_ || coro_.done(); }
+  bool is_done() const override
+  {
+    if (coro_)
+      return coro_.done();
+    return client_closed_;
+  }
 
   void cancel() override
   {
@@ -160,6 +146,12 @@ public:
       coro_.promise().completed_ = true;
       coro_.destroy();
       coro_ = {};
+      return;
+    }
+
+    if (client_manager_ && !client_closed_) {
+      client_manager_->send_cancel(client_stream_id_);
+      client_closed_ = true;
     }
   }
 
@@ -171,8 +163,63 @@ public:
     }
   }
 
+  void write(const T& value)
+  {
+    if (!client_manager_ || client_closed_)
+      return;
+    send_value(*client_manager_, client_stream_id_, value);
+  }
+
+  void write(T&& value)
+  {
+    write(static_cast<const T&>(value));
+  }
+
+  void close()
+  {
+    if (!client_manager_ || client_closed_)
+      return;
+    client_manager_->send_complete(client_stream_id_, sequence_ == 0 ? 0 : sequence_ - 1);
+    client_closed_ = true;
+  }
+
+  void abort(uint32_t error_code = 1)
+  {
+    if (!client_manager_ || client_closed_)
+      return;
+    client_manager_->send_error(client_stream_id_, error_code, {});
+    client_closed_ = true;
+  }
+
 private:
   handle_type coro_;
+  impl::StreamManager* client_manager_ = nullptr;
+  uint64_t client_stream_id_ = 0;
+  uint64_t sequence_ = 0;
+  bool client_closed_ = true;
+
+  void send_value(impl::StreamManager& manager,
+                  uint64_t stream_id,
+                  const T& value)
+  {
+    if constexpr (std::is_same_v<T, std::vector<uint8_t>>) {
+      manager.send_chunk(stream_id, value, sequence_++);
+    } else if constexpr (std::is_trivially_copyable_v<T>) {
+      const auto* data_ptr = reinterpret_cast<const uint8_t*>(&value);
+      manager.send_chunk(stream_id,
+                         std::span<const uint8_t>(data_ptr, sizeof(T)),
+                         sequence_++);
+    } else {
+      auto __buf = nprpc_stream::serialize<T>(value);
+      auto __span = __buf.data();
+      manager.send_chunk(
+          stream_id,
+          std::span<const uint8_t>(
+              reinterpret_cast<const uint8_t*>(__span.data()),
+              __span.size()),
+          sequence_++);
+    }
+  }
 };
 
 } // namespace nprpc

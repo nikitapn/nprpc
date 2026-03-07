@@ -186,6 +186,8 @@ interface TestStreams {
 	stream<u8> GetByteStream(size: u64);
 	stream<AAA> GetObjectStream(count: u32);
 	stream<direct AAA> GetObjectStreamDirect(count: u32);
+	void UploadByteStream(expected_size: u64, data: client_stream<u8>);
+	bidi_stream<u8, u8> EchoByteStream(xor_mask: in u8);
 }
 
 interface AsyncTest {

@@ -8,11 +8,13 @@
 #include <mutex>
 #include <span>
 #include <unordered_map>
+#include <utility>
 
 #include <nprpc_base.hpp>
 #include <nprpc/export.hpp>
 
 #include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/post.hpp>
 
 namespace nprpc {
 
@@ -55,6 +57,7 @@ public:
 
   // Client-side: register incoming stream
   void register_reader(uint64_t stream_id, StreamReaderBase* reader);
+  void unregister_reader(uint64_t stream_id, StreamReaderBase* reader);
 
   // Handle incoming messages
   void on_chunk_received(flat_buffer&& fb);
@@ -74,6 +77,12 @@ public:
 
   // Cleanup
   void cancel_all();
+
+  template <typename Fn>
+  void post(Fn&& fn)
+  {
+    boost::asio::post(executor_, [fn = std::forward<Fn>(fn)]() mutable { fn(); });
+  }
 
 private:
   SessionContext& session_;

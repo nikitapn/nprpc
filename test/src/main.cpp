@@ -2,10 +2,12 @@
 #include <coroutine>
 #include <cstdlib>
 #include <iostream>
+#include <mutex>
 #include <numeric>
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <condition_variable>
 
 #include <gtest/gtest.h>
 
@@ -965,6 +967,66 @@ TEST_F(NprpcTest, TestObjectStream)
 
     } catch (nprpc::Exception& ex) {
       FAIL() << "Exception in TestObjectStream: " << ex.what();
+    }
+  };
+
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+}
+
+TEST_F(NprpcTest, TestClientStream)
+{
+#include "common/tests/streams.inl"
+  TestStreamsImpl servant;
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+    try {
+      auto obj = bind_and_resolve<nprpc::test::TestStreams>(servant, flags, "client_stream_test");
+
+      std::vector<uint8_t> expected{1, 2, 3, 4, 5};
+      auto writer = obj->UploadByteStream(expected.size());
+      for (auto byte : expected) {
+        writer.write(byte);
+      }
+      writer.close();
+
+      EXPECT_TRUE(servant.wait_for_upload(expected));
+    } catch (nprpc::Exception& ex) {
+      FAIL() << "Exception in TestClientStream: " << ex.what();
+    }
+  };
+
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
+  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+}
+
+TEST_F(NprpcTest, TestBidiStream)
+{
+#include "common/tests/streams.inl"
+  TestStreamsImpl servant;
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+    try {
+      auto obj = bind_and_resolve<nprpc::test::TestStreams>(servant, flags, "bidi_stream_test");
+
+      std::vector<uint8_t> input{10, 11, 12, 13};
+      constexpr uint8_t kMask = 0x5A;
+      auto [writer, reader] = obj->EchoByteStream(kMask);
+
+      for (auto byte : input) {
+        writer.write(byte);
+      }
+      writer.close();
+
+      std::vector<uint8_t> output;
+      for (auto& byte : reader) {
+        output.push_back(byte);
+      }
+
+      ASSERT_EQ(output.size(), input.size());
+      for (size_t i = 0; i < input.size(); ++i) {
+        EXPECT_EQ(output[i], static_cast<uint8_t>(input[i] ^ kMask));
+      }
+    } catch (nprpc::Exception& ex) {
+      FAIL() << "Exception in TestBidiStream: " << ex.what();
     }
   };
 

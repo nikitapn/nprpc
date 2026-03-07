@@ -176,6 +176,12 @@ enum StreamMessageType : u8 {
   STREAM_CANCEL = 4     // Client requests cancellation
 }
 
+enum StreamKind : u8 {
+  Server = 0,
+  Client = 1,
+  Bidi = 2
+}
+
 // Stream initialization request (replaces normal RPC call for streaming methods)
 message StreamInit {
   stream_id: u64;            // Unique stream identifier (client-generated)
@@ -183,6 +189,7 @@ message StreamInit {
   interface_idx: ifs_idx_t;  // Target interface
   object_id: oid_t;          // Target object
   func_idx: fn_idx_t;        // Method index
+  stream_kind: StreamKind;   // Direction of the stream
 }
 
 // Data chunk from server to client
