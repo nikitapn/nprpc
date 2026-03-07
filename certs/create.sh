@@ -2,9 +2,11 @@
 
 openssl req \
   -x509 \
-  -newkey rsa:4096 \
+  -newkey ec \
+  -pkeyopt ec_paramgen_curve:P-256 \
+  -pkeyopt ec_param_enc:named_curve \
   -sha256 \
-  -days 3560 \
+  -days 13 \
   -nodes \
   -keyout out/localhost.key \
   -out out/localhost.crt \

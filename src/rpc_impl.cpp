@@ -876,6 +876,12 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
       oid.urls += (std::string(https_prefix) + g_cfg.hostname + ":" +
                    std::to_string(g_cfg.listen_http_port)) +
                   ';';
+
+#ifdef NPRPC_HTTP3_ENABLED
+      if (g_cfg.http3_enabled) {
+        oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::WebTransport);
+      }
+#endif
     }
   }
 

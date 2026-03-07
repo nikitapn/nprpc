@@ -37,10 +37,13 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <ranges>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "debug.hpp"
@@ -69,6 +72,9 @@ static constexpr size_t MAX_PKTS_BURST = 64;
 // Static secret for tokens
 static std::array<uint8_t, 32> g_static_secret;
 static bool g_static_secret_initialized = false;
+
+static constexpr std::string_view k_webtransport_path = "/wt";
+static constexpr uint64_t k_webtransport_bidi_stream_type = 0x41;
 
 } // anonymous namespace
 
@@ -136,16 +142,30 @@ void log_printf(void* user_data, const char* fmt, ...)
 // Http3Stream - Tracks state for a single HTTP/3 request stream
 //==============================================================================
 
+class WebTransportControlSession;
+
 struct Http3Stream {
   int64_t stream_id = -1;
   std::string method;
   std::string path;
   std::string authority;
+  std::string scheme;
+  std::string protocol;
   std::string content_type;
   std::string accept;                         // Accept header for SSR detection
   std::map<std::string, std::string> headers; // All headers for SSR
   size_t content_length = 0;
   std::vector<uint8_t> request_body;
+
+  bool http_stream = false;
+  bool webtransport_session = false;
+  bool webtransport_child_stream = false;
+  bool response_started = false;
+  int64_t webtransport_session_id = -1;
+  std::vector<uint8_t> webtransport_probe_buffer;
+  std::deque<std::vector<uint8_t>> raw_write_queue;
+  size_t raw_write_offset = 0;
+  std::shared_ptr<WebTransportControlSession> webtransport_control_session;
 
   // Response data - kept alive for async sending
   // For cached files: cached_file keeps the data alive (zero-copy)
@@ -208,6 +228,9 @@ public:
   // Called by server when write is possible
   void signal_write();
 
+  auto get_executor() { return socket_.get_executor(); }
+  void queue_raw_stream_write(int64_t stream_id, std::vector<uint8_t>&& data);
+
   // ngtcp2 crypto connection reference
   ngtcp2_crypto_conn_ref* conn_ref() { return &conn_ref_; }
 
@@ -216,6 +239,7 @@ private:
   Http3Stream* find_stream(int64_t stream_id);
   Http3Stream* create_stream(int64_t stream_id);
   void remove_stream(int64_t stream_id);
+  Http3Stream* next_raw_writable_stream();
 
   // HTTP/3 handling
   int setup_httpconn();
@@ -254,9 +278,18 @@ private:
                             unsigned int status_code,
                             std::string_view content_type,
                             std::string&& body);
+  int send_webtransport_connect_response(Http3Stream* stream);
 
   // RPC Handling
   int handle_rpc_request(Http3Stream* stream);
+  int handle_webtransport_connect(Http3Stream* stream);
+  int handle_webtransport_stream_data(Http3Stream* stream,
+                                      uint32_t flags,
+                                      const uint8_t* data,
+                                      size_t datalen);
+  bool has_webtransport_session(int64_t session_stream_id) const;
+  std::shared_ptr<WebTransportControlSession>
+  get_or_create_webtransport_control_session(Http3Stream* stream);
 
   // Error handling
   int handle_error();
@@ -426,6 +459,7 @@ private:
   uint32_t version_;
 
   std::unordered_map<int64_t, std::unique_ptr<Http3Stream>> streams_;
+  std::unordered_set<int64_t> webtransport_session_ids_;
 
   // Send buffer
   std::vector<uint8_t> send_buf_;
@@ -437,6 +471,140 @@ private:
   bool closed_ = false;
   bool timer_active_ = false;
 };
+
+//==============================================================================
+// WebTransportControlSession - minimal NPRPC tunnel on a WT child stream
+//==============================================================================
+
+class WebTransportControlSession : public Session,
+                                   public std::enable_shared_from_this<WebTransportControlSession>
+{
+public:
+  WebTransportControlSession(Http3Connection& connection,
+                             int64_t stream_id,
+                             const boost::asio::ip::udp::endpoint& remote_ep)
+      : Session(connection.get_executor())
+      , connection_(connection)
+      , stream_id_(stream_id)
+      , rx_buffer_(4 * 1024 * 1024)
+  {
+    ctx_.remote_endpoint = EndPoint(EndPointType::WebTransport,
+                                    remote_ep.address().to_string(),
+                                    remote_ep.port());
+  }
+
+  void process_bytes(const uint8_t* data, size_t datalen)
+  {
+    receive_buffer_.insert(receive_buffer_.end(), data, data + datalen);
+
+    while (receive_buffer_.size() >= sizeof(std::uint32_t)) {
+      std::uint32_t payload_len = 0;
+      std::memcpy(&payload_len, receive_buffer_.data(), sizeof(payload_len));
+
+      const size_t frame_len = static_cast<size_t>(payload_len) + sizeof(std::uint32_t);
+      if (receive_buffer_.size() < frame_len) {
+        break;
+      }
+
+      rx_buffer_.clear();
+      auto mb = rx_buffer_.prepare(frame_len);
+      std::memcpy(mb.data(), receive_buffer_.data(), frame_len);
+      rx_buffer_.commit(frame_len);
+
+      const auto request_id = extract_request_id(rx_buffer_);
+      flat_buffer tx_buffer{std::max(last_tx_size_, flat_buffer::default_initial_size())};
+      const bool needs_reply = handle_request(rx_buffer_, tx_buffer);
+
+      if (needs_reply) {
+        last_tx_size_ = std::max(tx_buffer.size(), flat_buffer::default_initial_size());
+        inject_request_id(tx_buffer, request_id);
+        queue_buffer(std::move(tx_buffer));
+      }
+
+      receive_buffer_.erase(receive_buffer_.begin(),
+                            receive_buffer_.begin() + static_cast<std::ptrdiff_t>(frame_len));
+    }
+  }
+
+  void send_receive(flat_buffer&, uint32_t) override
+  {
+    assert(false && "send_receive not supported on WebTransport server control session");
+  }
+
+  void send_receive_async(
+      flat_buffer&&,
+      std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&&,
+      uint32_t) override
+  {
+    assert(false && "send_receive_async not supported on WebTransport server control session");
+  }
+
+  void send_stream_message(flat_buffer&& buffer) override { queue_buffer(std::move(buffer)); }
+
+  void send_main_stream_message(flat_buffer&& buffer) override
+  {
+    queue_buffer(std::move(buffer));
+  }
+
+private:
+  static void inject_request_id(flat_buffer& buffer, uint32_t request_id)
+  {
+    if (buffer.size() >= sizeof(impl::Header)) {
+      impl::flat::Header_Direct header(buffer, 0);
+      header.request_id() = request_id;
+    }
+  }
+
+  static uint32_t extract_request_id(const flat_buffer& buffer)
+  {
+    if (buffer.size() >= sizeof(impl::Header)) {
+      const impl::flat::Header_Direct header(const_cast<flat_buffer&>(buffer), 0);
+      return header.request_id();
+    }
+
+    return 0;
+  }
+
+  void queue_buffer(flat_buffer&& buffer)
+  {
+    auto data = buffer.cdata();
+    std::vector<uint8_t> bytes(data.size());
+    std::memcpy(bytes.data(), data.data(), data.size());
+    connection_.queue_raw_stream_write(stream_id_, std::move(bytes));
+  }
+
+  void timeout_action() override {}
+
+  Http3Connection& connection_;
+  int64_t stream_id_;
+  flat_buffer rx_buffer_;
+  std::vector<uint8_t> receive_buffer_;
+  size_t last_tx_size_{flat_buffer::default_initial_size()};
+};
+
+namespace {
+
+std::optional<std::pair<uint64_t, size_t>> decode_quic_varint(const std::vector<uint8_t>& data)
+{
+  if (data.empty()) {
+    return std::nullopt;
+  }
+
+  const uint8_t first = data[0];
+  const size_t encoded_len = size_t{1} << (first >> 6);
+  if (data.size() < encoded_len) {
+    return std::nullopt;
+  }
+
+  uint64_t value = first & 0x3f;
+  for (size_t index = 1; index < encoded_len; ++index) {
+    value = (value << 8) | data[index];
+  }
+
+  return std::pair<uint64_t, size_t>{value, encoded_len};
+}
+
+} // anonymous namespace
 
 //==============================================================================
 // Http3Server - Main HTTP/3 server using ngtcp2 + nghttp3
@@ -642,6 +810,7 @@ bool Http3Connection::init()
   params.initial_max_data = 1 * 1024 * 1024;
   params.initial_max_streams_bidi = 100;
   params.initial_max_streams_uni = 3; // Control + QPACK enc + QPACK dec
+  params.max_datagram_frame_size = 65535;
   params.max_idle_timeout = 30 * NGTCP2_SECONDS;
   params.stateless_reset_token_present = 1;
   params.active_connection_id_limit = 7;
@@ -862,7 +1031,9 @@ int Http3Connection::on_write()
     int64_t stream_id = -1;
     int fin = 0;
     std::array<nghttp3_vec, 16> vec;
+    ngtcp2_vec raw_vec{};
     nghttp3_ssize sveccnt = 0;
+    bool using_http_stream = false;
 
     // Get data from HTTP/3 layer if available
     if (httpconn_ && ngtcp2_conn_get_max_data_left(conn_)) {
@@ -876,6 +1047,20 @@ int Http3Connection::on_write()
             nghttp3_err_infer_quic_app_error_code(static_cast<int>(sveccnt)),
             nullptr, 0);
         return handle_error();
+      }
+
+      using_http_stream = sveccnt > 0 || stream_id != -1 || fin != 0;
+    }
+
+    Http3Stream* raw_stream = nullptr;
+    if (!using_http_stream) {
+      raw_stream = next_raw_writable_stream();
+      if (raw_stream) {
+        stream_id = raw_stream->stream_id;
+        const auto& chunk = raw_stream->raw_write_queue.front();
+        raw_vec.base = const_cast<uint8_t*>(chunk.data() + raw_stream->raw_write_offset);
+        raw_vec.len = chunk.size() - raw_stream->raw_write_offset;
+        sveccnt = 1;
       }
     }
 
@@ -892,7 +1077,9 @@ int Http3Connection::on_write()
 
     auto nwrite = ngtcp2_conn_writev_stream(
         conn_, &ps.path, &pi, send_buf_.data(), MAX_UDP_PAYLOAD_SIZE, &ndatalen,
-        flags, stream_id, reinterpret_cast<const ngtcp2_vec*>(vec.data()),
+      flags, stream_id,
+      using_http_stream ? reinterpret_cast<const ngtcp2_vec*>(vec.data())
+                : &raw_vec,
         static_cast<size_t>(sveccnt), ts);
 
     NPRPC_HTTP3_TRACE("on_write: ngtcp2_conn_writev_stream returned "
@@ -902,17 +1089,20 @@ int Http3Connection::on_write()
     if (nwrite < 0) {
       switch (nwrite) {
       case NGTCP2_ERR_STREAM_DATA_BLOCKED:
-        if (httpconn_) {
+        if (using_http_stream && httpconn_) {
           nghttp3_conn_block_stream(httpconn_, stream_id);
         }
         continue;
       case NGTCP2_ERR_STREAM_SHUT_WR:
-        if (httpconn_) {
+        if (using_http_stream && httpconn_) {
           nghttp3_conn_shutdown_stream_write(httpconn_, stream_id);
+        } else if (raw_stream) {
+          raw_stream->raw_write_queue.clear();
+          raw_stream->raw_write_offset = 0;
         }
         continue;
       case NGTCP2_ERR_WRITE_MORE:
-        if (httpconn_ && ndatalen >= 0) {
+        if (using_http_stream && httpconn_ && ndatalen >= 0) {
           auto rv = nghttp3_conn_add_write_offset(
               httpconn_, stream_id, static_cast<size_t>(ndatalen));
           if (rv != 0) {
@@ -934,7 +1124,7 @@ int Http3Connection::on_write()
       return handle_error();
     }
 
-    if (ndatalen >= 0 && httpconn_) {
+    if (using_http_stream && ndatalen >= 0 && httpconn_) {
       auto rv = nghttp3_conn_add_write_offset(httpconn_, stream_id,
                                               static_cast<size_t>(ndatalen));
       if (rv != 0) {
@@ -944,6 +1134,18 @@ int Http3Connection::on_write()
             &last_error_, nghttp3_err_infer_quic_app_error_code(rv), nullptr,
             0);
         return handle_error();
+      }
+    } else if (!using_http_stream && ndatalen > 0 && raw_stream) {
+      raw_stream->raw_write_offset += static_cast<size_t>(ndatalen);
+
+      while (!raw_stream->raw_write_queue.empty()) {
+        const auto& chunk = raw_stream->raw_write_queue.front();
+        if (raw_stream->raw_write_offset < chunk.size()) {
+          break;
+        }
+
+        raw_stream->raw_write_offset -= chunk.size();
+        raw_stream->raw_write_queue.pop_front();
       }
     }
 
@@ -1065,6 +1267,11 @@ int Http3Connection::setup_httpconn()
   nghttp3_settings_default(&settings);
   settings.qpack_max_dtable_capacity = 4096;
   settings.qpack_blocked_streams = 100;
+  settings.enable_connect_protocol = 1;
+  settings.h3_datagram = 1;
+
+  std::cerr << "[HTTP/3] Advertising SETTINGS: extended_connect=1 h3_datagram=1 wt_enabled=1"
+            << std::endl;
 
   auto mem = nghttp3_mem_default();
 
@@ -1123,6 +1330,10 @@ int Http3Connection::setup_httpconn()
 
   NPRPC_HTTP3_TRACE("HTTP/3 connection setup complete");
 
+  // Flush the control/QPACK streams promptly so the peer can receive SETTINGS
+  // and continue with WebTransport session establishment.
+  signal_write();
+
   return 0;
 }
 
@@ -1143,7 +1354,19 @@ Http3Stream* Http3Connection::create_stream(int64_t stream_id)
 
 void Http3Connection::remove_stream(int64_t stream_id)
 {
+  webtransport_session_ids_.erase(stream_id);
   streams_.erase(stream_id);
+}
+
+Http3Stream* Http3Connection::next_raw_writable_stream()
+{
+  for (auto& [stream_id, stream] : streams_) {
+    if (!stream->raw_write_queue.empty()) {
+      return stream.get();
+    }
+  }
+
+  return nullptr;
 }
 
 int Http3Connection::recv_stream_data(uint32_t flags,
@@ -1151,6 +1374,29 @@ int Http3Connection::recv_stream_data(uint32_t flags,
                                       const uint8_t* data,
                                       size_t datalen)
 {
+  auto* stream = find_stream(stream_id);
+  if (!stream) {
+    stream = create_stream(stream_id);
+  }
+
+  const bool should_probe_webtransport =
+      stream->webtransport_child_stream ||
+      (!stream->http_stream && ngtcp2_is_bidi_stream(stream_id) &&
+       !ngtcp2_conn_is_local_stream(conn_, stream_id) &&
+       !webtransport_session_ids_.empty());
+
+  if (should_probe_webtransport) {
+    if (handle_webtransport_stream_data(stream, flags, data, datalen) != 0) {
+      return -1;
+    }
+    if (stream->webtransport_child_stream) {
+      ngtcp2_conn_extend_max_stream_offset(conn_, stream_id,
+                                           static_cast<uint64_t>(datalen));
+      ngtcp2_conn_extend_max_offset(conn_, static_cast<uint64_t>(datalen));
+      return 0;
+    }
+  }
+
   if (!httpconn_) {
     return 0;
   }
@@ -1203,6 +1449,11 @@ void Http3Connection::extend_max_remote_streams_bidi(uint64_t max_streams)
 void Http3Connection::extend_max_stream_data(int64_t stream_id,
                                              uint64_t max_data)
 {
+  auto* stream = find_stream(stream_id);
+  if (stream && !stream->raw_write_queue.empty()) {
+    signal_write();
+  }
+
   if (httpconn_) {
     nghttp3_conn_unblock_stream(httpconn_, stream_id);
   }
@@ -1213,6 +1464,7 @@ void Http3Connection::http_begin_headers(int64_t stream_id)
 {
   auto* stream = find_stream(stream_id);
   if (stream) {
+    stream->http_stream = true;
     nghttp3_conn_set_stream_user_data(httpconn_, stream_id, stream);
   }
 }
@@ -1240,6 +1492,13 @@ void Http3Connection::http_recv_header(Http3Stream* stream,
   case NGHTTP3_QPACK_TOKEN__AUTHORITY:
     stream->authority = std::move(header_value);
     break;
+  default:
+    if (header_name == ":scheme") {
+      stream->scheme = header_value;
+    } else if (header_name == ":protocol") {
+      stream->protocol = header_value;
+    }
+    break;
   case NGHTTP3_QPACK_TOKEN_CONTENT_TYPE:
     stream->content_type = std::move(header_value);
     break;
@@ -1255,6 +1514,13 @@ void Http3Connection::http_recv_header(Http3Stream* stream,
 int Http3Connection::http_end_headers(Http3Stream* stream)
 {
   NPRPC_HTTP3_TRACE("Request: {} {}", stream->method, stream->path);
+
+  // Extended CONNECT requests do not terminate the request stream with FIN.
+  // WebTransport expects the 200 response immediately after headers.
+  if (stream->method == "CONNECT" && stream->path == k_webtransport_path) {
+    return start_response(stream);
+  }
+
   return 0;
 }
 
@@ -1266,6 +1532,11 @@ int Http3Connection::http_end_stream(Http3Stream* stream)
 void Http3Connection::http_stream_close(int64_t stream_id,
                                         uint64_t app_error_code)
 {
+  auto* stream = find_stream(stream_id);
+  if (stream && stream->webtransport_control_session) {
+    stream->webtransport_control_session->shutdown();
+  }
+
   if (!ngtcp2_is_bidi_stream(stream_id)) {
     return;
   }
@@ -1279,6 +1550,22 @@ void Http3Connection::http_stream_close(int64_t stream_id,
 
 int Http3Connection::start_response(Http3Stream* stream)
 {
+  if (stream->response_started) {
+    return 0;
+  }
+
+  stream->response_started = true;
+
+  if (stream->method == "CONNECT" && stream->path == k_webtransport_path &&
+      (stream->protocol == "webtransport-h3" ||
+       stream->protocol == "webtransport")) {
+    std::cerr << "[HTTP/3] Received WebTransport CONNECT stream_id="
+              << stream->stream_id << " authority='" << stream->authority
+              << "' scheme='" << stream->scheme << "' origin='"
+              << stream->headers["origin"] << "'" << std::endl;
+    return handle_webtransport_connect(stream);
+  }
+
   // Handle the HTTP request
   if (stream->method == "GET" || stream->method == "HEAD") {
 #ifdef NPRPC_SSR_ENABLED
@@ -1587,6 +1874,155 @@ int Http3Connection::send_static_response(Http3Stream* stream,
   return 0;
 }
 
+int Http3Connection::send_webtransport_connect_response(Http3Stream* stream)
+{
+  std::cerr << "[HTTP/3] Accepting WebTransport CONNECT stream_id="
+            << stream->stream_id << std::endl;
+
+  std::string status_str = "200";
+  std::array<nghttp3_nv, 2> nva;
+  nva[0] = {.name = reinterpret_cast<uint8_t*>(const_cast<char*>(":status")),
+            .value = reinterpret_cast<uint8_t*>(status_str.data()),
+            .namelen = 7,
+            .valuelen = status_str.size(),
+            .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME};
+  nva[1] = {
+      .name = reinterpret_cast<uint8_t*>(const_cast<char*>("server")),
+      .value = reinterpret_cast<uint8_t*>(const_cast<char*>("nprpc/nghttp3")),
+      .namelen = 6,
+      .valuelen = 13,
+      .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
+  };
+
+  nghttp3_data_reader dr{.read_data = http_read_data_cb};
+  int rv = nghttp3_conn_submit_response(httpconn_, stream->stream_id,
+                                        nva.data(), nva.size(), &dr);
+  if (rv != 0) {
+    std::cerr << "[HTTP/3][E] nghttp3_conn_submit_response(CONNECT): "
+              << nghttp3_strerror(rv) << std::endl;
+    return -1;
+  }
+
+  return 0;
+}
+
+int Http3Connection::handle_webtransport_connect(Http3Stream* stream)
+{
+  if (stream->scheme != "https" || stream->authority.empty()) {
+    std::cerr << "[HTTP/3][E] Rejecting WebTransport CONNECT stream_id="
+              << stream->stream_id << " scheme='" << stream->scheme
+              << "' authority='" << stream->authority << "'" << std::endl;
+    return send_static_response(stream, 400, "text/plain",
+                                "Invalid WebTransport CONNECT request");
+  }
+
+  stream->webtransport_session = true;
+  stream->webtransport_session_id = stream->stream_id;
+  webtransport_session_ids_.insert(stream->stream_id);
+
+  std::cerr << "[HTTP/3] WebTransport session established stream_id="
+            << stream->stream_id << std::endl;
+
+  return send_webtransport_connect_response(stream);
+}
+
+bool Http3Connection::has_webtransport_session(int64_t session_stream_id) const
+{
+  return webtransport_session_ids_.contains(session_stream_id);
+}
+
+std::shared_ptr<WebTransportControlSession>
+Http3Connection::get_or_create_webtransport_control_session(Http3Stream* stream)
+{
+  if (!stream->webtransport_control_session) {
+    stream->webtransport_control_session =
+        std::make_shared<WebTransportControlSession>(*this, stream->stream_id,
+                                                     remote_ep_);
+  }
+
+  return stream->webtransport_control_session;
+}
+
+int Http3Connection::handle_webtransport_stream_data(Http3Stream* stream,
+                                                     uint32_t flags,
+                                                     const uint8_t* data,
+                                                     size_t datalen)
+{
+  if (!ngtcp2_is_bidi_stream(stream->stream_id) ||
+      ngtcp2_conn_is_local_stream(conn_, stream->stream_id)) {
+    return 0;
+  }
+
+  if (stream->webtransport_child_stream) {
+    auto session = get_or_create_webtransport_control_session(stream);
+    session->process_bytes(data, datalen);
+    return 0;
+  }
+
+  if (webtransport_session_ids_.empty() || stream->http_stream) {
+    return 0;
+  }
+
+  stream->webtransport_probe_buffer.insert(stream->webtransport_probe_buffer.end(),
+                                           data, data + datalen);
+
+  auto signal = decode_quic_varint(stream->webtransport_probe_buffer);
+  if (!signal) {
+    if (flags & NGTCP2_STREAM_DATA_FLAG_FIN) {
+      return -1;
+    }
+    return 0;
+  }
+
+  const auto [stream_type, stream_type_len] = *signal;
+  if (stream_type != k_webtransport_bidi_stream_type) {
+    return 0;
+  }
+
+  std::vector<uint8_t> session_id_bytes(
+      stream->webtransport_probe_buffer.begin() +
+          static_cast<std::ptrdiff_t>(stream_type_len),
+      stream->webtransport_probe_buffer.end());
+
+  auto session_id = decode_quic_varint(session_id_bytes);
+  if (!session_id) {
+    if (flags & NGTCP2_STREAM_DATA_FLAG_FIN) {
+      return -1;
+    }
+    return 0;
+  }
+
+  const auto [session_stream_id, session_id_len] = *session_id;
+  const auto header_len = stream_type_len + session_id_len;
+  if (!has_webtransport_session(static_cast<int64_t>(session_stream_id))) {
+    return 0;
+  }
+
+  stream->webtransport_child_stream = true;
+  stream->webtransport_session_id = static_cast<int64_t>(session_stream_id);
+
+  auto session = get_or_create_webtransport_control_session(stream);
+  if (stream->webtransport_probe_buffer.size() > header_len) {
+    session->process_bytes(stream->webtransport_probe_buffer.data() + header_len,
+                           stream->webtransport_probe_buffer.size() - header_len);
+  }
+  stream->webtransport_probe_buffer.clear();
+
+  return 0;
+}
+
+void Http3Connection::queue_raw_stream_write(int64_t stream_id,
+                                             std::vector<uint8_t>&& data)
+{
+  auto* stream = find_stream(stream_id);
+  if (!stream) {
+    stream = create_stream(stream_id);
+  }
+
+  stream->raw_write_queue.emplace_back(std::move(data));
+  signal_write();
+}
+
 int Http3Connection::send_dynamic_response(Http3Stream* stream,
                                            unsigned int status_code,
                                            std::string_view content_type,
@@ -1828,12 +2264,13 @@ int Http3Connection::on_stream_close(ngtcp2_conn* conn,
                                      void* stream_user_data)
 {
   auto h = static_cast<Http3Connection*>(user_data);
+  auto* stream = h->find_stream(stream_id);
 
   if (!(flags & NGTCP2_STREAM_CLOSE_FLAG_APP_ERROR_CODE_SET)) {
     app_error_code = NGHTTP3_H3_NO_ERROR;
   }
 
-  if (h->httpconn_) {
+  if (h->httpconn_ && (!stream || !stream->webtransport_child_stream)) {
     int rv = nghttp3_conn_close_stream(h->httpconn_, stream_id, app_error_code);
     if (rv != 0 && rv != NGHTTP3_ERR_STREAM_NOT_FOUND) {
       std::cerr << "[HTTP/3][E] nghttp3_conn_close_stream: "
@@ -2068,6 +2505,11 @@ nghttp3_ssize Http3Connection::http_read_data_cb(nghttp3_conn* conn,
                                                  void* stream_user_data)
 {
   auto stream = static_cast<Http3Stream*>(stream_user_data);
+
+  if (stream && stream->webtransport_session && !stream->response_data) {
+    *pflags |= NGHTTP3_DATA_FLAG_EOF | NGHTTP3_DATA_FLAG_NO_END_STREAM;
+    return 0;
+  }
 
   if (!stream || !stream->response_data) {
     *pflags |= NGHTTP3_DATA_FLAG_EOF;

@@ -16,10 +16,10 @@ export function get_nameserver(nameserver_ip: string): Nameserver {
 	const oid: detail.ObjectId = {
 		object_id: 0n,
 		poa_idx: 0,
-		flags: detail.ObjectFlag.Persistent,
+		flags: detail.ObjectFlag.Persistent | detail.ObjectFlag.WebTransport,
 		origin: new Uint8Array(16).fill(0),
 		class_id: _INameserver_Servant._get_class(),
-		urls: "ws://" + nameserver_ip + ":15001",
+		urls: "ws://" + nameserver_ip + ":15001;wss://" + nameserver_ip + ":15001;https://" + nameserver_ip + ":15001",
 	};
 	const nameserver = new Nameserver(oid);
 	nameserver.select_endpoint();

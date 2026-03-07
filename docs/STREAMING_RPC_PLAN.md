@@ -14,6 +14,65 @@ Add support for all three streaming modes — server-to-client, client-to-server
 6. **Lifecycle management** - Proper cleanup on cancellation, errors, disconnection
 7. **All three streaming directions** - `server_stream`, `client_stream`, `bidi_stream`
 
+## WebTransport Notes
+
+WebTransport should be treated as a browser transport on top of an HTTPS origin, not as a browser-facing `quic://` endpoint.
+
+### Discovery and advertisement
+
+- Native clients can keep using `quic://host:port` endpoints.
+- Browser clients should discover WebTransport from the existing `https://host:port` object endpoint plus an object capability bit.
+- Adding `WebTransport` to `EndPointType` is still useful so generated/runtime code can reason about the selected transport explicitly.
+- Object advertisement should not rely on a raw `webtransport://` URL string. The browser constructor takes an HTTPS URL such as `https://example.com:443/wt`.
+
+### Alt-Svc semantics
+
+- `Alt-Svc` is not the mechanism that switches an already-established HTTP/3 RPC session into WebTransport.
+- `Alt-Svc` is an origin advertisement that tells the browser an HTTP/3 alternative service is available for future connections.
+- If the client directly opens `new WebTransport("https://host:port/wt")`, the important requirement is that the origin actually supports HTTP/3 + WebTransport on that authority.
+- `Alt-Svc` is still useful, and often practically necessary, when the browser first learns about the origin via HTTP/1.1 or HTTP/2 and needs a standards-compliant way to discover that HTTP/3 is available.
+- If the application is already on an HTTPS/3 origin, `Alt-Svc` is not the logical selector between plain HTTP/3 RPC and WebTransport; the client chooses WebTransport by opening the WebTransport session URL.
+
+### Recommended NPRPC model
+
+- Keep `quic://` for native QUIC sessions.
+- Keep `https://` / `SecuredHttp` for browser-facing HTTP and HTTP/3 origins.
+- Add a new `detail::ObjectFlag::WebTransport = 4` capability bit.
+- JS can prefer WebTransport when all of the following are true:
+    - the object has a `SecuredHttp` endpoint
+    - the object flag `WebTransport` is set
+    - the runtime has `globalThis.WebTransport`
+- Use a fixed well-known WebTransport path such as `/wt` on the same origin as the secured HTTP endpoint.
+
+This keeps the existing `urls` model intact and avoids a second capability round-trip in the browser.
+
+Suggested rule for setting the flag server-side:
+
+- Set `WebTransport` only if the object is advertised with a secured HTTP endpoint and the server is actually configured to accept WebTransport sessions on that HTTPS authority.
+- Do not set it merely because HTTP/3 is enabled globally; otherwise objects that are only reachable over TCP, WS, or unsecured HTTP would be over-advertised.
+
+### Implementation approach
+
+#### Phase WT-1: Minimal integration
+
+- Add `WebTransport` to `EndPointType` in `idl/nprpc_base.npidl` and generated runtimes.
+- Add a JS `WebTransportConnection` alongside the current WebSocket connection.
+- Open a WebTransport session to `https://host:port/wt`.
+- Use one bidirectional WebTransport stream as the NPRPC control channel.
+- Reuse the existing framed NPRPC message protocol on that control stream.
+
+This gets browser HTTP/3 transport support with low generator churn.
+
+#### Phase WT-2: Native stream mapping
+
+- Keep one control bidirectional stream for unary RPC and stream-init replies.
+- Map `server_stream<T>` to a server-opened unidirectional WebTransport stream.
+- Map `client_stream<T>` to a client-opened unidirectional WebTransport stream.
+- Map `bidi_stream<TIn, TOut>` to a dedicated bidirectional WebTransport stream.
+- Prefix each native WebTransport stream with the NPRPC `stream_id` so it can be routed into the existing stream manager.
+
+This is the version that really exploits WebTransport rather than tunneling NPRPC over a single reliable stream.
+
 ## IDL Syntax
 
 Three streaming keywords are supported. All allow regular `in` parameters that are transmitted in the `StreamInit` handshake before the stream opens — the server can validate them and raise exceptions before any data flows.

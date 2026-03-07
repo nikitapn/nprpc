@@ -32,7 +32,7 @@ type ObjectId = detail.ObjectId;
 export type { ObjectId };
 
 export let rpc: Rpc;
-let host_info: HostInfo = {secured: false, objects: {}};
+let host_info: HostInfo = {secured: false, webtransport: false, objects: {}};
 
 let gLogLevel: LogLevel = LogLevel.error;
 
@@ -54,6 +54,8 @@ export class EndPoint {
         return "http://";
       case EndPointType.SecuredHttp:
         return "https://";
+      case EndPointType.WebTransport:
+        return "wt://";
       default:
         throw new Exception("Unknown EndPointType");
     };
@@ -69,6 +71,8 @@ export class EndPoint {
       type = EndPointType.Http;
     } else if (str.startsWith("https://")) {
       type = EndPointType.SecuredHttp;
+    } else if (str.startsWith("wt://")) {
+      type = EndPointType.WebTransport;
     } else {
       throw new Exception("Invalid EndPoint string: " + str);
     }
@@ -98,12 +102,17 @@ export class EndPoint {
 
   public is_ssl(): boolean {
     return this.type === EndPointType.SecuredWebSocket ||
-      this.type === EndPointType.SecuredHttp;
+      this.type === EndPointType.SecuredHttp ||
+      this.type === EndPointType.WebTransport;
   }
 };
 
+const webtransport_path = "/wt";
+
 interface HostInfo {
   secured: boolean;
+  webtransport?: boolean;
+  webtransport_options?: any;
   objects: any;
 }
 
@@ -134,15 +143,30 @@ function get_object(buffer: FlatBuffer, poa_idx: poa_idx_t, object_id: bigint) {
 
 export class Connection {
   endpoint: EndPoint;
-  ws: WebSocket;
+  ws?: WebSocket;
+  wt?: any;
+  wt_writer?: any;
   pending_requests: Map<number, PendingRequest>;
   next_request_id: number;
   stream_manager: StreamManager;
+  ready_: Promise<void>;
+  private wt_receive_buffer = new Uint8Array(0);
 
   private async perform_request(request_id: number, buffer: FlatBuffer) {
     // Inject request ID into the message header
     buffer.write_request_id(request_id);
-    this.ws.send(buffer.writable_view);
+    await this.send_payload(buffer.writable_view);
+  }
+
+  private async send_payload(payload: ArrayBufferView) {
+    await this.ready_;
+
+    if (this.endpoint.type === EndPointType.WebTransport) {
+      await this.wt_writer.write(payload);
+      return;
+    }
+
+    this.ws.send(payload);
   }
 
   private on_open() {
@@ -156,25 +180,20 @@ export class Connection {
     // Store the pending request
     this.pending_requests.set(request_id, { buffer: buffer, promise: promise });
 
-    // Send the request if WebSocket is ready
-    if (this.ws.readyState === WebSocket.OPEN) {
-      this.perform_request(request_id, buffer);
-    } else {
-      // If WebSocket is not ready, wait for it to open
-      const originalOnOpen = this.ws.onopen;
-      this.ws.onopen = (event) => {
-        if (originalOnOpen) originalOnOpen.call(this.ws, event);
-        if (this.pending_requests.has(request_id)) {
-          this.perform_request(request_id, buffer);
-        }
-      };
-    }
+    this.perform_request(request_id, buffer).catch(error => {
+      const pending_request = this.pending_requests.get(request_id);
+      if (!pending_request) {
+        return;
+      }
+      this.pending_requests.delete(request_id);
+      pending_request.promise.set_exception(error as any);
+    });
     
     return promise.$;
   }
 
-  private on_read(ev: MessageEvent<any>) {
-    let buf = FlatBuffer.from_array_buffer(ev.data as ArrayBuffer);
+  private handle_message(data: ArrayBuffer) {
+    let buf = FlatBuffer.from_array_buffer(data);
     if (buf.read_msg_type() == impl.MessageType.Answer) {
       // Extract request ID from the response
       const request_id = buf.read_request_id();
@@ -182,7 +201,7 @@ export class Connection {
       
       if (pending_request) {
         // Update the buffer with response data
-        pending_request.buffer.set_buffer(ev.data as ArrayBuffer);
+        pending_request.buffer.set_buffer(data);
         this.pending_requests.delete(request_id);
         pending_request.promise.set_promise();
       } else {
@@ -298,8 +317,99 @@ export class Connection {
       
       // Restore the request ID before sending the response
       buf.write_request_id(request_id);
-      this.ws.send(buf.writable_view);
+      void this.send_payload(buf.writable_view);
     }
+  }
+
+  private on_read(ev: MessageEvent<any>) {
+    this.handle_message(ev.data as ArrayBuffer);
+  }
+
+  private append_webtransport_bytes(chunk: Uint8Array) {
+    const merged = new Uint8Array(this.wt_receive_buffer.length + chunk.length);
+    merged.set(this.wt_receive_buffer, 0);
+    merged.set(chunk, this.wt_receive_buffer.length);
+    this.wt_receive_buffer = merged;
+
+    while (this.wt_receive_buffer.length >= 4) {
+      const dv = new DataView(
+        this.wt_receive_buffer.buffer,
+        this.wt_receive_buffer.byteOffset,
+        this.wt_receive_buffer.byteLength,
+      );
+      const payload_len = dv.getUint32(0, true);
+      const total_len = payload_len + 4;
+      if (this.wt_receive_buffer.length < total_len) {
+        break;
+      }
+
+      const packet = this.wt_receive_buffer.slice(0, total_len);
+      this.handle_message(packet.buffer.slice(packet.byteOffset, packet.byteOffset + packet.byteLength));
+      this.wt_receive_buffer = this.wt_receive_buffer.slice(total_len);
+    }
+  }
+
+  private async read_webtransport_stream(readable: any) {
+    const reader = readable.getReader();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          this.on_close();
+          break;
+        }
+        if (value) {
+          this.append_webtransport_bytes(value);
+        }
+      }
+    } catch (_error) {
+      this.on_error(new Event("error"));
+    } finally {
+      reader.releaseLock?.();
+    }
+  }
+
+  private init_websocket(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (host_info.secured) {
+        this.ws = new WebSocket('wss://' + this.endpoint.hostname + ':' + this.endpoint.port.toString(10));
+      } else {
+        const name_or_ip = this.endpoint.hostname;
+        this.ws = new WebSocket('ws://' + name_or_ip + ':' + this.endpoint.port.toString(10));
+      }
+
+      this.ws.binaryType = 'arraybuffer';
+      this.ws.onopen = () => {
+        this.on_open();
+        resolve();
+      };
+      this.ws.onclose = this.on_close.bind(this);
+      this.ws.onmessage = this.on_read.bind(this);
+      this.ws.onerror = (event) => {
+        this.on_error(event);
+        reject(new Error("WebSocket connection error"));
+      };
+    });
+  }
+
+  private async init_webtransport(): Promise<void> {
+    const WT = (globalThis as any).WebTransport;
+    if (!WT) {
+      throw new Error("WebTransport is not available in this runtime");
+    }
+
+    const url = `https://${this.endpoint.hostname}:${this.endpoint.port}${webtransport_path}`;
+    this.wt = new WT(url, host_info.webtransport_options);
+    this.wt.closed.then(
+      () => this.on_close(),
+      () => this.on_close(),
+    );
+
+    await this.wt.ready;
+    const bidi = await this.wt.createBidirectionalStream();
+    this.wt_writer = bidi.writable.getWriter();
+    void this.read_webtransport_stream(bidi.readable);
   }
 
   private on_close() { 
@@ -325,20 +435,12 @@ export class Connection {
     this.pending_requests = new Map<number, PendingRequest>();
     this.next_request_id = 1; // Start from 1, avoid 0 as it might be treated as invalid
 
-    if (host_info.secured) {
-      this.ws = new WebSocket('wss://' + this.endpoint.hostname + ':' + this.endpoint.port.toString(10));
-    } else {
-      // prefer hostname over ip address
-      const name_or_ip = this.endpoint.hostname; 
-      this.ws = new WebSocket('ws://' + name_or_ip + ':' + this.endpoint.port.toString(10));
-    }
-
-    this.ws.binaryType = 'arraybuffer';
-    this.ws.onopen = this.on_open.bind(this);
-    this.ws.onclose = this.on_close.bind(this);
-    this.ws.onmessage = this.on_read.bind(this);
-    this.ws.onerror = this.on_error.bind(this);
-    this.stream_manager = new StreamManager(payload => this.ws.send(payload));
+    this.ready_ = endpoint.type === EndPointType.WebTransport
+      ? this.init_webtransport()
+      : this.init_websocket();
+    this.stream_manager = new StreamManager(payload => {
+      void this.send_payload(payload);
+    });
   }
 }
 
@@ -452,8 +554,11 @@ export class Rpc {
 
     let info = JSON.parse(await x.text(), reviver);
     if (info.secured == undefined) info.secured = false;
+    if (info.webtransport == undefined) info.webtransport = false;
 
     host_info.secured = info.secured;
+    host_info.webtransport = info.webtransport;
+    host_info.webtransport_options = info.webtransport_options;
 
     for (let key of Object.keys(info.objects)) {
       try {
@@ -664,9 +769,19 @@ export class ObjectProxy {
     const urls = oid.urls.split(";");
 
     if (host_info.secured) {
-      const wss = urls.find(url => url.startsWith("wss://"));
-      if (!wss) throw new Exception("Object has no urls for secured connection");
-      this.endpoint_ = EndPoint.from_string(wss);
+      const https = urls.find(url => url.startsWith("https://"));
+      const has_webtransport = Boolean(oid.flags & detail.ObjectFlag.WebTransport);
+      const host_allows_webtransport = Boolean(host_info.webtransport);
+      const runtime_has_webtransport = typeof (globalThis as any).WebTransport !== "undefined";
+      if (https && has_webtransport && host_allows_webtransport && runtime_has_webtransport) {
+        const endpoint = EndPoint.from_string(https);
+        endpoint.type = EndPointType.WebTransport;
+        this.endpoint_ = endpoint;
+      } else {
+        const wss = urls.find(url => url.startsWith("wss://"));
+        if (!wss) throw new Exception("Object has no urls for secured connection");
+        this.endpoint_ = EndPoint.from_string(wss);
+      }
     } else {
       const ws = urls.find(url => url.startsWith("ws://"));
       if (!ws) throw new Exception("Object has no urls for unsecured connection");
@@ -955,8 +1070,19 @@ export const create_object_from_oid = (
 // Old helper function removed - used _Direct classes that no longer exist
 // export const create_object_from_flat = ...
 
-export const init = async (use_host_json: boolean = true): Promise<Rpc> => {
-  return rpc ? rpc : (rpc = new Rpc(use_host_json ? await Rpc.read_host() : {} as HostInfo));
+export const init = async (
+  use_host_json: boolean = true,
+  explicit_host_info?: HostInfo,
+): Promise<Rpc> => {
+  if (explicit_host_info) {
+    host_info.secured = Boolean(explicit_host_info.secured);
+    host_info.webtransport = Boolean(explicit_host_info.webtransport);
+    host_info.webtransport_options = explicit_host_info.webtransport_options;
+  }
+
+  return rpc
+    ? rpc
+    : (rpc = new Rpc(explicit_host_info ?? (use_host_json ? await Rpc.read_host() : {} as HostInfo)));
 }
 
 export const setLogLevel = (logLevel: LogLevel): void => {

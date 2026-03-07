@@ -52,7 +52,9 @@ enum EndPointType {
   // Plain UDP transport
   Udp,
   // QUIC transport with encryption and compression
-  Quic
+  Quic,
+  // Browser WebTransport session on top of HTTPS and HTTP/3
+  WebTransport
 };
 
 namespace detail {
@@ -70,6 +72,10 @@ enum ObjectFlag {
   // (this is for objects that originate from a Browser or clients behind NAT)
   // `false` - multiple clients can access the object by opening multiple sessions
   Tethered  = 2,
+
+  // Object may be reached from the browser over WebTransport using the
+  // existing secured HTTP origin.
+  WebTransport = 4,
 }
 
 [force_helpers]

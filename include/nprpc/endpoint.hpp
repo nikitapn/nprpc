@@ -18,6 +18,7 @@ static constexpr std::string_view https_prefix = "https://";
 static constexpr std::string_view mem_prefix = "mem://";
 static constexpr std::string_view udp_prefix = "udp://";
 static constexpr std::string_view quic_prefix = "quic://";
+static constexpr std::string_view webtransport_prefix = "wt://";
 
 class EndPoint
 {
@@ -46,6 +47,8 @@ public:
       return udp_prefix;
     case EndPointType::Quic:
       return quic_prefix;
+    case EndPointType::WebTransport:
+      return webtransport_prefix;
     default:
       assert(false);
       return "unknown://";
@@ -79,7 +82,9 @@ public:
   bool empty() const noexcept { return hostname_.empty(); }
   bool is_ssl() const noexcept
   {
-    return type_ == EndPointType::SecuredWebSocket;
+    return type_ == EndPointType::SecuredWebSocket ||
+           type_ == EndPointType::SecuredHttp ||
+           type_ == EndPointType::WebTransport;
   }
 
   // For shared memory endpoints, return the channel ID (stored in hostname_)
@@ -167,6 +172,9 @@ public:
     } else if (url.find(quic_prefix) == 0) {
       type_ = EndPointType::Quic;
       split(url, quic_prefix, true);
+    } else if (url.find(webtransport_prefix) == 0) {
+      type_ = EndPointType::WebTransport;
+      split(url, webtransport_prefix, true);
     } else {
       throw std::invalid_argument("Invalid URL format");
     }
