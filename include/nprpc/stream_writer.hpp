@@ -202,14 +202,14 @@ private:
                   uint64_t stream_id,
                   const T& value)
   {
-    if constexpr (std::is_same_v<T, std::vector<uint8_t>>) {
-      manager.send_chunk(stream_id, value, sequence_++);
-    } else if constexpr (std::is_trivially_copyable_v<T>) {
+    if constexpr (std::is_trivially_copyable_v<T>) {
       const auto* data_ptr = reinterpret_cast<const uint8_t*>(&value);
       manager.send_chunk(stream_id,
                          std::span<const uint8_t>(data_ptr, sizeof(T)),
                          sequence_++);
     } else {
+      // All non-trivial stream payloads use the npidl-generated codec so
+      // strings, vectors, and structs share one consistent wire format.
       auto __buf = nprpc_stream::serialize<T>(value);
       auto __span = __buf.data();
       manager.send_chunk(

@@ -538,6 +538,48 @@ void TSBuilder::emit_stream_serializer(AstTypeDecl* type, std::ostream& os)
     }
     break;
   }
+  case FieldType::Vector: {
+    auto* wt = cwt(type)->real_type();
+    auto [elem_size, elem_align] = get_type_size_align(wt);
+    if (is_fundamental(wt)) {
+      os << "((value: ";
+      emit_stream_value_type(type, os);
+      os << ") => { const buf = NPRPC.FlatBuffer.create(8 + value.byteLength); buf.commit(8); NPRPC.marshal_typed_array(buf, 0, value, "
+         << elem_size << ", " << elem_align
+         << "); return new Uint8Array(buf.array_buffer, 0, buf.size); })";
+    } else if (wt->id == FieldType::Struct) {
+      auto* s = cflat(wt);
+      os << "((value: ";
+      emit_stream_value_type(type, os);
+      os << ") => { const buf = NPRPC.FlatBuffer.create(8 + value.length * " << s->size
+         << "); buf.commit(8); NPRPC.marshal_struct_array(buf, 0, value, marshal_" << s->name
+         << ", " << s->size << ", " << s->align
+         << "); return new Uint8Array(buf.array_buffer, 0, buf.size); })";
+    } else {
+      assert(false);
+    }
+    break;
+  }
+  case FieldType::Array: {
+    auto* wt = cwt(type)->real_type();
+    auto* arr = car(type);
+    auto [elem_size, elem_align] = get_type_size_align(wt);
+    if (is_fundamental(wt)) {
+      os << "((value: ";
+      emit_stream_value_type(type, os);
+      os << ") => { if (value.length !== " << arr->length << ") throw new NPRPC.Exception('Invalid fixed array length'); return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)); })";
+    } else if (wt->id == FieldType::Struct) {
+      auto* s = cflat(wt);
+      os << "((value: ";
+      emit_stream_value_type(type, os);
+      os << ") => { if (value.length !== " << arr->length << ") throw new NPRPC.Exception('Invalid fixed array length'); const buf = NPRPC.FlatBuffer.create(" << (arr->length * s->size + 128) << "); buf.commit(" << (arr->length * s->size) << "); for (let i = 0; i < value.length; ++i) marshal_" << s->name << "(buf, i * " << s->size << ", value[i]); return new Uint8Array(buf.array_buffer, 0, buf.size); })";
+    } else {
+      assert(false);
+    }
+    (void)elem_size;
+    (void)elem_align;
+    break;
+  }
   case FieldType::Enum:
     emit_stream_serializer(cenum(type), os);
     break;
@@ -604,6 +646,47 @@ void TSBuilder::emit_stream_deserializer(AstTypeDecl* type, std::ostream& os)
     default:
       assert(false);
     }
+    break;
+  }
+  case FieldType::Vector: {
+    auto* wt = cwt(type)->real_type();
+    auto [elem_size, elem_align] = get_type_size_align(wt);
+    if (is_fundamental(wt)) {
+      os << "((data: Uint8Array) => NPRPC.unmarshal_typed_array(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0, "
+         << elem_size << ") as ";
+      emit_stream_value_type(type, os);
+      os << ")";
+    } else if (wt->id == FieldType::Struct) {
+      auto* s = cflat(wt);
+      os << "((data: Uint8Array) => NPRPC.unmarshal_struct_array(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0, unmarshal_"
+         << s->name << ", " << s->size << ") as Array<";
+      emit_type(wt, os);
+      os << ">)";
+    } else {
+      assert(false);
+    }
+    (void)elem_align;
+    break;
+  }
+  case FieldType::Array: {
+    auto* wt = cwt(type)->real_type();
+    auto* arr = car(type);
+    auto [elem_size, elem_align] = get_type_size_align(wt);
+    if (is_fundamental(wt)) {
+      os << "((data: Uint8Array) => { const value = new " << get_typed_array_name(cft(wt)->token_id)
+         << "(data.slice().buffer); if (value.length !== " << arr->length
+         << ") throw new NPRPC.Exception('Invalid fixed array length'); return value; })";
+    } else if (wt->id == FieldType::Struct) {
+      auto* s = cflat(wt);
+      os << "((data: Uint8Array) => { const buf = NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer); const result = new Array<";
+      emit_type(wt, os);
+      os << ">(" << arr->length << "); for (let i = 0; i < " << arr->length << "; ++i) result[i] = unmarshal_"
+         << s->name << "(buf, i * " << s->size << "); return result; })";
+    } else {
+      assert(false);
+    }
+    (void)elem_size;
+    (void)elem_align;
     break;
   }
   case FieldType::Enum:
@@ -2296,6 +2379,7 @@ void TSBuilder::emit_field_marshal(AstFieldDecl* f,
   case FieldType::Optional: {
     // All optionals have the same layout: 4-byte relative offset (0 = no
     // value)
+    auto declared_optional_type = copt(f->type)->type;
     auto wt = cwt(f->type)->real_type();
     auto [v_size, v_align] = get_type_size_align(f->type);
     const int field_offset = align_offset(v_align, offset, v_size);
@@ -2321,11 +2405,25 @@ void TSBuilder::emit_field_marshal(AstFieldDecl* f,
       auto real_elem_type = cwt(wt)->real_type();
       auto [ut_size, ut_align] = get_type_size_align(real_elem_type);
       if (is_fundamental(real_elem_type)) {
-        // Wrap marshal_typed_array in a lambda
-        out << bl() << "NPRPC.marshal_optional_struct(buf, offset + "
-            << field_offset << ", " << field_access
-            << ", (b, o, v) => NPRPC.marshal_typed_array(b, o, v, " << ut_size
-            << ", " << ut_align << "), 8, 4);\n";
+        const bool alias_to_vector = declared_optional_type->id == FieldType::Alias &&
+                                     calias(declared_optional_type)->get_real_type()->id == FieldType::Vector;
+        const bool keep_typed_array = alias_to_vector &&
+                                      cft(real_elem_type)->token_id == TokenId::UInt8;
+        if (alias_to_vector && !keep_typed_array) {
+          auto typed_array_name = get_typed_array_name(cft(real_elem_type)->token_id);
+          auto temp_var = "temp_" + f->name;
+          out << bl() << "const " << temp_var << " = new " << typed_array_name
+              << "(" << field_access << ");\n";
+          out << bl() << "NPRPC.marshal_optional_struct(buf, offset + "
+              << field_offset << ", " << temp_var
+              << ", (b, o, v) => NPRPC.marshal_typed_array(b, o, v, " << ut_size
+              << ", " << ut_align << "), 8, 4);\n";
+        } else {
+          out << bl() << "NPRPC.marshal_optional_struct(buf, offset + "
+              << field_offset << ", " << field_access
+              << ", (b, o, v) => NPRPC.marshal_typed_array(b, o, v, " << ut_size
+              << ", " << ut_align << "), 8, 4);\n";
+        }
       } else if (real_elem_type->id == FieldType::Struct) {
         out << bl() << "NPRPC.marshal_optional_struct(buf, offset + "
             << field_offset << ", " << field_access
@@ -2549,6 +2647,7 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
   case FieldType::Optional: {
     // All optionals have the same layout: 4-byte relative offset (0 = no
     // value)
+    auto declared_optional_type = copt(f->type)->type;
     auto wt = cwt(f->type)->real_type();
     auto [v_size, v_align] = get_type_size_align(f->type);
     const int field_offset = align_offset(v_align, offset, v_size);
@@ -2582,11 +2681,25 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
       if (is_fundamental(real_elem_type)) {
         auto typed_array_name =
             get_typed_array_name(cft(real_elem_type)->token_id);
-        out << bl() << field_name
-            << " = NPRPC.unmarshal_optional_struct(buf, offset + "
-            << field_offset << ", (b, o) => NPRPC.unmarshal_typed_array(b, o, "
-            << ut_size << ") as " << typed_array_name << ", 4) as "
-            << typed_array_name << ";\n";
+        const bool alias_to_vector = declared_optional_type->id == FieldType::Alias &&
+                                     calias(declared_optional_type)->get_real_type()->id == FieldType::Vector;
+        const bool keep_typed_array = alias_to_vector &&
+                                      cft(real_elem_type)->token_id == TokenId::UInt8;
+        if (alias_to_vector && !keep_typed_array) {
+          auto temp_var = "temp_" + f->name;
+          out << bl() << "const " << temp_var
+              << " = NPRPC.unmarshal_optional_struct(buf, offset + "
+              << field_offset << ", (b, o) => NPRPC.unmarshal_typed_array(b, o, "
+              << ut_size << ") as " << typed_array_name << ", 4) as "
+              << typed_array_name << ";\n";
+          out << bl() << field_name << " = Array.from(" << temp_var << ");\n";
+        } else {
+          out << bl() << field_name
+              << " = NPRPC.unmarshal_optional_struct(buf, offset + "
+              << field_offset << ", (b, o) => NPRPC.unmarshal_typed_array(b, o, "
+              << ut_size << ") as " << typed_array_name << ", 4) as "
+              << typed_array_name << ";\n";
+        }
       } else if (real_elem_type->id == FieldType::Struct) {
         out << bl() << field_name
             << " = NPRPC.unmarshal_optional_struct(buf, offset + "
@@ -2615,22 +2728,24 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
     if (real_type->id == FieldType::Vector) {
       auto elem_type = cwt(real_type)->real_type();
       if (is_fundamental(elem_type)) {
-        // Unmarshal as TypedArray then convert to Array<T>
-        auto temp_var = "temp_" + f->name;
-        out << bl() << "const " << temp_var << " = ";
-        auto temp_field = *f;
-        temp_field.type = real_type;
-        temp_field.name = temp_var;
-        // Generate the unmarshal call inline
+        // Unmarshal vector aliases into their declared TS representation.
         auto [v_size, v_align] = get_type_size_align(real_type);
         auto [ut_size, ut_align] = get_type_size_align(elem_type);
         const int field_offset = align_offset(v_align, offset, v_size);
         auto typed_array_name = get_typed_array_name(cft(elem_type)->token_id);
-        out << "NPRPC.unmarshal_typed_array(buf, offset + " << field_offset
-            << ", " << ut_size << ") as " << typed_array_name << ";\n";
-        // Convert TypedArray to Array
-        out << bl() << result_name << "." << f->name << " = Array.from("
-            << temp_var << ");\n";
+        if (cft(elem_type)->token_id == TokenId::UInt8) {
+          out << bl() << result_name << "." << f->name
+              << " = NPRPC.unmarshal_typed_array(buf, offset + " << field_offset
+              << ", " << ut_size << ") as " << typed_array_name << ";\n";
+        } else {
+          auto temp_var = "temp_" + f->name;
+          out << bl() << "const " << temp_var
+              << " = NPRPC.unmarshal_typed_array(buf, offset + " << field_offset
+              << ", " << ut_size << ") as " << typed_array_name << ";\n";
+          out << bl() << result_name << "." << f->name << " = Array.from("
+              << temp_var << ");\n";
+        }
+        (void)ut_align;
         return;
       }
     }

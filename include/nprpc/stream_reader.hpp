@@ -167,9 +167,10 @@ public:
       auto owned_buf = std::make_shared<flat_buffer>(std::move(fb));
       return T(std::move(owned_buf), offset);
     } else {
-      // For complex types, call the generated deserialization free function
-      // found via ADL in namespace nprpc_stream.
-      // npidl emits: namespace nprpc_stream { template<> T deserialize<T>(nprpc::flat_buffer&); }
+      // For all non-fundamental, non-direct stream payloads, call the
+      // npidl-generated deserialization free function in namespace
+      // nprpc_stream. This keeps string, vector<T>, and struct payloads on a
+      // single wire format instead of introducing runtime-only special cases.
       return nprpc_stream::deserialize<T>(fb);
     }
   }

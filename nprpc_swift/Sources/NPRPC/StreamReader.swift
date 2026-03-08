@@ -163,6 +163,19 @@ public func marshal_stream_string(buffer: FlatBuffer, offset: Int, value: String
     marshal_string(buffer: buffer, offset: offset, string: value)
 }
 
+public func marshal_stream_fundamental_vector<T>(buffer: FlatBuffer, offset: Int, value: [T]) {
+    let missingBytes = offset + 8 - buffer.size
+    if missingBytes > 0 {
+        buffer.prepare(missingBytes)
+        buffer.commit(missingBytes)
+    }
+    marshal_fundamental_vector(buffer: buffer, offset: offset, vector: value)
+}
+
+public func unmarshal_stream_fundamental_vector<T>(data: UnsafeRawPointer, offset: Int = 0) -> [T] {
+    unmarshal_fundamental_vector(buffer: data, offset: offset)
+}
+
 public func createObjectStreamReader<T: Sendable>(
     objectHandle: UnsafeMutableRawPointer,
     streamId: UInt64,

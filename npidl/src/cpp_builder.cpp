@@ -620,8 +620,11 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
     break;
 
   case FieldType::String:
-    assert(top_type == false);
-    os << bd << op1 << '(' << op2 << ");\n";
+    if (top_type) {
+      os << bd << op1 << " = " << op2 << ";\n";
+    } else {
+      os << bd << op1 << '(' << op2 << ");\n";
+    }
     break;
 
   case FieldType::Optional: {
@@ -631,9 +634,11 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
     os << bd << op1 << accessor << "alloc();\n";
 
     auto wt = copt(type)->real_type();
-    if (wt->id == FieldType::Struct || wt->id == FieldType::Vector || wt->id == FieldType::Array) {
-      os << bd << "auto value = " << op1 << accessor << "value();\n";
-      assign_from_cpp_type(wt, "value", op2 + ".value()", os, false, true, true);
+    auto* direct_wt = wt->id == FieldType::Alias ? calias(wt)->get_real_type() : wt;
+    if (direct_wt->id == FieldType::Struct || direct_wt->id == FieldType::Vector ||
+        direct_wt->id == FieldType::Array || direct_wt->id == FieldType::String) {
+      os << bd << "auto value_dir = " << op1 << accessor << "value();\n";
+      assign_from_cpp_type(wt, "value_dir", op2 + ".value()", os, false, true, true);
     } else {
       assign_from_cpp_type(wt, op1 + std::string(accessor) + "value", op2 + ".value()", os, false,
                            false);
@@ -736,7 +741,7 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type,
 
   case FieldType::Optional: {
     auto wt = copt(type)->real_type();
-    // auto wtr = copt(type)->real_type();
+    auto* direct_wt = wt->id == FieldType::Alias ? calias(wt)->get_real_type() : wt;
 
     auto const bd0 = bd;
 
@@ -748,7 +753,8 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type,
     os << bd + 2 << "auto& value_to = " << op1 << ".value();\n";
 
     bd = bd + 2;
-    if (wt->id == FieldType::Struct || wt->id == FieldType::Vector || wt->id == FieldType::Array) {
+    if (direct_wt->id == FieldType::Struct || direct_wt->id == FieldType::Vector ||
+        direct_wt->id == FieldType::Array || direct_wt->id == FieldType::String) {
       os << bd << "auto value_from = opt.value();\n";
       assign_from_flat_type(wt, "value_to", "value_from", os, false, true);
     } else {
@@ -1839,6 +1845,52 @@ void CppBuilder::emit_stream_deserialize(AstFunctionDecl* fn)
   oh << " deserialize<";
   emit_type(sd->stream_out_type(), oh);
   oh << ">(::nprpc::flat_buffer& buf) {\n";
+
+  if (elem->id == FieldType::Array) {
+    auto* arr = car(elem);
+    auto* wt = arr->real_type();
+    auto const [elem_size, elem_align] = get_type_size_align(wt);
+    (void)elem_align;
+
+    oh << "  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));\n";
+    oh << "  ";
+    emit_type(sd->stream_out_type(), oh);
+    oh << " __result{};\n";
+
+    if (is_flat(wt)) {
+      oh << "  std::memcpy(__result.data(), __chunk.data().data(), "
+         << arr->length << " * " << elem_size << ");\n";
+    } else {
+      oh << "  auto __span = __chunk.data();\n";
+      oh << "  ::nprpc::flat_buffer __elem_buf;\n";
+      oh << "  auto __mb = __elem_buf.prepare(__span.size());\n";
+      oh << "  std::memcpy(__mb.data(), __span.data(), __span.size());\n";
+      oh << "  __elem_buf.commit(__span.size());\n";
+      oh << "  auto& __arr = *reinterpret_cast<::nprpc::flat::Array<";
+      emit_flat_type(wt, oh);
+      oh << ", " << arr->length << ">*>(__elem_buf.data().data());\n";
+      oh << "  auto __items = ::nprpc::flat::Span_ref<";
+      emit_flat_type(wt, oh);
+      oh << ", ";
+      emit_direct_type(wt, oh);
+      oh << ">(__elem_buf, __arr.range(__elem_buf.data().data()));\n";
+      oh << "  size_t __index = 0;\n";
+      oh << "  for (auto __item : __items) {\n";
+      bd = 2;
+      assign_from_flat_type(wt, "__result[__index]", "__item", oh, true, false);
+      bd = 1;
+      oh << "    ++__index;\n";
+      oh << "  }\n";
+    }
+
+    oh << "  return __result;\n";
+    oh << "}\n} // namespace nprpc_stream\n\n";
+
+    always_full_namespace(false);
+    bd = bd_saved;
+    return;
+  }
+
   oh << "  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));\n";
   oh << "  auto __span = __chunk.data();\n";
   oh << "  ::nprpc::flat_buffer __elem_buf;\n";
@@ -1872,9 +1924,16 @@ void CppBuilder::emit_stream_serialize(AstFunctionDecl* fn)
   if (elem->id == FieldType::Fundamental || elem->id == FieldType::Enum) return;
   if (sd->direct) return;
 
-  auto* s = cflat(stream_type);
   auto bd_saved = bd; bd = 1;
   always_full_namespace(true);
+
+  auto root_size = 8;
+  auto extra_capacity = 128;
+  if (stream_type->id == FieldType::Struct) {
+    auto* s = cflat(stream_type);
+    root_size = s->size;
+    extra_capacity = s->flat ? 0 : 128;
+  }
 
   oh << "namespace nprpc_stream {\n";
   oh << "template<>\n";
@@ -1883,9 +1942,57 @@ void CppBuilder::emit_stream_serialize(AstFunctionDecl* fn)
   oh << ">(const ";
   emit_type(stream_type, oh);
   oh << "& value) {\n";
+
+  if (elem->id == FieldType::Array) {
+    auto* arr = car(elem);
+    auto* wt = arr->real_type();
+    auto const [elem_size, elem_align] = get_type_size_align(wt);
+    auto initial_capacity = arr->length * elem_size;
+    if (!is_flat(wt))
+      initial_capacity += 128 * arr->length;
+
+    oh << "  ::nprpc::flat_buffer __buf;\n";
+    oh << "  __buf.prepare(" << initial_capacity << ");\n";
+    oh << "  __buf.commit(" << arr->length * elem_size << ");\n";
+    oh << "  auto& __arr = *reinterpret_cast<::nprpc::flat::Array<";
+    emit_flat_type(wt, oh);
+    oh << ", " << arr->length << ">*>(__buf.data().data());\n";
+
+    if (is_flat(wt)) {
+      oh << "  auto __span = static_cast<::nprpc::flat::Span<";
+      emit_flat_type(wt, oh);
+      oh << ">>(__arr);\n";
+      oh << "  std::memcpy(__span.data(), value.data(), " << arr->length << " * " << elem_size << ");\n";
+    } else {
+      oh << "  auto __items = ::nprpc::flat::Span_ref<";
+      emit_flat_type(wt, oh);
+      oh << ", ";
+      emit_direct_type(wt, oh);
+      oh << ">(__buf, __arr.range(__buf.data().data()));\n";
+      oh << "  auto __it = value.begin();\n";
+      oh << "  for (auto __item : __items) {\n";
+      bd = 2;
+      oh << bd << "auto __ptr = ::nprpc::make_wrapper1(*__it);\n";
+      assign_from_cpp_type(wt, "  __item", "__ptr", oh, true);
+      oh << bd << "++__it;\n";
+      bd = 1;
+      oh << "  }\n";
+    }
+
+    oh << "  return __buf;\n";
+    oh << "}\n} // namespace nprpc_stream\n\n";
+
+    always_full_namespace(false);
+    bd = bd_saved;
+    return;
+  }
+
   oh << "  ::nprpc::flat_buffer __buf;\n";
-  oh << "  __buf.prepare(" << s->size << (s->flat ? "" : " + 128") << ");\n";
-  oh << "  __buf.commit(" << s->size << ");\n";
+  oh << "  __buf.prepare(" << root_size;
+  if (extra_capacity > 0)
+    oh << " + " << extra_capacity;
+  oh << ");\n";
+  oh << "  __buf.commit(" << root_size << ");\n";
   oh << "  ";
   emit_direct_type(stream_type, oh);
   oh << " __d(__buf, 0);\n";

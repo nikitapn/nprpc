@@ -99,6 +99,12 @@ describe('NPRPC Integration Tests', function() {
         return values;
     }
 
+    function expectAAA(value: test.AAA, expected: { a: number; b: string; c: string }): void {
+        expect(value.a).to.equal(expected.a);
+        expect(value.b).to.equal(expected.b);
+        expect(value.c).to.equal(expected.c);
+    }
+
     async function waitFor(predicate: () => boolean, timeoutMs: number = 5000): Promise<void> {
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
@@ -504,12 +510,163 @@ describe('NPRPC Integration Tests', function() {
             }
         });
 
+        it('should receive a string stream', async function() {
+            const testStreams = await resolveTestObject('object_stream_test', test.TestStreams);
+            const received: string[] = await collectStream(await testStreams.GetStringStream(3));
+
+            expect(received).to.deep.equal(['item_0', 'item_1', 'item_2']);
+        });
+
+        it('should receive a binary stream', async function() {
+            const testStreams = await resolveTestObject('object_stream_test', test.TestStreams);
+            const chunks: Uint8Array[] = await collectStream(await testStreams.GetBinaryStream(3));
+
+            expect(chunks.map(chunk => Array.from(chunk))).to.deep.equal([
+                [0, 1, 2],
+                [1, 2, 3],
+                [2, 3, 4],
+            ]);
+        });
+
+        it('should receive a u16 vector stream', async function() {
+            const testStreams = await resolveTestObject('object_stream_test', test.TestStreams);
+            const chunks: Uint16Array[] = await collectStream(await testStreams.GetU16VectorStream(3));
+
+            expect(chunks.map(chunk => Array.from(chunk))).to.deep.equal([
+                [100, 200, 300],
+                [101, 201, 301],
+                [102, 202, 302],
+            ]);
+        });
+
+        it('should receive an object vector stream', async function() {
+            const testStreams = await resolveTestObject('object_stream_test', test.TestStreams);
+            const chunks: test.AAA[][] = await collectStream(await testStreams.GetObjectVectorStream(2));
+
+            expect(chunks).to.have.lengthOf(2);
+            expect(chunks[0]).to.have.lengthOf(2);
+            expect(chunks[1]).to.have.lengthOf(2);
+            expectAAA(chunks[0][0], { a: 1, b: 'vec_0_0', c: 'payload_0_0' });
+            expectAAA(chunks[0][1], { a: 2, b: 'vec_0_1', c: 'payload_0_1' });
+            expectAAA(chunks[1][0], { a: 11, b: 'vec_1_0', c: 'payload_1_0' });
+            expectAAA(chunks[1][1], { a: 12, b: 'vec_1_1', c: 'payload_1_1' });
+        });
+
+        it('should receive a fixed u16 array stream', async function() {
+            const testStreams = await resolveTestObject('object_stream_test', test.TestStreams);
+            const chunks: Uint16Array[] = await collectStream(await testStreams.GetU16ArrayStream(3));
+
+            expect(chunks.map(chunk => Array.from(chunk))).to.deep.equal([
+                [0, 10, 20, 30],
+                [1, 11, 21, 31],
+                [2, 12, 22, 32],
+            ]);
+        });
+
+        it('should receive a fixed object array stream', async function() {
+            const testStreams = await resolveTestObject('object_stream_test', test.TestStreams);
+            const chunks: test.AAA[][] = await collectStream(await testStreams.GetObjectArrayStream(2));
+
+            expect(chunks).to.have.lengthOf(2);
+            expect(chunks[0]).to.have.lengthOf(2);
+            expect(chunks[1]).to.have.lengthOf(2);
+            expectAAA(chunks[0][0], { a: 1, b: 'arr_0_0', c: 'item_0_0' });
+            expectAAA(chunks[0][1], { a: 2, b: 'arr_0_1', c: 'item_0_1' });
+            expectAAA(chunks[1][0], { a: 11, b: 'arr_1_0', c: 'item_1_0' });
+            expectAAA(chunks[1][1], { a: 12, b: 'arr_1_1', c: 'item_1_1' });
+        });
+
         it('should upload a client byte stream', async function() {
             const testStreams = await resolveTestObject('client_stream_test', test.TestStreams);
             const writer = await testStreams.UploadByteStream(5n);
 
             for (const value of [1, 2, 3, 4, 5]) {
                 writer.write(Uint8Array.of(value));
+            }
+            writer.close();
+        });
+
+        it('should upload a client string stream', async function() {
+            const testStreams = await resolveTestObject('client_stream_test', test.TestStreams);
+            const writer = await testStreams.UploadStringStream(3n);
+
+            for (const value of ['alpha', 'beta', 'gamma']) {
+                writer.write(value);
+            }
+            writer.close();
+        });
+
+        it('should upload a client binary stream', async function() {
+            const testStreams = await resolveTestObject('client_stream_test', test.TestStreams);
+            const writer = await testStreams.UploadBinaryStream(3n);
+
+            for (const value of [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5]), new Uint8Array([6, 7, 8, 9])]) {
+                writer.write(value);
+            }
+            writer.close();
+        });
+
+        it('should upload a client u16 vector stream', async function() {
+            const testStreams = await resolveTestObject('client_stream_test', test.TestStreams);
+            const writer = await testStreams.UploadU16VectorStream(3n);
+
+            for (const value of [
+                new Uint16Array([10, 20, 30]),
+                new Uint16Array([40, 50]),
+                new Uint16Array([60, 70, 80, 90]),
+            ]) {
+                writer.write(value);
+            }
+            writer.close();
+        });
+
+        it('should upload a client object vector stream', async function() {
+            const testStreams = await resolveTestObject('client_stream_test', test.TestStreams);
+            const writer = await testStreams.UploadObjectVectorStream(2n);
+
+            for (const value of [
+                [
+                    { a: 1, b: 'left_0', c: 'payload_0' },
+                    { a: 2, b: 'left_1', c: 'payload_1' },
+                ],
+                [
+                    { a: 3, b: 'right_0', c: 'payload_2' },
+                    { a: 4, b: 'right_1', c: 'payload_3' },
+                ],
+            ]) {
+                writer.write(value);
+            }
+            writer.close();
+        });
+
+        it('should upload a client fixed u16 array stream', async function() {
+            const testStreams = await resolveTestObject('client_stream_test', test.TestStreams);
+            const writer = await testStreams.UploadU16ArrayStream(2n);
+
+            for (const value of [
+                new Uint16Array([1, 2, 3, 4]),
+                new Uint16Array([10, 20, 30, 40]),
+            ]) {
+                writer.write(value);
+            }
+            writer.close();
+        });
+
+        it('should upload a client fixed object array stream', async function() {
+            const testStreams = await resolveTestObject('client_stream_test', test.TestStreams);
+            const writer = await testStreams.UploadObjectArrayStream(2n);
+
+            for (const value of [
+                [
+                    { a: 5, b: 'array_0_0', c: 'item_0_0' },
+                    { a: 6, b: 'array_0_1', c: 'item_0_1' },
+                ],
+                [
+                    { a: 7, b: 'array_1_0', c: 'item_1_0' },
+                    { a: 8, b: 'array_1_1', c: 'item_1_1' },
+                ],
+            ]) {
+                writer.write(value);
             }
             writer.close();
         });
@@ -532,6 +689,165 @@ describe('NPRPC Integration Tests', function() {
             });
 
             expect(received).to.deep.equal([10 ^ mask, 11 ^ mask, 12 ^ mask, 13 ^ mask]);
+        });
+
+        it('should echo a bidi string stream', async function() {
+            const testStreams = await resolveTestObject('bidi_stream_test', test.TestStreams);
+            const stream = await testStreams.EchoStringStream('-ok');
+
+            for (const value of ['left', 'right']) {
+                stream.writer.write(value);
+            }
+            stream.writer.close();
+
+            const received: string[] = await collectStream(stream.reader);
+            expect(received).to.deep.equal(['left-ok', 'right-ok']);
+        });
+
+        it('should echo a bidi binary stream', async function() {
+            const testStreams = await resolveTestObject('bidi_stream_test', test.TestStreams);
+            const mask = 0x5A;
+            const stream = await testStreams.EchoBinaryStream(mask);
+
+            for (const value of [new Uint8Array([0, 1, 2]), new Uint8Array([10, 11])]) {
+                stream.writer.write(value);
+            }
+            stream.writer.close();
+
+            const chunks: Uint8Array[] = await collectStream(stream.reader);
+            expect(chunks.map(chunk => Array.from(chunk))).to.deep.equal([
+                [0 ^ mask, 1 ^ mask, 2 ^ mask],
+                [10 ^ mask, 11 ^ mask],
+            ]);
+        });
+
+        it('should echo a bidi u16 vector stream', async function() {
+            const testStreams = await resolveTestObject('bidi_stream_test', test.TestStreams);
+            const delta = 7;
+            const stream = await testStreams.EchoU16VectorStream(delta);
+
+            for (const value of [
+                new Uint16Array([1, 2, 3]),
+                new Uint16Array([100, 200]),
+            ]) {
+                stream.writer.write(value);
+            }
+            stream.writer.close();
+
+            const chunks: Uint16Array[] = await collectStream(stream.reader);
+            expect(chunks.map(chunk => Array.from(chunk))).to.deep.equal([
+                [8, 9, 10],
+                [107, 207],
+            ]);
+        });
+
+        it('should echo a bidi object vector stream', async function() {
+            const testStreams = await resolveTestObject('bidi_stream_test', test.TestStreams);
+            const suffix = '-ok';
+            const stream = await testStreams.EchoObjectVectorStream(suffix);
+
+            stream.writer.write([
+                { a: 1, b: 'vec_a', c: 'left' },
+                { a: 2, b: 'vec_b', c: 'right' },
+            ]);
+            stream.writer.write([
+                { a: 3, b: 'vec_c', c: 'up' },
+                { a: 4, b: 'vec_d', c: 'down' },
+            ]);
+            stream.writer.close();
+
+            const chunks: test.AAA[][] = await collectStream(stream.reader);
+            expect(chunks).to.have.lengthOf(2);
+            expectAAA(chunks[0][0], { a: 101, b: 'vec_a-ok', c: 'left-ok' });
+            expectAAA(chunks[0][1], { a: 102, b: 'vec_b-ok', c: 'right-ok' });
+            expectAAA(chunks[1][0], { a: 103, b: 'vec_c-ok', c: 'up-ok' });
+            expectAAA(chunks[1][1], { a: 104, b: 'vec_d-ok', c: 'down-ok' });
+        });
+
+        it('should echo a bidi fixed u16 array stream', async function() {
+            const testStreams = await resolveTestObject('bidi_stream_test', test.TestStreams);
+            const delta = 7;
+            const stream = await testStreams.EchoU16ArrayStream(delta);
+
+            stream.writer.write(new Uint16Array([1, 2, 3, 4]));
+            stream.writer.write(new Uint16Array([10, 20, 30, 40]));
+            stream.writer.close();
+
+            const chunks: Uint16Array[] = await collectStream(stream.reader);
+            expect(chunks.map(chunk => Array.from(chunk))).to.deep.equal([
+                [8, 9, 10, 11],
+                [17, 27, 37, 47],
+            ]);
+        });
+
+        it('should echo a bidi fixed object array stream', async function() {
+            const testStreams = await resolveTestObject('bidi_stream_test', test.TestStreams);
+            const suffix = '-ok';
+            const stream = await testStreams.EchoObjectArrayStream(suffix);
+
+            stream.writer.write([
+                { a: 11, b: 'arr_a', c: 'west' },
+                { a: 12, b: 'arr_b', c: 'east' },
+            ]);
+            stream.writer.write([
+                { a: 13, b: 'arr_c', c: 'north' },
+                { a: 14, b: 'arr_d', c: 'south' },
+            ]);
+            stream.writer.close();
+
+            const chunks: test.AAA[][] = await collectStream(stream.reader);
+            expect(chunks).to.have.lengthOf(2);
+            expectAAA(chunks[0][0], { a: 111, b: 'arr_a-ok', c: 'west-ok' });
+            expectAAA(chunks[0][1], { a: 112, b: 'arr_b-ok', c: 'east-ok' });
+            expectAAA(chunks[1][0], { a: 113, b: 'arr_c-ok', c: 'north-ok' });
+            expectAAA(chunks[1][1], { a: 114, b: 'arr_d-ok', c: 'south-ok' });
+        });
+
+        it('should echo a bidi alias and optional payload stream', async function() {
+            const testStreams = await resolveTestObject('bidi_stream_test', test.TestStreams);
+            const suffix = '-ok';
+            const delta = 7;
+            const stream = await testStreams.EchoAliasOptionalStream(suffix, delta);
+
+            stream.writer.write({
+                id: 10,
+                ids: [1, 2, 3],
+                payload: new Uint8Array([0, 1, 2]),
+                label: 'label',
+                item: { a: 5, b: 'item', c: 'payload' },
+                maybe_id: 20,
+                maybe_ids: [4, 5],
+                maybe_payload: new Uint8Array([6, 7, 8]),
+            });
+            stream.writer.write({
+                id: 30,
+                ids: [9],
+                payload: new Uint8Array([9, 8]),
+            });
+            stream.writer.close();
+
+            const chunks: test.AliasOptionalStreamPayload[] = await collectStream(stream.reader);
+            expect(chunks).to.have.lengthOf(2);
+
+            expect(chunks[0].id).to.equal(17);
+            expect(chunks[0].ids).to.deep.equal([8, 9, 10]);
+            expect(Array.from(chunks[0].payload)).to.deep.equal([7, 6, 5]);
+            expect(chunks[0].label).to.equal('label-ok');
+            expect(chunks[0].item).to.not.be.undefined;
+            expectAAA(chunks[0].item!, { a: 105, b: 'item-ok', c: 'payload-ok' });
+            expect(chunks[0].maybe_id).to.equal(27);
+            expect(chunks[0].maybe_ids).to.deep.equal([11, 12]);
+            expect(chunks[0].maybe_payload).to.not.be.undefined;
+            expect(Array.from(chunks[0].maybe_payload!)).to.deep.equal([1, 0, 15]);
+
+            expect(chunks[1].id).to.equal(37);
+            expect(chunks[1].ids).to.deep.equal([16]);
+            expect(Array.from(chunks[1].payload)).to.deep.equal([14, 15]);
+            expect(chunks[1].label).to.be.undefined;
+            expect(chunks[1].item).to.be.undefined;
+            expect(chunks[1].maybe_id).to.be.undefined;
+            expect(chunks[1].maybe_ids).to.be.undefined;
+            expect(chunks[1].maybe_payload).to.be.undefined;
         });
     }); // describe TestStreams
 
@@ -730,8 +1046,8 @@ describe('NPRPC Integration Tests', function() {
             expect(result).to.be.true;
         });
 
-        it('should return output parameters directly via HTTP/3', async function() {
-            this.skip(); // Skip this test for now, for some reason occasionally curl fails with error code: 56
+        // Skip this test for now, for some reason occasionally curl fails with error code: 56
+        // it('should return output parameters directly via HTTP/3', async function() {
 
             // if (!http3Available) this.skip();
             // const result = await testBasic.http.Out();
@@ -743,7 +1059,7 @@ describe('NPRPC Integration Tests', function() {
             // for (let i = 0; i < 256; i++) {
             //     expect(result.c[i]).to.equal(i);
             // }
-        });
+        // });
 
         it('should return array of IDs via HTTP/3', async function() {
             if (!http3Available) this.skip();

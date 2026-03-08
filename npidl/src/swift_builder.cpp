@@ -253,6 +253,57 @@ void SwiftBuilder::emit_stream_serializer(AstTypeDecl* type, std::ostream& os)
   case FieldType::String:
     os << "{ (buffer: FlatBuffer, offset: Int, value: String) in NPRPC.marshal_stream_string(buffer: buffer, offset: offset, value: value) }";
     break;
+  case FieldType::Vector: {
+    auto* element = cwt(type)->type;
+    if (element->id == FieldType::Alias)
+      element = calias(element)->get_real_type();
+    if (element->id == FieldType::Fundamental) {
+      os << "{ (buffer: FlatBuffer, offset: Int, value: ";
+      emit_type(type, os);
+      os << ") in NPRPC.marshal_stream_fundamental_vector(buffer: buffer, offset: offset, value: value) }";
+      break;
+    }
+    if (element->id == FieldType::Struct) {
+      auto* s = cflat(element);
+      os << "{ (buffer: FlatBuffer, offset: Int, value: ";
+      emit_type(type, os);
+      os << ") in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 8, value: value) { buf, off, elems in NPRPC.marshal_struct_vector(buffer: buf, offset: off, vector: elems, elementSize: "
+         << s->size << ", elementAlignment: " << s->align
+         << ") { eb, eo, elem in marshal_" << s->name
+         << "(buffer: eb, offset: eo, data: elem) } } }";
+      break;
+    }
+    assert(false && "Unsupported Swift stream vector serializer type");
+  }
+  case FieldType::Array: {
+    auto* element = cwt(type)->type;
+    auto* arr = car(type);
+    if (element->id == FieldType::Alias)
+      element = calias(element)->get_real_type();
+    if (element->id == FieldType::Fundamental) {
+      os << "{ (buffer: FlatBuffer, offset: Int, value: ";
+      emit_type(type, os);
+      os << ") in precondition(value.count == " << arr->length
+         << ", \"Invalid fixed array length\"); NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: "
+         << arr->length * get_fundamental_size(cft(element)->token_id)
+         << ", extraCapacity: 0, value: value) { buf, off, elems in NPRPC.marshal_fundamental_array(buffer: buf, offset: off, array: elems, count: "
+         << arr->length << ") } }";
+      break;
+    }
+    if (element->id == FieldType::Struct) {
+      auto* s = cflat(element);
+      os << "{ (buffer: FlatBuffer, offset: Int, value: ";
+      emit_type(type, os);
+      os << ") in precondition(value.count == " << arr->length
+         << ", \"Invalid fixed array length\"); NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: "
+         << arr->length * s->size
+         << ", extraCapacity: 0, value: value) { buf, off, elems in for i in 0..<" << arr->length
+         << " { marshal_" << s->name << "(buffer: buf, offset: off + i * " << s->size
+         << ", data: elems[i]) } } }";
+      break;
+    }
+    assert(false && "Unsupported Swift stream array serializer type");
+  }
   case FieldType::Struct: {
     auto* s = cflat(type);
     os << "{ (buffer: FlatBuffer, offset: Int, value: ";
@@ -291,6 +342,46 @@ void SwiftBuilder::emit_stream_deserializer(AstTypeDecl* type,
   case FieldType::String:
     os << "{ (data: UnsafeRawPointer, _: Int) in NPRPC.unmarshal_string(buffer: data, offset: 0) }";
     break;
+  case FieldType::Vector: {
+    auto* element = cwt(type)->type;
+    if (element->id == FieldType::Alias)
+      element = calias(element)->get_real_type();
+    if (element->id == FieldType::Fundamental) {
+      os << "{ (data: UnsafeRawPointer, _: Int) in NPRPC.unmarshal_stream_fundamental_vector(data: data) as ";
+      emit_type(type, os);
+      os << " }";
+      break;
+    }
+    if (element->id == FieldType::Struct) {
+      auto* s = cflat(element);
+      os << "{ (data: UnsafeRawPointer, _: Int) in NPRPC.unmarshal_struct_vector(buffer: data, offset: 0, elementSize: "
+         << s->size << ") { buf, off in unmarshal_" << s->name
+         << "(buffer: buf, offset: off) } }";
+      break;
+    }
+    assert(false && "Unsupported Swift stream vector deserializer type");
+  }
+  case FieldType::Array: {
+    auto* element = cwt(type)->type;
+    auto* arr = car(type);
+    if (element->id == FieldType::Alias)
+      element = calias(element)->get_real_type();
+    if (element->id == FieldType::Fundamental) {
+      os << "{ (data: UnsafeRawPointer, _: Int) in NPRPC.unmarshal_fundamental_array(buffer: data, offset: 0, count: "
+         << arr->length << ") as ";
+      emit_type(type, os);
+      os << " }";
+      break;
+    }
+    if (element->id == FieldType::Struct) {
+      auto* s = cflat(element);
+      os << "{ (data: UnsafeRawPointer, _: Int) in (0..<" << arr->length
+         << ").map { i in unmarshal_" << s->name << "(buffer: data, offset: i * " << s->size
+         << ") } }";
+      break;
+    }
+    assert(false && "Unsupported Swift stream array deserializer type");
+  }
   case FieldType::Struct: {
     auto* s = cflat(type);
     const bool needs_endpoint = contains_object(type);
