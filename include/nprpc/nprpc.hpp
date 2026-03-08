@@ -325,6 +325,10 @@ public:
   PoaBuilder create_poa() { return PoaBuilder(this); }
   virtual void destroy_poa(Poa* poa) = 0;
   virtual void destroy() = 0;
+  virtual void add_to_host_json(std::string_view name,
+                                const ObjectId& object_id) = 0;
+  virtual void clear_host_json() = 0;
+  virtual std::string produce_host_json(std::string_view output_path = {}) = 0;
   virtual ObjectPtr<common::Nameserver>
   get_nameserver(std::string_view nameserver_ip) = 0;
   virtual SessionContext* get_object_session_context(Object* obj) = 0;

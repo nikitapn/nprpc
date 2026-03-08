@@ -23,6 +23,8 @@
 #include <boost/asio/thread_pool.hpp>
 #include <boost/asio/use_future.hpp>
 
+#include <cstdlib>
+#include <cstring>
 #include <sstream>
 
 // Forward declarations for nprpc impl internals
@@ -48,6 +50,14 @@ namespace nprpc::impl {
 }
 
 namespace nprpc_swift {
+
+namespace {
+const char* copy_string_to_c_heap(const std::string& value) {
+    auto* buffer = new char[value.size() + 1];
+    std::memcpy(buffer, value.c_str(), value.size() + 1);
+    return buffer;
+}
+}
 
 struct RpcHandleImpl {
     nprpc::Rpc* rpc_instance = nullptr;
@@ -255,6 +265,76 @@ void* RpcHandle::create_poa(uint32_t max_objects, uint32_t lifespan, uint32_t id
     } catch (const std::exception& e) {
         NPRPC_LOG_ERROR("[SWB] RpcHandle::create_poa failed: {}", e.what());
         return nullptr;
+    }
+}
+
+bool RpcHandle::add_to_host_json(
+    const std::string& name,
+    uint64_t object_id,
+    uint16_t poa_idx,
+    uint16_t flags,
+    const uint8_t* origin,
+    size_t origin_size,
+    const std::string& class_id,
+    const std::string& urls)
+{
+    if (!initialized_ || !impl_ || !origin || origin_size != 16) {
+        return false;
+    }
+
+    try {
+        auto* impl = static_cast<RpcHandleImpl*>(impl_);
+        if (!impl->rpc_instance) return false;
+
+        nprpc::ObjectId oid;
+        auto& data = oid.get_data();
+        data.object_id = object_id;
+        data.poa_idx = poa_idx;
+        data.flags = flags;
+        std::copy(origin, origin + origin_size, data.origin.begin());
+        data.class_id = class_id;
+        data.urls = urls;
+
+        impl->rpc_instance->add_to_host_json(name, oid);
+        return true;
+    } catch (const std::exception& e) {
+        NPRPC_LOG_ERROR("[SWB] RpcHandle::add_to_host_json failed: {}", e.what());
+        return false;
+    } catch (...) {
+        NPRPC_LOG_ERROR("[SWB] RpcHandle::add_to_host_json failed with unknown exception");
+        return false;
+    }
+}
+
+void RpcHandle::clear_host_json() {
+    if (!initialized_ || !impl_) return;
+
+    try {
+        auto* impl = static_cast<RpcHandleImpl*>(impl_);
+        if (!impl->rpc_instance) return;
+        impl->rpc_instance->clear_host_json();
+    } catch (const std::exception& e) {
+        NPRPC_LOG_ERROR("[SWB] RpcHandle::clear_host_json failed: {}", e.what());
+    } catch (...) {
+        NPRPC_LOG_ERROR("[SWB] RpcHandle::clear_host_json failed with unknown exception");
+    }
+}
+
+std::string RpcHandle::produce_host_json(const std::string& output_path) {
+    if (!initialized_ || !impl_) {
+        return {};
+    }
+
+    try {
+        auto* impl = static_cast<RpcHandleImpl*>(impl_);
+        if (!impl->rpc_instance) return {};
+        return impl->rpc_instance->produce_host_json(output_path);
+    } catch (const std::exception& e) {
+        NPRPC_LOG_ERROR("[SWB] RpcHandle::produce_host_json failed: {}", e.what());
+        return {};
+    } catch (...) {
+        NPRPC_LOG_ERROR("[SWB] RpcHandle::produce_host_json failed with unknown exception");
+        return {};
     }
 }
 
@@ -774,6 +854,49 @@ void* nprpc_rpc_create_poa(void* rpc_handle, uint32_t max_objects, uint32_t life
 
     auto* handle = static_cast<nprpc_swift::RpcHandle*>(rpc_handle);
     return handle->create_poa(max_objects, lifespan, id_policy);
+}
+
+bool nprpc_rpc_add_to_host_json(
+    void* rpc_handle,
+    const char* name,
+    uint64_t object_id,
+    uint16_t poa_idx,
+    uint16_t flags,
+    const uint8_t* origin,
+    size_t origin_size,
+    const char* class_id,
+    const char* urls)
+{
+    if (!rpc_handle || !name || !origin || !class_id || !urls) {
+        return false;
+    }
+
+    auto* handle = static_cast<nprpc_swift::RpcHandle*>(rpc_handle);
+    return handle->add_to_host_json(
+        name,
+        object_id,
+        poa_idx,
+        flags,
+        origin,
+        origin_size,
+        class_id,
+        urls);
+}
+
+void nprpc_rpc_clear_host_json(void* rpc_handle) {
+    if (!rpc_handle) return;
+    auto* handle = static_cast<nprpc_swift::RpcHandle*>(rpc_handle);
+    handle->clear_host_json();
+}
+
+const char* nprpc_rpc_produce_host_json(void* rpc_handle, const char* output_path) {
+    if (!rpc_handle) return nullptr;
+    auto* handle = static_cast<nprpc_swift::RpcHandle*>(rpc_handle);
+    const std::string result = handle->produce_host_json(output_path ? output_path : "");
+    if (result.empty()) {
+        return nullptr;
+    }
+    return nprpc_swift::copy_string_to_c_heap(result);
 }
 
 uint16_t nprpc_poa_get_index(void* poa_handle) {

@@ -8,6 +8,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <condition_variable>
+#include <filesystem>
+#include <fstream>
 
 #include <gtest/gtest.h>
 
@@ -163,6 +165,47 @@ TEST_F(NprpcTest, TestOptional)
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
   exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+}
+
+TEST_F(NprpcTest, ProduceHostJson)
+{
+#include "common/tests/basic.inl"
+  TestBasicImpl servant;
+
+  auto oid = poa->activate_object(
+      &servant,
+      nprpc::ObjectActivationFlags::ALLOW_WEBSOCKET |
+          nprpc::ObjectActivationFlags::ALLOW_SSL_WEBSOCKET |
+          nprpc::ObjectActivationFlags::ALLOW_HTTP |
+          nprpc::ObjectActivationFlags::ALLOW_SECURED_HTTP);
+
+  rpc->clear_host_json();
+  rpc->add_to_host_json("calculator", oid);
+
+  const auto output_path =
+      (std::filesystem::temp_directory_path() / "nprpc-host-json-test" /
+       "host.json")
+          .string();
+  rpc->produce_host_json(output_path);
+
+  std::ifstream is(output_path);
+  ASSERT_TRUE(is.is_open());
+
+  const std::string text{std::istreambuf_iterator<char>{is},
+                         std::istreambuf_iterator<char>{}};
+
+  EXPECT_NE(text.find("\"secured\": true"), std::string::npos);
+#ifdef NPRPC_HTTP3_ENABLED
+  EXPECT_NE(text.find("\"webtransport\": true"), std::string::npos);
+#else
+  EXPECT_NE(text.find("\"webtransport\": false"), std::string::npos);
+#endif
+  EXPECT_NE(text.find("\"calculator\""), std::string::npos);
+  EXPECT_NE(text.find(std::string("\"class_id\": \"") +
+                          std::string(servant.get_class()) + "\""),
+            std::string::npos);
+  EXPECT_NE(text.find("\"urls\": \"ws://localhost:22223;wss://localhost:22223;http://localhost:22223;https://localhost:22223;\""),
+            std::string::npos);
 }
 
 // Nested structures test

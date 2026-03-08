@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
 #include <memory>
 #include <vector>
@@ -152,6 +153,20 @@ public:
     /// @return Opaque pointer to nprpc::Poa or nullptr on error
     SWIFT_RETURNS_INDEPENDENT_VALUE
     void* create_poa(uint32_t max_objects, uint32_t lifespan, uint32_t id_policy);
+
+    bool add_to_host_json(
+        const std::string& name,
+        uint64_t object_id,
+        uint16_t poa_idx,
+        uint16_t flags,
+        const uint8_t* origin,
+        size_t origin_size,
+        const std::string& class_id,
+        const std::string& urls);
+
+    void clear_host_json();
+
+    std::string produce_host_json(const std::string& output_path);
 
 private:
     bool initialized_ = false;
@@ -344,6 +359,23 @@ int nprpc_create_object_from_flat(
 //   id_policy: 0 = system-generated, 1 = user-supplied
 // Returns: opaque pointer to nprpc::Poa or nullptr on error
 void* nprpc_rpc_create_poa(void* rpc_handle, uint32_t max_objects, uint32_t lifespan, uint32_t id_policy);
+
+bool nprpc_rpc_add_to_host_json(
+    void* rpc_handle,
+    const char* name,
+    uint64_t object_id,
+    uint16_t poa_idx,
+    uint16_t flags,
+    const uint8_t* origin,
+    size_t origin_size,
+    const char* class_id,
+    const char* urls);
+
+void nprpc_rpc_clear_host_json(void* rpc_handle);
+
+const char* nprpc_rpc_produce_host_json(void* rpc_handle, const char* output_path);
+
+void nprpc_free_string(const char* str);
 
 // Get POA index
 uint16_t nprpc_poa_get_index(void* poa_handle);

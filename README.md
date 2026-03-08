@@ -293,6 +293,10 @@ int main() {
     nprpc::ObjectActivationFlags::ALLOW_HTTP
   );
 
+  // Optional: publish origin-local objects for browser bootstrap
+  rpc->add_to_host_json("calculator", oid);
+  rpc->produce_host_json(); // writes <http_root_dir>/host.json
+
   // Optional: Register with nameserver
   auto nameserver = nprpc::get_nameserver("localhost:15001");
   nameserver->Bind(oid, "calculator");

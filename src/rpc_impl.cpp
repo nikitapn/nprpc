@@ -5,6 +5,7 @@
 #include <nprpc/impl/shared_memory_channel.hpp>
 #include <nprpc/impl/shared_memory_connection.hpp>
 #include <nprpc/impl/udp_connection.hpp>
+#include <nprpc/serialization/oarchive.h>
 #ifdef NPRPC_QUIC_ENABLED
 #include <nprpc/impl/quic_transport.hpp>
 #endif
@@ -23,8 +24,10 @@ std::shared_ptr<Session> make_uring_client_connection(
 #include <boost/uuid/uuid_io.hpp>
 
 #include <cassert>
+#include <filesystem>
 #include <fstream>
 #include <functional>
+#include <sstream>
 
 #ifdef _WIN32
 #include <boost/asio/ssl/context.hpp>
@@ -57,6 +60,54 @@ void add_windows_root_certs(boost::asio::ssl::context& ctx)
 #endif // BOOST_OS_WINDOWS
 
 namespace nprpc::impl {
+
+namespace {
+std::string escape_json_string(std::string_view value)
+{
+  std::string escaped;
+  escaped.reserve(value.size());
+
+  for (const char ch : value) {
+    switch (ch) {
+    case '\\':
+      escaped += "\\\\";
+      break;
+    case '"':
+      escaped += "\\\"";
+      break;
+    case '\b':
+      escaped += "\\b";
+      break;
+    case '\f':
+      escaped += "\\f";
+      break;
+    case '\n':
+      escaped += "\\n";
+      break;
+    case '\r':
+      escaped += "\\r";
+      break;
+    case '\t':
+      escaped += "\\t";
+      break;
+    default:
+      escaped += ch;
+      break;
+    }
+  }
+
+  return escaped;
+}
+
+std::string serialize_host_object(const ObjectId& object_id)
+{
+  std::ostringstream os;
+  nprpc::serialization::json_oarchive oa(os);
+  auto copy = object_id;
+  oa << copy;
+  return os.str();
+}
+} // namespace
 
 NPRPC_API Rpc* RpcBuilderBase::build(boost::asio::io_context& ioc)
 {
@@ -287,6 +338,95 @@ void RpcImpl::destroy_poa(Poa* poa)
 
   poas_[idx].reset();
   poas_created_[idx] = false;
+}
+
+void RpcImpl::add_to_host_json(std::string_view name,
+                               const ObjectId& object_id)
+{
+  if (name.empty()) {
+    throw Exception("Host JSON object name cannot be empty");
+  }
+
+  std::lock_guard<std::mutex> lk{host_json_mut_};
+  if (auto it = std::find_if(host_json_objects_.begin(), host_json_objects_.end(),
+                             [name](const auto& entry) {
+                               return entry.first == name;
+                             });
+      it != host_json_objects_.end()) {
+    it->second = object_id;
+    return;
+  }
+
+  host_json_objects_.emplace_back(std::string(name), object_id);
+}
+
+void RpcImpl::clear_host_json()
+{
+  std::lock_guard<std::mutex> lk{host_json_mut_};
+  host_json_objects_.clear();
+}
+
+std::string RpcImpl::produce_host_json(std::string_view output_path)
+{
+  namespace fs = std::filesystem;
+
+  fs::path path;
+
+  if (output_path.empty()) {
+    if (g_cfg.http_root_dir.empty()) {
+      throw Exception(
+          "produce_host_json requires RpcBuilderHttp::root_dir(...) or an explicit output path");
+    }
+    path = fs::path(g_cfg.http_root_dir) / "host.json";
+  } else {
+    path = fs::path(output_path);
+  }
+
+  std::vector<std::pair<std::string, ObjectId>> entries;
+  {
+    std::lock_guard<std::mutex> lk{host_json_mut_};
+    entries = host_json_objects_;
+  }
+
+  std::ostringstream os;
+  os << "{\n";
+  os << "\t\"secured\": "
+     << ((!g_cfg.http_cert_file.empty() && !g_cfg.http_key_file.empty()) ? "true"
+                                                                        : "false")
+     << ",\n";
+  os << "\t\"webtransport\": " << (g_cfg.http3_enabled ? "true" : "false")
+     << ",\n";
+  os << "\t\"objects\": {";
+
+  for (std::size_t i = 0; i < entries.size(); ++i) {
+    os << "\n\t\t\"" << escape_json_string(entries[i].first) << "\": ";
+    os << serialize_host_object(entries[i].second);
+    if (i + 1 != entries.size()) {
+      os << ',';
+    }
+  }
+
+  if (!entries.empty()) {
+    os << '\n';
+  }
+
+  os << "\t}\n";
+  os << "}\n";
+
+  if (const auto parent = path.parent_path(); !parent.empty()) {
+    fs::create_directories(parent);
+  }
+
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    throw Exception("Failed to open host json output file: " + path.string());
+  }
+  out << os.str();
+  if (!out) {
+    throw Exception("Failed to write host json output file: " + path.string());
+  }
+
+  return path.string();
 }
 
 NPRPC_API std::shared_ptr<Session>

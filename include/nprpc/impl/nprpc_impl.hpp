@@ -15,7 +15,9 @@
 #include <shared_mutex>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <variant>
+#include <vector>
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
@@ -173,6 +175,8 @@ class RpcImpl : public Rpc
   std::array<bool, max_poa_objects> poas_created_;
   mutable std::shared_mutex connections_mut_;
   std::vector<std::shared_ptr<Session>> opened_sessions_;
+  mutable std::mutex host_json_mut_;
+  std::vector<std::pair<std::string, ObjectId>> host_json_objects_;
 
 public:
   uint16_t port() const noexcept { return g_cfg.listen_tcp_port; }
@@ -290,6 +294,10 @@ public:
   NPRPC_API std::optional<ObjectGuard> get_object(poa_idx_t poa_idx, oid_t oid);
 
   NPRPC_API SessionContext* get_object_session_context(Object* obj) override;
+  void add_to_host_json(std::string_view name,
+                        const ObjectId& object_id) override;
+  void clear_host_json() override;
+  std::string produce_host_json(std::string_view output_path = {}) override;
 
   boost::asio::io_context& ioc() noexcept { return ioc_; }
   // void start() override;

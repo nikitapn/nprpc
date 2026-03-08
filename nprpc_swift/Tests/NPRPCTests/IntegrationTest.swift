@@ -45,6 +45,39 @@ final class IntegrationTests: XCTestCase {
         XCTAssertTrue(true)
     }
 
+    func testProduceHostJson() throws {
+        class HostJsonServant: ShapeServiceServant {
+            override func getRectangle(id: UInt32) -> Rectangle { Rectangle() }
+            override func setRectangle(id: UInt32, rect: Rectangle) {}
+            override func getRectangles() -> [Rectangle] { [] }
+            override func getNumbers() -> [Int32] { [] }
+            override func throwingMethod(code: UInt32) throws {}
+        }
+
+        let servant = HostJsonServant()
+        let oid = try Self.poa!.activateObject(
+            servant,
+            flags: [.allowWebSocket, .allowSslWebSocket, .allowHttp, .allowSecuredHttp]
+        )
+
+        Self.rpc!.clearHostJson()
+        try Self.rpc!.addToHostJson(name: "shape", objectId: oid)
+
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nprpc-swift-host-json-test", isDirectory: true)
+        try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        let outputPath = outputDir.appendingPathComponent("host.json").path
+
+        let writtenPath = try Self.rpc!.produceHostJson(outputPath: outputPath)
+        XCTAssertEqual(writtenPath, outputPath)
+
+        let text = try String(contentsOfFile: outputPath, encoding: .utf8)
+        XCTAssertTrue(text.contains("\"shape\""))
+        XCTAssertTrue(text.contains("\"class_id\": \"basic_test/swift.test.ShapeService\""))
+        XCTAssertTrue(text.contains("\"secured\": true"))
+        XCTAssertTrue(text.contains("\"urls\": \"ws://localhost:16001;wss://localhost:16001;http://localhost:16001;https://localhost:16001;\""))
+    }
+
     /// Test servant instantiation and direct method calls
     func testServantDirectCalls() throws {
         class TestShapeServant: ShapeServiceServant {
@@ -1632,7 +1665,10 @@ final class IntegrationTests: XCTestCase {
         for try await value in binaryBidiStream.reader {
             echoedBinaryChunks.append(value)
         }
-        XCTAssertEqual(echoedBinaryChunks, [[0x5A, 0x5B, 0x58], [10 ^ 0x5A, 11 ^ 0x5A]])
+        XCTAssertEqual(
+            echoedBinaryChunks,
+            [[UInt8(0x5A), 0x5B, 0x58], [UInt8(10 ^ 0x5A), UInt8(11 ^ 0x5A)]]
+        )
 
         let u16VectorBidiStream = try client.echoU16VectorStream(delta: 7)
         u16VectorBidiStream.writer.write([1, 2, 3])

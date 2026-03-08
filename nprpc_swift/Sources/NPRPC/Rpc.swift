@@ -4,6 +4,7 @@
 // Swift wrapper for NPRPC Rpc singleton and configuration
 
 import CNprpc
+import Foundation
 
 /// Configuration for NPRPC runtime
 public struct RpcConfiguration: Sendable {
@@ -198,6 +199,57 @@ public final class Rpc {
     /// Check if runtime is initialized
     public var isInitialized: Bool {
         return handle?.pointee.is_initialized() ?? false
+    }
+
+    /// Register an activated object under a stable name for browser bootstrap.
+    public func addToHostJson(name: String, objectId: detail.ObjectId) throws {
+        guard let handle = handle else {
+            throw RuntimeError(message: "Rpc not initialized")
+        }
+
+        let origin = objectId.origin
+        guard origin.count == 16 else {
+            throw RuntimeError(message: "ObjectId origin must contain 16 bytes")
+        }
+
+        let ok = origin.withUnsafeBufferPointer { originPtr in
+            nprpc_rpc_add_to_host_json(
+                handle,
+                name,
+                objectId.object_id,
+                objectId.poa_idx,
+                objectId.flags,
+                originPtr.baseAddress,
+                origin.count,
+                objectId.class_id,
+                objectId.urls
+            )
+        }
+
+        if !ok {
+            throw RuntimeError(message: "Failed to add object to host json")
+        }
+    }
+
+    /// Clear the pending host.json object registry.
+    public func clearHostJson() {
+        guard let handle = handle else { return }
+        nprpc_rpc_clear_host_json(handle)
+    }
+
+    /// Produce host.json and return the file path written by the runtime.
+    @discardableResult
+    public func produceHostJson(outputPath: String? = nil) throws -> String {
+        guard let handle = handle else {
+            throw RuntimeError(message: "Rpc not initialized")
+        }
+
+        let cString = nprpc_rpc_produce_host_json(handle, outputPath)
+        guard let cString else {
+            throw RuntimeError(message: "Failed to produce host json")
+        }
+        defer { nprpc_free_string(cString) }
+        return String(cString: cString)
     }
 
     /// Get debug information
