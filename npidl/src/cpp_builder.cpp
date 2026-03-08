@@ -81,6 +81,13 @@ static std::string_view fundamental_to_flat(TokenId id)
   }
 }
 
+static AstTypeDecl* canonical_stream_codec_type(AstTypeDecl* type)
+{
+  while (type != nullptr && type->id == FieldType::Alias)
+    type = calias(type)->get_real_type();
+  return type;
+}
+
 void CppBuilder::emit_type(AstTypeDecl* type, std::ostream& os)
 {
   switch (type->id) {
@@ -1000,9 +1007,39 @@ void CppBuilder::finalize()
   // Emit nprpc_stream::deserialize<T> / serialize<T> specialisations outside any IDL namespace.
   // They must be at file scope so the primary templates in stream_reader.hpp / stream_writer.hpp
   // are visible and the specialisations end up in ::nprpc_stream, not in the IDL namespace.
+  std::set<std::string> emitted_stream_deserializers;
+  std::set<std::string> emitted_stream_serializers;
+  auto stream_codec_type_key = [this](AstTypeDecl* type) {
+    std::stringstream ss;
+    auto bd_saved = bd;
+    bd = 1;
+    always_full_namespace(true);
+    emit_type(type, ss);
+    always_full_namespace(false);
+    bd = bd_saved;
+    return ss.str();
+  };
   for (auto fn : stream_codec_fns_) {
-    emit_stream_deserialize(fn);
-    emit_stream_serialize(fn);
+    auto* sd = fn->stream_decl;
+    if (sd == nullptr)
+      continue;
+
+    if (auto* out_type = canonical_stream_codec_type(sd->stream_out_type());
+        out_type != nullptr && out_type->id != FieldType::Fundamental &&
+        out_type->id != FieldType::Enum && !sd->direct) {
+      auto key = stream_codec_type_key(out_type);
+      if (emitted_stream_deserializers.insert(key).second)
+        emit_stream_deserialize(fn);
+    }
+
+    if (auto* stream_type = canonical_stream_codec_type(
+            sd->stream_in_type() ? sd->stream_in_type() : sd->stream_out_type());
+        stream_type != nullptr && stream_type->id != FieldType::Fundamental &&
+        stream_type->id != FieldType::Enum && !sd->direct) {
+      auto key = stream_codec_type_key(stream_type);
+      if (emitted_stream_serializers.insert(key).second)
+        emit_stream_serialize(fn);
+    }
   }
 
   oh << "\n#endif";

@@ -7,7 +7,7 @@ import NPRPC
 import Foundation
 
 print("╔══════════════════════════════════════════════════════════╗")
-print("║         NPRPC Swift HTTP3 Server Example                ║")
+print("║         NPRPC Swift HTTP3 Server Example                 ║")
 print("╚══════════════════════════════════════════════════════════╝")
 print()
 

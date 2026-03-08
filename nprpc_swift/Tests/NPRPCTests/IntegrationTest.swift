@@ -990,14 +990,24 @@ final class IntegrationTests: XCTestCase {
     }
 
     // Test streaming RPC methods
-    // This tests the full round-trip: client sends StreamInit, servant produces stream,
-    // servant dispatch pumps chunks, client receives via AsyncThrowingStream
+    // This tests the full round-trip for server, client, and bidi streams.
     func testStreams() async throws {
-        // TestStreams servant implementation
         class TestStreamsImpl: TestStreamsServant {
+            let uploadExpectation: XCTestExpectation
+            let objectUploadExpectation: XCTestExpectation
+            var uploadedBytes: [UInt8] = []
+            var uploadedObjects: [AAA] = []
+            var uploadError: Error?
+            var objectUploadError: Error?
+
+            init(uploadExpectation: XCTestExpectation, objectUploadExpectation: XCTestExpectation) {
+                self.uploadExpectation = uploadExpectation
+                self.objectUploadExpectation = objectUploadExpectation
+                super.init()
+            }
+
             override func getByteStream(size: UInt64) -> AsyncStream<UInt8> {
                 return AsyncStream { continuation in
-                    // Produce 'size' bytes (capped at 256 for test)
                     let count = min(size, 256)
                     for i in 0..<count {
                         continuation.yield(UInt8(i & 0xFF))
@@ -1005,11 +1015,89 @@ final class IntegrationTests: XCTestCase {
                     continuation.finish()
                 }
             }
+
+            override func getObjectStream(count: UInt32) -> AsyncStream<AAA> {
+                return AsyncStream { continuation in
+                    for i in 0..<count {
+                        continuation.yield(
+                            AAA(
+                                a: i,
+                                b: "name_\(i)",
+                                c: "value_\(i)"
+                            )
+                        )
+                    }
+                    continuation.finish()
+                }
+            }
+
+            override func uploadByteStream(expected_size: UInt64, data: NPRPCStreamReader<UInt8>) async {
+                var values: [UInt8] = []
+                values.reserveCapacity(Int(expected_size))
+
+                do {
+                    for try await byte in data {
+                        values.append(byte)
+                    }
+                } catch {
+                    uploadError = error
+                }
+
+                uploadedBytes = values
+                uploadExpectation.fulfill()
+            }
+
+            override func uploadObjectStream(expected_count: UInt64, data: NPRPCStreamReader<AAA>) async {
+                var values: [AAA] = []
+                values.reserveCapacity(Int(expected_count))
+
+                do {
+                    for try await value in data {
+                        values.append(value)
+                    }
+                } catch {
+                    objectUploadError = error
+                }
+
+                uploadedObjects = values
+                objectUploadExpectation.fulfill()
+            }
+
+            override func echoByteStream(xor_mask: UInt8, stream: NPRPCBidiStream<UInt8, UInt8>) async {
+                do {
+                    for try await byte in stream.reader {
+                        stream.writer.write(byte ^ xor_mask)
+                    }
+                    stream.writer.close()
+                } catch {
+                    stream.writer.abort()
+                }
+            }
+
+            override func echoObjectStream(suffix: String, stream: NPRPCBidiStream<AAA, AAA>) async {
+                do {
+                    for try await value in stream.reader {
+                        stream.writer.write(
+                            AAA(
+                                a: value.a + 100,
+                                b: value.b + suffix,
+                                c: value.c + suffix
+                            )
+                        )
+                    }
+                    stream.writer.close()
+                } catch {
+                    stream.writer.abort()
+                }
+            }
         }
 
+        let uploadExpectation = expectation(description: "client stream upload completed")
+        let objectUploadExpectation = expectation(description: "object client stream upload completed")
+
         // Create and activate servant
-        let servant = TestStreamsImpl()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowWebSocket) // Use WebSocket for streaming test
+        let servant = TestStreamsImpl(uploadExpectation: uploadExpectation, objectUploadExpectation: objectUploadExpectation)
+        let oid = try Self.poa!.activateObject(servant, flags: .allowWebSocket)
         XCTAssertEqual(oid.class_id, "nprpc_test/nprpc.test.TestStreams")
 
         // Create client proxy
@@ -1020,17 +1108,91 @@ final class IntegrationTests: XCTestCase {
         let client = narrow(obj, to: TestStreams.self)!
         XCTAssertEqual(client.classId, "nprpc_test/nprpc.test.TestStreams")
 
-        // Test full round-trip: call streaming method and consume the stream
         let stream = try client.getByteStream(size: 5)
         var receivedValues: [UInt8] = []
 
         for try await value in stream {
             receivedValues.append(value)
         }
-        // Verify we received all expected values
         XCTAssertEqual(receivedValues.count, 5, "Should receive 5 bytes from stream")
         for i in 0..<5 {
             XCTAssertEqual(receivedValues[i], UInt8(i), "Byte \(i) should be \(i)")
         }
+
+        let objectStream = try client.getObjectStream(count: 3)
+        var receivedObjects: [AAA] = []
+        for try await value in objectStream {
+            receivedObjects.append(value)
+        }
+
+        XCTAssertEqual(receivedObjects.count, 3)
+        XCTAssertEqual(receivedObjects[0].a, 0)
+        XCTAssertEqual(receivedObjects[0].b, "name_0")
+        XCTAssertEqual(receivedObjects[0].c, "value_0")
+        XCTAssertEqual(receivedObjects[2].a, 2)
+        XCTAssertEqual(receivedObjects[2].b, "name_2")
+        XCTAssertEqual(receivedObjects[2].c, "value_2")
+
+        let uploadWriter = try client.uploadByteStream(expected_size: 5)
+        for byte in [UInt8(1), 2, 3, 4, 5] {
+            uploadWriter.write(byte)
+        }
+        uploadWriter.close()
+
+        await fulfillment(of: [uploadExpectation], timeout: 2.0)
+        XCTAssertNil(servant.uploadError)
+        XCTAssertEqual(servant.uploadedBytes, [1, 2, 3, 4, 5])
+
+        let uploadObjectWriter = try client.uploadObjectStream(expected_count: 2)
+        uploadObjectWriter.write(AAA(a: 1, b: "first", c: "one"))
+        uploadObjectWriter.write(AAA(a: 2, b: "second", c: "two"))
+        uploadObjectWriter.close()
+
+        await fulfillment(of: [objectUploadExpectation], timeout: 2.0)
+        XCTAssertNil(servant.objectUploadError)
+        XCTAssertEqual(servant.uploadedObjects.count, 2)
+        XCTAssertEqual(servant.uploadedObjects[0].a, 1)
+        XCTAssertEqual(servant.uploadedObjects[0].b, "first")
+        XCTAssertEqual(servant.uploadedObjects[0].c, "one")
+        XCTAssertEqual(servant.uploadedObjects[1].a, 2)
+        XCTAssertEqual(servant.uploadedObjects[1].b, "second")
+        XCTAssertEqual(servant.uploadedObjects[1].c, "two")
+
+        let bidiStream = try client.echoByteStream(xor_mask: 0x5A)
+        let input: [UInt8] = [10, 11, 12, 13]
+        for byte in input {
+            bidiStream.writer.write(byte)
+        }
+        bidiStream.writer.close()
+
+        var echoed: [UInt8] = []
+        for try await byte in bidiStream.reader {
+            echoed.append(byte)
+        }
+
+        XCTAssertEqual(echoed, input.map { $0 ^ 0x5A })
+
+        let objectBidiStream = try client.echoObjectStream(suffix: "-ok")
+        let objectInput: [AAA] = [
+            AAA(a: 10, b: "alpha", c: "one"),
+            AAA(a: 20, b: "beta", c: "two"),
+        ]
+        for value in objectInput {
+            objectBidiStream.writer.write(value)
+        }
+        objectBidiStream.writer.close()
+
+        var echoedObjects: [AAA] = []
+        for try await value in objectBidiStream.reader {
+            echoedObjects.append(value)
+        }
+
+        XCTAssertEqual(echoedObjects.count, 2)
+        XCTAssertEqual(echoedObjects[0].a, 110)
+        XCTAssertEqual(echoedObjects[0].b, "alpha-ok")
+        XCTAssertEqual(echoedObjects[0].c, "one-ok")
+        XCTAssertEqual(echoedObjects[1].a, 120)
+        XCTAssertEqual(echoedObjects[1].b, "beta-ok")
+        XCTAssertEqual(echoedObjects[1].c, "two-ok")
     }
 }

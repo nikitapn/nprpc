@@ -8,10 +8,12 @@ cd "$SCRIPT_DIR/.."
 
 NPIDL=${NPIDL:-.build_relwith_debinfo/npidl/npidl}
 
-if [ "$NPIDL" == ".build_relwith_debinfo/npidl/npidl" ]; then
-  # Build npidl if needed
-  ./bt.sh npidl > /dev/null
-fi
+# if [ "$NPIDL" == ".build_relwith_debinfo/npidl/npidl" ]; then
+#   # Build npidl if needed
+#   ./bt.sh npidl > /dev/null
+# fi
+
+./bt.sh npidl > /dev/null
 
 $NPIDL --swift \
   idl/nprpc_base.npidl \

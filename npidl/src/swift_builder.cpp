@@ -166,6 +166,149 @@ void SwiftBuilder::emit_type(AstTypeDecl* type, std::ostream& os)
   }
 }
 
+void SwiftBuilder::emit_stream_reader_type(AstTypeDecl* type, std::ostream& os)
+{
+  os << "NPRPCStreamReader<";
+  emit_type(type, os);
+  os << ">";
+}
+
+void SwiftBuilder::emit_stream_writer_type(AstTypeDecl* type, std::ostream& os)
+{
+  os << "NPRPCStreamWriter<";
+  emit_type(type, os);
+  os << ">";
+}
+
+void SwiftBuilder::emit_stream_bidi_type(AstTypeDecl* write_type,
+                                         AstTypeDecl* read_type,
+                                         std::ostream& os)
+{
+  os << "NPRPCBidiStream<";
+  emit_type(write_type, os);
+  os << ", ";
+  emit_type(read_type, os);
+  os << ">";
+}
+
+void SwiftBuilder::emit_stream_proxy_return_type(AstFunctionDecl* fn,
+                                                 std::ostream& os)
+{
+  auto* stream = fn->stream_decl;
+  assert(stream != nullptr);
+
+  switch (fn->stream_kind) {
+  case StreamKind::Server:
+    emit_stream_reader_type(stream->stream_out_type(), os);
+    break;
+  case StreamKind::Client:
+    emit_stream_writer_type(stream->stream_in_type(), os);
+    break;
+  case StreamKind::Bidi:
+    emit_stream_bidi_type(stream->stream_in_type(), stream->stream_out_type(),
+                          os);
+    break;
+  default:
+    assert(false);
+  }
+}
+
+int SwiftBuilder::estimate_stream_initial_payload_capacity(AstTypeDecl* type) const
+{
+  if (type->id == FieldType::Alias)
+    return estimate_stream_initial_payload_capacity(calias(type)->get_real_type());
+
+  switch (type->id) {
+  case FieldType::Fundamental:
+    return get_fundamental_size(cft(type)->token_id);
+  case FieldType::Enum:
+    return sizeof(int32_t);
+  case FieldType::String:
+    return 128;
+  case FieldType::Struct:
+    return cflat(type)->size + 128;
+  default:
+    return 128;
+  }
+}
+
+void SwiftBuilder::emit_stream_serializer(AstTypeDecl* type, std::ostream& os)
+{
+  if (type->id == FieldType::Alias) {
+    emit_stream_serializer(calias(type)->get_real_type(), os);
+    return;
+  }
+
+  switch (type->id) {
+  case FieldType::Fundamental:
+    os << "{ (buffer: FlatBuffer, offset: Int, value: ";
+    emit_type(type, os);
+    os << ") in NPRPC.marshal_stream_fundamental(buffer: buffer, offset: offset, value: value) }";
+    break;
+  case FieldType::Enum:
+    os << "{ (buffer: FlatBuffer, offset: Int, value: ";
+    emit_type(type, os);
+    os << ") in NPRPC.marshal_stream_fundamental(buffer: buffer, offset: offset, value: value.rawValue) }";
+    break;
+  case FieldType::String:
+    os << "{ (buffer: FlatBuffer, offset: Int, value: String) in NPRPC.marshal_stream_string(buffer: buffer, offset: offset, value: value) }";
+    break;
+  case FieldType::Struct: {
+    auto* s = cflat(type);
+    os << "{ (buffer: FlatBuffer, offset: Int, value: ";
+    emit_type(type, os);
+    os << ") in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: "
+       << s->size
+       << ", value: value) { buf, off, elem in marshal_"
+       << s->name << "(buffer: buf, offset: off, data: elem) } }";
+    break;
+  }
+  default:
+    assert(false && "Unsupported Swift stream serializer type");
+  }
+}
+
+void SwiftBuilder::emit_stream_deserializer(AstTypeDecl* type,
+                                            const std::string& endpoint_expr,
+                                            std::ostream& os)
+{
+  if (type->id == FieldType::Alias) {
+    emit_stream_deserializer(calias(type)->get_real_type(), endpoint_expr, os);
+    return;
+  }
+
+  switch (type->id) {
+  case FieldType::Fundamental:
+    os << "{ (data: UnsafeRawPointer, _: Int) in data.load(as: ";
+    emit_type(type, os);
+    os << ".self) }";
+    break;
+  case FieldType::Enum:
+    os << "{ (data: UnsafeRawPointer, _: Int) in ";
+    emit_type(type, os);
+    os << "(rawValue: data.load(as: Int32.self))! }";
+    break;
+  case FieldType::String:
+    os << "{ (data: UnsafeRawPointer, _: Int) in NPRPC.unmarshal_string(buffer: data, offset: 0) }";
+    break;
+  case FieldType::Struct: {
+    auto* s = cflat(type);
+    const bool needs_endpoint = contains_object(type);
+    os << "{ (data: UnsafeRawPointer, _: Int) in ";
+    if (needs_endpoint) {
+      os << "try! unmarshal_" << s->name << "(buffer: data, offset: 0, endpoint: "
+         << endpoint_expr << ")";
+    } else {
+      os << "unmarshal_" << s->name << "(buffer: data, offset: 0)";
+    }
+    os << " }";
+    break;
+  }
+  default:
+    assert(false && "Unsupported Swift stream deserializer type");
+  }
+}
+
 void SwiftBuilder::emit_constant(const std::string& name, AstNumber* number)
 {
   out << bl() << "public let " << name << ": ";
@@ -364,20 +507,42 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
           out << ", ";
         first = false;
         out << arg->name << ": ";
-        emit_type(arg->type, out);
+        if (fn->is_stream && arg->type->id == FieldType::Stream) {
+          emit_stream_reader_type(fn->stream_decl->stream_in_type(), out);
+        } else {
+          emit_type(arg->type, out);
+        }
       }
     }
 
-    out << ")";
-
-    // For streaming methods, servant returns AsyncStream<T> (producer)
     if (fn->is_stream) {
-      out << " -> AsyncStream<";
-      emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, out);
-      out << ">";
-      out << "\n";
+      if (fn->stream_kind == StreamKind::Bidi) {
+        if (!first)
+          out << ", ";
+        out << "stream: ";
+        emit_stream_bidi_type(fn->stream_decl->stream_out_type(),
+                              fn->stream_decl->stream_in_type(), out);
+      }
+
+      out << ")";
+
+      switch (fn->stream_kind) {
+      case StreamKind::Server:
+        out << " -> AsyncStream<";
+        emit_type(fn->stream_decl->stream_out_type(), out);
+        out << ">\n";
+        break;
+      case StreamKind::Client:
+      case StreamKind::Bidi:
+        out << " async\n";
+        break;
+      default:
+        assert(false);
+      }
       continue;
     }
+
+    out << ")";
 
     // Return type: collect out parameters and return value
     std::vector<AstFunctionArgument*> out_params;
@@ -740,14 +905,15 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
 void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionDecl* fn)
 {
-  auto stream_type = static_cast<AstStreamDecl*>(fn->ret_value)->type;
-  
+  auto* stream_decl = fn->stream_decl;
+  assert(stream_decl != nullptr);
+
   out << bl() << "public func " << swift_method_name(fn->name) << "(";
 
   // Emit only 'in' parameters
   bool first = true;
   for (auto arg : fn->args) {
-    if (arg->modifier == ArgumentModifier::In) {
+    if (arg->modifier == ArgumentModifier::In && arg != fn->stream_arg) {
       if (!first) out << ", ";
       first = false;
       out << arg->name << ": ";
@@ -755,10 +921,9 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
     }
   }
 
-  // Streaming methods return AsyncThrowingStream on client side
-  out << ") throws -> AsyncThrowingStream<";
-  emit_type(stream_type, out);
-  out << ", Error> " << bb();
+  out << ") throws -> ";
+  emit_stream_proxy_return_type(fn, out);
+  out << " " << bb();
 
   // Generate unique stream ID
   out << bl() << "let streamId = nprpc_generate_stream_id()\n\n";
@@ -787,7 +952,22 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
   out << bl() << "data.storeBytes(of: poaIdx, toByteOffset: " << (size_of_header + 8) << ", as: UInt16.self)  // offset 8\n";
   out << bl() << "data.storeBytes(of: UInt8(0), toByteOffset: " << (size_of_header + 10) << ", as: UInt8.self)  // interface_idx at offset 10\n";
   out << bl() << "data.storeBytes(of: objectId, toByteOffset: " << (size_of_header + 16) << ", as: UInt64.self)  // offset 16 (after 5-byte pad)\n";
-  out << bl() << "data.storeBytes(of: UInt8(" << fn->idx << "), toByteOffset: " << (size_of_header + 24) << ", as: UInt8.self)  // func_idx at offset 24\n\n";
+  out << bl() << "data.storeBytes(of: UInt8(" << fn->idx << "), toByteOffset: " << (size_of_header + 24) << ", as: UInt8.self)  // func_idx at offset 24\n";
+  out << bl() << "data.storeBytes(of: impl.StreamKind.";
+  switch (fn->stream_kind) {
+  case StreamKind::Server:
+    out << "server";
+    break;
+  case StreamKind::Client:
+    out << "client";
+    break;
+  case StreamKind::Bidi:
+    out << "bidi";
+    break;
+  default:
+    assert(false);
+  }
+  out << ".rawValue, toByteOffset: " << (size_of_header + 25) << ", as: Int32.self)\n\n";
 
   // Marshal input arguments if any
   if (fn->in_s) {
@@ -796,7 +976,7 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
 
     int ix = 0;
     for (auto arg : fn->args) {
-      if (arg->modifier == ArgumentModifier::Out) continue;
+      if (arg->modifier == ArgumentModifier::Out || arg == fn->stream_arg) continue;
       ++ix;
       out << bl() << "inArgs._" << ix << " = " << arg->name << "\n";
     }
@@ -808,54 +988,50 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
   out << bl() << "guard let finalData = buffer.data else { throw BufferError(message: \"Failed to get buffer data\") }\n";
   out << bl() << "finalData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n\n";
 
-  // Create AsyncThrowingStream with continuation
-  out << bl() << "// Create AsyncThrowingStream for receiving chunks\n";
-  out << bl() << "return AsyncThrowingStream { continuation in\n" << bb(false);
-  out << bl() << "  // Box the continuation for C callback\n";
-  out << bl() << "  final class ContinuationBox {\n";
-  out << bl() << "    var continuation: AsyncThrowingStream<";
-  emit_type(stream_type, out);
-  out << ", Error>.Continuation\n";
-  out << bl() << "    init(_ c: AsyncThrowingStream<";
-  emit_type(stream_type, out);
-  out << ", Error>.Continuation) { continuation = c }\n";
-  out << bl() << "  }\n";
-  out << bl() << "  let box = Unmanaged.passRetained(ContinuationBox(continuation)).toOpaque()\n\n";
+  switch (fn->stream_kind) {
+  case StreamKind::Server:
+    out << bl() << "let reader = NPRPC.createObjectStreamReader(objectHandle: self.handle, streamId: streamId, buffer: buffer, deserializer: ";
+    emit_stream_deserializer(stream_decl->stream_out_type(), "self.endpoint",
+                             out);
+    out << ")\n";
+    break;
+  case StreamKind::Client:
+    out << bl() << "let writer = try NPRPC.createObjectStreamWriter(objectHandle: self.handle, streamId: streamId, initialPayloadCapacity: "
+        << estimate_stream_initial_payload_capacity(stream_decl->stream_in_type())
+        << ", serializer: ";
+    emit_stream_serializer(stream_decl->stream_in_type(), out);
+    out << ")\n";
+    break;
+  case StreamKind::Bidi:
+    out << bl() << "let stream = try NPRPC.createObjectBidiStream(objectHandle: self.handle, streamId: streamId, buffer: buffer, initialPayloadCapacity: "
+        << estimate_stream_initial_payload_capacity(stream_decl->stream_in_type())
+        << ", serializer: ";
+    emit_stream_serializer(stream_decl->stream_in_type(), out);
+    out << ", deserializer: ";
+    emit_stream_deserializer(stream_decl->stream_out_type(), "self.endpoint",
+                             out);
+    out << ")\n";
+    break;
+  default:
+    assert(false);
+  }
 
-  // Define C callbacks
-  out << bl() << "  let onChunk: @convention(c) (UnsafeMutableRawPointer?, UnsafeRawPointer?, UInt32) -> Void = { ctx, dataPtr, size in\n";
-  out << bl() << "    guard let ctx = ctx, let dataPtr = dataPtr, size > 0 else { return }\n";
-  out << bl() << "    let box = Unmanaged<ContinuationBox>.fromOpaque(ctx).takeUnretainedValue()\n";
-  // For now, assume fundamental types - later we'd need type-specific deserialization
-  out << bl() << "    let value = dataPtr.load(as: ";
-  emit_type(stream_type, out);
-  out << ".self)\n";
-  out << bl() << "    box.continuation.yield(value)\n";
-  out << bl() << "  }\n\n";
+  out << bl() << "let result = nprpc_stream_send_init(self.handle, buffer.handle, self.timeout)\n";
+  out << bl() << "if result != 0 { throw RuntimeError(message: \"Failed to send StreamInit\") }\n";
 
-  out << bl() << "  let onComplete: @convention(c) (UnsafeMutableRawPointer?) -> Void = { ctx in\n";
-  out << bl() << "    guard let ctx = ctx else { return }\n";
-  out << bl() << "    let box = Unmanaged<ContinuationBox>.fromOpaque(ctx).takeRetainedValue()\n";
-  out << bl() << "    box.continuation.finish()\n";
-  out << bl() << "  }\n\n";
-
-  out << bl() << "  let onError: @convention(c) (UnsafeMutableRawPointer?, UInt32) -> Void = { ctx, errorCode in\n";
-  out << bl() << "    guard let ctx = ctx else { return }\n";
-  out << bl() << "    let box = Unmanaged<ContinuationBox>.fromOpaque(ctx).takeRetainedValue()\n";
-  out << bl() << "    box.continuation.finish(throwing: RuntimeError(message: \"Stream error: \\(errorCode)\"))\n";
-  out << bl() << "  }\n\n";
-
-  // Register stream reader with C++ runtime
-  out << bl() << "  nprpc_stream_register_reader(self.handle, streamId, box, onChunk, onComplete, onError)\n\n";
-
-  // Send StreamInit message
-  out << bl() << "  // Send StreamInit message\n";
-  out << bl() << "  let result = nprpc_stream_send_init(self.handle, buffer.handle, self.timeout)\n";
-  out << bl() << "  if result != 0 {\n";
-  out << bl() << "    let box = Unmanaged<ContinuationBox>.fromOpaque(box).takeRetainedValue()\n";
-  out << bl() << "    box.continuation.finish(throwing: RuntimeError(message: \"Failed to send StreamInit\"))\n";
-  out << bl() << "  }\n";
-  out << eb() << "\n";
+  switch (fn->stream_kind) {
+  case StreamKind::Server:
+    out << bl() << "return reader\n";
+    break;
+  case StreamKind::Client:
+    out << bl() << "return writer\n";
+    break;
+  case StreamKind::Bidi:
+    out << bl() << "return stream\n";
+    break;
+  default:
+    assert(false);
+  }
 
   out << eb() << "\n";
 }
@@ -888,15 +1064,36 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
         if (!first) out << ", ";
         first = false;
         out << arg->name << ": ";
-        emit_type(arg->type, out);
+        if (fn->is_stream && arg->type->id == FieldType::Stream) {
+          emit_stream_reader_type(fn->stream_decl->stream_in_type(), out);
+        } else {
+          emit_type(arg->type, out);
+        }
       }
     }
 
-    // For streaming methods, return AsyncStream<T>
     if (fn->is_stream) {
-      out << ") -> AsyncStream<";
-      emit_type(static_cast<AstStreamDecl*>(fn->ret_value)->type, out);
-      out << "> " << bb();
+      if (fn->stream_kind == StreamKind::Bidi) {
+        if (!first) out << ", ";
+        out << "stream: ";
+        emit_stream_bidi_type(fn->stream_decl->stream_out_type(),
+                              fn->stream_decl->stream_in_type(), out);
+      }
+
+      out << ")";
+      switch (fn->stream_kind) {
+      case StreamKind::Server:
+        out << " -> AsyncStream<";
+        emit_type(fn->stream_decl->stream_out_type(), out);
+        out << "> " << bb();
+        break;
+      case StreamKind::Client:
+      case StreamKind::Bidi:
+        out << " async " << bb();
+        break;
+      default:
+        assert(false);
+      }
       out << bl() << "fatalError(\"Subclass must implement " << swift_method_name(fn->name) << "\")\n";
       out << eb() << "\n";
       continue;
@@ -1171,13 +1368,14 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
 
 void SwiftBuilder::emit_servant_stream_dispatch(AstFunctionDecl* fn)
 {
-  auto stream_type = static_cast<AstStreamDecl*>(fn->ret_value)->type;
+  auto* stream_decl = fn->stream_decl;
+  assert(stream_decl != nullptr);
 
   // For streaming dispatch, we need to:
   // 1. Read stream_id from the StreamInit message (different from CallHeader layout)
-  // 2. Call the servant method to get AsyncStream
-  // 3. Iterate over the stream and send chunks  
-  // 4. Send completion when done
+  // 2. Build any reader/writer wrappers needed for the stream kind
+  // 3. Invoke the servant method
+  // 4. Pump output chunks when needed
 
   out << bl() << "// Streaming method dispatch\n";
   out << bl() << "guard let data = buffer.data else { return }\n";
@@ -1199,41 +1397,80 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstFunctionDecl* fn)
   out << bl() << "  makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_BadInput)\n";
   out << bl() << "  return\n";
   out << bl() << "}\n";
-  // Convert to UInt for Swift 6 Sendable compliance
-  out << bl() << "let streamManagerInt = UInt(bitPattern: streamManager)\n\n";
+  switch (fn->stream_kind) {
+  case StreamKind::Server:
+    out << bl() << "let writer = NPRPC.createStreamManagerWriter(streamManager: streamManager, streamId: streamId, initialPayloadCapacity: "
+        << estimate_stream_initial_payload_capacity(stream_decl->stream_out_type())
+        << ", serializer: ";
+    emit_stream_serializer(stream_decl->stream_out_type(), out);
+    out << ")\n";
+    out << bl() << "let source = " << swift_method_name(fn->name) << "(";
+    break;
+  case StreamKind::Client:
+    out << bl() << "let reader = NPRPC.createStreamManagerReader(streamManager: streamManager, streamId: streamId, buffer: buffer, deserializer: ";
+    emit_stream_deserializer(stream_decl->stream_in_type(), "remoteEndpoint",
+                             out);
+    out << ")\n";
+    out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.success)\n";
+    out << bl() << "Task {\n" << bb(false);
+    out << bl() << "await " << swift_method_name(fn->name) << "(";
+    break;
+  case StreamKind::Bidi:
+    out << bl() << "let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: "
+        << estimate_stream_initial_payload_capacity(stream_decl->stream_out_type())
+        << ", serializer: ";
+    emit_stream_serializer(stream_decl->stream_out_type(), out);
+    out << ", deserializer: ";
+    emit_stream_deserializer(stream_decl->stream_in_type(), "remoteEndpoint",
+                             out);
+    out << ")\n";
+    out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.success)\n";
+    out << bl() << "Task {\n" << bb(false);
+    out << bl() << "await " << swift_method_name(fn->name) << "(";
+    break;
+  default:
+    assert(false);
+  }
 
-  // Call servant method
-  out << bl() << "// Get stream from servant implementation\n";
-  out << bl() << "let stream = " << swift_method_name(fn->name) << "(";
   bool first = true;
   int ix = 0;
   for (auto arg : fn->args) {
     if (arg->modifier == ArgumentModifier::Out) continue;
-    ++ix;
     if (!first) out << ", ";
     first = false;
+
+    if (arg->type->id == FieldType::Stream) {
+      out << arg->name << ": reader";
+      continue;
+    }
+
+    ++ix;
     out << arg->name << ": ia._" << ix;
   }
-  out << ")\n\n";
 
-  // Iterate and send chunks using Task for async iteration
-  out << bl() << "// Pump stream and send chunks in background\n";
-  out << bl() << "Task {\n" << bb(false);
-  out << bl() << "  let streamManagerPtr = UnsafeMutableRawPointer(bitPattern: streamManagerInt)!\n";
-  out << bl() << "  var sequence: UInt64 = 0\n";
-  out << bl() << "  for await value in stream {\n";
+  if (fn->stream_kind == StreamKind::Bidi) {
+    if (!first) out << ", ";
+    out << "stream: stream";
+  }
+  out << ")\n";
 
-  // Serialize the value and send as chunk
-  // For now, handle fundamental types directly
-  out << bl() << "    // Send chunk\n";
-  out << bl() << "    withUnsafeBytes(of: value) { valueBytes in\n";
-  out << bl() << "      nprpc_stream_manager_send_chunk(streamManagerPtr, streamId, valueBytes.baseAddress, UInt32(valueBytes.count), sequence)\n";
-  out << bl() << "    }\n";
-  out << bl() << "    sequence += 1\n";
-  out << bl() << "  }\n";
-  out << bl() << "  // Send completion\n";
-  out << bl() << "  nprpc_stream_manager_send_complete(streamManagerPtr, streamId, sequence)\n";
-  out << eb() << "\n";
+  switch (fn->stream_kind) {
+  case StreamKind::Server:
+    out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.success)\n";
+    out << bl() << "Task {\n" << bb(false);
+    out << bl() << "for await value in source {\n" << bb(false);
+    out << bl() << "writer.write(value)\n";
+    out << eb();
+    out << bl() << "writer.close()\n";
+    out << eb() << "\n";
+    break;
+  case StreamKind::Client:
+  case StreamKind::Bidi:
+    out << eb() << "\n";
+    break;
+  default:
+    assert(false);
+  }
 }
 
 // Generate Swift trampolines that C++ bridge will call

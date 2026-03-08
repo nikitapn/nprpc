@@ -990,6 +990,20 @@ TEST_F(NprpcTest, TestClientStream)
       writer.close();
 
       EXPECT_TRUE(servant.wait_for_upload(expected));
+
+      std::vector<nprpc::test::AAA> expected_objects{
+        nprpc::test::AAA{.a = 1, .b = "first", .c = "one"},
+        nprpc::test::AAA{.a = 2, .b = "second", .c = "two"},
+        nprpc::test::AAA{.a = 3, .b = "third", .c = "three"},
+      };
+
+      auto object_writer = obj->UploadObjectStream(expected_objects.size());
+      for (const auto& object : expected_objects) {
+        object_writer.write(object);
+      }
+      object_writer.close();
+
+      EXPECT_TRUE(servant.wait_for_object_upload(expected_objects));
     } catch (nprpc::Exception& ex) {
       FAIL() << "Exception in TestClientStream: " << ex.what();
     }
@@ -1024,6 +1038,30 @@ TEST_F(NprpcTest, TestBidiStream)
       ASSERT_EQ(output.size(), input.size());
       for (size_t i = 0; i < input.size(); ++i) {
         EXPECT_EQ(output[i], static_cast<uint8_t>(input[i] ^ kMask));
+      }
+
+      std::vector<nprpc::test::AAA> object_input{
+        nprpc::test::AAA{.a = 7, .b = "alpha", .c = "left"},
+        nprpc::test::AAA{.a = 8, .b = "beta", .c = "right"},
+      };
+      const std::string suffix = "-ok";
+      auto [object_writer, object_reader] = obj->EchoObjectStream(suffix);
+
+      for (const auto& object : object_input) {
+        object_writer.write(object);
+      }
+      object_writer.close();
+
+      std::vector<nprpc::test::AAA> object_output;
+      for (auto& object : object_reader) {
+        object_output.push_back(object);
+      }
+
+      ASSERT_EQ(object_output.size(), object_input.size());
+      for (size_t i = 0; i < object_input.size(); ++i) {
+        EXPECT_EQ(object_output[i].a, object_input[i].a + 100);
+        EXPECT_EQ(object_output[i].b, object_input[i].b + suffix);
+        EXPECT_EQ(object_output[i].c, object_input[i].c + suffix);
       }
     } catch (nprpc::Exception& ex) {
       FAIL() << "Exception in TestBidiStream: " << ex.what();

@@ -31,6 +31,16 @@ private:
   void emit_type(AstTypeDecl* type, std::ostream& os);
   void emit_fundamental_type(TokenId id, std::ostream& os);
   void emit_parameter_type(AstFunctionArgument* arg, std::ostream& os);
+  void emit_stream_reader_type(AstTypeDecl* type, std::ostream& os);
+  void emit_stream_writer_type(AstTypeDecl* type, std::ostream& os);
+  void emit_stream_bidi_type(AstTypeDecl* write_type, AstTypeDecl* read_type,
+                             std::ostream& os);
+  void emit_stream_proxy_return_type(AstFunctionDecl* fn, std::ostream& os);
+  void emit_stream_serializer(AstTypeDecl* type, std::ostream& os);
+  void emit_stream_deserializer(AstTypeDecl* type,
+                                const std::string& endpoint_expr,
+                                std::ostream& os);
+  int estimate_stream_initial_payload_capacity(AstTypeDecl* type) const;
   
   // Struct/Exception generation
   void emit_struct2(AstStructDecl* s, Target target);

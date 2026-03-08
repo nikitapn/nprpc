@@ -3,9 +3,58 @@
 
 import Foundation
 
+private class StreamReaderBridgeBase {
+    func onChunk(data: UnsafeRawPointer, size: Int) {}
+    func onComplete() {}
+    func onError(errorCode: UInt32) {}
+}
+
+private final class StreamReaderBridge<T: Sendable>: StreamReaderBridgeBase {
+    private let reader: NPRPCStreamReader<T>
+
+    init(reader: NPRPCStreamReader<T>) {
+        self.reader = reader
+    }
+
+    override func onChunk(data: UnsafeRawPointer, size: Int) {
+        reader.onChunkReceived(data: data, size: size)
+    }
+
+    override func onComplete() {
+        reader.onComplete()
+    }
+
+    override func onError(errorCode: UInt32) {
+        reader.onError(RuntimeError(message: "Stream error: \(errorCode)"))
+    }
+}
+
+internal let nprpcStreamReaderOnChunk: @convention(c) (UnsafeMutableRawPointer?, UnsafeRawPointer?, UInt32) -> Void = {
+    context, dataPtr, size in
+    guard let context = context, let dataPtr = dataPtr else { return }
+    let bridge = Unmanaged<StreamReaderBridgeBase>.fromOpaque(context).takeUnretainedValue()
+    bridge.onChunk(data: dataPtr, size: Int(size))
+}
+
+internal let nprpcStreamReaderOnComplete: @convention(c) (UnsafeMutableRawPointer?) -> Void = {
+    context in
+    guard let context = context else { return }
+    let bridge = Unmanaged<StreamReaderBridgeBase>.fromOpaque(context).takeRetainedValue()
+    bridge.onComplete()
+}
+
+internal let nprpcStreamReaderOnError: @convention(c) (UnsafeMutableRawPointer?, UInt32) -> Void = {
+    context, errorCode in
+    guard let context = context else { return }
+    let bridge = Unmanaged<StreamReaderBridgeBase>.fromOpaque(context).takeRetainedValue()
+    bridge.onError(errorCode: errorCode)
+}
+
 /// Client-side stream reader wrapper
 /// Wraps AsyncThrowingStream to receive chunks from server
-public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable {
+public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence {
+    public typealias Element = T
+
     private let streamId: UInt64
     private var continuation: AsyncThrowingStream<T, Error>.Continuation?
     private let stream: AsyncThrowingStream<T, Error>
@@ -28,25 +77,19 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable {
     public var asyncStream: AsyncThrowingStream<T, Error> {
         return stream
     }
+
+    public func makeAsyncIterator() -> AsyncThrowingStream<T, Error>.Iterator {
+        stream.makeAsyncIterator()
+    }
     
     /// Called when a data chunk is received from server
     internal func onChunkReceived(data: UnsafeRawPointer, size: Int) {
-        // StreamChunk layout after Header (16 bytes):
-        // stream_id: u64 (8 bytes) - offset 0
-        // sequence: u64 (8 bytes) - offset 8
-        // data: vector<u8> (8 bytes header: offset + count) - offset 16
-        // window_size: u32 (4 bytes) - offset 24
-        
-        // Read the data vector from the chunk (offset 16 relative to chunk start)
-        let dataOffset = 16
-        let relativeOffset = data.load(fromByteOffset: dataOffset, as: UInt32.self)
-        let count = data.load(fromByteOffset: dataOffset + 4, as: UInt32.self)
-        
-        if count > 0 {
-            let absoluteOffset = dataOffset + Int(relativeOffset)
-            let value = deserializer(data.advanced(by: absoluteOffset), Int(count))
-            continuation?.yield(value)
+        guard size > 0 else {
+            return
         }
+
+        let value = deserializer(data, size)
+        continuation?.yield(value)
     }
     
     /// Called when stream completes successfully
@@ -66,6 +109,10 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable {
         continuation?.finish(throwing: CancellationError())
         continuation = nil
     }
+
+    internal func makeBridgeContext() -> UnsafeMutableRawPointer {
+        Unmanaged.passRetained(StreamReaderBridge(reader: self) as StreamReaderBridgeBase).toOpaque()
+    }
     
     deinit {
         cancel()
@@ -78,6 +125,244 @@ public func createByteStreamReader(streamId: UInt64, buffer: FlatBuffer) -> NPRP
         // For single byte, just read the first byte
         return data.load(as: UInt8.self)
     }
+}
+
+public func marshal_stream_fundamental<T>(buffer: FlatBuffer, offset: Int, value: T) {
+    let elementSize = MemoryLayout<T>.stride
+    let missingBytes = offset + elementSize - buffer.size
+    if missingBytes > 0 {
+        buffer.prepare(missingBytes)
+        buffer.commit(missingBytes)
+    }
+    guard let data = buffer.data else { return }
+    data.storeBytes(of: value, toByteOffset: offset, as: T.self)
+}
+
+public func marshal_stream_struct<T>(
+    buffer: FlatBuffer,
+    offset: Int,
+    rootSize: Int,
+    extraCapacity: Int = 128,
+    value: T,
+    marshalElement: (FlatBuffer, Int, T) -> Void
+) {
+    let missingBytes = offset + rootSize - buffer.size
+    if missingBytes > 0 {
+        buffer.prepare(missingBytes + extraCapacity)
+        buffer.commit(missingBytes)
+    }
+    marshalElement(buffer, offset, value)
+}
+
+public func marshal_stream_string(buffer: FlatBuffer, offset: Int, value: String) {
+    let missingBytes = offset + 8 - buffer.size
+    if missingBytes > 0 {
+        buffer.prepare(missingBytes)
+        buffer.commit(missingBytes)
+    }
+    marshal_string(buffer: buffer, offset: offset, string: value)
+}
+
+public func createObjectStreamReader<T: Sendable>(
+    objectHandle: UnsafeMutableRawPointer,
+    streamId: UInt64,
+    buffer: FlatBuffer,
+    deserializer: @escaping (UnsafeRawPointer, Int) -> T
+) -> NPRPCStreamReader<T> {
+    let reader = NPRPCStreamReader(streamId: streamId, buffer: buffer, deserializer: deserializer)
+    let context = reader.makeBridgeContext()
+    nprpc_stream_register_reader(
+        objectHandle,
+        streamId,
+        context,
+        nprpcStreamReaderOnChunk,
+        nprpcStreamReaderOnComplete,
+        nprpcStreamReaderOnError
+    )
+    return reader
+}
+
+public func createStreamManagerReader<T: Sendable>(
+    streamManager: UnsafeMutableRawPointer,
+    streamId: UInt64,
+    buffer: FlatBuffer,
+    deserializer: @escaping (UnsafeRawPointer, Int) -> T
+) -> NPRPCStreamReader<T> {
+    let reader = NPRPCStreamReader(streamId: streamId, buffer: buffer, deserializer: deserializer)
+    let context = reader.makeBridgeContext()
+    nprpc_stream_manager_register_reader(
+        streamManager,
+        streamId,
+        context,
+        nprpcStreamReaderOnChunk,
+        nprpcStreamReaderOnComplete,
+        nprpcStreamReaderOnError
+    )
+    return reader
+}
+
+public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
+    private let streamId: UInt64
+    private let buffer: FlatBuffer
+    private let serializer: (FlatBuffer, Int, T) -> Void
+    private let initialPayloadCapacity: Int
+    private let sendChunk: (FlatBuffer, UInt64) -> Void
+    private let sendComplete: (UInt64, UInt64) -> Void
+    private let sendError: (UInt64, UInt32) -> Void
+    private let sendCancel: ((UInt64) -> Void)?
+    private var sequence: UInt64 = 0
+    private var closed = false
+
+    internal init(
+        streamId: UInt64,
+        buffer: FlatBuffer = FlatBuffer(),
+        initialPayloadCapacity: Int,
+        serializer: @escaping (FlatBuffer, Int, T) -> Void,
+        sendChunk: @escaping (FlatBuffer, UInt64) -> Void,
+        sendComplete: @escaping (UInt64, UInt64) -> Void,
+        sendError: @escaping (UInt64, UInt32) -> Void,
+        sendCancel: ((UInt64) -> Void)? = nil
+    ) {
+        self.streamId = streamId
+        self.buffer = buffer
+        self.initialPayloadCapacity = max(initialPayloadCapacity, 1)
+        self.serializer = serializer
+        self.sendChunk = sendChunk
+        self.sendComplete = sendComplete
+        self.sendError = sendError
+        self.sendCancel = sendCancel
+    }
+
+    public func write(_ value: T) {
+        guard !closed else {
+            return
+        }
+
+        buffer.consume(buffer.size)
+        buffer.prepare(initialPayloadCapacity)
+        serializer(buffer, 0, value)
+
+        sendChunk(buffer, sequence)
+        sequence += 1
+    }
+
+    public func close() {
+        guard !closed else { return }
+        sendComplete(streamId, sequence == 0 ? 0 : sequence - 1)
+        closed = true
+    }
+
+    public func abort(errorCode: UInt32 = 1) {
+        guard !closed else { return }
+        sendError(streamId, errorCode)
+        closed = true
+    }
+
+    public func cancel() {
+        guard !closed else { return }
+        sendCancel?(streamId)
+        closed = true
+    }
+}
+
+public struct NPRPCBidiStream<TWrite: Sendable, TRead: Sendable>: @unchecked Sendable {
+    public let writer: NPRPCStreamWriter<TWrite>
+    public let reader: NPRPCStreamReader<TRead>
+
+    public init(writer: NPRPCStreamWriter<TWrite>, reader: NPRPCStreamReader<TRead>) {
+        self.writer = writer
+        self.reader = reader
+    }
+}
+
+public func createStreamManagerWriter<T: Sendable>(
+    streamManager: UnsafeMutableRawPointer,
+    streamId: UInt64,
+    initialPayloadCapacity: Int,
+    serializer: @escaping (FlatBuffer, Int, T) -> Void
+) -> NPRPCStreamWriter<T> {
+    NPRPCStreamWriter(
+        streamId: streamId,
+        initialPayloadCapacity: initialPayloadCapacity,
+        serializer: serializer,
+        sendChunk: { buffer, sequence in
+            guard let data = buffer.constData else { return }
+            nprpc_stream_manager_send_chunk(streamManager, streamId, data, UInt32(buffer.size), sequence)
+        },
+        sendComplete: { streamId, finalSequence in
+            nprpc_stream_manager_send_complete(streamManager, streamId, finalSequence)
+        },
+        sendError: { streamId, errorCode in
+            nprpc_stream_manager_send_error(streamManager, streamId, errorCode, nil, 0)
+        },
+        sendCancel: { streamId in
+            nprpc_stream_manager_send_cancel(streamManager, streamId)
+        }
+    )
+}
+
+public func createObjectStreamWriter<T: Sendable>(
+    objectHandle: UnsafeMutableRawPointer,
+    streamId: UInt64,
+    initialPayloadCapacity: Int,
+    serializer: @escaping (FlatBuffer, Int, T) -> Void
+) throws -> NPRPCStreamWriter<T> {
+    guard let streamManager = nprpc_object_get_stream_manager(objectHandle) else {
+        throw RuntimeError(message: "Failed to get stream manager for object stream writer")
+    }
+
+    return createStreamManagerWriter(
+        streamManager: streamManager,
+        streamId: streamId,
+        initialPayloadCapacity: initialPayloadCapacity,
+        serializer: serializer
+    )
+}
+
+public func createObjectBidiStream<TWrite: Sendable, TRead: Sendable>(
+    objectHandle: UnsafeMutableRawPointer,
+    streamId: UInt64,
+    buffer: FlatBuffer,
+    initialPayloadCapacity: Int,
+    serializer: @escaping (FlatBuffer, Int, TWrite) -> Void,
+    deserializer: @escaping (UnsafeRawPointer, Int) -> TRead
+) throws -> NPRPCBidiStream<TWrite, TRead> {
+    let reader = createObjectStreamReader(
+        objectHandle: objectHandle,
+        streamId: streamId,
+        buffer: buffer,
+        deserializer: deserializer
+    )
+    let writer = try createObjectStreamWriter(
+        objectHandle: objectHandle,
+        streamId: streamId,
+        initialPayloadCapacity: initialPayloadCapacity,
+        serializer: serializer
+    )
+    return NPRPCBidiStream(writer: writer, reader: reader)
+}
+
+public func createStreamManagerBidiStream<TWrite: Sendable, TRead: Sendable>(
+    streamManager: UnsafeMutableRawPointer,
+    streamId: UInt64,
+    buffer: FlatBuffer,
+    initialPayloadCapacity: Int,
+    serializer: @escaping (FlatBuffer, Int, TWrite) -> Void,
+    deserializer: @escaping (UnsafeRawPointer, Int) -> TRead
+) -> NPRPCBidiStream<TWrite, TRead> {
+    let reader = createStreamManagerReader(
+        streamManager: streamManager,
+        streamId: streamId,
+        buffer: buffer,
+        deserializer: deserializer
+    )
+    let writer = createStreamManagerWriter(
+        streamManager: streamManager,
+        streamId: streamId,
+        initialPayloadCapacity: initialPayloadCapacity,
+        serializer: serializer
+    )
+    return NPRPCBidiStream(writer: writer, reader: reader)
 }
 
 /// Server-side stream yielder for sending data chunks to client
@@ -110,37 +395,10 @@ public class StreamYielder<T>: @unchecked Sendable {
     /// Send a value to the client
     public func yield(_ value: T) {
         guard !finished else { return }
-        
-        // Build StreamDataChunk message
-        // Header (16) + stream_id (8) + sequence (8) + data vector (8) + window_size (4) = 44 base
-        let headerSize = 16
-        let chunkFixedSize = 28  // stream_id + sequence + vector header + window_size
-        let dataStartOffset = headerSize + chunkFixedSize
-        
+
         buffer.consume(buffer.size)
-        buffer.prepare(dataStartOffset + elementSize + 16)
-        buffer.commit(dataStartOffset)
-        
-        guard let data = buffer.data else { return }
-        
-        // Write header
-        data.storeBytes(of: impl.MessageId.streamDataChunk.rawValue, toByteOffset: 4, as: Int32.self)
-        data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: Int32.self)
-        data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self)  // request_id
-        
-        // Write StreamChunk fields
-        data.storeBytes(of: streamId, toByteOffset: headerSize, as: UInt64.self)
-        data.storeBytes(of: sequence, toByteOffset: headerSize + 8, as: UInt64.self)
-        // data vector at offset headerSize + 16
-        // window_size at offset headerSize + 24
-        data.storeBytes(of: UInt32(0), toByteOffset: headerSize + 24, as: UInt32.self)
-        
-        // Serialize the element into the data vector
-        serializer(buffer, headerSize + 16, value)
-        
-        // Update header size
-        guard let finalData = buffer.data else { return }
-        finalData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
+        buffer.prepare(elementSize + 16)
+        serializer(buffer, 0, value)
         
         sendChunk(buffer)
         sequence += 1
@@ -172,15 +430,13 @@ public func createByteStreamYielder(
         buffer: buffer,
         elementSize: 1,
         serializer: { buf, offset, value in
-            // For a single byte, write inline (relative offset 8, count 1, then the byte)
+            let missingBytes = offset + 1 - buf.size
+            if missingBytes > 0 {
+                buf.prepare(missingBytes)
+                buf.commit(missingBytes)
+            }
             guard let data = buf.data else { return }
-            let dataOffset = buf.size
-            buf.prepare(1)
-            buf.commit(1)
-            guard let newData = buf.data else { return }
-            newData.storeBytes(of: UInt32(dataOffset - offset), toByteOffset: offset, as: UInt32.self)
-            newData.storeBytes(of: UInt32(1), toByteOffset: offset + 4, as: UInt32.self)
-            newData.storeBytes(of: value, toByteOffset: dataOffset, as: UInt8.self)
+            data.storeBytes(of: value, toByteOffset: offset, as: UInt8.self)
         },
         sendChunk: sendChunk,
         sendComplete: sendComplete

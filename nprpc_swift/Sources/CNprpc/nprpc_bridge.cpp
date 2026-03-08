@@ -894,6 +894,22 @@ uint64_t nprpc_generate_stream_id() {
     return nprpc::impl::StreamManager::generate_stream_id();
 }
 
+void* nprpc_object_get_stream_manager(void* object_ptr) {
+    auto* obj = static_cast<nprpc::Object*>(object_ptr);
+    if (!obj) {
+        NPRPC_LOG_WARN("[SWB] nprpc_object_get_stream_manager: object_ptr is null");
+        return nullptr;
+    }
+
+    auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
+    if (!session || !session->ctx().stream_manager) {
+        NPRPC_LOG_WARN("[SWB] nprpc_object_get_stream_manager: no session or stream_manager");
+        return nullptr;
+    }
+
+    return session->ctx().stream_manager;
+}
+
 void* nprpc_get_stream_manager(void* session_ctx) {
     auto* ctx = static_cast<nprpc::SessionContext*>(session_ctx);
     if (!ctx) {
@@ -933,6 +949,14 @@ void nprpc_stream_manager_send_complete(void* stream_manager, uint64_t stream_id
     if (!mgr) return;
 
     mgr->send_complete(stream_id, final_sequence);
+}
+
+void nprpc_stream_manager_send_cancel(void* stream_manager, uint64_t stream_id) {
+    NPRPC_LOG_INFO("[SWB] send_cancel: stream_id={}", stream_id);
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) return;
+
+    mgr->send_cancel(stream_id);
 }
 
 void nprpc_stream_manager_send_error(
@@ -1078,6 +1102,25 @@ void nprpc_stream_register_reader(
     auto* reader = new SwiftStreamReader(context, on_chunk, on_complete, on_error);
     session->ctx().stream_manager->register_reader(stream_id, reader);
     NPRPC_LOG_INFO("[SWB] nprpc_stream_register_reader: Reader registered with stream_manager={}", (void*)session->ctx().stream_manager);
+}
+
+void nprpc_stream_manager_register_reader(
+    void* stream_manager,
+    uint64_t stream_id,
+    void* context,
+    void (*on_chunk)(void*, const void*, uint32_t),
+    void (*on_complete)(void*),
+    void (*on_error)(void*, uint32_t))
+{
+    NPRPC_LOG_INFO("[SWB] nprpc_stream_manager_register_reader: stream_id={}", stream_id);
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) {
+        NPRPC_LOG_ERROR("[SWB] nprpc_stream_manager_register_reader: stream_manager is null");
+        return;
+    }
+
+    auto* reader = new SwiftStreamReader(context, on_chunk, on_complete, on_error);
+    mgr->register_reader(stream_id, reader);
 }
 
 int nprpc_stream_send_init(

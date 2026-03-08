@@ -30,6 +30,7 @@ public struct NPRPCEndpoint {
         switch type {
         case .tcp, .tcpTethered: prefix = "tcp://"
         case .webSocket: prefix = "ws://"
+        case .webTransport: prefix = "wt://"
         case .securedWebSocket: prefix = "wss://"
         case .http: prefix = "http://"
         case .securedHttp: prefix = "https://"
@@ -42,7 +43,7 @@ public struct NPRPCEndpoint {
 }
 
 /// Base class for Swift servants
-open class NPRPCServant {
+open class NPRPCServant: @unchecked Sendable {
     /// Session context pointer for streaming operations (set during dispatch)
     public var sessionContext: UnsafeMutableRawPointer?
     

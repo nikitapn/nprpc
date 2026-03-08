@@ -378,6 +378,10 @@ void* nprpc_poa_activate_swift_servant_with_id(
 // Generate a unique stream ID
 uint64_t nprpc_generate_stream_id();
 
+// Get stream_manager pointer for a client-side object.
+// The returned pointer is valid for the lifetime of the underlying session.
+void* nprpc_object_get_stream_manager(void* object_ptr);
+
 // Get stream_manager pointer from session context (for use in async Tasks)
 // The stream_manager pointer remains valid for the lifetime of the session
 void* nprpc_get_stream_manager(void* session_ctx);
@@ -398,6 +402,9 @@ void nprpc_stream_manager_send_chunk(
 
 // Send stream completion via stream_manager (server -> client)
 void nprpc_stream_manager_send_complete(void* stream_manager, uint64_t stream_id, uint64_t final_sequence);
+
+// Send stream cancellation via stream_manager
+void nprpc_stream_manager_send_cancel(void* stream_manager, uint64_t stream_id);
 
 // Send stream error via stream_manager (server -> client)
 void nprpc_stream_manager_send_error(
@@ -442,6 +449,15 @@ void nprpc_stream_send_error(
 //   on_error: callback when error occurs (context, error_code)
 void nprpc_stream_register_reader(
     void* object_ptr,
+    uint64_t stream_id,
+    void* context,
+    void (*on_chunk)(void*, const void*, uint32_t),
+    void (*on_complete)(void*),
+    void (*on_error)(void*, uint32_t));
+
+// Register a stream reader directly on a StreamManager (server-side streaming handlers)
+void nprpc_stream_manager_register_reader(
+    void* stream_manager,
     uint64_t stream_id,
     void* context,
     void (*on_chunk)(void*, const void*, uint32_t),
