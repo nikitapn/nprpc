@@ -471,10 +471,10 @@ public:
 //   function_decl  ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (',' arg_decl)*)? ')' (';' | 'raises' '(' IDENTIFIER ')' ';')
 //   field_decl     ::= (IDENTIFIER | 'message') '?'? ':' type_decl
 //   arg_decl       ::= (IDENTIFIER | 'message') '?'? ':' ('in' | 'out' 'direct'?) type_decl
-//   type_decl      ::= fundamental_type array_decl? | IDENTIFIER array_decl?
-//                      | 'vector' '<' type_decl '>' | 'string' array_decl?
+//   type_decl      ::= fundamental_type array_or_vec_decl? | IDENTIFIER array_or_vec_decl?
+//                      | 'vector' '<' type_decl '>' | 'string' array_or_vec_decl?
 //                      | 'void' | 'object' | 'stream' '<' type_decl '>'
-//   array_decl     ::= '[' (IDENTIFIER | NUMBER) ']'
+//   array_or_vec_decl     ::= '[' (IDENTIFIER | NUMBER) ']'
 //   version_decl   ::= '#' 'version' NUMBER
 //   attributes_decl::= '[' (IDENTIFIER '=' (IDENTIFIER | NUMBER))? ']' attributes_decl?
 
@@ -650,36 +650,42 @@ class Parser : public IParser
     node->set_position(token_position(start_token), current_position());
   }
 
-  // array_decl ::= '[' (IDENTIFIER | NUMBER) ']'
-  bool array_decl(AstTypeDecl*& type)
+  // array_or_vec_decl ::= '[' (IDENTIFIER | NUMBER)? ']'
+  bool array_or_vec_decl(AstTypeDecl*& type)
   {
-    if (peek() == TokenId::SquareBracketOpen) {
-      flush();
+    if (peek() != TokenId::SquareBracketOpen)
+      return false;
 
-      int64_t length = -1;
-      auto tok = peek();
-      if (tok == TokenId::Identifier) {
-        auto value = ctx_.nm_cur()->find_constant(tok.name);
-        if (!value) {
-          throw_error("Unknown constant: \"" + tok.name + "\". Make sure it's defined before use with 'const'.");
-        } else if (!value->is_decimal()) {
-          throw_error("Constant \"" + tok.name + "\" is not a decimal value. Only decimal constants can be used for array sizes.");
-        }
-        length = value->decimal();
-      } else if (tok == TokenId::Number) {
-        length = std::atoi(match(TokenId::Number).name.c_str());
-      } else {
-        throw_error("Expected a number literal or a constant name. Examples: 42, 3.14, MY_CONSTANT");
+    flush();
+
+    int64_t length = -1;
+    Token tok;
+    if (check(&Parser::one1, TokenId::Identifier, std::ref(tok))) {
+      auto value = ctx_.nm_cur()->find_constant(tok.name);
+      if (!value) {
+        throw_error("Unknown constant: \"" + tok.name + "\". Make sure it's defined before use with 'const'.");
       }
-
-      flush();
-
-      match(TokenId::SquareBracketClose);
-      type = new AstArrayDecl(type, static_cast<int>(length));
-
-      return true;
+      if (!value->is_decimal()) {
+        throw_error("Constant \"" + tok.name + "\" is not a decimal value. Only decimal constants can be used for array sizes.");
+      }
+      length = value->decimal();
+    } else if (check(&Parser::one1, TokenId::Number, std::ref(tok))) {
+      length = std::atoi(tok.name.c_str());
+    } else {
+      // then it's a vector with dynamic length
     }
-    return false;
+
+    match(TokenId::SquareBracketClose);
+
+    if (length == 0) {
+      throw_error("Array length cannot be zero.");
+    } else if (length > 0) {
+      type = new AstArrayDecl(type, static_cast<int>(length));
+    } else {
+      type = new AstVectorDecl(type);
+    }
+
+    return true;
   }
 
   // is_double_colon ::= '::'
@@ -741,10 +747,10 @@ class Parser : public IParser
     return false;
   }
 
-  // type_decl ::= fundamental_type array_decl?
-  //             | IDENTIFIER array_decl?
+  // type_decl ::= fundamental_type array_or_vec_decl?
+  //             | IDENTIFIER array_or_vec_decl?
   //             | 'vector' '<' type_decl '>'
-  //             | 'string' array_decl?
+  //             | 'string' array_or_vec_decl?
   //             | 'void'
   //             | 'object'
   //             | 'stream' '<' type_decl '>'
@@ -773,7 +779,7 @@ class Parser : public IParser
     if (t.is_fundamental_type()) {
       flush();
       type = new AstFundamentalType(t.id);
-      check(&Parser::array_decl, std::ref(type));
+      check(&Parser::array_or_vec_decl, std::ref(type));
       return true;
     }
 
@@ -785,7 +791,7 @@ class Parser : public IParser
       if (!type) {
         throw_error("Unknown type '" + t.name + "'. Did you forget to import it or define it before use?");
       }
-      check(&Parser::array_decl, std::ref(type));
+      check(&Parser::array_or_vec_decl, std::ref(type));
       return true;
     case TokenId::Vector:
       flush();
@@ -840,7 +846,7 @@ class Parser : public IParser
     case TokenId::String:
       flush();
       type = new AstStringDecl();
-      check(&Parser::array_decl, std::ref(type));
+      check(&Parser::array_or_vec_decl, std::ref(type));
       return true;
     case TokenId::Void:
       flush();
@@ -1489,6 +1495,15 @@ class Parser : public IParser
   bool one(TokenId id)
   {
     if (peek() == id) {
+      flush();
+      return true;
+    }
+    return false;
+  }
+
+  bool one1(TokenId id, Token& tok)
+  {
+    if ((tok = peek()) == id) {
       flush();
       return true;
     }

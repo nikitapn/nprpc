@@ -5,6 +5,33 @@
 
 import Foundation
 
+// MARK: - String Marshalling
+
+public func marshal_string(buffer: FlatBuffer, offset: Int, string: String) {
+    let utf8 = Array(string.utf8)
+    let dataOffset = _alloc(buffer: buffer, vectorOffset: offset, count: utf8.count, elementSize: 1, align: 1)
+
+    if utf8.count > 0 {
+        guard let data = buffer.data else { return }
+        utf8.withUnsafeBytes { bytes in
+            data.advanced(by: dataOffset).copyMemory(
+                from: bytes.baseAddress!,
+                byteCount: utf8.count
+            )
+        }
+    }
+}
+
+public func unmarshal_string(buffer: UnsafeRawPointer, offset: Int) -> String {
+    let dataOffset = Int(buffer.load(fromByteOffset: offset, as: UInt32.self)) + offset
+    let count = Int(buffer.load(fromByteOffset: offset + 4, as: UInt32.self))
+    guard count > 0 else { return "" }
+
+    let dataPtr = buffer.advanced(by: dataOffset)
+    let data = Data(bytes: dataPtr, count: count)
+    return String(data: data, encoding: .utf8) ?? ""
+}
+
 // MARK: - Vector Marshalling
 
 public func marshal_fundamental_vector<T>(buffer: FlatBuffer, offset: Int, vector: [T]) {
@@ -40,6 +67,36 @@ public func unmarshal_fundamental_vector<T>(buffer: UnsafeRawPointer, offset: In
 
     return result
 }
+
+/// MARK: - String Vector Marshalling (special case of vector of fundamental type)
+
+public func marshal_string_vector(buffer: FlatBuffer, offset: Int, vector: [String]) {
+    let dataOffset = _alloc(buffer: buffer, vectorOffset: offset, count: vector.count, elementSize: 8, align: 4)
+
+    if vector.count > 0 {
+        for (index, element) in vector.enumerated() {
+            marshal_string(buffer: buffer, offset: dataOffset + index * 8, string: element)
+        }
+    }
+}
+
+public func unmarshal_string_vector(buffer: UnsafeRawPointer, offset: Int) -> [String] {
+    let dataOffset = Int(buffer.load(fromByteOffset: offset + 0, as: UInt32.self)) + offset
+    let count = Int(buffer.load(fromByteOffset: offset + 4, as: UInt32.self))
+    guard count > 0 else { return [] }
+
+    var result: [String] = []
+    result.reserveCapacity(count)
+
+    for i in 0..<count {
+        result.append(
+            unmarshal_string(buffer: buffer, offset: dataOffset + i * 8))
+    }
+
+    return result
+}
+
+/// MARK: - Struct Vector Marshalling (for vectors of non-fundamental types)
 
 public func marshal_struct_vector<T>(
     buffer: FlatBuffer,
@@ -96,6 +153,59 @@ public func unmarshal_fundamental_array<T>(buffer: UnsafeRawPointer, offset: Int
     return Array(UnsafeBufferPointer(start: pointer, count: count))
 }
 
+/// MARK: - String Array Marshalling (special case of array of fundamental type)
+
+public func marshal_string_array(buffer: FlatBuffer, offset: Int, stringArray: [String], count: Int) {
+    for i in 0..<count {
+        marshal_string(buffer: buffer, offset: offset + i * 8, string: stringArray[i])
+    }
+}
+
+public func unmarshal_string_array(buffer: UnsafeRawPointer, offset: Int, count: Int) -> [String] {
+    var result: [String] = []
+    result.reserveCapacity(count)
+
+    for i in 0..<count {
+        result.append(unmarshal_string(buffer: buffer, offset: offset + i * 8))
+    }
+
+    return result
+}
+
+/// MARK: - Struct Array Marshalling (for arrays of non-fundamental types)
+
+public func marshal_struct_array<T>(
+    buffer: FlatBuffer,
+    offset: Int,
+    array: [T],
+    count: Int,
+    elementSize: Int,
+    marshalElement: (FlatBuffer, Int, T) -> Void
+) {
+    for i in 0..<count {
+        marshalElement(buffer, offset + i * elementSize, array[i])
+    }
+}
+
+public func unmarshal_struct_array<T>(
+    buffer: UnsafeRawPointer,
+    offset: Int,
+    count: Int,
+    elementSize: Int,
+    unmarshalElement: (UnsafeRawPointer, Int) -> T
+) -> [T] {
+    var result: [T] = []
+    result.reserveCapacity(count)
+
+    for i in 0..<count {
+        let element = unmarshalElement(buffer, offset + i * elementSize)
+        result.append(element)
+    }
+
+    return result
+}
+
+
 // MARK: - Optional Marshalling
 
 public func marshal_optional_fundamental<T>(buffer: FlatBuffer, offset: Int, value: T) {
@@ -146,32 +256,6 @@ public func unmarshal_optional_struct<T>(
     return unmarshalFunc(buffer, dataOffset)
 }
 
-// MARK: - String Marshalling
-
-public func marshal_string(buffer: FlatBuffer, offset: Int, string: String) {
-    let utf8 = Array(string.utf8)
-    let dataOffset = _alloc(buffer: buffer, vectorOffset: offset, count: utf8.count, elementSize: 1, align: 1)
-
-    if utf8.count > 0 {
-        guard let data = buffer.data else { return }
-        utf8.withUnsafeBytes { bytes in
-            data.advanced(by: dataOffset).copyMemory(
-                from: bytes.baseAddress!,
-                byteCount: utf8.count
-            )
-        }
-    }
-}
-
-public func unmarshal_string(buffer: UnsafeRawPointer, offset: Int) -> String {
-    let dataOffset = Int(buffer.load(fromByteOffset: offset, as: UInt32.self)) + offset
-    let count = Int(buffer.load(fromByteOffset: offset + 4, as: UInt32.self))
-    guard count > 0 else { return "" }
-
-    let dataPtr = buffer.advanced(by: dataOffset)
-    let data = Data(bytes: dataPtr, count: count)
-    return String(data: data, encoding: .utf8) ?? ""
-}
 
 // MARK: - ObjectId Marshalling
 

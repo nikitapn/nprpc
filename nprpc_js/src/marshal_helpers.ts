@@ -23,6 +23,27 @@ export function unmarshal_string(buf: FlatBuffer, offset: number): string {
 	return u8dec.decode(new DataView(buf.array_buffer, data_offset, n));
 }
 
+export function marshal_string_array(buf: FlatBuffer, offset: number, arr: string[]): void {
+	const data_offset = _alloc(buf, offset, arr.length, 8, 4);
+	for (let i = 0; i < arr.length; i++) {
+		marshal_string(buf, data_offset + i * 8, arr[i]);
+	}
+}
+
+export function unmarshal_string_array(buf: FlatBuffer, offset: number): string[] {
+	const relative_offset = buf.dv.getUint32(offset, true);
+	const n = buf.dv.getUint32(offset + 4, true);
+	
+	if (n === 0) return [];
+	
+	const data_offset = offset + relative_offset;
+	const result = [];
+	for (let i = 0; i < n; i++) {
+		result.push(unmarshal_string(buf, data_offset + i * 8));
+	}
+	return result;
+}
+
 export function marshal_typed_array(buf: FlatBuffer, offset: number, arr: TypedArray, elem_size: number, elem_align: number): void {
 	const data_offset = _alloc(buf, offset, arr.length, elem_size, elem_align);
 	const bytes = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);

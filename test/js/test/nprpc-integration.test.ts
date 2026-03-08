@@ -214,6 +214,14 @@ describe('NPRPC Integration Tests', function() {
             // Verify the output value (dev_addr + addr = 10 + 20 = 30)
             expect(valueRef.value).to.equal(30);
         });
+
+        it('should return array of strings', async function() {
+            const result = await testBasic.ReturnStringArray(5);
+            expect(result).to.be.an('array').that.has.lengthOf(5);
+            for (let i = 0; i < 5; i++) {
+                expect(result[i]).to.equal("String " + i);
+            }
+        });
     }); // describe TestBasic
 
     describe('TestOptional Interface', function() {

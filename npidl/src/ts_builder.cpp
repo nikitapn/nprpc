@@ -2341,7 +2341,15 @@ void TSBuilder::emit_field_marshal(AstFieldDecl* f,
           << "(buf.array_buffer, offset + " << field_offset << ", "
           << arr->length << ");\n";
       out << bl() << __arr << ".set(" << field_access << ");\n";
-    } else if (wt->id == FieldType::Struct) {
+    } else if (wt->id == FieldType::String) {
+      // For fixed-size arrays of strings, marshal each element in place
+      out << bl() << "for (let i = 0; i < " << arr->length << "; ++i) {\n"
+          << bb(false);
+      out << bl() << "NPRPC.marshal_string(buf, offset + " << field_offset
+          << " + i * 8, " << field_access << "[i]);\n";
+      out << eb();
+
+    }else if (wt->id == FieldType::Struct) {
       // For fixed-size arrays of structs, marshal each element in place
       out << bl() << "for (let i = 0; i < " << arr->length << "; ++i) {\n"
           << bb(false);
@@ -2350,7 +2358,7 @@ void TSBuilder::emit_field_marshal(AstFieldDecl* f,
           << "[i]);\n";
       out << eb();
     } else {
-      assert(false && "Unsupported array element type for marshalling");
+      throw std::runtime_error("Unsupported vector element type for marshalling");
     }
     break;
   }
@@ -2365,14 +2373,15 @@ void TSBuilder::emit_field_marshal(AstFieldDecl* f,
       out << bl() << "NPRPC.marshal_typed_array(buf, offset + " << field_offset
           << ", " << field_access << ", " << ut_size << ", " << ut_align
           << ");\n";
+    } else if (wt->id == FieldType::String) {
+      out << bl() << "NPRPC.marshal_string_array(buf, offset + " << field_offset
+          << ", " << field_access << ");\n";
     } else if (wt->id == FieldType::Struct) {
       out << bl() << "NPRPC.marshal_struct_array(buf, offset + " << field_offset
           << ", " << field_access << ", marshal_" << cflat(wt)->name << ", "
           << ut_size << ", " << ut_align << ");\n";
     } else {
-      // TODO: skip for now - need to implement nested vectors/arrays
-      // assert(false && "Unsupported vector element type for
-      // marshalling");
+      throw std::runtime_error("Unsupported vector element type for marshalling");
     }
     break;
   }
@@ -2600,6 +2609,14 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
       out << bl() << field_name << " = new " << typed_array_name
           << "(buf.array_buffer, offset + " << field_offset << ", "
           << arr->length << ");\n";
+    } else if (wt->id == FieldType::String) {
+      // For fixed-size arrays of strings, unmarshal each element
+      out << bl() << field_name << " = new Array(" << arr->length << ");\n";
+      out << bl() << "for (let i = 0; i < " << arr->length << "; ++i) {\n"
+          << bb(false);
+      out << bl() << field_name << "[i] = NPRPC.unmarshal_string(buf, offset + "
+          << field_offset << " + i * 8);\n";
+      out << eb();
     } else if (wt->id == FieldType::Struct) {
       // For fixed-size arrays of structs, unmarshal each element
       out << bl() << field_name << " = new Array(" << arr->length << ");\n";
@@ -2616,7 +2633,8 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
       }
       out << eb();
     } else {
-      assert(false && "Unsupported array element type for unmarshalling");
+      // TODO: Support arrays of other types (e.g., arrays of arrays, etc.)
+      throw std::runtime_error("Unsupported array element type for unmarshalling");
     }
     break;
   }
@@ -2633,14 +2651,17 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
           << " = NPRPC.unmarshal_typed_array(buf, offset + " << field_offset
           << ", " << ut_size << ") as "
           << get_typed_array_name(cft(wt)->token_id) << ";\n";
+    } else if (wt->id == FieldType::String) {
+      out << bl() << field_name
+          << " = NPRPC.unmarshal_string_array(buf, offset + " << field_offset
+          << ");\n";
     } else if (wt->id == FieldType::Struct) {
       out << bl() << field_name
           << " = NPRPC.unmarshal_struct_array(buf, offset + " << field_offset
           << ", unmarshal_" << cflat(wt)->name << ", " << ut_size << ");\n";
-    } else {
-      // TODO: skip for now - need to implement nested vectors/arrays
-      // assert(false && "Unsupported vector element type for
-      // unmarshalling");
+     } else {
+      // TODO: Support vectors of other types (e.g., vectors of vectors, etc.)
+      throw std::runtime_error("Unsupported vector element type for unmarshalling");
     }
     break;
   }

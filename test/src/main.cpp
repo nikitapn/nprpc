@@ -79,6 +79,13 @@ TEST_F(NprpcTest, TestBasic)
       for (uint32_t i = 0; i < 10; ++i) {
         EXPECT_EQ(struct_array[i].id, i + 1);
       }
+
+      // ReturnStringArray test
+      auto string_array = obj->ReturnStringArray(5);
+      EXPECT_EQ(string_array.size(), 5u);
+      for (uint32_t i = 0; i < 5; ++i) {
+        EXPECT_EQ(string_array[i], "String " + std::to_string(i));
+      }
     } catch (nprpc::Exception& ex) {
       FAIL() << "Exception in TestBasic: " << ex.what();
     }

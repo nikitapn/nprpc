@@ -19,6 +19,8 @@ final class IntegrationTests: XCTestCase {
                 .withHostname("localhost")
                 .withTcp(16000)
                 .withHttp(16001)
+                    .ssl(certFile: "/workspace/certs/out/localhost.crt",
+                         keyFile: "/workspace/certs/out/localhost.key")
                 .withQuic(16002)
                     .ssl(certFile: "/workspace/certs/out/localhost.crt",
                          keyFile: "/workspace/certs/out/localhost.key")
@@ -72,6 +74,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(writtenPath, outputPath)
 
         let text = try String(contentsOfFile: outputPath, encoding: .utf8)
+        print("Produced host.json content:\n\(text)")
         XCTAssertTrue(text.contains("\"shape\""))
         XCTAssertTrue(text.contains("\"class_id\": \"basic_test/swift.test.ShapeService\""))
         XCTAssertTrue(text.contains("\"secured\": true"))
@@ -307,6 +310,10 @@ final class IntegrationTests: XCTestCase {
                 outScalarWithException_receivedAddr = addr
                 return 32
             }
+
+            override func returnStringArray(count: UInt32) throws -> [String]   {
+                return (1...count).map { "String \($0)" }
+            }
         }
 
         let servant = TestBasicServantImpl()
@@ -379,6 +386,9 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(servant.outScalarWithException_receivedDevAddr, 10)
         XCTAssertEqual(servant.outScalarWithException_receivedAddr, 783)
         XCTAssertEqual(result, 32)
+        // Testing marshalling of output string array
+        let stringArray = try client.returnStringArray(count: 3)
+        XCTAssertEqual(stringArray, ["String 1", "String 2", "String 3"])
     }
 
     func testLargeMessage() throws {

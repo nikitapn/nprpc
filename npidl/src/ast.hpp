@@ -359,6 +359,12 @@ struct AstVectorDecl : AstWrapType {
   {
     id = FieldType::Vector;
   }
+
+  AstVectorDecl(AstTypeDecl* _type)
+      : AstWrapType(_type)
+  {
+    id = FieldType::Vector;
+  }
 };
 
 struct AstAliasDecl : AstWrapType, AstNodeWithPosition {

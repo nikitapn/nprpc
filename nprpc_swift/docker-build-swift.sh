@@ -12,7 +12,6 @@ DOCKER_IMAGE_NAME="nprpc-swift-ubuntu"
 if [ ! -f "$BUILD_DIR/libnprpc.so" ]; then
   echo "Error: libnprpc.so not found at $BUILD_DIR"
   echo "Please build nprpc with Swift's Clang 17 first:"
-  # echo "  cd $NPRPC_ROOT && ./configure_swift_clang17.sh && cmake --build .build_swift_clang17 -j\$(nproc)"
   exit 1
 fi
 
@@ -34,7 +33,7 @@ if [ "$RUN_TESTS" = true ]; then
       # Use stdbuf to disable output buffering so we see print() before timeout kills process
       stdbuf -oL -eL timeout 15 swift test 2>&1
       code=$?
-      test $code -eq 0 && echo "✅ Swift tests passed" || echo "❌ Swift tests failed with code $code"
+      test $code -eq 0 && echo "✅ Swift tests passed" || echo "❌ Swift tests failed with code $code" && exit $code
      '
 else
   docker run --rm -v         \

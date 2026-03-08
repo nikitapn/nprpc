@@ -66,7 +66,7 @@ COPY ./ /workspace/
 # Build NPRPC C++ library and tools
 RUN cmake -G Ninja \
     -S . \
-    -B .build_release \
+    -B .build_relwith_debinfo \
     -DCMAKE_C_COMPILER=clang \
     -DCMAKE_CXX_COMPILER=clang++ \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -79,8 +79,8 @@ RUN cmake -G Ninja \
     -DBUILD_SHARED_LIBS=ON \
     -DNPRPC_BUILD_TESTS=OFF \
     -DNPRPC_BUILD_JS=OFF \
-    && cmake --build .build_release -j$(nproc) \
-    && cmake --install .build_release
+    && cmake --build .build_relwith_debinfo -j$(nproc) \
+    && cmake --install .build_relwith_debinfo
 
 # ============================================================================
 # Stage 3: Build Swift bindings
@@ -90,7 +90,7 @@ FROM nprpc-builder AS swift-builder
 WORKDIR /workspace/nprpc_swift
 
 # Generate Swift stubs
-RUN NPIDL=.build_release/npidl/npidl ./gen_stubs.sh
+RUN NPIDL=.build_relwith_debinfo/npidl/npidl ./gen_stubs.sh
 
 # Build Swift package (release mode)
 RUN swift build -c release \

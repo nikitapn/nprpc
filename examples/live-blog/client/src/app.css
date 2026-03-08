@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+:root {
+	--ink: #1c1917;
+	--paper: #f8f4ec;
+	--accent: #b45309;
+	--accent-deep: #7c2d12;
+	--card: rgba(255, 251, 245, 0.84);
+	--line: rgba(120, 53, 15, 0.18);
+	--shadow: 0 24px 60px rgba(28, 25, 23, 0.12);
+}
+
+html {
+	background:
+		radial-gradient(circle at top, rgba(245, 158, 11, 0.24), transparent 34%),
+		linear-gradient(180deg, #fffaf3 0%, var(--paper) 52%, #efe6d7 100%);
+	color: var(--ink);
+	min-height: 100%;
+}
+
+body {
+	min-height: 100vh;
+	margin: 0;
+	font-family:
+		"Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia,
+		serif;
+}
+
+.grain {
+	background-image:
+		linear-gradient(rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.3)),
+		url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23d6c1a0' fill-opacity='.18'%3E%3Cpath d='M36 34h2v2h-2zm29 11h2v2h-2zm45 33h2v2h-2zm-63 57h2v2h-2zm108-25h2v2h-2zm-95-67h2v2h-2zm70-16h2v2h-2zm-5 109h2v2h-2z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+}
+
+.glass-card {
+	background: var(--card);
+	border: 1px solid var(--line);
+	box-shadow: var(--shadow);
+	backdrop-filter: blur(12px);
+	border-radius: 24px;
+}
+
+.eyebrow {
+	letter-spacing: 0.24em;
+	text-transform: uppercase;
+	font-size: 0.72rem;
+	font-family: ui-sans-serif, system-ui, sans-serif;
+	color: var(--accent-deep);
+	font-weight: 700;
+}
+
+.skeleton {
+	position: relative;
+	overflow: hidden;
+	background: rgba(120, 53, 15, 0.08);
+	border-radius: 999px;
+}
+
+.skeleton::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	transform: translateX(-100%);
+	background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.65), transparent);
+	animation: shimmer 1.6s infinite;
+}
+
+@keyframes shimmer {
+	100% {
+		transform: translateX(100%);
+	}
+}

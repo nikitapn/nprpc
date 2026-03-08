@@ -68,6 +68,8 @@ interface TestBasic {
 	// Test case for flat output struct with simple scalar out parameter and exception handler
 	// This tests the fix for variable scope when output params are declared before try block
 	void OutScalarWithException(dev_addr: u8, addr: u16, value: out u8) raises (SimpleException);
+
+	string[] ReturnStringArray(count: u32) raises (AssertionFailed);
 }
 
 interface TestLargeMessage {

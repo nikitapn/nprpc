@@ -1758,6 +1758,8 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
 
     if (is_fundamental(wt)) {
       out << bl() << "NPRPC.marshal_fundamental_array(buffer: buffer, offset: offset + " << field_offset << ", array: " << field_access << ", count: " << count_name << ")\n";
+    } else if (wt->id == FieldType::String) {
+      out << bl() << "NPRPC.marshal_string_array(buffer: buffer, offset: offset + " << field_offset << ", array: " << field_access << ", count: " << count_name << ")\n";
     } else {
       auto flat_struct = cflat(wt);
       std::string type_name = flat_struct ? flat_struct->name : "<unknown>";
@@ -1775,12 +1777,16 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
 
     if (is_fundamental(wt)) {
       out << bl() << "NPRPC.marshal_fundamental_vector(buffer: buffer, offset: offset + " << field_offset << ", vector: " << field_access << ")\n";
-    } else {
+    } else if (wt->id == FieldType::Struct) {
       auto flat_struct = cflat(wt);
       std::string type_name = flat_struct ? flat_struct->name : "<unknown>";
       out << bl() << "NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + " << field_offset << ", vector: " << field_access << ", elementSize: " << ut_size << ", elementAlignment: " << ut_align << ") { buf, off, elem in\n";
       out << bl() << "  marshal_" << type_name << "(buffer: buf, offset: off, data: elem)\n";
       out << bl() << "}\n";
+    } else if (wt->id == FieldType::String) {
+      out << bl() << "NPRPC.marshal_string_vector(buffer: buffer, offset: offset + " << field_offset << ", vector: " << field_access << ")\n";
+    } else {
+      throw std::runtime_error("Not yet supported vector element type for marshalling: " + std::to_string(static_cast<int>(wt->id)));
     }
     break;
   }
@@ -1956,6 +1962,8 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
 
     if (is_fundamental(wt)) {
       out << bl() << field_name << " = NPRPC.unmarshal_fundamental_array(buffer: buffer, offset: offset + " << field_offset << ", count: " << arr->length << ")\n";
+    } else if (wt->id == FieldType::String) {
+      out << bl() << field_name << " = NPRPC.unmarshal_string_array(buffer: buffer, offset: offset + " << field_offset << ", count: " << arr->length << ")\n";
     } else {
       out << bl() << field_name << " = (0..<" << arr->length << ").map { i in\n" <<  bb(false);
       out << bl() << "unmarshal_" << cflat(wt)->name << "(buffer: buffer, offset: offset + " << field_offset << " + i * " << ut_size << ")\n";
@@ -1971,6 +1979,8 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
 
     if (is_fundamental(wt)) {
       out << bl() << field_name << " = NPRPC.unmarshal_fundamental_vector(buffer: buffer, offset: offset + " << field_offset << ")\n";
+    } else if (wt->id == FieldType::String) {
+      out << bl() << field_name << " = NPRPC.unmarshal_string_vector(buffer: buffer, offset: offset + " << field_offset << ")\n";
     } else {
       out << bl() << field_name << " = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + " << field_offset << ", elementSize: " << ut_size << ") { buf, off in\n";
       out << bl() << "  unmarshal_" << cflat(wt)->name << "(buffer: buf, offset: off)\n";

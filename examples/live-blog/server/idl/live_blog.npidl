@@ -1,0 +1,85 @@
+
+module live_blog;
+
+alias binary = u8[];
+
+enum PresenceEventKind {
+  Joined,
+  Left,
+  Typing,
+}
+
+message AuthorPreview {
+  id: u64;
+  slug: string;
+  name: string;
+  bio: string;
+  avatar_url: string;
+}
+
+message PostPreview {
+  id: u64;
+  slug: string;
+  title: string;
+  excerpt: string;
+  published_at: string;
+  cover_url?: string;
+  author: AuthorPreview;
+}
+
+message PostPage {
+  page: u32;
+  page_size: u32;
+  total_posts: u32;
+  posts: PostPreview[];
+}
+
+message PostDetail {
+  id: u64;
+  slug: string;
+  title: string;
+  summary: string;
+  body_html: string;
+  published_at: string;
+  author: AuthorPreview;
+  tags: string[];
+}
+
+message Comment {
+  id: u64;
+  author_name: string;
+  body: string;
+  created_at: string;
+}
+
+message ChatEnvelope {
+  author: string;
+  body: string;
+  created_at: string;
+}
+
+message PresenceEvent {
+  user_name: string;
+  kind: PresenceEventKind;
+}
+
+message ChatServerEvent {
+  message1: ChatEnvelope;
+  presence: PresenceEvent;
+}
+
+interface BlogService {
+  PostPage ListPosts(page: u32, page_size: u32);
+  PostDetail GetPost(slug: string);
+  vector<Comment> ListComments(post_id: u64, page: u32, page_size: u32);
+  vector<PostPreview> ListAuthorPosts(author_slug: string, page: u32, page_size: u32);
+  AuthorPreview GetAuthor(author_slug: string);
+}
+
+interface ChatService {
+  bidi_stream<ChatEnvelope, ChatServerEvent> JoinPostChat(post_id: u64, user_name: string);
+}
+
+interface MediaService {
+  server_stream<binary> OpenPostVideo(post_id: u64);
+}

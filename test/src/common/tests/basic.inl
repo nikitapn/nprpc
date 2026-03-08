@@ -82,4 +82,12 @@ public:
       // Simulate a simple read operation that succeeds
       value = static_cast<uint8_t>(dev_addr + addr); // Simple calculation for testing
     }
+
+    std::vector<std::string> ReturnStringArray (uint32_t count) override {
+      std::vector<std::string> result;
+      for (uint32_t i = 0; i < count; i++) {
+        result.push_back("String " + std::to_string(i));
+      }
+      return result;
+    }
 };
