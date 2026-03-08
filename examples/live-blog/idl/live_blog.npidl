@@ -1,4 +1,4 @@
-
+// Blog post and chat example for nprpc, demonstrating various features
 module live_blog;
 
 alias binary = u8[];
@@ -64,7 +64,7 @@ message PresenceEvent {
 }
 
 message ChatServerEvent {
-  message1: ChatEnvelope;
+  message: ChatEnvelope;
   presence: PresenceEvent;
 }
 

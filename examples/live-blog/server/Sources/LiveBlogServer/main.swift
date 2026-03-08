@@ -1,5 +1,6 @@
 import Foundation
 import NPRPC
+import LiveBlogAPI
 
 struct BlogPost: Sendable {
     let id: UInt64

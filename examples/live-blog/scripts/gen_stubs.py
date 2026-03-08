@@ -15,12 +15,15 @@ import os
 import argparse
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).parent.resolve()
+ROOT_DIR = Path(__file__).parent.parent.resolve()
+# Change working directory to `live-blog`
+os.chdir(ROOT_DIR)
+
 DOCKER_IMAGE = "nprpc-dev:latest"
 
 # Input IDL files
 IDL_FILES = [
-    "server/idl/live_blog.npidl",
+    "idl/live_blog.npidl",
 ]
 
 # Output directories (relative to ROOT_DIR, mirrored as /app/... inside container)
