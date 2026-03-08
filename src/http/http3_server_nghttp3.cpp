@@ -278,6 +278,7 @@ private:
                             unsigned int status_code,
                             std::string_view content_type,
                             std::string&& body);
+  int send_cors_preflight(Http3Stream* stream);
   int send_webtransport_connect_response(Http3Stream* stream);
 
   // RPC Handling
@@ -290,6 +291,13 @@ private:
   bool has_webtransport_session(int64_t session_stream_id) const;
   std::shared_ptr<WebTransportControlSession>
   get_or_create_webtransport_control_session(Http3Stream* stream);
+  std::vector<nghttp3_nv>
+  make_response_headers(Http3Stream* stream,
+                        unsigned int status_code,
+                        std::string_view content_type,
+                        size_t content_length,
+                        bool include_cors,
+                        bool preflight = false);
 
   // Error handling
   int handle_error();
@@ -568,6 +576,17 @@ private:
   void queue_buffer(flat_buffer&& buffer)
   {
     auto data = buffer.cdata();
+    if (data.size() >= sizeof(impl::Header)) {
+      const impl::flat::Header_Direct header(buffer, 0);
+      std::cerr << "[HTTP/3][WT] queue_buffer stream_id=" << stream_id_
+                << " size=" << data.size()
+                << " msg_id=" << static_cast<uint32_t>(header.msg_id())
+                << " msg_type=" << static_cast<uint32_t>(header.msg_type())
+                << " request_id=" << header.request_id() << std::endl;
+    } else {
+      std::cerr << "[HTTP/3][WT] queue_buffer stream_id=" << stream_id_
+                << " size=" << data.size() << " (short frame)" << std::endl;
+    }
     std::vector<uint8_t> bytes(data.size());
     std::memcpy(bytes.data(), data.data(), data.size());
     connection_.queue_raw_stream_write(stream_id_, std::move(bytes));
@@ -1113,6 +1132,18 @@ int Http3Connection::on_write()
                 nullptr, 0);
             return handle_error();
           }
+        } else if (!using_http_stream && ndatalen > 0 && raw_stream) {
+          raw_stream->raw_write_offset += static_cast<size_t>(ndatalen);
+
+          while (!raw_stream->raw_write_queue.empty()) {
+            const auto& chunk = raw_stream->raw_write_queue.front();
+            if (raw_stream->raw_write_offset < chunk.size()) {
+              break;
+            }
+
+            raw_stream->raw_write_offset -= chunk.size();
+            raw_stream->raw_write_queue.pop_front();
+          }
         }
         continue;
       }
@@ -1651,6 +1682,8 @@ int Http3Connection::start_response(Http3Stream* stream)
 
     // Use zero-copy response
     return send_cached_response(stream, 200, std::move(cached_file));
+  } else if (stream->method == "OPTIONS") {
+    return send_cors_preflight(stream);
   } else if (stream->method == "POST") { // Handle POST request (e.g., RPC)
     // Handle RPC requests (POST to /rpc)
     if (stream->path == "/rpc") {
@@ -1813,6 +1846,100 @@ int Http3Connection::handle_rpc_request(Http3Stream* stream)
   }
 }
 
+std::vector<nghttp3_nv>
+Http3Connection::make_response_headers(Http3Stream* stream,
+                                       unsigned int status_code,
+                                       std::string_view content_type,
+                                       size_t content_length,
+                                       bool include_cors,
+                                       bool preflight)
+{
+  std::vector<nghttp3_nv> headers;
+  headers.reserve(include_cors ? 9 : 4);
+
+  auto add = [&](const char* name,
+                 size_t namelen,
+                 const uint8_t* value,
+                 size_t valuelen,
+                 uint8_t flags) {
+    headers.push_back({
+        .name = reinterpret_cast<uint8_t*>(const_cast<char*>(name)),
+        .value = const_cast<uint8_t*>(value),
+        .namelen = namelen,
+        .valuelen = valuelen,
+        .flags = flags,
+    });
+  };
+
+  auto add_sv = [&](const char* name,
+                    size_t namelen,
+                    std::string_view value,
+                    uint8_t flags) {
+    add(name, namelen, reinterpret_cast<const uint8_t*>(value.data()),
+        value.size(), flags);
+  };
+
+  std::string status_str = std::to_string(status_code);
+  std::string content_length_str = std::to_string(content_length);
+
+  add_sv(":status", 7, status_str, NGHTTP3_NV_FLAG_NO_COPY_NAME);
+  add("server", 6,
+      reinterpret_cast<const uint8_t*>("nprpc/nghttp3"), 13,
+      NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
+
+  if (!preflight) {
+    add_sv("content-type", 12, content_type,
+           NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
+    add_sv("content-length", 14, content_length_str,
+           NGHTTP3_NV_FLAG_NO_COPY_NAME);
+  }
+
+  if (include_cors) {
+    const auto origin_it = stream->headers.find("origin");
+    const bool credentialed =
+        origin_it != stream->headers.end() && !origin_it->second.empty();
+    const std::string_view allow_origin = credentialed
+                                              ? std::string_view(origin_it->second)
+                                              : std::string_view("*");
+
+    add_sv("access-control-allow-origin", 27, allow_origin,
+           NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
+    if (credentialed) {
+      add("access-control-allow-credentials", 32,
+          reinterpret_cast<const uint8_t*>("true"), 4,
+          NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
+    }
+    add("access-control-allow-methods", 28,
+        reinterpret_cast<const uint8_t*>("GET, POST, OPTIONS"), 18,
+        NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
+    add("access-control-allow-headers", 28,
+        reinterpret_cast<const uint8_t*>("Content-Type"), 12,
+        NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
+    if (preflight) {
+      add("access-control-max-age", 22,
+          reinterpret_cast<const uint8_t*>("86400"), 5,
+          NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
+    }
+  }
+
+  return headers;
+}
+
+int Http3Connection::send_cors_preflight(Http3Stream* stream)
+{
+  auto headers = make_response_headers(stream, 204, "", 0, true, true);
+  nghttp3_data_reader dr{.read_data = http_read_data_cb};
+  int rv = nghttp3_conn_submit_response(httpconn_, stream->stream_id,
+                                        headers.data(), headers.size(), &dr);
+  if (rv != 0) {
+    std::cerr << "[HTTP/3][E] nghttp3_conn_submit_response(OPTIONS): "
+              << nghttp3_strerror(rv) << std::endl;
+    return -1;
+  }
+
+  return 0;
+}
+
 int Http3Connection::send_static_response(Http3Stream* stream,
                                           unsigned int status_code,
                                           std::string_view content_type,
@@ -1827,44 +1954,17 @@ int Http3Connection::send_static_response(Http3Stream* stream,
   stream->response_len = body.size();
   stream->response_offset = 0;
 
-  // Build headers
-  std::string status_str = std::to_string(status_code);
-  std::string content_length_str = std::to_string(body.size());
-
-  std::array<nghttp3_nv, 4> nva;
-  nva[0] = {.name = reinterpret_cast<uint8_t*>(const_cast<char*>(":status")),
-            .value = reinterpret_cast<uint8_t*>(status_str.data()),
-            .namelen = 7,
-            .valuelen = status_str.size(),
-            .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME};
-  nva[1] = {
-      .name = reinterpret_cast<uint8_t*>(const_cast<char*>("server")),
-      .value = reinterpret_cast<uint8_t*>(const_cast<char*>("nprpc/nghttp3")),
-      .namelen = 6,
-      .valuelen = 13,
-      .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
-  };
-  nva[2] = {
-      .name = reinterpret_cast<uint8_t*>(const_cast<char*>("content-type")),
-      .value = reinterpret_cast<const uint8_t*>(content_type.data()),
-      .namelen = 12,
-      .valuelen = content_type.size(),
-      .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
-  };
-  nva[3] = {
-      .name = reinterpret_cast<uint8_t*>(const_cast<char*>("content-length")),
-      .value = reinterpret_cast<uint8_t*>(content_length_str.data()),
-      .namelen = 14,
-      .valuelen = content_length_str.size(),
-      .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME,
-  };
+    const bool include_cors = stream->path == "/rpc" ||
+                stream->path.rfind("/rpc/", 0) == 0;
+    auto headers = make_response_headers(stream, status_code, content_type,
+                       body.size(), include_cors);
 
   nghttp3_data_reader dr{
       .read_data = http_read_data_cb,
   };
 
   int rv = nghttp3_conn_submit_response(httpconn_, stream->stream_id,
-                                        nva.data(), nva.size(), &dr);
+                      headers.data(), headers.size(), &dr);
   if (rv != 0) {
     std::cerr << "[HTTP/3][E] nghttp3_conn_submit_response: "
               << nghttp3_strerror(rv) << std::endl;
@@ -2019,6 +2119,10 @@ void Http3Connection::queue_raw_stream_write(int64_t stream_id,
     stream = create_stream(stream_id);
   }
 
+  std::cerr << "[HTTP/3][WT] queue_raw_stream_write stream_id=" << stream_id
+            << " bytes=" << data.size()
+            << " queued_before=" << stream->raw_write_queue.size() << std::endl;
+
   stream->raw_write_queue.emplace_back(std::move(data));
   signal_write();
 }
@@ -2041,45 +2145,18 @@ int Http3Connection::send_dynamic_response(Http3Stream* stream,
   stream->response_len = stream->dynamic_body.size();
   stream->response_offset = 0;
 
-  // Build headers
-  std::string status_str = std::to_string(status_code);
-  std::string content_length_str = std::to_string(stream->response_len);
-
-  std::array<nghttp3_nv, 4> nva;
-  nva[0] = {.name = reinterpret_cast<uint8_t*>(const_cast<char*>(":status")),
-            .value = reinterpret_cast<uint8_t*>(status_str.data()),
-            .namelen = 7,
-            .valuelen = status_str.size(),
-            .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME};
-  nva[1] = {
-      .name = reinterpret_cast<uint8_t*>(const_cast<char*>("server")),
-      .value = reinterpret_cast<uint8_t*>(const_cast<char*>("nprpc/nghttp3")),
-      .namelen = 6,
-      .valuelen = 13,
-      .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
-  };
-  nva[2] = {
-      .name = reinterpret_cast<uint8_t*>(const_cast<char*>("content-type")),
-      .value = reinterpret_cast<const uint8_t*>(
-          stream->response_content_type.data()),
-      .namelen = 12,
-      .valuelen = stream->response_content_type.size(),
-      .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
-  };
-  nva[3] = {
-      .name = reinterpret_cast<uint8_t*>(const_cast<char*>("content-length")),
-      .value = reinterpret_cast<uint8_t*>(content_length_str.data()),
-      .namelen = 14,
-      .valuelen = content_length_str.size(),
-      .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME,
-  };
+    const bool include_cors = stream->path == "/rpc" ||
+                stream->path.rfind("/rpc/", 0) == 0;
+    auto headers = make_response_headers(stream, status_code,
+                       stream->response_content_type,
+                       stream->response_len, include_cors);
 
   nghttp3_data_reader dr{
       .read_data = http_read_data_cb,
   };
 
   int rv = nghttp3_conn_submit_response(httpconn_, stream->stream_id,
-                                        nva.data(), nva.size(), &dr);
+                      headers.data(), headers.size(), &dr);
   if (rv != 0) {
     std::cerr << "[HTTP/3][E] nghttp3_conn_submit_response: "
               << nghttp3_strerror(rv) << std::endl;
@@ -2265,6 +2342,15 @@ int Http3Connection::on_stream_close(ngtcp2_conn* conn,
 {
   auto h = static_cast<Http3Connection*>(user_data);
   auto* stream = h->find_stream(stream_id);
+
+  std::cerr << "[HTTP/3] stream_close stream_id=" << stream_id
+            << " flags=" << flags
+            << " app_error_code=" << app_error_code
+            << " webtransport_child="
+            << (stream && stream->webtransport_child_stream ? "true" : "false")
+            << " webtransport_session="
+            << (stream && stream->webtransport_session ? "true" : "false")
+            << std::endl;
 
   if (!(flags & NGTCP2_STREAM_CLOSE_FLAG_APP_ERROR_CODE_SET)) {
     app_error_code = NGHTTP3_H3_NO_ERROR;

@@ -21,6 +21,10 @@ function killProcessByName(processName: string): void {
 export class ServerManager {
     private serverProcess: ChildProcess | null = null;
 
+    private static isProcessRunning(process: ChildProcess): boolean {
+        return process.exitCode === null && process.signalCode === null;
+    }
+
     async startTestServer(): Promise<boolean> {
         console.log('Starting test server...');
         
@@ -44,15 +48,19 @@ export class ServerManager {
                 });
 
                 if (this.serverProcess.pid) {
-                    console.log(`Test server started with PID: ${this.serverProcess.pid}`);
-                    
                     // Wait a bit for the server to initialize
                     await sleep(2000);
                     
                     // Check if process is still running
-                    if (!this.serverProcess.killed) {
+                    if (ServerManager.isProcessRunning(this.serverProcess)) {
+                        console.log(`Test server started with PID: ${this.serverProcess.pid}`);
                         return true;
                     }
+                    console.error(
+                        `Test server process started but exited prematurely at path: ${path} ` +
+                        `(exitCode=${this.serverProcess.exitCode}, signalCode=${this.serverProcess.signalCode})`
+                    );
+                    return false;
                 }
             } catch (error) {
                 console.log(`Failed to start test server at ${path}: ${error}`);
@@ -65,18 +73,16 @@ export class ServerManager {
     }
 
     async startAll(): Promise<boolean> {
-        console.log('Starting test server...');
         // Start test server
         const testServerStarted = await this.startTestServer();
         if (!testServerStarted)
             return false;
 
-        console.log('Test server started successfully');
         return true;
     }
 
     killServer() {
-        if (this.serverProcess && !this.serverProcess.killed) {
+        if (ServerManager.isProcessRunning(this.serverProcess!)) {
             console.log('Stopping test server...');
             this.serverProcess.kill('SIGTERM');
         }

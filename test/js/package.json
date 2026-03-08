@@ -7,9 +7,10 @@
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "tsc --project tsconfig.json && webpack --config webpack.browser.config.js",
     "test": "mocha",
     "test:basic": "npm run build && mocha dist/test/basic.test.js",
+    "test:webtransport-browser": "npm run build && mocha --grep \"^WebTransport Browser Transport\" --timeout 120000",
     "test:watch": "npm run build && mocha --watch",
     "test:debug": "npm run build && mocha dist/test/**/*.js --timeout 60000 --grep",
     "clean": "rm -rf dist"
@@ -26,6 +27,9 @@
     "chai": "^4.3.7",
     "mocha": "^10.2.0",
     "playwright-core": "^1.58.2",
+    "ts-loader": "^9.5.2",
     "typescript": "^5.8.3"
+    ,"webpack": "^5.99.9"
+    ,"webpack-cli": "^6.0.1"
   }
 }

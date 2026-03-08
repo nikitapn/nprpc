@@ -61,8 +61,11 @@ int main()
   try {
     auto rpc = nprpc::RpcBuilder()
                    .set_log_level(nprpc::LogLevel::error)
+                   .with_hostname("localhost")
                    .with_tcp(15000)
                    .with_http(15001)
+                   .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
+                        "/home/nikita/projects/nprpc/certs/out/localhost.key")
                    .build(ioc);
 
     auto poa = nprpc::PoaBuilder(rpc)
@@ -75,7 +78,10 @@ int main()
     auto oid = poa->activate_object_with_id(
         0, &server,
         nprpc::ObjectActivationFlags::ALLOW_TCP |
-            nprpc::ObjectActivationFlags::ALLOW_WEBSOCKET);
+        nprpc::ObjectActivationFlags::ALLOW_WEBSOCKET |
+        nprpc::ObjectActivationFlags::ALLOW_SSL_WEBSOCKET |
+        nprpc::ObjectActivationFlags::ALLOW_HTTP |
+        nprpc::ObjectActivationFlags::ALLOW_SECURED_HTTP);
 
     boost::asio::signal_set signals(ioc, SIGINT, SIGTERM);
     signals.async_wait(
