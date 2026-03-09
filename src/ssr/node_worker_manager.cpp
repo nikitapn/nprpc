@@ -13,6 +13,10 @@
 #include <fstream>
 #include <unordered_map>
 
+#if !defined(_WIN32)
+extern char** environ;
+#endif
+
 namespace nprpc::impl {
 
 namespace fs = std::filesystem;
@@ -93,9 +97,22 @@ bool NodeWorkerManager::start(const std::string& handler_path,
 
     // Build environment for Node.js process (Boost.Process v2)
     namespace bpe = boost::process::environment;
-    std::unordered_map<bpe::key, bpe::value> env = {
-        {"NPRPC_CHANNEL_ID", channel_id_},
-    };
+    std::unordered_map<bpe::key, bpe::value> env;
+
+  #if !defined(_WIN32)
+    for (char** envp = environ; envp && *envp; ++envp) {
+      std::string_view entry(*envp);
+      auto pos = entry.find('=');
+      if (pos == std::string_view::npos || pos == 0) {
+      continue;
+      }
+
+      env.emplace(std::string(entry.substr(0, pos)),
+            std::string(entry.substr(pos + 1)));
+    }
+  #endif
+
+    env.insert_or_assign("NPRPC_CHANNEL_ID", channel_id_);
 
     // Start Node.js process
     NPRPC_LOG_INFO("NodeWorkerManager: Starting Node.js worker");

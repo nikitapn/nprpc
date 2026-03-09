@@ -15,7 +15,7 @@
 #    variant that still has .target / nprpc_bridge.cpp).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$SCRIPT_DIR/.."          # this script lives at the repo root
+PROJECT_ROOT="$SCRIPT_DIR/.." # live-blog/ folder
 HOME_DIR="$HOME"
 IMAGE="nprpc-dev:latest"
 

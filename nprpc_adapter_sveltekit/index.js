@@ -1,7 +1,7 @@
 // @nprpc/adapter-sveltekit
 // SvelteKit adapter that serves SSR via shared memory IPC with NPRPC C++ server
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,12 @@ function copyIfExists(from, to) {
         return;
     }
 
+    const resolvedFrom = existsSync(from) ? realpathSync(from) : path.resolve(from);
+    const resolvedTo = existsSync(to) ? realpathSync(to) : path.resolve(to);
+    if (resolvedFrom === resolvedTo) {
+        return;
+    }
+
     cpSync(from, to, { recursive: true });
 }
 
@@ -22,13 +28,20 @@ function stageNprpcNodeRuntime(out) {
     const packageDir = path.dirname(packageJsonPath);
     const runtimeDir = path.join(out, 'node_modules', 'nprpc_node');
 
-    mkdirSync(runtimeDir, { recursive: true });
+    rmSync(runtimeDir, { recursive: true, force: true });
+    mkdirSync(path.dirname(runtimeDir), { recursive: true });
+    cpSync(packageDir, runtimeDir, { recursive: true, dereference: true });
+}
 
-    copyIfExists(path.join(packageDir, 'package.json'), path.join(runtimeDir, 'package.json'));
-    copyIfExists(path.join(packageDir, 'index.js'), path.join(runtimeDir, 'index.js'));
-    copyIfExists(path.join(packageDir, 'index.d.ts'), path.join(runtimeDir, 'index.d.ts'));
-    copyIfExists(path.join(packageDir, 'build'), path.join(runtimeDir, 'build'));
-    copyIfExists(path.join(packageDir, 'nprpc_shm.node'), path.join(runtimeDir, 'nprpc_shm.node'));
+function stageApplicationNodeModules(out) {
+    const appNodeModules = path.resolve('node_modules');
+    const runtimeNodeModules = path.join(out, 'node_modules');
+
+    if (!existsSync(appNodeModules)) {
+        return;
+    }
+
+    copyIfExists(appNodeModules, runtimeNodeModules);
 }
 
 /**
@@ -94,6 +107,21 @@ export default function adapter(opts = {}) {
                     CHANNEL_ID: channelId ? JSON.stringify(channelId) : 'null'
                 }
             });
+
+            writeFileSync(
+                `${out}/package.json`,
+                JSON.stringify(
+                    {
+                        type: 'module',
+                        private: true
+                    },
+                    null,
+                    2
+                )
+            );
+
+            builder.log.minor('Staging application node_modules');
+            stageApplicationNodeModules(out);
 
             builder.log.minor('Staging nprpc_node runtime');
             stageNprpcNodeRuntime(out);

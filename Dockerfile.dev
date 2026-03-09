@@ -124,6 +124,7 @@ RUN apt-get update && apt-get install -y \
     git \
     vim \
     nodejs \
+    liburing-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Boost runtime libraries

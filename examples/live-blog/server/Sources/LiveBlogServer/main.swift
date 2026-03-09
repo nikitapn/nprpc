@@ -345,21 +345,24 @@ print("╚═══════════════════════�
 print()
 
 do {
-  let certFile = "/project/certs/out/localhost.crt"
-  let keyFile = "/project/certs/out/localhost.key"
+  let certFile = "/app/certs/out/localhost.crt"
+  let keyFile = "/app/certs/out/localhost.key"
+  let runtimeRoot = "/app/runtime-www"
+  let staticRoot = runtimeRoot + "/client"
   let httpPort: UInt16 = 8443
-  let runtimeRoot = FileManager.default.currentDirectoryPath + "/.runtime-www"
   let repository = BlogRepository()
 
   try FileManager.default.createDirectory(atPath: runtimeRoot, withIntermediateDirectories: true)
+  try FileManager.default.createDirectory(atPath: staticRoot, withIntermediateDirectories: true)
 
   let rpc = try RpcBuilder()
     .setLogLevel(.trace)
     .withHostname("localhost")
     .withHttp(httpPort)
       .ssl(certFile: certFile, keyFile: keyFile)
+      .enableSsr(handlerDir: runtimeRoot)
+      .rootDir(staticRoot)
       .enableHttp3()
-      .rootDir(runtimeRoot)
     .build()
 
   let poa = try rpc.createPoa(maxObjects: 32, lifetime: .persistent, idPolicy: .systemGenerated)
@@ -376,9 +379,10 @@ do {
   let hostJsonPath = try rpc.produceHostJson()
 
   let indexHtml = buildIndexHtml(postCount: repository.posts.count, hostJsonPath: hostJsonPath)
-  try indexHtml.write(toFile: runtimeRoot + "/index.html", atomically: true, encoding: .utf8)
+  try indexHtml.write(toFile: staticRoot + "/index.html", atomically: true, encoding: .utf8)
 
-  print("HTTP root: \(runtimeRoot)")
+  print("HTTP root: \(staticRoot)")
+  print("SSR handler root: \(runtimeRoot)")
   print("HTTPS/WebTransport port: \(httpPort)")
   print("host.json: \(hostJsonPath)")
   print("Objects: blog, chat, media")
