@@ -2,14 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
-const nprpcShim = new URL('./src/my_modules/nprpc.ts', import.meta.url).pathname;
-
 export default defineConfig({
-	resolve: {
-		alias: {
-			nprpc: nprpcShim
-		}
-	},
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
 		host: '0.0.0.0',

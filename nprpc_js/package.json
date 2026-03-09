@@ -18,7 +18,10 @@
     "webpack-cli": "^6.0.1"
   },
   "exports": {
-    "import": "./dist/index.esm.js",
+    "import": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.esm.js"
+    },
     "require": "./dist/index.js"
   },
   "module": "dist/index.esm.js"

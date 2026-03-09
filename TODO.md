@@ -3,6 +3,19 @@
 ## STD
 * [ ] Replace std::unordered_map with absl::flat_hash_map in performance-critical paths.
 
+## Packaging / DX
+* [ ] Write a friction-free setup guide for a mixed Swift/C++ + SvelteKit project with `nprpc_node` / `nprpc_shm.node`, including build, runtime layout, and SSR packaging expectations.
+* [ ] Provide a minimal starter template or reference example that works out of the box for Swift backend + SvelteKit frontend + NPRPC SSR/addon integration.
+
+## Runtime Configuration
+* [ ] Add `RpcBuilder` options for socket send/receive buffer sizes so applications can tune kernel buffers without patching transport code.
+
+## Stability & Security
+* [ ] Add long-running soak tests that keep mixed transports active for hours to catch leaks, stuck streams, and reconnection issues.
+* [ ] Add high-concurrency load tests for 1k+ simultaneous connections, including connection churn and mixed request sizes, not just latency microbenchmarks.
+* [ ] Add malformed-input and protocol fuzzing coverage for HTTP, WebSocket, QUIC, and generated deserializers.
+* [ ] Audit and document resource-exhaustion guards: max request size, header size, stream count, idle timeouts, and per-connection memory limits.
+
 ## Serialization
 * [ ] Add hint attributes [estimated_in_size=x], [estimated_out_size=x] to IDL for preallocating buffers, before method calls.
 * [ ] Support flat_buffer view mode in generated code to avoid copies when serializing/deserializing from shared memory.
@@ -117,6 +130,8 @@ Serve web clients over HTTP/3 using nghttp3/ngtcp2
 * [ ] Performance tuning
 * [ ] QUIC/HTTP/3 endpoint sharing (same port, ALPN differentiation)
 * [ ] CORS headers for browser requests
+* [ ] Add an HTTP server option to disable or aggressively invalidate the static file cache during development so rebuilt frontend assets do not require a server restart.
+* [ ] Evaluate a better cache invalidation strategy than manual restart, e.g. mtime checks, versioned asset keys, or inotify-based invalidation.
 
 ### Ideas for Future Enhancements
 | Area | Improvement | Complexity |

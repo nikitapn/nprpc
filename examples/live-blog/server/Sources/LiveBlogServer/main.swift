@@ -346,35 +346,6 @@ private final class MediaServiceImpl: MediaServiceServant, @unchecked Sendable {
   }
 }
 
-private func buildIndexHtml(postCount: Int, hostJsonPath: String) -> String {
-  """
-  <!doctype html>
-  <html>
-    <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Live Blog Swift Backend</title>
-    <style>
-      body { font-family: system-ui, sans-serif; margin: 3rem auto; max-width: 62rem; padding: 0 1.5rem; color: #1c1917; background: #faf7f2; }
-      code { background: #f5f5f4; padding: 0.15rem 0.35rem; border-radius: 0.35rem; }
-      .card { border: 1px solid #e7e5e4; border-radius: 1rem; padding: 1.5rem; margin-top: 1rem; background: white; }
-      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    </style>
-    </head>
-    <body>
-    <h1>Live Blog Swift Backend</h1>
-    <p>This server now exposes typed NPRPC services for blog listing, post detail, author lookups, comments, a toy chat loopback stream, and a placeholder media stream.</p>
-    <div class="card">
-      <p><strong>Static root:</strong> <span class="mono">\(hostJsonPath.replacingOccurrences(of: "/host.json", with: ""))</span></p>
-      <p><strong>Bootstrap:</strong> <a href="/host.json"><code>/host.json</code></a></p>
-      <p><strong>Objects:</strong> <code>blog</code>, <code>chat</code>, <code>media</code></p>
-      <p><strong>Mock posts available:</strong> \(postCount)</p>
-    </div>
-    </body>
-  </html>
-  """
-}
-
 print("╔══════════════════════════════════════════════════════════╗")
 print("║                  Live Blog Swift Server                  ║")
 print("╚══════════════════════════════════════════════════════════╝")
@@ -413,9 +384,6 @@ do {
   try rpc.addToHostJson(name: "chat", objectId: chatObjectId)
   try rpc.addToHostJson(name: "media", objectId: mediaObjectId)
   let hostJsonPath = try rpc.produceHostJson()
-
-  let indexHtml = buildIndexHtml(postCount: repository.posts.count, hostJsonPath: hostJsonPath)
-  try indexHtml.write(toFile: staticRoot + "/index.html", atomically: true, encoding: .utf8)
 
   print("HTTP root: \(staticRoot)")
   print("SSR handler root: \(runtimeRoot)")
