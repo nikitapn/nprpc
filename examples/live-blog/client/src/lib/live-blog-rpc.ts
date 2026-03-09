@@ -2,46 +2,24 @@ import * as NPRPC from 'nprpc';
 
 import {
 	BlogService,
+	ChatService,
 	type AuthorPreview,
+	type ChatEnvelope,
+	type ChatServerEvent,
 	type Comment,
 	type PostDetail,
 	type PostPage,
-	type PostPreview
+	type PostPreview,
+	PresenceEventKind
 } from '../rpc/live_blog';
 
-type HostInfo = {
-	secured: boolean;
-	webtransport?: boolean;
-	webtransport_options?: unknown;
-	objects: Record<string, NPRPC.ObjectProxy>;
-};
-
-const HOST_INFO_PATH = '/host.json';
-
 let blogServicePromise: Promise<BlogService> | undefined;
-
-const bigIntReviver = (key: string, value: unknown): unknown => {
-	if (key === 'object_id' && typeof value === 'string') {
-		return BigInt(value);
-	}
-
-	return value;
-};
-
-async function fetchHostInfo(): Promise<HostInfo> {
-	const response = await fetch(HOST_INFO_PATH, { cache: 'no-store' });
-	if (!response.ok) {
-		throw new Error(`Failed to load ${HOST_INFO_PATH}: ${response.status} ${response.statusText}`);
-	}
-
-	return JSON.parse(await response.text(), bigIntReviver) as HostInfo;
-}
+let chatServicePromise: Promise<ChatService> | undefined;
 
 export async function getBlogService(): Promise<BlogService> {
 	if (!blogServicePromise) {
 		blogServicePromise = (async () => {
-			const hostInfo = await fetchHostInfo();
-			const rpc = await NPRPC.init(false, hostInfo as never);
+			const rpc = await NPRPC.init();
 			const blog = NPRPC.narrow(rpc.host_info.objects.blog, BlogService);
 			if (!blog) {
 				throw new Error('host.json did not expose a valid blog service');
@@ -52,6 +30,22 @@ export async function getBlogService(): Promise<BlogService> {
 	}
 
 	return blogServicePromise;
+}
+
+export async function getChatService(): Promise<ChatService> {
+	if (!chatServicePromise) {
+		chatServicePromise = (async () => {
+			const rpc = await NPRPC.init();
+			const chat = NPRPC.narrow(rpc.host_info.objects.chat, ChatService);
+			if (!chat) {
+				throw new Error('host.json did not expose a valid chat service');
+			}
+
+			return chat;
+		})();
+	}
+
+	return chatServicePromise;
 }
 
 export async function loadBlogPage(page: number, pageSize: number): Promise<PostPage> {
@@ -80,6 +74,11 @@ export async function loadAuthorPage(
 	return { author, posts };
 }
 
+export async function joinPostChat(postId: bigint, userName: string): Promise<Awaited<ReturnType<ChatService['JoinPostChat']>>> {
+	const chat = await getChatService();
+	return chat.JoinPostChat(postId, userName);
+}
+
 export function formatIsoDate(value: string): string {
 	if (!value) {
 		return 'Unscheduled';
@@ -97,6 +96,22 @@ export function formatIsoDate(value: string): string {
 	});
 }
 
+export function formatChatTimestamp(value: string): string {
+	if (!value) {
+		return 'now';
+	}
+
+	const parsed = new Date(value);
+	if (Number.isNaN(parsed.getTime())) {
+		return value;
+	}
+
+	return parsed.toLocaleTimeString([], {
+		hour: '2-digit',
+		minute: '2-digit'
+	});
+}
+
 export function formatError(error: unknown): string {
 	if (error instanceof Error) {
 		return error.message;
@@ -105,4 +120,5 @@ export function formatError(error: unknown): string {
 	return String(error);
 }
 
-export type { AuthorPreview, Comment, PostDetail, PostPage, PostPreview };
+export { PresenceEventKind };
+export type { AuthorPreview, ChatEnvelope, ChatServerEvent, Comment, PostDetail, PostPage, PostPreview };

@@ -109,12 +109,12 @@ export class EndPoint {
 
 const webtransport_path = "/wt";
 
-interface HostInfo {
+export type HostInfo = {
   secured: boolean;
   webtransport?: boolean;
-  webtransport_options?: any;
-  objects: any;
-}
+	webtransport_options?: unknown;
+	objects: Record<string, ObjectProxy>;
+};
 
 interface PendingRequest {
   buffer: FlatBuffer;
@@ -540,7 +540,7 @@ export class Rpc {
 
   /** @internal */
   public static async read_host(): Promise<HostInfo> {
-    let x = await fetch("./host.json");
+    let x = await fetch("/host.json");
     if (!x.ok)
       throw "read_host error: " + x.statusText;
 

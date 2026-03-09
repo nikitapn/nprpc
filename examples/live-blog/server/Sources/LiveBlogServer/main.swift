@@ -266,8 +266,42 @@ private final class BlogServiceImpl: BlogServiceServant, @unchecked Sendable {
   }
 }
 
+private actor ChatHub {
+  struct Participant: Sendable {
+    let id: UUID
+    let userName: String
+    let writer: NPRPCStreamWriter<ChatServerEvent>
+  }
+
+  private var rooms: [UInt64: [UUID: Participant]] = [:]
+
+  func join(postId: UInt64, userName: String, writer: NPRPCStreamWriter<ChatServerEvent>) -> UUID {
+    let id = UUID()
+    rooms[postId, default: [:]][id] = Participant(id: id, userName: userName, writer: writer)
+    return id
+  }
+
+  func leave(postId: UInt64, participantId: UUID) {
+    rooms[postId]?[participantId] = nil
+    if rooms[postId]?.isEmpty == true {
+      rooms[postId] = nil
+    }
+  }
+
+  func broadcast(postId: UInt64, event: ChatServerEvent) {
+    guard let participants = rooms[postId]?.values else { return }
+    for participant in participants {
+      participant.writer.write(event)
+    }
+  }
+}
+
 private final class ChatServiceImpl: ChatServiceServant, @unchecked Sendable {
+  private let chatHub = ChatHub()
+
   override func joinPostChat(post_id: UInt64, user_name: String, stream: NPRPCBidiStream<ChatServerEvent, ChatEnvelope>) async {
+    let participantId = await chatHub.join(postId: post_id, userName: user_name, writer: stream.writer)
+
     let joined = ChatServerEvent(
       message: ChatEnvelope(author: "system", body: "\(user_name) joined post #\(post_id).", created_at: "2026-03-09T09:00:00Z"),
       presence: PresenceEvent(user_name: user_name, kind: .joined)
@@ -284,7 +318,7 @@ private final class ChatServiceImpl: ChatServiceServant, @unchecked Sendable {
           ),
           presence: PresenceEvent(user_name: "", kind: .typing)
         )
-        stream.writer.write(echoed)
+        await chatHub.broadcast(postId: post_id, event: echoed)
       }
 
       stream.writer.write(
@@ -293,8 +327,10 @@ private final class ChatServiceImpl: ChatServiceServant, @unchecked Sendable {
           presence: PresenceEvent(user_name: user_name, kind: .left)
         )
       )
+      await chatHub.leave(postId: post_id, participantId: participantId)
       stream.writer.close()
     } catch {
+      await chatHub.leave(postId: post_id, participantId: participantId)
       stream.writer.abort()
     }
   }
