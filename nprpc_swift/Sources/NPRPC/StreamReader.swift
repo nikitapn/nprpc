@@ -60,6 +60,7 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     private let stream: AsyncThrowingStream<T, Error>
     private var buffer: FlatBuffer?
     private let deserializer: (UnsafeRawPointer, Int) -> T
+    private let lock = NSLock()
     
     public init(streamId: UInt64, buffer: FlatBuffer, deserializer: @escaping (UnsafeRawPointer, Int) -> T) {
         self.streamId = streamId
@@ -94,20 +95,29 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     
     /// Called when stream completes successfully
     internal func onComplete() {
-        continuation?.finish()
+        lock.lock()
+        let cont = continuation
         continuation = nil
+        lock.unlock()
+        cont?.finish()
     }
     
     /// Called when stream encounters an error
     internal func onError(_ error: Error) {
-        continuation?.finish(throwing: error)
+        lock.lock()
+        let cont = continuation
         continuation = nil
+        lock.unlock()
+        cont?.finish(throwing: error)
     }
     
     /// Cancel the stream
     public func cancel() {
-        continuation?.finish(throwing: CancellationError())
+        lock.lock()
+        let cont = continuation
         continuation = nil
+        lock.unlock()
+        cont?.finish(throwing: CancellationError())
     }
 
     internal func makeBridgeContext() -> UnsafeMutableRawPointer {
@@ -225,6 +235,7 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
     private let sendCancel: ((UInt64) -> Void)?
     private var sequence: UInt64 = 0
     private var closed = false
+    private let lock = NSLock()
 
     internal init(
         streamId: UInt64,
@@ -247,6 +258,8 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
     }
 
     public func write(_ value: T) {
+        lock.lock()
+        defer { lock.unlock() }
         guard !closed else {
             return
         }
@@ -260,18 +273,24 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
     }
 
     public func close() {
+        lock.lock()
+        defer { lock.unlock() }
         guard !closed else { return }
         sendComplete(streamId, sequence == 0 ? 0 : sequence - 1)
         closed = true
     }
 
     public func abort(errorCode: UInt32 = 1) {
+        lock.lock()
+        defer { lock.unlock() }
         guard !closed else { return }
         sendError(streamId, errorCode)
         closed = true
     }
 
     public func cancel() {
+        lock.lock()
+        defer { lock.unlock() }
         guard !closed else { return }
         sendCancel?(streamId)
         closed = true

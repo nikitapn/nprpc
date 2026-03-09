@@ -10,7 +10,6 @@
 #include <cstddef>
 #include <string>
 #include <memory>
-#include <vector>
 #include <optional>
 
 // Swift interop macros
@@ -61,11 +60,6 @@ inline std::string greet(const std::string& name) {
     result += name;
     result += "!";
     return result;
-}
-
-/// Test returning a vector to Swift
-inline std::vector<int32_t> get_test_array() {
-    return {1, 2, 3, 4, 5};
 }
 
 /// Helper to convert std::string to C string for Swift (avoids interior pointer issues)

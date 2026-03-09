@@ -788,7 +788,7 @@ final public class BlogService: NPRPCObject, @unchecked Sendable {
 }
 
 // Servant base for BlogService
-open class BlogServiceServant: NPRPCServant, BlogServiceProtocol {
+open class BlogServiceServant: NPRPCServant, BlogServiceProtocol, @unchecked Sendable {
   public override init() { super.init() }
 
   public override func getClass() -> String   {
@@ -1012,7 +1012,7 @@ final public class ChatService: NPRPCObject, @unchecked Sendable {
 }
 
 // Servant base for ChatService
-open class ChatServiceServant: NPRPCServant, ChatServiceProtocol {
+open class ChatServiceServant: NPRPCServant, ChatServiceProtocol, @unchecked Sendable {
   public override init() { super.init() }
 
   public override func getClass() -> String   {
@@ -1152,7 +1152,7 @@ final public class MediaService: NPRPCObject, @unchecked Sendable {
 }
 
 // Servant base for MediaService
-open class MediaServiceServant: NPRPCServant, MediaServiceProtocol {
+open class MediaServiceServant: NPRPCServant, MediaServiceProtocol, @unchecked Sendable {
   public override init() { super.init() }
 
   public override func getClass() -> String   {

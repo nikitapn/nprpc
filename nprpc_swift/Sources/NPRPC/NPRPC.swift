@@ -32,16 +32,6 @@ public func testGreet(_ name: String) -> String {
     return String(cString: nprpc_swift.string_to_cstr(result))
 }
 
-/// Test array return from C++
-public func testArray() -> [Int32] {
-    let vec = nprpc_swift.get_test_array()
-    var result: [Int32] = []
-    for i in 0..<vec.size() {
-        result.append(vec[i])
-    }
-    return result
-}
-
 // ============================================================================
 // MARK: - NPRPC Protocol Utilities
 // ============================================================================

@@ -1133,7 +1133,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
   const std::string servant_name = class_name + "Servant";
 
   out << bl() << "// Servant base for " << class_name << "\n";
-  out << bl() << "open class " << servant_name << ": NPRPCServant, " << class_name << "Protocol " << bb();
+  out << bl() << "open class " << servant_name << ": NPRPCServant, " << class_name << "Protocol, @unchecked Sendable " << bb();
 
   // Constructor
   out << bl() << "public override init() { super.init() }\n\n";
