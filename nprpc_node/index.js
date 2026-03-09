@@ -5,26 +5,30 @@ const path = require('path');
 
 // Try to load the native addon
 let addon;
-try {
-    // First try the flat structure (dist folder)
+const candidates = [
+    './nprpc_shm.node',
+    './build/Release/nprpc_shm.node',
+    './build/Debug/nprpc_shm.node',
+    './build/Debug/Release/nprpc_shm.node'
+];
+
+let lastError = null;
+for (const candidate of candidates) {
     try {
-        addon = require('./nprpc_shm.node');
-    } catch (e0) {
-        // Then try the standard node-gyp build location
-        addon = require('./build/Release/nprpc_shm.node');
+        addon = require(candidate);
+        break;
+    } catch (error) {
+        lastError = error;
     }
-} catch (e1) {
-    try {
-        // Try debug build
-        addon = require('./build/Debug/nprpc_shm.node');
-    } catch (e2) {
-        throw new Error(
-            `Failed to load nprpc_shm native addon. ` +
-            `Make sure to run 'npm run build' first.\n` +
-            `Release error: ${e1.message}\n` +
-            `Debug error: ${e2.message}`
-        );
-    }
+}
+
+if (!addon) {
+    throw new Error(
+        `Failed to load nprpc_shm native addon. ` +
+        `Make sure to run 'npm run build' first.\n` +
+        `Searched: ${candidates.join(', ')}\n` +
+        `Last error: ${lastError ? lastError.message : 'unknown error'}`
+    );
 }
 
 // Export both for ESM and CommonJS compatibility

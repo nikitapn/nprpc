@@ -123,6 +123,7 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     git \
     vim \
+    nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Boost runtime libraries

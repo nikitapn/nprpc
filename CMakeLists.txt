@@ -422,47 +422,9 @@ if(NPRPC_BUILD_EXAMPLES)
 endif()
 
 # Node.js Addon
-# if(NPRPC_BUILD_NODE_ADDON)
-#   find_program(NPM_EXECUTABLE npm REQUIRED)
-
-#   set(NPRPC_NODE_SOURCES
-#     ${CMAKE_CURRENT_SOURCE_DIR}/include/nprpc_node.hpp
-#     ${CMAKE_CURRENT_SOURCE_DIR}/nprpc_node/binding.gyp
-#     ${CMAKE_CURRENT_SOURCE_DIR}/nprpc_node/package.json
-#     ${CMAKE_CURRENT_SOURCE_DIR}/nprpc_node/src/addon.cpp
-#     ${CMAKE_CURRENT_SOURCE_DIR}/nprpc_node/src/shm_channel_wrapper.cpp
-#     ${CMAKE_CURRENT_SOURCE_DIR}/nprpc_node/src/shm_channel_wrapper.hpp
-#     ${CMAKE_CURRENT_SOURCE_DIR}/nprpc_node/src/nprpc_stub.cpp
-#     ${CMAKE_CURRENT_SOURCE_DIR}/src/shm/lock_free_ring_buffer.cpp
-#     ${CMAKE_CURRENT_SOURCE_DIR}/include/nprpc/impl/lock_free_ring_buffer.hpp
-#   )
-
-#   add_custom_command(
-#     OUTPUT ${CMAKE_BINARY_DIR}/nprpc_shm.node
-#     COMMAND ${NPM_EXECUTABLE} install
-#     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/nprpc_node
-#     COMMAND ${CMAKE_COMMAND} -E copy
-#       build/Release/nprpc_shm.node
-#       ${CMAKE_BINARY_DIR}/nprpc_node/nprpc_shm.node
-#     COMMAND ${CMAKE_COMMAND} -E copy
-#       index.js
-#       ${CMAKE_BINARY_DIR}/nprpc_node/index.js
-#     COMMAND ${CMAKE_COMMAND} -E copy
-#       index.d.ts
-#       ${CMAKE_BINARY_DIR}/nprpc_node/index.d.ts
-#     COMMAND ${CMAKE_COMMAND} -E copy
-#       package.json
-#       ${CMAKE_BINARY_DIR}/nprpc_node/package.json
-#     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/nprpc_node
-#     DEPENDS ${NPRPC_NODE_SOURCES}
-#     COMMENT "Building Node.js addon"
-#     VERBATIM
-#   )
-
-#   add_custom_target(nprpc_node_addon ALL
-#     DEPENDS ${CMAKE_BINARY_DIR}/nprpc_shm.node
-#   )
-# endif()
+if(NPRPC_BUILD_NODE_ADDON)
+  add_subdirectory(nprpc_node)
+endif()
 
 # Installation
 if(NPRPC_INSTALL)

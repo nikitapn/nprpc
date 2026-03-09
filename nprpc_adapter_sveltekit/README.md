@@ -62,9 +62,9 @@ node build/index.js
 ## Architecture
 
 ```
-┌─────────────────┐     HTTP      ┌─────────────────┐
-│     Browser     │ ◄──────────► │  NPRPC C++ Server │
-└─────────────────┘               └────────┬────────┘
+┌─────────────────┐     HTTP      ┌───────────────────┐
+│     Browser     │ ◄──────────►  │  NPRPC C++ Server │
+└─────────────────┘               └────────┬──────────┘
                                            │
                                     Shared Memory
                                            │
@@ -83,37 +83,7 @@ node build/index.js
 5. Response sent back via shared memory
 6. C++ server returns HTTP response to browser
 
-### Message Format
-
-**Request:**
-```json
-{
-    "type": "request",
-    "id": 12345,
-    "method": "GET",
-    "url": "http://localhost:3000/about",
-    "headers": {
-        "accept": "text/html",
-        "cookie": "session=abc123"
-    },
-    "body": null,
-    "clientAddress": "192.168.1.100"
-}
-```
-
-**Response:**
-```json
-{
-    "type": "response",
-    "id": 12345,
-    "status": 200,
-    "headers": {
-        "content-type": "text/html; charset=utf-8",
-        "set-cookie": "session=xyz789"
-    },
-    "body": "PGh0bWw+Li4uPC9odG1sPg=="  // Base64 encoded
-}
-```
+### [Message Format](../idl/nprpc_node.npidl)
 
 ## C++ Server Integration
 

@@ -1,13 +1,13 @@
 # Live Blog Swift Server
 
-This directory contains the Swift backend scaffold for the `examples/live-blog` demo.
+This directory contains the Swift backend for the `examples/live-blog` demo.
 
 ## Current State
 
-- standalone Swift package using the repo-local `nprpc_swift` package
-- NPRPC HTTP/HTTPS server scaffold in `Sources/LiveBlogServer/main.swift`
-- initial service contract sketch in `idl/live_blog.npidl`
-- helper generation script in `scripts/gen_stubs.sh`
+- standalone Swift package using the preinstalled `nprpc_swift` package from the dev image
+- generated `LiveBlogAPI` target compiled alongside the executable target
+- mock repository-backed `BlogService`, plus toy `ChatService` and `MediaService`
+- `host.json` generation for browser bootstrap
 
 ## Intended Runtime Model
 
@@ -19,7 +19,13 @@ This directory contains the Swift backend scaffold for the `examples/live-blog` 
 
 ## Running In The Development Image
 
-From the repo root:
+From `examples/live-blog`:
+
+```bash
+./scripts/build-swift-server.sh --debug
+```
+
+Then run the binary in the development image:
 
 ```bash
 docker run --rm -it \
@@ -27,17 +33,13 @@ docker run --rm -it \
   -w /project/examples/live-blog/server \
   -p 8443:8443 \
   nprpc-dev:latest \
-  swift run
+  ./.build/debug/LiveBlogServer
 ```
 
-## Generating Stubs Later
+## Regenerating Stubs
 
 ```bash
-docker run --rm -it \
-  -v $(pwd):/project \
-  -w /project/examples/live-blog/server \
-  nprpc-dev:latest \
-  bash scripts/gen_stubs.sh
+python3 ../scripts/gen_stubs.py
 ```
 
-The current scaffold does not yet compile generated example-specific Swift code into the server target. That should be the next step after the service contract is finalized.
+The IDL lives in [examples/live-blog/idl/live_blog.npidl](../idl/live_blog.npidl). Generated Swift output lands in `Sources/LiveBlogAPI/`, and generated TypeScript output lands in `../client/src/rpc/`.

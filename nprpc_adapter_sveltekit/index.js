@@ -1,11 +1,35 @@
 // @nprpc/adapter-sveltekit
 // SvelteKit adapter that serves SSR via shared memory IPC with NPRPC C++ server
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const files = fileURLToPath(new URL('./files', import.meta.url));
+const require = createRequire(import.meta.url);
+
+function copyIfExists(from, to) {
+    if (!existsSync(from)) {
+        return;
+    }
+
+    cpSync(from, to, { recursive: true });
+}
+
+function stageNprpcNodeRuntime(out) {
+    const packageJsonPath = require.resolve('nprpc_node/package.json');
+    const packageDir = path.dirname(packageJsonPath);
+    const runtimeDir = path.join(out, 'node_modules', 'nprpc_node');
+
+    mkdirSync(runtimeDir, { recursive: true });
+
+    copyIfExists(path.join(packageDir, 'package.json'), path.join(runtimeDir, 'package.json'));
+    copyIfExists(path.join(packageDir, 'index.js'), path.join(runtimeDir, 'index.js'));
+    copyIfExists(path.join(packageDir, 'index.d.ts'), path.join(runtimeDir, 'index.d.ts'));
+    copyIfExists(path.join(packageDir, 'build'), path.join(runtimeDir, 'build'));
+    copyIfExists(path.join(packageDir, 'nprpc_shm.node'), path.join(runtimeDir, 'nprpc_shm.node'));
+}
 
 /**
  * @typedef {Object} AdapterOptions
@@ -70,6 +94,9 @@ export default function adapter(opts = {}) {
                     CHANNEL_ID: channelId ? JSON.stringify(channelId) : 'null'
                 }
             });
+
+            builder.log.minor('Staging nprpc_node runtime');
+            stageNprpcNodeRuntime(out);
 
             builder.log.minor('Build complete');
             builder.log.info(`Output: ${out}`);

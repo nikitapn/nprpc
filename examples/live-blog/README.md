@@ -63,22 +63,21 @@ examples/live-blog/
 
 The client is a SvelteKit app with Svelte 5 and Tailwind.
 
-It is currently scaffolded as:
+It now does two important things:
 
-- route-aware shell pages for blog list, post page, and author page
-- loading skeletons that make the hybrid SSR approach visible
-- a design direction for live chat and media panels
+- keeps SSR limited to route-aware shell rendering
+- hydrates blog list, post detail, comments, and author pages from the Swift backend via generated NPRPC TypeScript stubs
 
-The real NPRPC client wiring is intentionally the next step, after the service/IDL surface is settled.
+For development, the Vite server proxies `/host.json` to the Swift backend on `https://localhost:8443`, while the generated object URLs continue to point the browser at the real NPRPC endpoint.
 
 ## Server Notes
 
-The Swift server scaffold currently includes:
+The Swift server now includes:
 
 - a standalone Swift package under `server/`
-- a starter `main.swift`
-- an initial `live_blog.npidl` sketch for the service surface
-- a helper `scripts/gen_stubs.sh` for future code generation wiring
+- a generated `LiveBlogAPI` target for RPC contracts
+- a handwritten `LiveBlogServer` executable with mock repository-backed services
+- `host.json` emission for browser bootstrap
 
 The server is intended to run inside the updated development Docker image.
 
@@ -94,17 +93,22 @@ npm run dev
 
 ### Server
 
-From the repo root:
+From `examples/live-blog`:
+
+```bash
+./scripts/build-swift-server.sh --debug
+```
+
+To run the server in the dev image after building:
 
 ```bash
 docker run --rm -it \
-  -v $(pwd):/project \
+  -v $(pwd):/../..:/project \
   -w /project/examples/live-blog/server \
+  -p 8443:8443 \
   nprpc-dev:latest \
-  swift run
+  ./.build/debug/LiveBlogServer
 ```
-
-If you add generated Swift code from the IDL, run generation first inside the same image or another environment where `npidl` and the repo-local `nprpc_swift` package are available.
 
 ## Why This Example
 
@@ -118,8 +122,7 @@ That makes the transport and streaming story obvious without reducing the produc
 
 ## Next Steps
 
-1. Finalize the IDL surface in `server/idl/live_blog.npidl`
-2. Generate Swift and TypeScript stubs for the example
-3. Wire the Svelte client to the Swift backend
-4. Add live chat on the post page
-5. Add media streaming after the core blog flow is solid
+1. Replace the toy chat loopback with multi-user room state
+2. Serve the built client from the Swift static root for a single-process demo
+3. Add live chat on the post page
+4. Add media streaming after the core blog flow is solid
