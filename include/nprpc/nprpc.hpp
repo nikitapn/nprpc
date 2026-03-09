@@ -8,9 +8,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <initializer_list>
 #include <optional>
-#include <stdexcept>
 #include <string_view>
 
 #include <boost/asio/io_context.hpp>
@@ -324,13 +322,16 @@ public:
   // Create a new POA builder
   PoaBuilder create_poa() { return PoaBuilder(this); }
   virtual void destroy_poa(Poa* poa) = 0;
+  virtual boost::asio::io_context& ioc() noexcept = 0;
+  // Start the RPC event loop in a thread pool with the specified number of threads
+  virtual void start_thread_pool(size_t thread_count) noexcept = 0;
+  // Run the RPC event loop (blocks until stopped)
+  virtual void run() = 0;
   virtual void destroy() = 0;
-  virtual void add_to_host_json(std::string_view name,
-                                const ObjectId& object_id) = 0;
+  virtual void add_to_host_json(std::string_view name, const ObjectId& object_id) = 0;
   virtual void clear_host_json() = 0;
   virtual std::string produce_host_json(std::string_view output_path = {}) = 0;
-  virtual ObjectPtr<common::Nameserver>
-  get_nameserver(std::string_view nameserver_ip) = 0;
+  virtual ObjectPtr<common::Nameserver> get_nameserver(std::string_view nameserver_ip) = 0;
   virtual SessionContext* get_object_session_context(Object* obj) = 0;
   virtual ~Rpc() = default;
 };
@@ -411,7 +412,7 @@ public:
   RpcBuilderUdp with_udp(uint16_t port) noexcept;
   RpcBuilderQuic with_quic(uint16_t port) noexcept;
 
-  NPRPC_API Rpc* build(boost::asio::io_context& ioc);
+  NPRPC_API Rpc* build();
 };
 
 class RpcBuilderTcp : public RpcBuilderBase

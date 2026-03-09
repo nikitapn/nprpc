@@ -1,6 +1,5 @@
 #pragma once
 
-#include <nprpc/impl/misc/thread_pool.hpp>
 #include <nprpc/nprpc.hpp>
 #include <nprpc_benchmark.hpp>
 #include <nprpc_nameserver.hpp>

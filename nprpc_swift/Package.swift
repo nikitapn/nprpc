@@ -14,10 +14,7 @@ let package = Package(
     products: [
         .library(
             name: "NPRPC",
-            targets: ["NPRPC"]),
-        .executable(
-            name: "http3-server",
-            targets: ["HTTP3Server"]),
+            targets: ["NPRPC"])
     ],
     targets: [
         // C++ bridge module - exposes nprpc headers to Swift
@@ -58,16 +55,6 @@ let package = Package(
             ]
         ),
 
-        // HTTP3 Server example
-        .executableTarget(
-            name: "HTTP3Server",
-            dependencies: ["NPRPC"],
-            path: "Examples/HTTP3Server",
-            swiftSettings: [
-                .interoperabilityMode(.Cxx)
-            ]
-        ),
-        
         // Tests
         .testTarget(
             name: "NPRPCTests",

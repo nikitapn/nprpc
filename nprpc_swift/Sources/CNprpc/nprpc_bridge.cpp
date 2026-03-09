@@ -33,18 +33,20 @@ namespace nprpc::impl {
     class RpcImpl;
     class Session;
     NPRPC_API extern RpcImpl* g_rpc;
-    
+
     NPRPC_API void rpc_call(const nprpc::EndPoint& endpoint, nprpc::flat_buffer& buffer, uint32_t timeout_ms);
+
     NPRPC_API void rpc_call_async(
         const nprpc::EndPoint& endpoint,
         nprpc::flat_buffer&& buffer,
         std::function<void(const boost::system::error_code&, nprpc::flat_buffer&)>&& completion_handler,
         uint32_t timeout_ms);
+
     NPRPC_API void rpc_call_async_no_reply(
         const nprpc::EndPoint& endpoint,
         nprpc::flat_buffer&& buffer,
         uint32_t timeout_ms);
-    
+
     // Forward declare get_session - we'll use it for stream registration
     NPRPC_API std::shared_ptr<Session> get_session_for_endpoint(const nprpc::EndPoint& endpoint);
 }
@@ -61,45 +63,32 @@ const char* copy_string_to_c_heap(const std::string& value) {
 
 struct RpcHandleImpl {
     nprpc::Rpc* rpc_instance = nullptr;
-    bool stopped = true;
-
-    boost::asio::io_context ioc;
-    std::unique_ptr<boost::asio::thread_pool> pool;
-    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard;
-
-    RpcHandleImpl()
-        : work_guard(boost::asio::make_work_guard(ioc)) {}
 
     void run() {
-        if (!stopped) return;  // Already running in background
-        stopped = false;
-        ioc.run();  // Blocking call for manual mode
+        if (!rpc_instance) {
+            NPRPC_LOG_ERROR("[SWB] RpcHandleImpl::run called but rpc_instance is null");
+            return;
+        }
+        rpc_instance->run();
     }
 
     void start_thread_pool(size_t thread_count) noexcept {
-        if (pool) return;  // Thread pool already exists
-        pool = std::make_unique<boost::asio::thread_pool>(thread_count);
-        for (size_t i = 0; i < thread_count; ++i) {
-            boost::asio::post(*pool, [this] {
-                ioc.run();
-            });
+        if (!rpc_instance) {
+            NPRPC_LOG_ERROR("[SWB] RpcHandleImpl::start_thread_pool called but rpc_instance is null");
+            return;
         }
-        stopped = false;
+        rpc_instance->start_thread_pool(thread_count);
     }
 
     void stop() noexcept {
-        ioc.stop();
-        if (pool) {
-            pool->join();
-            pool.reset();
+        if (!rpc_instance) {
+            NPRPC_LOG_ERROR("[SWB] RpcHandleImpl::stop called but rpc_instance is null");
+            return;
         }
-        stopped = true;
+        rpc_instance->ioc().stop();
     }
 
     ~RpcHandleImpl() {
-        work_guard.reset();
-        if (!stopped)
-            stop();
         if (rpc_instance) {
             NPRPC_LOG_INFO("[SWB] About to destroy Rpc instance");
             rpc_instance->destroy();
@@ -179,12 +168,12 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
             explicit RpcSwiftBuilder(nprpc::impl::BuildConfig& cfg)
                 : nprpc::impl::RpcBuilderBase(cfg) {}
 
-            nprpc::Rpc* build(boost::asio::io_context& ioc) {
-                return nprpc::impl::RpcBuilderBase::build(ioc);
+            nprpc::Rpc* build() {
+                return nprpc::impl::RpcBuilderBase::build();
             }
         };
 
-        impl->rpc_instance = RpcSwiftBuilder(*stored_config).build(impl->ioc);
+        impl->rpc_instance = RpcSwiftBuilder(*stored_config).build();
 
         initialized_ = true;
         return true;

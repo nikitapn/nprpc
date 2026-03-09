@@ -19,6 +19,7 @@
 #include <variant>
 #include <vector>
 
+#include <boost/asio/thread_pool.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/beast/websocket/ssl.hpp>
@@ -169,7 +170,9 @@ class RpcImpl : public Rpc
   static constexpr size_t max_poa_objects = 6;
   static constexpr std::uint16_t invalid_port = -1;
 
-  boost::asio::io_context& ioc_;
+  boost::asio::io_context ioc_;
+  boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard_;
+  boost::asio::thread_pool pool_;
   std::mutex poas_mut_;
   std::array<std::shared_ptr<PoaImpl>, max_poa_objects> poas_;
   std::array<bool, max_poa_objects> poas_created_;
@@ -299,8 +302,9 @@ public:
   void clear_host_json() override;
   std::string produce_host_json(std::string_view output_path = {}) override;
 
-  boost::asio::io_context& ioc() noexcept { return ioc_; }
-  // void start() override;
+  boost::asio::io_context& ioc() noexcept override { return ioc_; }
+  void start_thread_pool(size_t thread_count) noexcept override;
+  void run() override;
   void destroy() override;
   void destroy_poa(Poa* poa) override;
   bool close_session(Session* con);
@@ -316,7 +320,7 @@ public:
     return poas_[idx].get();
   }
 
-  RpcImpl(boost::asio::io_context& ioc);
+  explicit RpcImpl();
 
 protected:
   Poa* create_poa_impl(uint32_t max_objects,

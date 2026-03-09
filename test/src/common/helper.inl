@@ -38,7 +38,6 @@ inline void log(
 #endif
 
 namespace nprpctest {
-using thread_pool = nprpc::thread_pool_1;
 // Helper class to manage nameserver process
 class NameserverManager {
     pid_t nameserver_pid = -1;
@@ -123,7 +122,7 @@ public:
                 .set_log_level(nprpc::LogLevel::trace)
                 .with_hostname("localhost")
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
-                .with_tcp(22222).with_uring()
+                .with_tcp(22222)//.with_uring()
                 .with_udp(22224)
                 .with_http(22223)
                     .root_dir("/home/nikita/projects/nprpc/test/http")
@@ -137,9 +136,10 @@ public:
                     .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                          "/home/nikita/projects/nprpc/certs/out/localhost.key")
 #endif
-                .build(thread_pool::get_instance().ctx());
+                .build();
 
-            // Use the new PoaBuilder API  
+            rpc->start_thread_pool(1);
+
             poa = rpc->create_poa()
                 .with_max_objects(128)
                 .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
@@ -157,20 +157,10 @@ public:
         // that the nameserver might be using
         nameserver_manager.stop_nameserver();
         std::cout << "Nameserver stopped." << std::endl;
-        // Destroy rpc while io_context is still running
-        // This allows pending async operations to complete
         if (rpc) {
             rpc->destroy();
-            std::cout << "RPC destroyed." << std::endl;
             rpc = nullptr;
         }
-        // Now stop the io_context and wait for threads
-        std::cout << "About to stop io_context..." << std::endl;
-        thread_pool::get_instance().stop();
-        std::cout << "IO context stopped, about to wait..." << std::endl;
-        thread_pool::get_instance().wait();
-        std::cout << "Thread pool wait completed." << std::endl;
-        std::cout << "Test environment torn down." << std::endl;
     }
 };
 

@@ -7,14 +7,11 @@
 #include <thread>
 #include <unistd.h>
 
-#include <nprpc/impl/misc/thread_pool.hpp>
 #include <nprpc_benchmark.hpp>
 #include <nprpc_nameserver.hpp>
 
 using namespace std::string_literals;
 using namespace std::string_view_literals;
-
-using thread_pool = nprpc::thread_pool_4;
 
 #define LOG_PREFIX "[benchmark_server] "
 
@@ -35,7 +32,7 @@ public:
     } else if (nameserver_pid == 0) {
       // Child process - run the nameserver
       // Try to find npnameserver in the build directory
-      execl("/home/nikita/projects/nprpc/.build_release/npnameserver",
+      execl("/home/nikita/projects/nprpc/.build_relwith_debinfo/npnameserver",
             "npnameserver", nullptr);
       execl("/home/nikita/projects/nprpc/.build_debug/npnameserver",
             "npnameserver", nullptr);
@@ -112,7 +109,9 @@ public:
                      "/home/nikita/projects/nprpc/certs/out/localhost.key")
                 .enable_ssl_client_self_signed_cert(
                     "/home/nikita/projects/nprpc/certs/out/localhost.crt")
-                .build(thread_pool::get_instance().ctx());
+                .build();
+
+      rpc->start_thread_pool(16);
 
       // Use the new PoaBuilder API
       poa = rpc->create_poa()
@@ -130,9 +129,7 @@ public:
 
   void TearDown()
   {
-    thread_pool::get_instance().stop();
     if (rpc) {
-      thread_pool::get_instance().stop();
       rpc->destroy();
     }
     // Stop the nameserver

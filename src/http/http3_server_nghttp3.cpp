@@ -1301,8 +1301,8 @@ int Http3Connection::setup_httpconn()
   settings.enable_connect_protocol = 1;
   settings.h3_datagram = 1;
 
-  std::cerr << "[HTTP/3] Advertising SETTINGS: extended_connect=1 h3_datagram=1 wt_enabled=1"
-            << std::endl;
+  // std::cerr << "[HTTP/3] Advertising SETTINGS: extended_connect=1 h3_datagram=1 wt_enabled=1"
+  //           << std::endl;
 
   auto mem = nghttp3_mem_default();
 
@@ -1590,10 +1590,10 @@ int Http3Connection::start_response(Http3Stream* stream)
   if (stream->method == "CONNECT" && stream->path == k_webtransport_path &&
       (stream->protocol == "webtransport-h3" ||
        stream->protocol == "webtransport")) {
-    std::cerr << "[HTTP/3] Received WebTransport CONNECT stream_id="
-              << stream->stream_id << " authority='" << stream->authority
-              << "' scheme='" << stream->scheme << "' origin='"
-              << stream->headers["origin"] << "'" << std::endl;
+    // std::cerr << "[HTTP/3] Received WebTransport CONNECT stream_id="
+    //           << stream->stream_id << " authority='" << stream->authority
+    //           << "' scheme='" << stream->scheme << "' origin='"
+    //           << stream->headers["origin"] << "'" << std::endl;
     return handle_webtransport_connect(stream);
   }
 
@@ -1976,8 +1976,8 @@ int Http3Connection::send_static_response(Http3Stream* stream,
 
 int Http3Connection::send_webtransport_connect_response(Http3Stream* stream)
 {
-  std::cerr << "[HTTP/3] Accepting WebTransport CONNECT stream_id="
-            << stream->stream_id << std::endl;
+  // std::cerr << "[HTTP/3] Accepting WebTransport CONNECT stream_id="
+  //           << stream->stream_id << std::endl;
 
   std::string status_str = "200";
   std::array<nghttp3_nv, 2> nva;
@@ -2119,9 +2119,9 @@ void Http3Connection::queue_raw_stream_write(int64_t stream_id,
     stream = create_stream(stream_id);
   }
 
-  std::cerr << "[HTTP/3][WT] queue_raw_stream_write stream_id=" << stream_id
-            << " bytes=" << data.size()
-            << " queued_before=" << stream->raw_write_queue.size() << std::endl;
+  // std::cerr << "[HTTP/3][WT] queue_raw_stream_write stream_id=" << stream_id
+  //           << " bytes=" << data.size()
+  //           << " queued_before=" << stream->raw_write_queue.size() << std::endl;
 
   stream->raw_write_queue.emplace_back(std::move(data));
   signal_write();
@@ -2343,14 +2343,14 @@ int Http3Connection::on_stream_close(ngtcp2_conn* conn,
   auto h = static_cast<Http3Connection*>(user_data);
   auto* stream = h->find_stream(stream_id);
 
-  std::cerr << "[HTTP/3] stream_close stream_id=" << stream_id
-            << " flags=" << flags
-            << " app_error_code=" << app_error_code
-            << " webtransport_child="
-            << (stream && stream->webtransport_child_stream ? "true" : "false")
-            << " webtransport_session="
-            << (stream && stream->webtransport_session ? "true" : "false")
-            << std::endl;
+  // std::cerr << "[HTTP/3] stream_close stream_id=" << stream_id
+  //           << " flags=" << flags
+  //           << " app_error_code=" << app_error_code
+  //           << " webtransport_child="
+  //           << (stream && stream->webtransport_child_stream ? "true" : "false")
+  //           << " webtransport_session="
+  //           << (stream && stream->webtransport_session ? "true" : "false")
+  //           << std::endl;
 
   if (!(flags & NGTCP2_STREAM_CLOSE_FLAG_APP_ERROR_CODE_SET)) {
     app_error_code = NGHTTP3_H3_NO_ERROR;

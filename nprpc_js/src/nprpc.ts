@@ -110,8 +110,8 @@ export class EndPoint {
 const webtransport_path = "/wt";
 
 export type HostInfo = {
-  secured: boolean;
-  webtransport?: boolean;
+	secured: boolean;
+	webtransport?: boolean;
 	webtransport_options?: unknown;
 	objects: Record<string, ObjectProxy>;
 };
@@ -557,7 +557,7 @@ export class Rpc {
     if (info.webtransport == undefined) info.webtransport = false;
 
     host_info.secured = info.secured;
-    host_info.webtransport = info.webtransport;
+    host_info.webtransport = false; //info.webtransport;
     host_info.webtransport_options = info.webtransport_options;
 
     for (let key of Object.keys(info.objects)) {

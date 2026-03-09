@@ -66,7 +66,7 @@ int main()
                    .with_http(15001)
                    .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                         "/home/nikita/projects/nprpc/certs/out/localhost.key")
-                   .build(ioc);
+                   .build();
 
     auto poa = nprpc::PoaBuilder(rpc)
                    .with_max_objects(1)
@@ -83,11 +83,11 @@ int main()
         nprpc::ObjectActivationFlags::ALLOW_HTTP |
         nprpc::ObjectActivationFlags::ALLOW_SECURED_HTTP);
 
-    boost::asio::signal_set signals(ioc, SIGINT, SIGTERM);
+    boost::asio::signal_set signals(rpc->ioc(), SIGINT, SIGTERM);
     signals.async_wait(
-        [&](boost::beast::error_code const&, int) { ioc.stop(); });
+        [&](boost::beast::error_code const&, int) { rpc->ioc().stop(); });
 
-    ioc.run();
+    rpc->run();
     rpc->destroy();
 
   } catch (const std::exception& e) {

@@ -10,7 +10,6 @@
 #include <cstddef> // std::byte
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <ostream>
 #include <string_view>
 #include <tuple>

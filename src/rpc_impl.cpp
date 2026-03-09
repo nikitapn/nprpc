@@ -109,7 +109,7 @@ std::string serialize_host_object(const ObjectId& object_id)
 }
 } // namespace
 
-NPRPC_API Rpc* RpcBuilderBase::build(boost::asio::io_context& ioc)
+NPRPC_API Rpc* RpcBuilderBase::build()
 {
   if (impl::g_rpc)
     throw Exception("NPRPC has been previously initialized");
@@ -242,7 +242,7 @@ NPRPC_API Rpc* RpcBuilderBase::build(boost::asio::io_context& ioc)
   g_cfg.quic_cert_file = cfg_.quic_cert_file;
   g_cfg.quic_key_file = cfg_.quic_key_file;
 
-  impl::g_rpc = new impl::RpcImpl(ioc);
+  impl::g_rpc = new impl::RpcImpl();
   return impl::g_rpc;
 }
 
@@ -264,6 +264,18 @@ Poa* RpcImpl::create_poa_impl(uint32_t objects_max,
   (*it) = true; // Mark this POA as created
 
   return poa.get();
+}
+
+void RpcImpl::start_thread_pool(size_t thread_count) noexcept
+{
+  for (size_t i = 0; i < thread_count; ++i) {
+    boost::asio::post(pool_, [this] { ioc_.run(); });
+  }
+}
+
+void RpcImpl::run()
+{
+  ioc_.run();
 }
 
 extern void init_socket(boost::asio::io_context& ioc);
@@ -290,6 +302,9 @@ extern void stop_ssr();
 
 void RpcImpl::destroy()
 {
+  ioc_.stop();
+  pool_.join();
+
   // Stop all listeners first
   stop_socket_listener();
   stop_http_server();
@@ -319,6 +334,11 @@ void RpcImpl::destroy()
   }
   // Now destroy sessions outside the lock
   sessions_to_destroy.clear();
+
+  // Drain any handlers posted by session shutdown (e.g. cancellation
+  // completions). ioc_ was stopped above, so restart it to allow poll() to run.
+  ioc_.restart();
+  ioc_.poll();
 
   delete this;
   g_rpc = nullptr;
@@ -834,8 +854,8 @@ RpcImpl::get_nameserver(std::string_view nameserver_ip)
   return obj;
 }
 
-RpcImpl::RpcImpl(boost::asio::io_context& ioc)
-    : ioc_{ioc}
+RpcImpl::RpcImpl()
+    : work_guard_(boost::asio::make_work_guard(ioc_))
 {
   poas_created_.fill(false);
 

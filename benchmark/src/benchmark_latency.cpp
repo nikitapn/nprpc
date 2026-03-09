@@ -223,8 +223,7 @@ BENCHMARK_DEFINE_F(LatencyFixture, LargeData10MB)(benchmark::State& state)
 // Register benchmarks for each transport
 // Arg(0) = SharedMemory, Arg(1) = TCP, Arg(2) = WebSocket, Arg(3) = UDP
 
-BENCHMARK_REGISTER_F(LatencyFixture,
-                     EmptyCall)
+BENCHMARK_REGISTER_F(LatencyFixture, EmptyCall)
     ->Arg(0) // SharedMemory
     ->Arg(1) // TCP
     ->Arg(2) // WebSocket
@@ -232,69 +231,37 @@ BENCHMARK_REGISTER_F(LatencyFixture,
     ->Arg(4) // QUIC
     ->UseRealTime()->Unit(benchmark::kMicrosecond);
 
-BENCHMARK_REGISTER_F(LatencyFixture,
-                     CallWithReturn)
+BENCHMARK_REGISTER_F(LatencyFixture, CallWithReturn)
     ->Arg(0)
     ->Arg(1)
     ->Arg(2)
     ->Arg(4) // QUIC
     ->UseRealTime()->Unit(benchmark::kMicrosecond);
 
-BENCHMARK_REGISTER_F(LatencyFixture,
-                     SmallStringCall)
+BENCHMARK_REGISTER_F(LatencyFixture, SmallStringCall)
     ->Arg(0)
     ->Arg(1)
     ->Arg(2)
     ->Arg(4) // QUIC
     ->UseRealTime()->Unit(benchmark::kMicrosecond);
 
-BENCHMARK_REGISTER_F(LatencyFixture,
-                     NestedDataCall)
+BENCHMARK_REGISTER_F(LatencyFixture, NestedDataCall)
     ->Arg(0)
     ->Arg(1)
     ->Arg(2)
     ->Arg(4) // QUIC
     ->UseRealTime()->Unit(benchmark::kMicrosecond);
 
-BENCHMARK_REGISTER_F(LatencyFixture,
-                     LargeData1MB)
+BENCHMARK_REGISTER_F(LatencyFixture, LargeData1MB)
     ->Arg(0)
     ->Arg(1)
     ->Arg(2)
     ->Arg(4) // QUIC
     ->UseRealTime()->Unit(benchmark::kMillisecond);
 
-BENCHMARK_REGISTER_F(LatencyFixture,
-                     LargeData10MB)
+BENCHMARK_REGISTER_F(LatencyFixture, LargeData10MB)
     ->Arg(0)
     ->Arg(1)
     ->Arg(2)
     ->Arg(4) // QUIC
     ->UseRealTime()->Unit(benchmark::kMillisecond);
-
-/* RESULTS:
---------------------------------------------------------------------------------------
-Benchmark                                 Time             CPU   Iterations
-calls/sec
---------------------------------------------------------------------------------------
-LatencyFixture/EmptyCall/0              132 us         17.0 us 41528  58.871k/s
-SharedMemory LatencyFixture/EmptyCall/1              119 us         18.9 us
-36365 52.8213k/s TCP LatencyFixture/EmptyCall/2              123 us         20.0
-us        35030 50.0187k/s WebSocket LatencyFixture/EmptyCall/3              130
-us         19.5 us        36789  49.999k/s UDP LatencyFixture/CallWithReturn/0
-130 us         17.0 us        40097 58.8606k/s SharedMemory
-LatencyFixture/CallWithReturn/1         112 us         18.0 us 37362 55.7027k/s
-TCP LatencyFixture/CallWithReturn/2         116 us         18.9 us
-37664 52.9795k/s WebSocket LatencyFixture/CallWithReturn/3         125 us 19.0
-us        36789  49.999k/s UDP
--------------------------------------------------------------------------------------------------------
-Benchmark                                 Time             CPU   Iterations
-bytes_per_second  calls/sec
--------------------------------------------------------------------------------------------------------
-LatencyFixture/SmallStringCall/0        125 us         16.5 us
-38706       5.7919Mi/s 60.7325k/s SharedMemory LatencyFixture/SmallStringCall/1
-112 us         18.0 us        38649      5.31255Mi/s 55.7061k/s TCP
-LatencyFixture/SmallStringCall/2        116 us         19.1 us
-37101      5.00113Mi/s 52.4407k/s WebSocket LatencyFixture/SmallStringCall/3 130
-us         18.5 us        36789      4.99999Mi/s 49.999k/s UDP
-*/

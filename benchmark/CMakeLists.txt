@@ -196,6 +196,8 @@ set(BENCHMARK_SOURCES
   src/benchmark_latency.cpp
   # src/benchmark_throughput.cpp
   # src/benchmark_bandwidth.cpp
+  # Add concurrent benchmarks (always; gRPC section compiled conditionally via #ifdef)
+  src/benchmark_concurrent.cpp
   ${nprpc_benchmark_stub_GENERATED_SOURCES}
 )
 
@@ -274,6 +276,12 @@ target_link_libraries(nprpc_benchmarks
   PRIVATE
     ${BENCHMARK_LIBRARIES}
 )
+
+if(GRPC_AVAILABLE)
+  target_compile_definitions(nprpc_benchmarks
+    PRIVATE NPRPC_GRPC_BENCHMARK_ENABLED
+  )
+endif()
 
 # Custom target to run benchmarks
 add_custom_target(run_benchmarks

@@ -5,7 +5,6 @@
 
 #include <benchmark/benchmark.h>
 
-#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <signal.h>
@@ -17,7 +16,6 @@
 
 nprpc::Rpc* g_rpc;
 
-using thread_pool = nprpc::thread_pool_1;
 namespace fs = std::filesystem;
 
 // Global test infrastructure
@@ -260,7 +258,9 @@ int main(int argc, char** argv)
   g_rpc = nprpc::RpcBuilder()
     .set_log_level(nprpc::LogLevel::error)
     .with_tcp(0).with_uring_if(use_uring_client)
-    .build(thread_pool::get_instance().ctx());
+    .build();
+
+  g_rpc->start_thread_pool(16);
 
   nprpc::benchmark::BenchmarkServerManager server;
 
@@ -289,7 +289,6 @@ int main(int argc, char** argv)
   server.stop_capnp_server();
 
   if (g_rpc) {
-    thread_pool::get_instance().stop();
     g_rpc->destroy();
     g_rpc = nullptr;
   }
