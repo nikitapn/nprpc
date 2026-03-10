@@ -172,7 +172,7 @@ class RpcImpl : public Rpc
 
   boost::asio::io_context ioc_;
   boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard_;
-  boost::asio::thread_pool pool_;
+  std::unique_ptr<boost::asio::thread_pool> pool_;
   std::mutex poas_mut_;
   std::array<std::shared_ptr<PoaImpl>, max_poa_objects> poas_;
   std::array<bool, max_poa_objects> poas_created_;

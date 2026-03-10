@@ -266,6 +266,6 @@ interface TestDirect {
 	// out direct vector<struct> → OwnedDirect<Vector_Direct2<...>>
 	void GetStructArray(count: u32, result: out direct vector<SimpleStruct>) raises (AssertionFailed);
 
-	// ill formed cases: does not make sense to return a direct value for primitive types, and should be rejected by the compiler ?
-	void GetFundamentalDirect(result: out direct u32) raises (AssertionFailed);
+	// ill formed case: does not make sense to return a direct value for primitive types, and should be rejected by the compiler ?
+	void GetFundamentalDirect(result: out /* direct */ u32) raises (AssertionFailed);
 }

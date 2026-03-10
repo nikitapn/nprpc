@@ -268,8 +268,9 @@ Poa* RpcImpl::create_poa_impl(uint32_t objects_max,
 
 void RpcImpl::start_thread_pool(size_t thread_count) noexcept
 {
+  pool_ = std::make_unique<boost::asio::thread_pool>(thread_count);
   for (size_t i = 0; i < thread_count; ++i) {
-    boost::asio::post(pool_, [this] { ioc_.run(); });
+    boost::asio::post(*pool_, [this] { ioc_.run(); });
   }
 }
 
@@ -303,7 +304,9 @@ extern void stop_ssr();
 void RpcImpl::destroy()
 {
   ioc_.stop();
-  pool_.join();
+  if (pool_) {
+    pool_->join();
+  }
 
   // Stop all listeners first
   stop_socket_listener();
@@ -454,7 +457,7 @@ RpcImpl::get_session(const EndPoint& endpoint)
 {
   {
     // Fast path: check if session already exists for this endpoint
-    std::shared_lock<std::shared_mutex> lk(connections_mut_);
+    std::shared_lock lk(connections_mut_);
     if (auto it = std::find_if(opened_sessions_.begin(), opened_sessions_.end(),
                               [&endpoint](auto const& ptr) {
                                 return ptr->remote_endpoint() == endpoint;
@@ -464,7 +467,20 @@ RpcImpl::get_session(const EndPoint& endpoint)
     }
   }
 
-  std::scoped_lock<std::shared_mutex> lk(connections_mut_);
+  std::unique_lock session_creation_lock(session_creation_mutex_);
+
+  {
+    // Check again if session was created while waiting for the lock
+    std::shared_lock lk(connections_mut_);
+    if (auto it = std::find_if(opened_sessions_.begin(), opened_sessions_.end(),
+                              [&endpoint](auto const& ptr) {
+                                return ptr->remote_endpoint() == endpoint;
+                              });
+        it != opened_sessions_.end()) {
+      return (*it);
+    }
+  }
+
   std::shared_ptr<Session> con;
   switch (endpoint.type()) {
   case EndPointType::TcpTethered:
@@ -504,7 +520,7 @@ RpcImpl::get_session(const EndPoint& endpoint)
          std::to_string(static_cast<int>(endpoint.type())));
   }
 
-  opened_sessions_.push_back(con);
+  add_connection(con);
 
   return con;
 }
