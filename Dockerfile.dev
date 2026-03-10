@@ -42,6 +42,32 @@ RUN ./b2 --user-config=user-config.jam \
     rm -rf boost_1_89_0 boost_1_89_0.tar.gz
 
 # ============================================================================
+# Stage 2: Build OpenSSL 3.6.1 with QUIC support (SSL_set_quic_tls_cbs)
+# ============================================================================
+FROM swift:6.2.3 AS openssl-builder
+
+RUN apt-get update && apt-get install -y \
+    wget \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+RUN wget https://www.openssl.org/source/openssl-3.6.1.tar.gz && \
+    tar -xzf openssl-3.6.1.tar.gz
+
+RUN cd openssl-3.6.1 && \
+    ./config \
+        --prefix=/opt/openssl \
+        --openssldir=/opt/openssl/ssl \
+        --libdir=lib \
+        CC=clang \
+        shared \
+        no-tests && \
+    make -j$(nproc) && \
+    make install_sw
+
+# ============================================================================
 # Stage 2: Build NPRPC C++
 # ============================================================================
 FROM swift:6.2.3 AS nprpc-builder
@@ -50,13 +76,13 @@ RUN apt-get update && apt-get install -y \
     cmake \
     ninja-build \
     build-essential \
-    libssl-dev \
     liburing-dev \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Boost from previous stage
+# Copy Boost and OpenSSL from previous stages
 COPY --from=boost-builder /opt/boost /opt/boost
+COPY --from=openssl-builder /opt/openssl /opt/openssl
 
 WORKDIR /workspace
 
@@ -71,6 +97,10 @@ RUN cmake -G Ninja \
     -DCMAKE_CXX_COMPILER=clang++ \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DBOOST_DIR=/opt/boost \
+    -DOPENSSL_ROOT_DIR=/opt/openssl \
+    -DOPENSSL_INCLUDE_DIR=/opt/openssl/include \
+    -DOPENSSL_SSL_LIBRARY=/opt/openssl/lib/libssl.so \
+    -DOPENSSL_CRYPTO_LIBRARY=/opt/openssl/lib/libcrypto.so \
     -DCMAKE_INSTALL_PREFIX=/opt/nprpc \
     -DNPRPC_BUILD_TOOLS=ON \
     -DNPRPC_ENABLE_QUIC=ON \
@@ -95,6 +125,7 @@ RUN NPIDL=.build_relwith_debinfo/npidl/npidl ./gen_stubs.sh
 # Build Swift package (release mode)
 RUN swift build -c release \
     -Xcc -I/opt/boost/include \
+    -Xcc -I/opt/openssl/include \
     -Xcc -I/opt/nprpc/include \
     -Xlinker -L/opt/boost/lib \
     -Xlinker -L/opt/nprpc/lib \
@@ -119,7 +150,6 @@ LABEL org.opencontainers.image.version="1.0.0"
 RUN apt-get update && apt-get install -y \
     cmake \
     ninja-build \
-    libssl-dev \
     pkg-config \
     git \
     vim \
@@ -129,6 +159,9 @@ RUN apt-get update && apt-get install -y \
 
 # Copy Boost runtime libraries
 COPY --from=boost-builder /opt/boost /opt/boost
+
+# Copy OpenSSL (QUIC-capable) runtime libraries
+COPY --from=openssl-builder /opt/openssl /opt/openssl
 
 # Copy NPRPC C++ artifacts (libs, headers, tools, cmake configs)
 COPY --from=nprpc-builder /opt/nprpc /opt/nprpc
@@ -156,12 +189,13 @@ module CNprpc {
 }
 EOF
 
-RUN cat > /opt/nprpc/lib/pkgconfig/nprpc-swift.pc << 'EOF'
+RUN mkdir -p /opt/nprpc/lib/pkgconfig && \
+    cat > /opt/nprpc/lib/pkgconfig/nprpc-swift.pc << 'EOF'
 Name: nprpc-swift
 Description: NPRPC C++ bridge for Swift (pre-built)
 Version: 1.0.0
-Cflags: -I/opt/nprpc/include -I/opt/boost/include
-Libs: -L/opt/nprpc/lib -L/opt/boost/lib -lCNprpc -lnprpc -lssl -lcrypto
+Cflags: -I/opt/nprpc/include -I/opt/boost/include -I/opt/openssl/include
+Libs: -L/opt/nprpc/lib -L/opt/boost/lib -L/opt/openssl/lib -lCNprpc -lnprpc -lssl -lcrypto
 EOF
 
 # ---------------------------------------------------------------------------
@@ -169,17 +203,18 @@ EOF
 # Make /opt trees group-readable and give ubuntu ownership of /project so
 # `docker run --user $(id -u):$(id -g)` writes .build/ files as the host user.
 # ---------------------------------------------------------------------------
-RUN chown -R root:ubuntu /opt/nprpc /opt/nprpc_swift /opt/boost && \
-    chmod -R g+rX /opt/nprpc /opt/nprpc_swift /opt/boost && \
+RUN chown -R root:ubuntu /opt/nprpc /opt/nprpc_swift /opt/boost /opt/openssl && \
+    chmod -R g+rX /opt/nprpc /opt/nprpc_swift /opt/boost /opt/openssl && \
     mkdir -p /project && chown ubuntu:ubuntu /project
 
 # Set environment variables for easy discovery
 ENV BOOST_ROOT=/opt/boost
 ENV NPRPC_ROOT=/opt/nprpc
 ENV NPRPC_SWIFT_ROOT=/opt/nprpc_swift
+ENV OPENSSL_ROOT=/opt/openssl
 ENV PATH="${PATH}:/opt/nprpc/bin"
-ENV LD_LIBRARY_PATH="/opt/boost/lib:/opt/nprpc/lib:${LD_LIBRARY_PATH}"
-ENV PKG_CONFIG_PATH="/opt/nprpc/lib/pkgconfig:${PKG_CONFIG_PATH}"
+ENV LD_LIBRARY_PATH="/opt/boost/lib:/opt/nprpc/lib:/opt/openssl/lib:${LD_LIBRARY_PATH}"
+ENV PKG_CONFIG_PATH="/opt/nprpc/lib/pkgconfig:/opt/openssl/lib/pkgconfig:${PKG_CONFIG_PATH}"
 
 # Create CMake toolchain hint file for projects
 RUN echo "# NPRPC Paths\n\

@@ -27,7 +27,8 @@ if [ "$RUN_TESTS" = true ]; then
      ${DOCKER_IMAGE_NAME} bash -c '
       set -e
       cd /workspace/nprpc_swift
-      export LD_LIBRARY_PATH=/workspace/.build_ubuntu_swift
+      export LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib:/workspace/.build_ubuntu_swift/openssl_install/lib"
+      export LD_LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/openssl_install/lib"
       swift build
       set +e
       # Use stdbuf to disable output buffering so we see print() before timeout kills process
@@ -41,7 +42,8 @@ else
      ${DOCKER_IMAGE_NAME} bash -c '
       set -e
       cd /workspace/nprpc_swift
-      export LD_LIBRARY_PATH=/workspace/.build_ubuntu_swift
+      export LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib:/workspace/.build_ubuntu_swift/openssl_install/lib"
+      export LD_LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/openssl_install/lib"
       swift build
      '
   echo "✅ Swift package built successfully."

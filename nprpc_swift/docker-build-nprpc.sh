@@ -43,17 +43,30 @@ docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace ${DOCKER_IMAGE_NAME}
         echo "⚠️  Boost not found! Run ./docker-build-boost.sh first"
         exit 1
     fi
+
+    if [ ! -f ".build_ubuntu_swift/openssl_install/lib/libssl.so" ]; then
+        echo "⚠️  QUIC-capable OpenSSL not found! Run ./docker-build-boost.sh first"
+        exit 1
+    fi
     
-    echo "=== Using existing Boost installation ==="
+    echo ""
+    echo "=== Using existing Boost and OpenSSL installations ==="
     ls -la .build_ubuntu_swift/boost_install/include/boost/ | head -5
     
     echo ""
     echo "=== Configuring NPRPC with Swift Clang ==="
+    # Clear stale cmake cache so OPENSSL_ROOT_DIR is not overridden by previously
+    # cached system OpenSSL paths (OPENSSL_LIBRARIES, OPENSSL_INCLUDE_DIR, etc.)
+    OPENSSL_INSTALL=/workspace/.build_ubuntu_swift/openssl_install
     cmake -S . -B .build_ubuntu_swift \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DCMAKE_C_COMPILER=clang \
         -DCMAKE_CXX_COMPILER=clang++ \
         -DBOOST_DIR=/workspace/.build_ubuntu_swift/boost_install \
+        -DOPENSSL_ROOT_DIR=${OPENSSL_INSTALL} \
+        -DOPENSSL_INCLUDE_DIR=${OPENSSL_INSTALL}/include \
+        -DOPENSSL_SSL_LIBRARY=${OPENSSL_INSTALL}/lib/libssl.so \
+        -DOPENSSL_CRYPTO_LIBRARY=${OPENSSL_INSTALL}/lib/libcrypto.so \
         -DNPRPC_BUILD_TOOLS=ON \
         -DNPRPC_ENABLE_QUIC=ON \
         -DNPRPC_ENABLE_HTTP3=ON \
@@ -74,9 +87,9 @@ docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace ${DOCKER_IMAGE_NAME}
     echo "=== Building Swift Package ==="
     cd nprpc_swift
     
-    export CPATH="/workspace/include:/workspace/.build_ubuntu_swift/include:/workspace/.build_ubuntu_swift/boost_install/include"
-    export LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib"
-    export LD_LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib"
+    export CPATH="/workspace/include:/workspace/.build_ubuntu_swift/include:/workspace/.build_ubuntu_swift/boost_install/include:/workspace/.build_ubuntu_swift/openssl_install/include"
+    export LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib:/workspace/.build_ubuntu_swift/openssl_install/lib"
+    export LD_LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib:/workspace/.build_ubuntu_swift/openssl_install/lib"
     
     swift build -v
     

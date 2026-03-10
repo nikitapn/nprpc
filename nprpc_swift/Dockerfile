@@ -4,10 +4,10 @@ FROM swift:6.2.3
 # Install additional build dependencies (Swift image already has build essentials)
 RUN apt-get update && apt-get install -y \
     cmake \
-    libssl-dev \
     liburing-dev \
     pkg-config \
     sudo \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Create user with same UID/GID as host user
