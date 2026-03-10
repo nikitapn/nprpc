@@ -1400,11 +1400,8 @@ class Parser : public IParser
     for (const auto& a : attr) {
       if (a.first == "trusted")
         ifs->trusted = (a.second == "1");
-      else if (a.first == "udp")
-        ifs->is_udp = (a.second.empty() || a.second == "1");
       else
-        throw_error("Unknown attribute: " + a.first + " for interface " +
-                    ifs->name);
+        throw_error("Unknown attribute: " + a.first + " for interface " + ifs->name);
       // other attributes...
     }
 

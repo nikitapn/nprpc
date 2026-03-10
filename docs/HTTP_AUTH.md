@@ -1,7 +1,7 @@
 # HTTP Authentication & Cookies
 
 NPRPC supports cookie-based authentication for **HTTP** and **WebSocket** sessions.  
-Native transports (TCP, shared-memory, UDP) have no HTTP header layer; credentials for those should be passed as ordinary IDL arguments.
+Native transports (TCP, shared-memory) have no HTTP header layer; credentials for those should be passed as ordinary IDL arguments.
 
 ---
 
@@ -64,7 +64,7 @@ std::optional<std::string> nprpc::http::get_cookie(std::string_view name);
 Returns the value of a named cookie from the current request, or `std::nullopt` when:
 - the cookie is absent, or
 - called outside a servant dispatch, or
-- the session is a native transport (TCP / SHM / UDP).
+- the session is a native transport (TCP / SHM).
 
 ### `set_cookie`
 
@@ -227,8 +227,7 @@ clearCookie(name: "session_id")
 | WebSocket | ✅ | ⚠️ | Read from Upgrade request; write is no-op (no response envelope) |
 | TCP | — | — | Returns `nullopt` / no-op; pass credentials as IDL arguments |
 | Shared Memory | — | — | Same as TCP |
-| UDP | — | — | Same as TCP |
-| QUIC / HTTP/3 | ✅ | ✅ | Same as HTTP; handled by `http3_server_msh3.cpp` / `http3_server_nghttp3.cpp` |
+| QUIC / HTTP/3 | ✅ | ✅ | Same as HTTP; handled by `http3_server_nghttp3.cpp` |
 
 ---
 

@@ -13,9 +13,6 @@ class BuildConfig {
     // TCP
     var tcpPort: UInt16 = 0
     
-    // UDP
-    var udpPort: UInt16 = 0
-    
     // HTTP/WebSocket
     var httpPort: UInt16 = 0
     var httpSslEnabled: Bool = false
@@ -60,9 +57,6 @@ public protocol RpcBuilderProtocol {
     
     /// Add HTTP/WebSocket transport on specified port
     func withHttp(_ port: UInt16) -> RpcBuilderHttp
-    
-    /// Add UDP transport on specified port
-    func withUdp(_ port: UInt16) -> RpcBuilderUdp
     
     /// Add QUIC transport on specified port
     func withQuic(_ port: UInt16) -> RpcBuilderQuic
@@ -111,17 +105,12 @@ extension RpcBuilderInternal {
         config.httpPort = port
         return RpcBuilderHttp(config: config)
     }
-    
-    public func withUdp(_ port: UInt16) -> RpcBuilderUdp {
-        config.udpPort = port
-        return RpcBuilderUdp(config: config)
-    }
-    
+
     public func withQuic(_ port: UInt16) -> RpcBuilderQuic {
         config.quicPort = port
         return RpcBuilderQuic(config: config)
     }
-    
+
     public func build() throws -> Rpc {
         // Build RpcBuildConfig (Swift-visible struct matching nprpc::impl::BuildConfig)
         var cxxConfig = nprpc_swift.RpcBuildConfig()
@@ -135,7 +124,6 @@ extension RpcBuilderInternal {
         
         // Transport ports
         cxxConfig.tcp_port = config.tcpPort
-        cxxConfig.udp_port = config.udpPort
         cxxConfig.http_port = config.httpPort
         cxxConfig.quic_port = config.quicPort
         
@@ -182,15 +170,6 @@ public final class RpcBuilder: RpcBuilderInternal {
 
 /// TCP-specific builder
 public final class RpcBuilderTcp: RpcBuilderInternal {
-    internal let config: BuildConfig
-    
-    init(config: BuildConfig) {
-        self.config = config
-    }
-}
-
-/// UDP-specific builder
-public final class RpcBuilderUdp: RpcBuilderInternal {
     internal let config: BuildConfig
     
     init(config: BuildConfig) {

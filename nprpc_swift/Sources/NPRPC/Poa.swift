@@ -41,9 +41,6 @@ public struct ObjectActivationFlags: OptionSet, Sendable {
     /// Allow shared memory transport
     public static let allowSharedMemory = ObjectActivationFlags(rawValue: 1 << 6)
 
-    /// Allow UDP datagrams
-    public static let allowUdp = ObjectActivationFlags(rawValue: 1 << 7)
-
     /// Allow QUIC connections
     public static let allowQuic = ObjectActivationFlags(rawValue: 1 << 8)
 
@@ -55,7 +52,7 @@ public struct ObjectActivationFlags: OptionSet, Sendable {
 
     /// Network transports only (no shared memory)
     public static let networkOnly: ObjectActivationFlags = [
-        .allowTcp, .allowWebSocket, .allowHttp, .allowQuic, .allowUdp
+        .allowTcp, .allowWebSocket, .allowHttp, .allowQuic
     ]
 }
 

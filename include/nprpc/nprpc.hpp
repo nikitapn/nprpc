@@ -125,8 +125,6 @@ enum Enum : uint32_t {
   ALLOW_SECURED_HTTP = 1 << 5,
   // Allow shared memory connections to this object
   ALLOW_SHARED_MEMORY = 1 << 6,
-  // Allow udp connections to this object
-  ALLOW_UDP = 1 << 7,
   // Allow QUIC connections to this object
   ALLOW_QUIC = 1 << 8,
   // Allow all connection types
@@ -342,7 +340,6 @@ struct BuildConfig {
   uuid_t uuid;
 
   uint16_t tcp_port = 0;
-  uint16_t udp_port = 0;
   std::string hostname;
 
   // HTTP/HTTPS settings + WebSocket/SSL WebSocket settings
@@ -372,7 +369,6 @@ struct BuildConfig {
 class RpcBuilderHttp;
 class RpcBuilderQuic;
 class RpcBuilderTcp;
-class RpcBuilderUdp;
 
 class RpcBuilderBase
 {
@@ -409,7 +405,6 @@ public:
 
   RpcBuilderTcp with_tcp(uint16_t port) noexcept;
   RpcBuilderHttp with_http(uint16_t port) noexcept;
-  RpcBuilderUdp with_udp(uint16_t port) noexcept;
   RpcBuilderQuic with_quic(uint16_t port) noexcept;
 
   NPRPC_API Rpc* build();
@@ -451,15 +446,6 @@ public:
   {
     if (condition) cfg_.use_uring_tcp = true;
     return *this;
-  }
-};
-
-class RpcBuilderUdp : public RpcBuilderBase
-{
-public:
-  explicit RpcBuilderUdp(impl::BuildConfig& cfg)
-      : RpcBuilderBase(cfg)
-  {
   }
 };
 
@@ -531,12 +517,6 @@ inline RpcBuilderHttp RpcBuilderBase::with_http(uint16_t port) noexcept
 {
   cfg_.http_port = port;
   return RpcBuilderHttp(cfg_);
-}
-
-inline RpcBuilderUdp RpcBuilderBase::with_udp(uint16_t port) noexcept
-{
-  cfg_.udp_port = port;
-  return RpcBuilderUdp(cfg_);
 }
 
 inline RpcBuilderQuic RpcBuilderBase::with_quic(uint16_t port) noexcept

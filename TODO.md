@@ -33,33 +33,11 @@
 ## WebSocket Transport
 * [ ] Support openning another WebSocket connection on demand when existing one is busy (for high-throughput clients).
 
-## UDP Transport (Game Networking)
-
-### Done
-* [x] IDL: `[udp]` interface attribute and `[unreliable]` method attribute
-* [x] Code generation: `send_udp()` for fire-and-forget calls
-* [x] UdpConnection: async send queue, connection caching
-* [x] UdpListener: receive datagrams and dispatch to servants
-* [x] UDP endpoint selection and URL construction
-* [x] Reliable UDP with ACK/retransmit for methods without `[unreliable]`
-
-### Known Issues
-* [ ] UdpListener copies received buffer to satisfy Buffers interface (see udp_listener.cpp:160)
-      - Not trivial to fix since Buffers are generated from cpp builder
-      - Consider adding a view-based Buffers variant for receive-only paths
-
-### Future Enhancements
-* [ ] CRC32 or xxHash32 checksums
-* [ ] ChaCha20-Poly1305 or AES-GCM encryption
-* [ ] LZ4 compression for large payloads
-* [ ] Delta encoding for game state updates
-* [ ] Bandwidth throttling / rate limiting
-
 ## HTTP/3 Server
 
 ## QUIC Transport (MsQuic) ✅ COMPLETE
 
-QUIC provides everything UDP fragmentation tries to do, plus more:
+Motivation: Add a modern, high-performance transport option with built-in encryption and multiplexing. QUIC offers:
 - Reliable streams with automatic retransmission
 - Unreliable datagrams (RFC 9221) for fire-and-forget
 - Built-in congestion control and flow control
@@ -89,16 +67,13 @@ QUIC provides everything UDP fragmentation tries to do, plus more:
 
 ### Phase 3: IDL `[unreliable]` Attribute ✅
 * [x] Support `[unreliable]` attribute on methods (not interface-level)
-* [x] Code generator handles `[unreliable]` for UDP (fire-and-forget)
 * [x] Transport behavior:
   - **TCP/WebSocket**: Ignore `[unreliable]` (always reliable)
-  - **UDP**: `[unreliable]` methods use fire-and-forget, others use ACK
   - **QUIC**: Default reliable (streams), `[unreliable]` uses datagrams
-* [ ] Deprecate `[udp]` interface attribute (use URL-based transport selection)
 
 ### Phase 4: Testing & Benchmarks ✅
 * [x] Unit tests for QUIC transport (TestQuicBasic, TestQuicUnreliable)
-* [x] Latency benchmarks vs TCP/UDP
+* [x] Latency benchmarks vs TCP
 * [ ] Throughput benchmarks
 * [ ] Connection establishment time (0-RTT)
 
@@ -113,7 +88,6 @@ Serve web clients over HTTP/3 using nghttp3/ngtcp2
 - "My personal site runs on HTTP/3" 🚀
 
 ### Implementation Status
-* [x] Add msh3 and ls-qpack as dependencies (git submodules in third_party/)
 * [x] Create `Http3Server` class (include/nprpc/impl/http3_server.hpp, src/http3_server.cpp)
   - Integrates with existing Rpc singleton for configuration
   - Reuses certificate handling from QUIC transport
@@ -148,28 +122,17 @@ Serve web clients over HTTP/3 using nghttp3/ngtcp2
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                         NPRPC                               │
-├─────────────┬─────────────┬─────────────┬───────────────────┤
-│  Shared Mem │  TCP/WS/HTTP│     UDP     │   QUIC/HTTP3      │
-│  (IPC)      │  (boost)    │  (boost)    │   (MsQuic/msh3)   │
-├─────────────┴─────────────┴─────────────┴───────────────────┤
-│                    Transport Selection                      │
-│  shm://     tcp://         udp://        quic://            │
-│             ws://  wss://                https:// (HTTP/3)  │
-│             http:// https://                                │
-├─────────────────────────────────────────────────────────────┤
-│                    Method Attributes                        │
-│  [unreliable] - Use best-effort delivery where supported    │
-│                 TCP/WS/HTTP: ignored (always reliable)      │
-│                 UDP: fire-and-forget, no ACK                │
-│                 QUIC: use DATAGRAM instead of stream        │
-│                                                             │
-│  (no attribute) - Default reliable delivery                 │
-│                 TCP/WS/HTTP: normal RPC                     │
-│                 UDP: ACK/retransmit                         │
-│                 QUIC: use stream                            │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                              NPRPC                                  │
+├─────────────┬─────────────┬──────────────────────┬──────────────────┤
+│  Shared Mem │ TCP/WS/HTTP |  HTTP3/WebTransport  │   Native QUIC    │
+│  (IPC)      │ (boost)     │  (ngtcp2/nghttp3)    │     (MsQuic)     │
+├─────────────┴─────────────┴──────────────────────┴──────────────────┤
+│                      Transport Selection                            │
+│  shm://       tcp://                                   quic://      │
+│               ws://  wss://     https:// (HTTP/3)                   │
+│               http:// https://  wt:// (WebTransport)                │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Swift Language Bindings ✅ COMPLETE

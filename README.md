@@ -11,7 +11,6 @@ NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framewo
   - **HTTP/3** - Modern web transport over QUIC (via nghttp3/ngtcp2)
   - **TCP** - Direct socket communication
   - **Shared Memory** - Zero-copy IPC with 8x memory efficiency
-  - **UDP** - Fire-and-forget for game networking
   - **QUIC** - Next-gen encrypted transport (via MsQuic)
 - **Server-Side Rendering**: Built-in SvelteKit SSR support via shared memory IPC
 - **Efficient Binary Protocol**: FlatBuffers-based serialization for minimal overhead
@@ -31,7 +30,6 @@ NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framewo
 | **HTTP** | Web apps, stateless APIs, SSR | Browser compatible, SSR-capable | Higher overhead per request |
 | **TCP** | High-performance IPC | Low overhead, reliable | No browser support |
 | **Shared Memory** | Same-machine IPC | Zero-copy, 8x memory efficient | Local only |
-| **UDP** | Game networking, low-latency | 76µs latency, fire-and-forget | Connectionless, size limits |
 | **QUIC** | Next-gen transport | Multiplexed, encrypted, 0-RTT, ~43k calls/sec | Requires MsQuic |
 | **HTTP/3** | Modern web, SSR | HTTP/3 over QUIC, SSR-capable | Requires nghttp3/ngtcp2 |
 
@@ -107,42 +105,6 @@ cmake --build .
 - **RPC Calls** - Still handled by NPRPC's binary protocol at `/rpc`
 
 See [SSR_ARCHITECTURE.md](docs/SSR_ARCHITECTURE.md) for detailed documentation.
-
-## �🎮 UDP Transport
-
-UDP support is designed for game networking and other latency-sensitive applications.
-The payload size is limited to fit within a single UDP datagram (typically ~1200 bytes).
-
-```typescript
-// game.npidl
-module game;
-
-message vector3 {
-  x: f32;
-  y: f32;
-  z: f32;
-}
-
-[udp]
-interface GameUpdates {
-  [unreliable]  // Fire-and-forget, no ACK
-  async PlayerMoved(x: f32, y: f32, z: f32);
-
-  [unreliable]
-  async BulletFired(weapon_id: u32, weapon_id, dir: vector3);
-
-  // ACK-based reliable delivery
-  void PlayerDied(killer_id: u32, victim_id: u32);
-}
-```
-
-**Features:**
-- **Fire-and-forget**: Send and don't wait - ideal for position updates
-- **Reliable mode**: ACK-based delivery with retransmission
-- **Connection caching**: Reuse connections for ~40k calls/sec throughput
-- **Low latency**: ~76µs vs ~119µs for TCP on same machine
-
-See [UDP_TRANSPORT.md](docs/UDP_TRANSPORT.md) for details.
 
 ## 🍪 Cookie-Based Authentication
 
@@ -720,7 +682,7 @@ See [LICENSE](../LICENSE) file in the topmost directory.
 ## 🙏 Acknowledgments
 
 NPRPC is built on top of excellent open-source libraries:
-- [Boost.Asio](https://www.boost.org/doc/libs/release/libs/asio/) - Async I/O, TCP/UDP
+- [Boost.Asio](https://www.boost.org/doc/libs/release/libs/asio/) - Async I/O
 - [Boost.Beast](https://www.boost.org/doc/libs/release/libs/beast/) - HTTP/WebSocket
 - [nghttp3/ngtcp2](https://github.com/ngtcp2/ngtcp2.git) - HTTP/3 and QUIC
 - [MsQuic](https://github.com/microsoft/msquic.git) - QUIC transport

@@ -103,7 +103,6 @@ public:
                 .with_http(22223)
                 .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                      "/home/nikita/projects/nprpc/certs/out/localhost.key")
-                .with_udp(22224)
                 .with_quic(22225)
                 .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                      "/home/nikita/projects/nprpc/certs/out/localhost.key")
@@ -179,11 +178,6 @@ class BenchmarkServerImpl : public ::nprpc::benchmark::IBenchmark_Servant
   }
 };
 
-class BenchmarkUDPImpl : public ::nprpc::benchmark::IBenchmarkUDP_Servant
-{
-  void Ping() override {}
-};
-
 int main(int argc, char** argv)
 {
   Environment env;
@@ -200,11 +194,6 @@ int main(int argc, char** argv)
   BenchmarkServerImpl benchmark_server;
   oid = poa->activate_object(&benchmark_server, flags);
   nameserver->Bind(oid, "nprpc_benchmark");
-
-  BenchmarkUDPImpl benchmark_udp;
-  oid = poa->activate_object(&benchmark_udp,
-                             nprpc::ObjectActivationFlags::ALLOW_UDP);
-  nameserver->Bind(oid, "nprpc_benchmark_udp");
 
   // Capture interrupt signal to allow graceful shutdown
   signal(SIGINT, [](int signum) {

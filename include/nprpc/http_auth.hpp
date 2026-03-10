@@ -10,7 +10,7 @@
  * These helpers are only meaningful inside an object servant method that
  * is being dispatched over an HTTP(S) transport.  They are safe but
  * silently no-op / return nullopt when called from a WebSocket, TCP,
- * shared-memory or UDP session.
+ * shared-memory
  *
  * Usage (server side):
  *

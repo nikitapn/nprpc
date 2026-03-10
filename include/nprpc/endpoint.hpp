@@ -16,7 +16,6 @@ static constexpr std::string_view wss_prefix = "wss://";
 static constexpr std::string_view http_prefix = "http://";
 static constexpr std::string_view https_prefix = "https://";
 static constexpr std::string_view mem_prefix = "mem://";
-static constexpr std::string_view udp_prefix = "udp://";
 static constexpr std::string_view quic_prefix = "quic://";
 static constexpr std::string_view webtransport_prefix = "wt://";
 
@@ -43,8 +42,6 @@ public:
       return https_prefix;
     case EndPointType::SharedMemory:
       return mem_prefix;
-    case EndPointType::Udp:
-      return udp_prefix;
     case EndPointType::Quic:
       return quic_prefix;
     case EndPointType::WebTransport:
@@ -166,9 +163,6 @@ public:
     } else if (url.find(mem_prefix) == 0) {
       type_ = EndPointType::SharedMemory;
       split(url, mem_prefix, false); // Port is optional for shared memory
-    } else if (url.find(udp_prefix) == 0) {
-      type_ = EndPointType::Udp;
-      split(url, udp_prefix, true);
     } else if (url.find(quic_prefix) == 0) {
       type_ = EndPointType::Quic;
       split(url, quic_prefix, true);

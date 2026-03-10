@@ -70,7 +70,6 @@ try rpc.run()  // Blocks until shutdown
 | `.setHostname(_:)` | Set hostname for advertised URLs |
 | `.withHttp(_:)` | Enable HTTP/WebSocket on port, returns HTTP-specific builder |
 | `.withTcp(_:)` | Enable TCP transport on port |
-| `.withUdp(_:)` | Enable UDP transport on port |
 | `.withQuic(_:)` | Enable QUIC transport on port |
 | `.build()` | Build and initialize Rpc instance |
 

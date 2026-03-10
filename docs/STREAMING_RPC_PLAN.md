@@ -9,7 +9,7 @@ Add support for all three streaming modes — server-to-client, client-to-server
 1. **Efficient streaming** - Leverage zero-copy shared memory for local streams, minimize copies for remote
 2. **Backpressure** - Prevent unbounded buffering, allow client to control flow
 3. **Multiplexing** - Interleave stream chunks with regular RPC calls without blocking
-4. **Transport agnostic** - Work seamlessly over TCP, WebSocket, HTTP, shared memory, UDP (where applicable)
+4. **Transport agnostic** - Work seamlessly over TCP, WebSocket, HTTP, shared memory
 5. **Clean API** - C++20 coroutines on server, async iterators/generators on client (C++, Swift, TypeScript)
 6. **Lifecycle management** - Proper cleanup on cancellation, errors, disconnection
 7. **All three streaming directions** - `server_stream`, `client_stream`, `bidi_stream`
@@ -852,15 +852,6 @@ void StreamManager::send_chunk_webtransport(uint64_t stream_id,
 - `src/webtransport_server.cpp` - new server implementation
 - `nprpc_js/src/webtransport.ts` - browser client
 
-### 3.5 UDP Considerations
-
-UDP unreliable transport is **not suitable** for streaming:
-- No ordering guarantees
-- No reliability
-- Packet loss would corrupt stream
-
-**Decision:** Disable streaming for UDP transport (compile-time error or runtime exception)
-
 ## Phase 4: Backpressure & Flow Control (Week 3)
 
 ### 4.1 Window-Based Flow Control
@@ -1157,7 +1148,7 @@ BENCHMARK(NPRPC_StreamFile_TCP);
 - [ ] All unit tests passing
 - [ ] Benchmark shows >500 MB/s for SHM transport
 - [ ] Proper cleanup on all error paths
-- [ ] Works across all transports (except UDP)
+- [ ] Works across all transports
 - [ ] Documentation complete
 
 ## Future Enhancements (Post-v1)

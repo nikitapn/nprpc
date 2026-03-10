@@ -17,7 +17,6 @@ public struct RpcConfiguration: Sendable {
     public var listenWsPort: UInt16
     public var listenHttpPort: UInt16
     public var listenQuicPort: UInt16
-    public var listenUdpPort: UInt16
 
     /// HTTP/WebSocket settings
     public var httpRootDir: String
@@ -39,7 +38,6 @@ public struct RpcConfiguration: Sendable {
         listenWsPort: UInt16 = 0,
         listenHttpPort: UInt16 = 0,
         listenQuicPort: UInt16 = 0,
-        listenUdpPort: UInt16 = 0,
         httpRootDir: String = "",
         sslCertFile: String = "",
         sslKeyFile: String = "",
@@ -53,7 +51,6 @@ public struct RpcConfiguration: Sendable {
         self.listenWsPort = listenWsPort
         self.listenHttpPort = listenHttpPort
         self.listenQuicPort = listenQuicPort
-        self.listenUdpPort = listenUdpPort
         self.httpRootDir = httpRootDir
         self.sslCertFile = sslCertFile
         self.sslKeyFile = sslKeyFile
@@ -68,7 +65,6 @@ public struct RpcConfiguration: Sendable {
         // Note: RpcBuildConfig matches nprpc::impl::BuildConfig structure
         config.hostname = std.string(nameserverHost)
         config.tcp_port = listenTcpPort
-        config.udp_port = listenUdpPort
         config.http_port = listenHttpPort
         config.quic_port = listenQuicPort
         config.http_root_dir = std.string(httpRootDir)
@@ -83,7 +79,7 @@ public struct RpcConfiguration: Sendable {
 /// NPRPC runtime singleton
 /// 
 /// This is the main entry point for NPRPC applications. It manages:
-/// - Network transport listeners (TCP, WebSocket, HTTP, QUIC, UDP)
+/// - Network transport listeners (TCP, WebSocket, HTTP, QUIC)
 /// - Connection to nameserver
 /// - io_context for async operations
 /// - POA management

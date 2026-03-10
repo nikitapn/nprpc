@@ -35,7 +35,6 @@ public struct NPRPCEndpoint {
         case .http: prefix = "http://"
         case .securedHttp: prefix = "https://"
         case .sharedMemory: return "mem://\(hostname)"  // No port for shared memory
-        case .udp: prefix = "udp://"
         case .quic: prefix = "quic://"
         }
         return "\(prefix)\(hostname):\(port)"

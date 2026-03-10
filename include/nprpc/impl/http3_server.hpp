@@ -13,8 +13,8 @@ namespace nprpc::impl {
 /**
  * @brief Initialize the HTTP/3 server
  *
- * Uses msh3 library on top of MsQuic for HTTP/3 support.
- * Shares certificates with QUIC transport configuration.
+ * Uses nghttp3 library on top of MsQuic for HTTP/3 support.
+ * Shares certificates with boost beast http/1.1 transport configuration.
  *
  * @param ioc The io_context for async operations
  */

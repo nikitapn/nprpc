@@ -70,7 +70,7 @@ private:
   void emit_flat_type(AstTypeDecl* type, std::ostream& os);
   void emit_direct_type(AstTypeDecl* type, std::ostream& os);
 
-  /// Shared output-side logic for proxy_call / proxy_udp_reliable_call.
+  /// Shared output-side logic for proxy_call
   /// Emits the buf_ptr / Direct-out setup and all out-arg assignments,
   /// including OwnedSpan/OwnedDirect for 'direct' annotated arguments.
   void emit_proxy_out_assignments(AstFunctionDecl* fn, bool use_co_return = false);
@@ -98,17 +98,10 @@ private:
   void proxy_call(AstFunctionDecl* fn);
   void proxy_call_coro(AstFunctionDecl* fn);  // coroutine variant
   void proxy_async_call(AstFunctionDecl* fn);
-  void proxy_udp_call(AstFunctionDecl* fn); // Fire-and-forget UDP call
-  void
-  proxy_unreliable_call(AstFunctionDecl* fn); // Fire-and-forget for non-UDP
-                                              // (e.g., QUIC DATAGRAM)
-  void proxy_udp_reliable_call(
-      AstFunctionDecl* fn); // Blocking reliable UDP call with ACK
-  void proxy_udp_reliable_async_call(
-      AstFunctionDecl* fn); // Async reliable UDP call with ACK
-    void proxy_stream_call(AstFunctionDecl* fn); // Server-streaming call
-    void proxy_client_stream_call(AstFunctionDecl* fn);
-    void proxy_bidi_stream_call(AstFunctionDecl* fn);
+  void proxy_unreliable_call(AstFunctionDecl* fn); // Fire-and-forget
+  void proxy_stream_call(AstFunctionDecl* fn); // Server-streaming call
+  void proxy_client_stream_call(AstFunctionDecl* fn);
+  void proxy_bidi_stream_call(AstFunctionDecl* fn);
   std::string_view proxy_arguments(AstFunctionDecl* fn);
   static void emit_function_arguments(
       AstFunctionDecl* fn,

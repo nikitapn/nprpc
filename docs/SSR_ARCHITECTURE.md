@@ -357,4 +357,3 @@ This logs:
 
 - [Shared Memory Architecture](./SHARED_MEMORY_ARCHITECTURE.md)
 - [HTTP/3 Server](./HTTP3_BACKENDS.md)
-- [UDP Transport](./UDP_TRANSPORT.md)

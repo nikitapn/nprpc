@@ -43,9 +43,3 @@ interface Benchmark {
   // and this what capnp does
   void ProcessLargeData(data: vector<u8>, result: out direct vector<u8>);
 }
-
-
-[udp]
-interface BenchmarkUDP {
-  void Ping();
-}

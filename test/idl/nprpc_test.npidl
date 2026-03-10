@@ -11,7 +11,7 @@ exception AssertionFailed {
 	message: string;
 }
 
-// Simple ACK, for testing UDP unreliable delivery
+// Simple ACK, for testing unreliable delivery
 interface Ack {
 	// Simple ACK method
 	// Made it async since it will be called io_context thread and we don't want to deadlock
@@ -191,7 +191,7 @@ interface TestUnreliable {
 	[unreliable]
 	async FireAndForget(a: u32, b: boolean, c: vector<u8>);
 
-	// Reliable UDP - needs ACK, can have return value and throw
+	// Reliable - needs ACK, can have return value and throw
 	boolean ReliableCall(a: u32, b: boolean, c: vector<u8>) raises (AssertionFailed);
 }
 

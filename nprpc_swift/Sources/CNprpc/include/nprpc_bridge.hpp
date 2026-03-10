@@ -79,7 +79,6 @@ struct RpcBuildConfig {
     uint8_t uuid[16] = {};
 
     uint16_t tcp_port = 0;
-    uint16_t udp_port = 0;
     std::string hostname;
 
     // HTTP/HTTPS + WebSocket/SSL WebSocket
@@ -182,7 +181,6 @@ enum class EndPointType : uint8_t {
     WebSocket = 2,
     Http = 3,
     Quic = 4,
-    Udp = 5,
     SharedMemory = 6
 };
 

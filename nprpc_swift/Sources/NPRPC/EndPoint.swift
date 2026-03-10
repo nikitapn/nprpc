@@ -12,14 +12,13 @@ public enum TransportType: UInt8, Sendable {
     case webSocket = 2
     case http = 3
     case quic = 4
-    case udp = 5
     case sharedMemory = 6
-    
+
     /// Initialize from C++ EndPointType
     init(from cxxType: nprpc_swift.EndPointType) {
         self = TransportType(rawValue: cxxType.rawValue) ?? .unknown
     }
-    
+
     /// Convert to C++ EndPointType
     var cxxType: nprpc_swift.EndPointType {
         return nprpc_swift.EndPointType(rawValue: self.rawValue) ?? .Unknown
@@ -33,7 +32,6 @@ public enum TransportType: UInt8, Sendable {
         case .webSocket: return "WebSocket"
         case .http: return "HTTP"
         case .quic: return "QUIC"
-        case .udp: return "UDP"
         case .sharedMemory: return "SharedMemory"
         }
     }
@@ -46,7 +44,6 @@ public enum TransportType: UInt8, Sendable {
         case .webSocket: return "ws"
         case .http: return "http"
         case .quic: return "quic"
-        case .udp: return "udp"
         case .sharedMemory: return "shm"
         }
     }
@@ -110,11 +107,7 @@ public struct EndPoint: Sendable {
     public static func quic(host: String, port: UInt16) -> EndPoint {
         return EndPoint(type: .quic, hostname: host, port: port)
     }
-    
-    public static func udp(host: String, port: UInt16) -> EndPoint {
-        return EndPoint(type: .udp, hostname: host, port: port)
-    }
-    
+
     public static func sharedMemory(uuid: String) -> EndPoint {
         return EndPoint(type: .sharedMemory, hostname: uuid, port: 0)
     }

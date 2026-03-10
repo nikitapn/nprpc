@@ -175,16 +175,9 @@ Object::select_endpoint(std::optional<EndPoint> remote_endpoint) noexcept
         return pos;
       }
 
-      // Check for QUIC endpoint (preferred over UDP for unreliable when
-      // available) Note: Don't replace IP for QUIC - TLS certificates
-      // must match the hostname
+      // Check for QUIC endpoint
+      // Note: Don't replace IP for QUIC - TLS certificates must match the hostname
       if ((pos = urls.find(quic_prefix)) != std::string::npos) {
-        return pos;
-      }
-
-      // Check for UDP endpoint
-      if ((pos = urls.find(udp_prefix)) != std::string::npos) {
-        try_replace_ip(pos, udp_prefix);
         return pos;
       }
 

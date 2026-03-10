@@ -64,7 +64,7 @@ NPRPC provides several CMake options to customize the build:
 - `NPRPC_INSTALL` (default: ON when standalone) - Generate install targets
 - `BUILD_SHARED_LIBS` (default: ON) - Build shared libraries instead of static
 - `NPRPC_ENABLE_QUIC` (default: OFF) - Enable QUIC transport (builds MsQuic from submodule)
-- `NPRPC_ENABLE_HTTP3` (default: OFF) - Enable HTTP/3 server support (requires QUIC, builds msh3)
+- `NPRPC_ENABLE_HTTP3` (default: OFF) - Enable HTTP/3 server support (nghttp3 backend)
 
 #### Examples
 

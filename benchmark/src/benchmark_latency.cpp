@@ -14,13 +14,11 @@ protected:
     SharedMemory = 0,
     TCP = 1,
     WebSocket = 2,
-    UDP = 3,
     QUIC = 4
   };
 
   TransportType transport_;
   nprpc::ObjectPtr<nprpc::benchmark::Benchmark> proxy_;
-  nprpc::ObjectPtr<nprpc::benchmark::BenchmarkUDP> proxy_udp_;
 
   std::string GetEndpoint(TransportType type)
   {
@@ -31,8 +29,6 @@ protected:
       return "tcp://";
     case TransportType::WebSocket:
       return "ws://";
-    case TransportType::UDP:
-      return "udp://";
     case TransportType::QUIC:
       return "quic://";
     default:
@@ -50,8 +46,6 @@ protected:
       return "TCP";
     case TransportType::WebSocket:
       return "WebSocket";
-    case TransportType::UDP:
-      return "UDP";
     case TransportType::QUIC:
       return "QUIC";
     default:
@@ -65,25 +59,17 @@ public:
   {
     // Get transport type from state range
     transport_ = static_cast<TransportType>(state.range(0));
+    proxy_ = get_object<nprpc::benchmark::Benchmark>("nprpc_benchmark");
 
-    if (transport_ == TransportType::UDP) {
-      proxy_udp_ =
-          get_object<nprpc::benchmark::BenchmarkUDP>("nprpc_benchmark_udp");
-    } else {
-      proxy_ = get_object<nprpc::benchmark::Benchmark>("nprpc_benchmark");
-    }
+    auto endpoint = GetEndpoint(transport_);
 
-    if (transport_ != TransportType::UDP) {
-      auto endpoint = GetEndpoint(transport_);
+    auto& urls = proxy_->get_data().urls;
 
-      auto& urls = proxy_->get_data().urls;
+    auto a = urls.find(endpoint);
+    auto b = urls.find(";", a);
+    urls = urls.substr(a, b - a);
 
-      auto a = urls.find(endpoint);
-      auto b = urls.find(";", a);
-      urls = urls.substr(a, b - a);
-
-      proxy_->select_endpoint();
-    }
+    proxy_->select_endpoint();
   }
 
   void TearDown(const ::benchmark::State& /* state */) override {}
@@ -95,11 +81,7 @@ public:
 BENCHMARK_DEFINE_F(LatencyFixture, EmptyCall)(benchmark::State& state)
 {
   for (auto _ : state) {
-    if (transport_ == TransportType::UDP) {
-      proxy_udp_->Ping();
-    } else {
-      proxy_->Ping();
-    }
+    proxy_->Ping();
   }
 
   state.SetLabel(GetTransportName(transport_));
@@ -110,9 +92,6 @@ BENCHMARK_DEFINE_F(LatencyFixture, EmptyCall)(benchmark::State& state)
 // Benchmark: Function call with return value
 BENCHMARK_DEFINE_F(LatencyFixture, CallWithReturn)(benchmark::State& state)
 {
-  if (transport_ == TransportType::UDP)
-    return; // UDP doesn't support this
-
   for (auto _ : state) {
     uint32_t result = proxy_->Func1(42, 24);
     benchmark::DoNotOptimize(result);
@@ -126,9 +105,6 @@ BENCHMARK_DEFINE_F(LatencyFixture, CallWithReturn)(benchmark::State& state)
 // Benchmark: Small string payload
 BENCHMARK_DEFINE_F(LatencyFixture, SmallStringCall)(benchmark::State& state)
 {
-  if (transport_ == TransportType::UDP)
-    return; // UDP doesn't support this
-
   std::string str(100, 'x'); // 100 bytes
 
   for (auto _ : state) {
@@ -144,9 +120,6 @@ BENCHMARK_DEFINE_F(LatencyFixture, SmallStringCall)(benchmark::State& state)
 // Benchmark: Complex nested data structure
 BENCHMARK_DEFINE_F(LatencyFixture, NestedDataCall)(benchmark::State& state)
 {
-  if (transport_ == TransportType::UDP)
-    return; // UDP doesn't support this
-
   // Create a complex nested employee object
   nprpc::benchmark::Employee employee;
   employee.person.name = "John Doe";
@@ -175,9 +148,6 @@ BENCHMARK_DEFINE_F(LatencyFixture, NestedDataCall)(benchmark::State& state)
 // Benchmark: Large data payload (1 MB)
 BENCHMARK_DEFINE_F(LatencyFixture, LargeData1MB)(benchmark::State& state)
 {
-  if (transport_ == TransportType::UDP)
-    return; // UDP doesn't support this
-
   std::vector<uint8_t> data(1024 * 1024); // 1 MB
   std::fill(data.begin(), data.end(), 0x42);
 
@@ -196,9 +166,6 @@ BENCHMARK_DEFINE_F(LatencyFixture, LargeData1MB)(benchmark::State& state)
 // Benchmark: Very large data payload (10 MB)
 BENCHMARK_DEFINE_F(LatencyFixture, LargeData10MB)(benchmark::State& state)
 {
-  if (transport_ == TransportType::UDP)
-    return; // UDP doesn't support this
-
   std::vector<uint8_t> data(10 * 1024 * 1024); // 10 MB
   std::fill(data.begin(), data.end(), 0x42);
 
@@ -221,13 +188,12 @@ BENCHMARK_DEFINE_F(LatencyFixture, LargeData10MB)(benchmark::State& state)
 }
 
 // Register benchmarks for each transport
-// Arg(0) = SharedMemory, Arg(1) = TCP, Arg(2) = WebSocket, Arg(3) = UDP
+// Arg(0) = SharedMemory, Arg(1) = TCP, Arg(2) = WebSocket
 
 BENCHMARK_REGISTER_F(LatencyFixture, EmptyCall)
     ->Arg(0) // SharedMemory
     ->Arg(1) // TCP
     ->Arg(2) // WebSocket
-    // ->Arg(3)  // UDP
     ->Arg(4) // QUIC
     ->UseRealTime()->Unit(benchmark::kMicrosecond);
 

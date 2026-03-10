@@ -437,8 +437,6 @@ struct AstInterfaceDecl : AstTypeDecl, AstNodeWithPosition {
   std::vector<AstFunctionDecl*> fns;
   std::vector<AstInterfaceDecl*> plist;
   bool trusted = true;
-  bool is_udp =
-      false; // [udp] attribute - all methods are fire-and-forget by default
 
   AstInterfaceDecl() { id = FieldType::Interface; }
 };
@@ -624,7 +622,7 @@ struct AstFunctionDecl : AstNodeWithPosition {
   AstStructDecl* ex = nullptr;
   std::vector<AstFunctionArgument*> args, in_args, out_args;
   bool is_async;
-  // [unreliable] attribute maybe used for UDP and quic methods
+  // [unreliable] attribute maybe used for quic methods
   bool is_reliable = true;
   bool is_stream;
   StreamKind stream_kind = StreamKind::None;

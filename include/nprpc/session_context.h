@@ -47,7 +47,7 @@ struct SessionContext {
   impl::StreamManager* stream_manager = nullptr;
 
   // HTTP-only: value of the incoming Cookie: header (valid during dispatch).
-  // Empty string_view for all non-HTTP transports (TCP/WS/SHM/UDP).
+  // Empty string_view for all non-HTTP transports (TCP/WS/SHM).
   std::string_view cookies;
 
   // HTTP-only: Set-Cookie header values to attach to the HTTP response.

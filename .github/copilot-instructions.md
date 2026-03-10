@@ -12,7 +12,7 @@
 - To regenerate stubs manually: `npidl path/to/foo.npidl --cpp --ts --swift --output-dir gen`; in CMake, depend on the `<module>_gen` custom target exposed by `npidl_generate_idl_files`.
 - POAs are created via `nprpc::PoaBuilder` off an `Rpc`; set limits (`with_max_objects`), lifetime, and optionally `with_object_id_policy` (default system-generated, `UserSupplied` unlocks `activate_object_with_id` for deterministic IDs embedded in JS bundles) before calling the relevant activation API with explicit `ObjectActivationFlags` for allowed transports.
 - Nameserver addresses (default TCP 15000, HTTP 15001) come from `RpcBuilder` settings; `Bind` takes ownership of the passed `Object*`, so avoid deleting the servant yourself afterward.
-- Generated clients expose `ObjectPtr<T>` plus `.http` or UDP helpers; call `select_endpoint()` when a servant advertises multiple URLs so you pin the preferred transport.
+- Generated clients expose `ObjectPtr<T>` plus `.http`; call `select_endpoint()` when a servant advertises multiple URLs so you pin the preferred transport.
 ## Testing & Quality Gates
 - C++ tests live in `test/src`; building `nprpc_test` automatically triggers `ctest --output-on-failure` because of a POST_BUILD hook, so fix failures before re-running the build.
 - Handy targets: `run_nprpc_tests`, `run_nprpc_tests_verbose`, and the focused executables (`test_lock_free_ring_buffer`, `test_shared_memory_endpoint`, etc.) that ctest registers as separate suites.

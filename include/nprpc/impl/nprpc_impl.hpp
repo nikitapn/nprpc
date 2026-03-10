@@ -38,7 +38,6 @@ struct Config {
   std::string listen_address = "0.0.0.0";
   uint16_t listen_tcp_port = 0;
   uint16_t listen_http_port = 0; // Used for both HTTP/1.1 and HTTP/3
-  uint16_t listen_udp_port = 0;
   uint16_t listen_quic_port = 0;
   bool http3_enabled = false; // Enable HTTP/3 on same port as HTTP
   bool ssr_enabled = false;   // Enable node worker for SSR
@@ -208,59 +207,9 @@ public:
       uint32_t timeout_ms = 2500);
 
   /**
-   * @brief Send UDP datagram (fire-and-forget, no reply expected)
-   *
-   * Used for unreliable UDP transport where no acknowledgment is needed.
-   * The buffer is sent and immediately discarded.
-   *
-   * @param endpoint Target UDP endpoint
-   * @param buffer Message buffer to send (moved)
-   */
-  NPRPC_API void send_udp(const EndPoint& endpoint, flat_buffer&& buffer);
-
-  /**
-   * @brief Send reliable UDP call and wait for response
-   *
-   * Used for [reliable] UDP methods that need acknowledgment and response.
-   * Implements timeout and automatic retransmission.
-   *
-   * @param endpoint Target UDP endpoint
-   * @param buffer Message buffer to send (input/output - response overwrites)
-   * @param timeout_ms Timeout per attempt in milliseconds
-   * @param max_retries Maximum retransmit attempts before failure
-   */
-  NPRPC_API void call_udp_reliable(const EndPoint& endpoint,
-                                   flat_buffer& buffer,
-                                   uint32_t timeout_ms = 500,
-                                   uint32_t max_retries = 3);
-
-  /**
-   * @brief Send async reliable UDP call with completion handler
-   *
-   * Used for [reliable] async UDP methods. Buffer is moved (copied for
-   * retransmit). Handler is called when response is received or on timeout.
-   *
-   * @param endpoint Target UDP endpoint
-   * @param buffer Message buffer to send (moved - copied internally for
-   * retransmit)
-   * @param completion_handler Called on completion with error code and
-   * response buffer
-   * @param timeout_ms Timeout per attempt in milliseconds
-   * @param max_retries Maximum retransmit attempts before failure
-   */
-  NPRPC_API void call_udp_reliable_async(
-      const EndPoint& endpoint,
-      flat_buffer&& buffer,
-      std::optional<std::function<void(const boost::system::error_code&,
-                                       flat_buffer&)>>&& completion_handler,
-      uint32_t timeout_ms = 500,
-      uint32_t max_retries = 3);
-
-  /**
    * @brief Send unreliable message (fire-and-forget, no reply expected)
    *
    * Used for [unreliable] methods across all transports:
-   * - UDP: Uses UDP datagram (existing send_udp)
    * - QUIC: Uses QUIC DATAGRAM extension (RFC 9221)
    * - TCP/WebSocket: Falls back to regular async call (reliable)
    *

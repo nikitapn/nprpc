@@ -142,7 +142,6 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.log_level = static_cast<nprpc::LogLevel>(config->log_level);
         std::memcpy(&cxxConfig.uuid, config->uuid, 16);
         cxxConfig.tcp_port = config->tcp_port;
-        cxxConfig.udp_port = config->udp_port;
         cxxConfig.hostname = config->hostname;
         cxxConfig.http_port = config->http_port;
         cxxConfig.http_ssl_enabled = config->http_ssl_enabled;
@@ -348,7 +347,6 @@ std::optional<EndPointInfo> EndPointInfo::parse(const std::string& url) {
     else if (scheme == "ws" || scheme == "wss") info.type = EndPointType::WebSocket;
     else if (scheme == "http" || scheme == "https") info.type = EndPointType::Http;
     else if (scheme == "quic") info.type = EndPointType::Quic;
-    else if (scheme == "udp") info.type = EndPointType::Udp;
     else if (scheme == "shm" || scheme == "mem") info.type = EndPointType::SharedMemory;
     else return std::nullopt;
 
@@ -384,7 +382,6 @@ std::string EndPointInfo::to_url() const {
         case EndPointType::WebSocket: oss << "ws://"; break;
         case EndPointType::Http: oss << "http://"; break;
         case EndPointType::Quic: oss << "quic://"; break;
-        case EndPointType::Udp: oss << "udp://"; break;
         case EndPointType::SharedMemory: oss << "shm://"; break;
         default: oss << "unknown://"; break;
     }

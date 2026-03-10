@@ -5,7 +5,7 @@
 //
 // These are only meaningful inside a servant's dispatch() method (where
 // the C++ session context is set on the calling thread).  They are safe
-// but silently return nil / do nothing for native transports (TCP/SHM/UDP).
+// but silently return nil / do nothing for native transports (TCP/SHM).
 //
 // Usage inside a Swift servant:
 //
@@ -60,7 +60,7 @@ public struct CookieOptions {
 /// Returns `nil` when:
 /// - called outside a servant `dispatch()`, or
 /// - the named cookie is absent, or
-/// - the transport is native (TCP / shared-memory / UDP).
+/// - the transport is native (TCP / shared-memory).
 public func getCookie(name: String) -> String? {
     guard let ptr = nprpc_http_get_cookie(name) else { return nil }
     return String(cString: ptr)
@@ -71,7 +71,7 @@ public func getCookie(name: String) -> String? {
 /// - For HTTP sessions the header is sent with the RPC reply.
 /// - For WebSocket sessions the cookie is queued but there is no per-call
 ///   response envelope; use an HTTP RPC call to issue new tokens instead.
-/// - No-op for native transports (TCP / SHM / UDP).
+/// - No-op for native transports (TCP / SHM).
 public func setCookie(
     name: String,
     value: String,

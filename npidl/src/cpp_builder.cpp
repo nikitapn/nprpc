@@ -1507,61 +1507,10 @@ void CppBuilder::proxy_call_coro(AstFunctionDecl* fn)
   }
 }
 
-void CppBuilder::proxy_udp_call(AstFunctionDecl* fn)
-{
-  // Fire-and-forget UDP call - send and don't wait for reply
-  oc << "  ::nprpc::impl::g_rpc->send_udp(this->get_endpoint(), "
-        "std::move(buf));\n";
-}
-
 void CppBuilder::proxy_unreliable_call(AstFunctionDecl* fn)
 {
-  // Fire-and-forget call for non-UDP transports (e.g., QUIC DATAGRAM)
   oc << "  ::nprpc::impl::g_rpc->send_unreliable(this->get_endpoint(), "
         "std::move(buf));\n";
-}
-void CppBuilder::proxy_udp_reliable_call(AstFunctionDecl* fn)
-{
-  // Reliable UDP call - wait for reply with retransmit
-  oc << "  ::nprpc::impl::g_rpc->call_udp_reliable(this->get_endpoint(), "
-        "buf);\n"
-        "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n";
-
-  if (fn->ex)
-    oc << "  if (std_reply == 1) " << ctx_->current_file() << "_throw_exception(buf);\n";
-
-  if (!fn->out_s) {
-    oc << "  if (std_reply != 0) {\n"
-          "    throw ::nprpc::Exception(\"Unknown Error\");\n"
-          "  }\n";
-  } else {
-    oc << "  if (std_reply != -1) {\n"
-          "    throw ::nprpc::Exception(\"Unknown Error\");\n"
-          "  }\n";
-    emit_proxy_out_assignments(fn);
-  }
-}
-
-void CppBuilder::proxy_udp_reliable_async_call(AstFunctionDecl* fn)
-{
-  // Async reliable UDP call - buffer is moved, handler called on completion
-  oc << "  "
-        "::nprpc::impl::g_rpc->call_udp_reliable_async(this->get_endpoint(), "
-        "std::move(buf), "
-        "!handler ? std::nullopt : std::make_optional([handler = "
-        "move(handler)] "
-        "(\n"
-        "    const boost::system::error_code& ec, ::nprpc::flat_buffer& buf) "
-        "{\n"
-        "      if (ec) {\n"
-        "        // Error occurred - just call handler with no args or "
-        "handle "
-        "error\n"
-        "        // For now, we don't propagate errors through async "
-        "handler\n"
-        "      }\n"
-        "      (*handler)();\n"
-        "  }));\n";
 }
 
 // Forward declaration — defined after emit_interface in this translation unit.
@@ -2135,7 +2084,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     oh << ' ' << fn->name << " ";
     oh << proxy_arguments(fn) << ";\n";
     // Coroutine variant for reliable, non-async, non-stream TCP methods
-    if (!fn->is_async && !fn->is_stream && fn->is_reliable && !ifs->is_udp) {
+    if (!fn->is_async && !fn->is_stream && fn->is_reliable) {
       oh << "  ::nprpc::Task<";
       emit_type(fn->ret_value, oh);
       oh << "> " << fn->name << "Async ";
@@ -2243,20 +2192,9 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
           "static_cast<uint32_t>(buf.size() - 4);\n";
 
     // Choose the call method based on interface/function attributes
-    if (ifs->is_udp && !fn->is_reliable) {
-      // UDP fire-and-forget - no reply expected
-      proxy_udp_call(fn);
-    } else if (ifs->is_udp && fn->is_reliable && fn->is_async) {
-      // UDP reliable + async - buffer moved, handler called on completion
-      proxy_udp_reliable_async_call(fn);
-    } else if (ifs->is_udp && fn->is_reliable) {
-      // UDP reliable blocking - caller blocks, no buffer copy needed
-      proxy_udp_reliable_call(fn);
-    } else if (!fn->is_reliable) {
-      // Non-UDP unreliable (e.g., QUIC DATAGRAM) - fire-and-forget
+    if (!fn->is_reliable) {
+      // Unreliable (e.g., QUIC DATAGRAM) - fire-and-forget
       proxy_unreliable_call(fn);
-    } else if (!fn->is_async) {
-      proxy_call(fn);
     } else if (!fn->is_async) {
       proxy_call(fn);
     } else {
@@ -2266,7 +2204,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     oc << "}\n\n";
 
     // Emit coroutine (Async) variant for reliable, non-async, non-stream TCP methods
-    if (!fn->is_async && !fn->is_stream && fn->is_reliable && !ifs->is_udp) {
+    if (!fn->is_async && !fn->is_stream && fn->is_reliable) {
       oc << "::nprpc::Task<";
       emit_type(fn->ret_value, oc);
       oc << ">\n";

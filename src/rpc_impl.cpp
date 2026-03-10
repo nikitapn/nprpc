@@ -4,7 +4,6 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/shared_memory_channel.hpp>
 #include <nprpc/impl/shared_memory_connection.hpp>
-#include <nprpc/impl/udp_connection.hpp>
 #include <nprpc/serialization/oarchive.h>
 #ifdef NPRPC_QUIC_ENABLED
 #include <nprpc/impl/quic_transport.hpp>
@@ -228,7 +227,6 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   g_cfg.hostname = cfg_.hostname;
   g_cfg.listen_tcp_port = cfg_.tcp_port;
   g_cfg.listen_http_port = cfg_.http_port;
-  g_cfg.listen_udp_port = cfg_.udp_port;
   g_cfg.listen_quic_port = cfg_.quic_port;
   g_cfg.http3_enabled = cfg_.http3_enabled;
   g_cfg.ssr_enabled = cfg_.ssr_enabled;
@@ -282,14 +280,11 @@ void RpcImpl::run()
 extern void init_socket(boost::asio::io_context& ioc);
 extern void init_http_server(boost::asio::io_context& ioc);
 extern void init_shared_memory_listener(boost::asio::io_context& ioc);
-extern void init_udp_listener(boost::asio::io_context& ioc);
 
 NPRPC_API Config g_cfg;
 NPRPC_API RpcImpl* g_rpc;
 
 // Forward declarations for cleanup
-void stop_udp_listener();
-void clear_udp_connections();
 void stop_shared_memory_listener();
 void stop_socket_listener();
 void stop_http_server();
@@ -311,8 +306,6 @@ void RpcImpl::destroy()
   // Stop all listeners first
   stop_socket_listener();
   stop_http_server();
-  stop_udp_listener();
-  clear_udp_connections();
   stop_shared_memory_listener();
 #ifdef NPRPC_QUIC_ENABLED
   stop_quic_listener();
@@ -565,108 +558,10 @@ NPRPC_API std::shared_ptr<Session> get_session_for_endpoint(const EndPoint& endp
   return g_rpc->get_session(endpoint);
 }
 
-NPRPC_API void RpcImpl::send_udp(const EndPoint& endpoint, flat_buffer&& buffer)
-{
-  if (endpoint.type() == EndPointType::Udp) {
-    // Use dedicated UDP socket for fire-and-forget
-    auto udp_conn = get_udp_connection(ioc_, std::string(endpoint.hostname()),
-                                       endpoint.port());
-    udp_conn->send(std::move(buffer));
-    return;
-  }
-
-  // Fallback: use existing transport but fire-and-forget style
-  // This allows UDP-style interfaces to work over TCP/SharedMemory for
-  // testing
-  get_session(endpoint)->send_receive_async(std::move(buffer), std::nullopt, 0);
-}
-
 NPRPC_API void RpcImpl::send_unreliable(const EndPoint& endpoint,
                                         flat_buffer&& buffer)
 {
-  switch (endpoint.type()) {
-  case EndPointType::Udp: {
-    // UDP: Use dedicated socket for fire-and-forget
-    auto udp_conn = get_udp_connection(ioc_, std::string(endpoint.hostname()),
-                                       endpoint.port());
-    udp_conn->send(std::move(buffer));
-    break;
-  }
-  default:
-    // All other transports: Use session's send_datagram (QUIC uses
-    // DATAGRAM, others fall back)
-    get_session(endpoint)->send_datagram(std::move(buffer));
-    break;
-  }
-}
-
-NPRPC_API void RpcImpl::call_udp_reliable(const EndPoint& endpoint,
-                                          flat_buffer& buffer,
-                                          uint32_t timeout_ms,
-                                          uint32_t max_retries)
-{
-  if (endpoint.type() == EndPointType::Udp) {
-    // Use dedicated UDP socket with reliable delivery
-    auto udp_conn = get_udp_connection(ioc_, std::string(endpoint.hostname()),
-                                       endpoint.port());
-
-    std::atomic_bool done{false};
-    boost::system::error_code result_ec;
-
-    udp_conn->send_reliable(
-        buffer, // Pass reference - caller is blocked, no copy needed for
-                // first send
-        [&](const boost::system::error_code& ec, flat_buffer& response) {
-          result_ec = ec;
-          if (!ec) buffer = std::move(response);
-          done.store(true, std::memory_order_release);
-          done.notify_one();
-        },
-        timeout_ms, max_retries);
-
-    // Wait for completion
-    done.wait(false);
-
-    if (result_ec) {
-      throw nprpc::Exception(std::string("UDP reliable call failed: ") +
-                             result_ec.message());
-    }
-    return;
-  }
-
-  // Fallback: use existing transport (synchronous call)
-  get_session(endpoint)->send_receive(buffer, timeout_ms * (max_retries + 1));
-}
-
-NPRPC_API void RpcImpl::call_udp_reliable_async(
-    const EndPoint& endpoint,
-    flat_buffer&& buffer,
-    std::optional<std::function<void(const boost::system::error_code&,
-                                     flat_buffer&)>>&& completion_handler,
-    uint32_t timeout_ms,
-    uint32_t max_retries)
-{
-  if (endpoint.type() == EndPointType::Udp) {
-    auto udp_conn = get_udp_connection(ioc_, std::string(endpoint.hostname()),
-                                       endpoint.port());
-
-    udp_conn->send_reliable_async(
-        std::move(buffer),
-        [handler =
-             std::move(completion_handler)](const boost::system::error_code& ec,
-                                            flat_buffer& response) mutable {
-          if (handler) {
-            (*handler)(ec, response);
-          }
-        },
-        timeout_ms, max_retries);
-    return;
-  }
-
-  // Fallback: use existing transport (async call)
-  get_session(endpoint)->send_receive_async(std::move(buffer),
-                                            std::move(completion_handler),
-                                            timeout_ms * (max_retries + 1));
+  get_session(endpoint)->send_datagram(std::move(buffer));
 }
 
 NPRPC_API void RpcImpl::call_async(
@@ -842,7 +737,6 @@ RpcImpl::RpcImpl()
   init_socket(ioc_);
   init_http_server(ioc_);
   init_shared_memory_listener(ioc_);
-  init_udp_listener(ioc_);
 #ifdef NPRPC_QUIC_ENABLED
   init_quic(ioc_);
 #endif
@@ -1027,13 +921,6 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
 
   if (activation_flags & ObjectActivationFlags::ALLOW_SHARED_MEMORY) {
     oid.urls += (std::string(mem_prefix) + g_server_listener_uuid) + ';';
-  }
-
-  if ((activation_flags & ObjectActivationFlags::ALLOW_UDP) &&
-      g_cfg.listen_udp_port != 0) {
-    oid.urls += (std::string(udp_prefix) + default_url + ":" +
-                 std::to_string(g_cfg.listen_udp_port)) +
-                ';';
   }
 
   if ((activation_flags & ObjectActivationFlags::ALLOW_QUIC) &&

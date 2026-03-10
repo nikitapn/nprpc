@@ -49,8 +49,6 @@ enum EndPointType {
   SecuredHttp,
   // Shared memory transport
   SharedMemory,
-  // Plain UDP transport
-  Udp,
   // QUIC transport with encryption and compression
   Quic,
   // Browser WebTransport session on top of HTTPS and HTTP/3

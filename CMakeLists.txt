@@ -38,24 +38,6 @@ option(NPRPC_ENABLE_SSR "Enable SSR support via Node.js worker (requires Boost.P
 option(NPRPC_BUILD_NODE_ADDON "Build Node.js addon" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
-# HTTP/3 backend selection: msh3 (default, uses MsQuic) or nghttp3 (uses ngtcp2)
-set(NPRPC_HTTP3_BACKEND "msh3" CACHE STRING "HTTP/3 backend: msh3 or nghttp3")
-set_property(CACHE NPRPC_HTTP3_BACKEND PROPERTY STRINGS "msh3" "nghttp3")
-
-# Validate HTTP/3 backend choice
-if(NPRPC_ENABLE_HTTP3)
-  if(NOT NPRPC_HTTP3_BACKEND STREQUAL "msh3" AND NOT NPRPC_HTTP3_BACKEND STREQUAL "nghttp3")
-    message(FATAL_ERROR "Invalid NPRPC_HTTP3_BACKEND: ${NPRPC_HTTP3_BACKEND}. Must be 'msh3' or 'nghttp3'")
-  endif()
-  message(STATUS "HTTP/3 backend: ${NPRPC_HTTP3_BACKEND}")
-endif()
-
-# HTTP/3 with msh3 backend requires QUIC (MsQuic)
-if(NPRPC_ENABLE_HTTP3 AND NPRPC_HTTP3_BACKEND STREQUAL "msh3" AND NOT NPRPC_ENABLE_QUIC)
-  message(STATUS "HTTP/3 with msh3 backend requires QUIC - enabling QUIC transport")
-  set(NPRPC_ENABLE_QUIC ON CACHE BOOL "Enable QUIC transport using MsQuic" FORCE)
-endif()
-
 # Find dependencies
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
@@ -102,40 +84,24 @@ endif()
 
 # HTTP/3 support
 if(NPRPC_ENABLE_HTTP3)
-  if(NPRPC_HTTP3_BACKEND STREQUAL "msh3")
-    message(STATUS "HTTP/3 server enabled - building msh3 backend")
-    
-    # Build ls-qpack first (msh3 needs it)
-    set(LSQPACK_TESTS OFF CACHE BOOL "" FORCE)
-    set(LSQPACK_BIN OFF CACHE BOOL "" FORCE)
-    add_subdirectory(third_party/ls-qpack)
-    
-    # Build msh3 (will find existing msquic and ls-qpack targets)
-    set(MSH3_TOOL OFF CACHE BOOL "" FORCE)
-    set(MSH3_PING OFF CACHE BOOL "" FORCE)
-    set(MSH3_TEST OFF CACHE BOOL "" FORCE)
-    add_subdirectory(third_party/msh3)
-    
-  elseif(NPRPC_HTTP3_BACKEND STREQUAL "nghttp3")
-    message(STATUS "HTTP/3 server enabled - building nghttp3 backend")
-    
-    # Build ngtcp2 (QUIC implementation)
-    set(ENABLE_STATIC_LIB ON CACHE BOOL "" FORCE)
-    set(ENABLE_SHARED_LIB OFF CACHE BOOL "" FORCE)
-    set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
-    set(ENABLE_OPENSSL ON CACHE BOOL "" FORCE)
-    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-    # Need PIC for static libs that will be linked into shared libraries
-    set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "" FORCE)
-    add_subdirectory(third_party/ngtcp2 EXCLUDE_FROM_ALL)
-    
-    # Build nghttp3 (HTTP/3 framing)
-    set(ENABLE_STATIC_LIB ON CACHE BOOL "" FORCE)
-    set(ENABLE_SHARED_LIB OFF CACHE BOOL "" FORCE)
-    set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
-    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-    add_subdirectory(third_party/nghttp3 EXCLUDE_FROM_ALL)
-  endif()
+  message(STATUS "HTTP/3 server enabled - building nghttp3 backend")
+
+  # Build ngtcp2 (QUIC implementation)
+  set(ENABLE_STATIC_LIB ON CACHE BOOL "" FORCE)
+  set(ENABLE_SHARED_LIB OFF CACHE BOOL "" FORCE)
+  set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
+  set(ENABLE_OPENSSL ON CACHE BOOL "" FORCE)
+  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  # Need PIC for static libs that will be linked into shared libraries
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "" FORCE)
+  add_subdirectory(third_party/ngtcp2 EXCLUDE_FROM_ALL)
+
+  # Build nghttp3 (HTTP/3 framing)
+  set(ENABLE_STATIC_LIB ON CACHE BOOL "" FORCE)
+  set(ENABLE_SHARED_LIB OFF CACHE BOOL "" FORCE)
+  set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
+  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  add_subdirectory(third_party/nghttp3 EXCLUDE_FROM_ALL)
 endif()
 
 # Add subdirectories
@@ -197,7 +163,6 @@ add_library(nprpc
   src/http/http_rpc_session.cpp
   src/http/http_file_cache.cpp
   src/http/http_auth.cpp
-  src/http/http3_server_msh3.cpp
   src/http/http3_server_nghttp3.cpp
   # WebSocket transport
   src/ws/async_connect.cpp
@@ -206,9 +171,6 @@ add_library(nprpc
   src/ws/websocket_session.cpp
   # QUIC transport
   src/quic/quic_transport.cpp
-  # UDP transport
-  src/udp/udp_connection.cpp
-  src/udp/udp_listener.cpp
   # Core framework files
   src/nprpc.cpp
   src/logging.cpp
@@ -242,8 +204,6 @@ add_library(nprpc
   include/nprpc/impl/async_connect.hpp
   include/nprpc/impl/nprpc_impl.hpp
   include/nprpc/impl/session.hpp
-  include/nprpc/impl/udp_connection.hpp
-  include/nprpc/impl/udp_listener.hpp
   include/nprpc/impl/quic_transport.hpp
   include/nprpc/impl/http3_server.hpp
   include/nprpc/impl/uuid.hpp
@@ -309,29 +269,19 @@ endif()
 # HTTP/3 linking
 if(NPRPC_ENABLE_HTTP3)
   target_compile_definitions(nprpc PUBLIC NPRPC_HTTP3_ENABLED)
-  
-  if(NPRPC_HTTP3_BACKEND STREQUAL "msh3")
-    target_link_libraries(nprpc PRIVATE msh3)
-    target_include_directories(nprpc PRIVATE 
-      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/msh3
-    )
-    target_compile_definitions(nprpc PRIVATE NPRPC_HTTP3_BACKEND_MSH3)
-    
-  elseif(NPRPC_HTTP3_BACKEND STREQUAL "nghttp3")
-    target_link_libraries(nprpc PRIVATE 
-      ngtcp2_static
-      ngtcp2_crypto_ossl_static
-      nghttp3_static
-    )
-    target_include_directories(nprpc PRIVATE 
-      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ngtcp2/lib/includes
-      ${CMAKE_CURRENT_BINARY_DIR}/third_party/ngtcp2/lib/includes
-      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ngtcp2/crypto/includes
-      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nghttp3/lib/includes
-      ${CMAKE_CURRENT_BINARY_DIR}/third_party/nghttp3/lib/includes
-    )
-    target_compile_definitions(nprpc PRIVATE NPRPC_HTTP3_BACKEND_NGHTTP3)
-  endif()
+  target_link_libraries(nprpc PRIVATE 
+    ngtcp2_static
+    ngtcp2_crypto_ossl_static
+    nghttp3_static
+  )
+  target_include_directories(nprpc PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ngtcp2/lib/includes
+    ${CMAKE_CURRENT_BINARY_DIR}/third_party/ngtcp2/lib/includes
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ngtcp2/crypto/includes
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nghttp3/lib/includes
+    ${CMAKE_CURRENT_BINARY_DIR}/third_party/nghttp3/lib/includes
+  )
+  target_compile_definitions(nprpc PRIVATE NPRPC_HTTP3_BACKEND_NGHTTP3)
 endif()
 
 # Platform-specific settings
