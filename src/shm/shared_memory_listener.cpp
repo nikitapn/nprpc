@@ -237,14 +237,22 @@ connect_to_shared_memory_listener(boost::asio::io_context& ioc,
 
     // Spin-wait for the server's release-store on the ready flag.
     auto start = std::chrono::steady_clock::now();
+    auto last_log = start;
     while (ready_flag->load(std::memory_order_acquire) == 0u) {
 #if defined(__x86_64__) || defined(__i386__)
       __builtin_ia32_pause();
 #elif defined(__aarch64__) || defined(__arm__)
       asm volatile("yield" ::: "memory");
 #endif
-      auto elapsed = std::chrono::steady_clock::now() - start;
-      if (elapsed > std::chrono::seconds(5)) {
+      auto now = std::chrono::steady_clock::now();
+      if (now - last_log >= std::chrono::milliseconds(500)) {
+        NPRPC_LOG_WARN("SHM connect: still waiting for ready flag '{}' ({} ms)",
+                       ready_flag_name,
+                       std::chrono::duration_cast<std::chrono::milliseconds>(
+                           now - start).count());
+        last_log = now;
+      }
+      if (now - start > std::chrono::seconds(5)) {
         cleanup_ready();
         throw std::runtime_error(
             "Timeout waiting for server to create ring buffers");

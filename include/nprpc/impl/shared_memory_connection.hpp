@@ -31,8 +31,6 @@ class SharedMemoryConnection
   std::mutex mutex_;
   uint32_t pending_requests_ = 0;
 
-  // For zero-copy writes: stores the active reservation
-  LockFreeRingBuffer::WriteReservation active_reservation_;
 
 protected:
   virtual void timeout_action() final;

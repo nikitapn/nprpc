@@ -177,6 +177,7 @@ class RpcImpl : public Rpc
   std::array<std::shared_ptr<PoaImpl>, max_poa_objects> poas_;
   std::array<bool, max_poa_objects> poas_created_;
   mutable std::shared_mutex connections_mut_;
+  mutable std::mutex session_creation_mutex_; // serialises slow-path creation
   std::vector<std::shared_ptr<Session>> opened_sessions_;
   mutable std::mutex host_json_mut_;
   std::vector<std::pair<std::string, ObjectId>> host_json_objects_;

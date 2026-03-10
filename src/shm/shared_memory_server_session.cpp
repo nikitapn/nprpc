@@ -105,8 +105,7 @@ public:
         channel_->commit_write(reservation, tx_buffer.size());
       } else {
         // Should not happen for now...
-        NPRPC_LOG_ERROR("SharedMemoryServerSession: Unexpected "
-                        "non-zero-copy response path");
+        // NPRPC_LOG_ERROR("SharedMemoryServerSession: Unexpected non-zero-copy response path");
         // std::abort();
         // Fallback path: buffer was converted to owned mode or didn't
         // have reservation Need to get a new reservation and copy the
@@ -117,8 +116,7 @@ public:
                       tx_buffer.size());
           channel_->commit_write(new_reservation, tx_buffer.size());
         } else {
-          NPRPC_LOG_ERROR("SharedMemoryServerSession: Failed to "
-                          "allocate response buffer");
+          NPRPC_LOG_ERROR("SharedMemoryServerSession: Failed to allocate response buffer");
         }
       }
     } catch (const std::exception& e) {

@@ -11,6 +11,8 @@
 #include <boost/interprocess/mapped_region.hpp>
 #include <boost/interprocess/shared_memory_object.hpp>
 
+#include <thread>
+
 #include <nprpc/common.hpp>
 #include <nprpc/impl/lock_free_ring_buffer.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
@@ -285,51 +287,53 @@ LockFreeRingBuffer::~LockFreeRingBuffer()
 
 size_t LockFreeRingBuffer::used_bytes() const
 {
-  size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
-  size_t read_idx = header_->read_idx.load(std::memory_order_acquire);
-
-  if (write_idx >= read_idx) {
-    return write_idx - read_idx;
-  } else {
-    // Wrapped around
-    return header_->buffer_size - read_idx + write_idx;
-  }
+  // Use write_idx (claimed frontier) vs read_idx.
+  // Unsigned subtraction wraps correctly because both indices are always
+  // kept in [0, buffer_size) and write_idx >= read_idx modulo buffer_size.
+  size_t w = header_->write_idx.load(std::memory_order_acquire);
+  size_t r = header_->read_idx.load(std::memory_order_acquire);
+  return (w - r + header_->buffer_size) % header_->buffer_size;
 }
 
 bool LockFreeRingBuffer::try_write(const void* data, size_t size)
 {
-  // Validate message size
   if (size > header_->max_message_size) {
     NPRPC_LOG_ERROR("Message size {} exceeds maximum {}", size,
                     header_->max_message_size);
     return false;
   }
 
-  // Total bytes needed: size header (4 bytes) + data
-  size_t total_bytes = sizeof(uint32_t) + size;
+  // Slot layout: [claimed_size u32][actual_size u32][data bytes]
+  static constexpr size_t kHdr = sizeof(uint32_t) * 2;
+  size_t total = kHdr + size;
 
-  // Check if we have enough space
-  // Need to keep at least 1 byte free to distinguish full from empty
-  if (total_bytes + 1 > available_bytes()) {
-    return false; // Buffer full
-  }
+  // CAS-claim the slot (same loop as try_reserve_write).
+  size_t old_idx, new_idx;
+  do {
+    old_idx = header_->write_idx.load(std::memory_order_relaxed);
+    size_t r = header_->read_idx.load(std::memory_order_acquire);
+    size_t used = (old_idx - r + header_->buffer_size) % header_->buffer_size;
+    if (used + total + 1 > header_->buffer_size)
+      return false; // Buffer full
+    new_idx = (old_idx + total) % header_->buffer_size;
+  } while (!header_->write_idx.compare_exchange_weak(
+               old_idx, new_idx,
+               std::memory_order_acq_rel,
+               std::memory_order_relaxed));
 
-  // Load current write index
-  size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
+  // Write claimed_size (navigation header for consumer)
+  uint32_t claimed32 = static_cast<uint32_t>(size);
+  std::memcpy(data_region_ + old_idx, &claimed32, sizeof(uint32_t));
 
-  // Write size header - with mirrored mapping, no wrap-around needed!
-  // Just write directly, the mirror handles the wrap
-  std::memcpy(data_region_ + write_idx, &size, sizeof(uint32_t));
-  write_idx = (write_idx + sizeof(uint32_t)) % header_->buffer_size;
+  // Write data (mirrored mapping: single memcpy always safe)
+  size_t data_start = (old_idx + kHdr) % header_->buffer_size;
+  std::memcpy(data_region_ + data_start,
+              static_cast<const uint8_t*>(data), size);
 
-  // Write data - with mirrored mapping, single memcpy always works!
-  // Even if it crosses the buffer boundary, the mirror makes it contiguous
-  const uint8_t* src = static_cast<const uint8_t*>(data);
-  std::memcpy(data_region_ + write_idx, src, size);
-
-  // Update write index with release semantics
-  size_t new_write_idx = (write_idx + size) % header_->buffer_size;
-  header_->write_idx.store(new_write_idx, std::memory_order_release);
+  // Commit: store actual_size with release — this is the consumer's signal.
+  auto* actual_slot = reinterpret_cast<std::atomic<uint32_t>*>(
+      data_region_ + (old_idx + sizeof(uint32_t)) % header_->buffer_size);
+  actual_slot->store(claimed32, std::memory_order_release);
 
   // Notify waiting readers
   {
@@ -343,41 +347,45 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size)
 
 size_t LockFreeRingBuffer::try_read(void* buffer, size_t buffer_size)
 {
-  // Load indices with acquire semantics
-  size_t read_idx = header_->read_idx.load(std::memory_order_acquire);
-  size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
+  static constexpr size_t kHdr = sizeof(uint32_t) * 2;
 
-  // Check if buffer is empty
-  if (read_idx == write_idx) {
+  size_t commit_idx = header_->commit_idx.load(std::memory_order_relaxed);
+  size_t write_idx  = header_->write_idx.load(std::memory_order_acquire);
+
+  if (commit_idx == write_idx)
     return 0; // Empty
-  }
 
-  // Read size header - with mirrored mapping, no wrap-around needed!
-  uint32_t message_size = 0;
-  std::memcpy(&message_size, data_region_ + read_idx, sizeof(uint32_t));
-  read_idx = (read_idx + sizeof(uint32_t)) % header_->buffer_size;
+  uint32_t claimed_size = 0;
+  std::memcpy(&claimed_size, data_region_ + commit_idx, sizeof(uint32_t));
 
-  // Validate size
-  if (message_size > header_->max_message_size) {
-    NPRPC_LOG_ERROR("Corrupt message size: {}", message_size);
+  if (claimed_size == 0 || claimed_size > header_->max_message_size) {
+    NPRPC_LOG_ERROR("Corrupt claimed_size: {}", claimed_size);
     return 0;
   }
 
-  if (message_size > buffer_size) {
-    NPRPC_LOG_ERROR("Buffer too small: message={}, buffer={}", message_size,
-                    buffer_size);
+  // Spin until committed
+  auto* actual_slot = reinterpret_cast<std::atomic<uint32_t>*>(
+      data_region_ +
+      (commit_idx + sizeof(uint32_t)) % header_->buffer_size);
+  uint32_t actual_size;
+  while ((actual_size = actual_slot->load(std::memory_order_acquire)) == 0)
+    std::this_thread::yield();
+
+  if (actual_size > buffer_size) {
+    NPRPC_LOG_ERROR("Buffer too small: message={}, buffer={}",
+                    actual_size, buffer_size);
     return 0;
   }
 
-  // Copy data - with mirrored mapping, single memcpy always works!
-  uint8_t* dest = static_cast<uint8_t*>(buffer);
-  std::memcpy(dest, data_region_ + read_idx, message_size);
+  size_t data_start = (commit_idx + kHdr) % header_->buffer_size;
+  std::memcpy(static_cast<uint8_t*>(buffer),
+              data_region_ + data_start, actual_size);
 
-  // Update read index with release semantics
-  size_t new_read_idx = (read_idx + message_size) % header_->buffer_size;
-  header_->read_idx.store(new_read_idx, std::memory_order_release);
+  size_t next = (commit_idx + kHdr + claimed_size) % header_->buffer_size;
+  header_->commit_idx.store(next, std::memory_order_relaxed);
+  header_->read_idx.store(next, std::memory_order_release);
 
-  return message_size;
+  return actual_size;
 }
 
 size_t LockFreeRingBuffer::read_with_timeout(void* buffer,
@@ -424,9 +432,9 @@ size_t LockFreeRingBuffer::available_bytes() const
 
 bool LockFreeRingBuffer::is_empty() const
 {
-  size_t read_idx = header_->read_idx.load(std::memory_order_acquire);
-  size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
-  return read_idx == write_idx;
+  size_t commit_idx = header_->commit_idx.load(std::memory_order_relaxed);
+  size_t write_idx  = header_->write_idx.load(std::memory_order_acquire);
+  return commit_idx == write_idx;
 }
 
 bool LockFreeRingBuffer::is_full(size_t message_size) const
@@ -442,47 +450,51 @@ bool LockFreeRingBuffer::is_full(size_t message_size) const
 LockFreeRingBuffer::WriteReservation
 LockFreeRingBuffer::try_reserve_write(size_t min_size)
 {
-  WriteReservation result{nullptr, 0, 0, false};
+  // Slot layout: [claimed_size u32][actual_size u32][data bytes]
+  // claimed_size is written at claim time (= min_size); it lets the consumer
+  // navigate to the next slot boundary without waiting for commit_write.
+  // actual_size is zeroed at claim time; commit_write stores the real size
+  // with release semantics — this is the consumer's spin-wait signal.
+  //
+  // We claim exactly min_size bytes of data.  Claiming all available space
+  // would make the ring appear full to other producers until commit_read is
+  // called, causing false "buffer full" failures in pipelined scenarios where
+  // the next write arrives before commit_read runs.
+  //
+  // ABA note: the CAS below is not protected by a generation counter.
+  // ABA requires other producers to lap the entire ring between this thread's
+  // load and its CAS — extremely unlikely with a 16 MB ring.
+  static constexpr size_t kHdr = sizeof(uint32_t) * 2;
+  size_t total = kHdr + min_size;
 
-  // Calculate available space for data (excluding size header overhead)
-  size_t avail = available_bytes();
-  if (avail <= sizeof(uint32_t) + 1) {
-    return result; // Not enough space for even a minimal message
-  }
+  size_t old_idx, new_idx;
+  do {
+    old_idx = header_->write_idx.load(std::memory_order_relaxed);
+    size_t r = header_->read_idx.load(std::memory_order_acquire);
+    size_t used = (old_idx - r + header_->buffer_size) % header_->buffer_size;
+    // Keep 1 byte gap to distinguish full from empty.
+    if (used + total + 1 > header_->buffer_size)
+      return {}; // Not enough space
+    new_idx = (old_idx + total) % header_->buffer_size;
+  } while (!header_->write_idx.compare_exchange_weak(
+               old_idx, new_idx,
+               std::memory_order_acq_rel,
+               std::memory_order_relaxed));
 
-  // Maximum data we can write (reserve space for size header + 1 byte to
-  // distinguish full/empty)
-  size_t max_data_size = avail - sizeof(uint32_t) - 1;
+  // Slot [old_idx, old_idx + total) is now exclusively ours.
+  // Write claimed_size immediately so the consumer can find the next slot.
+  uint32_t claimed32 = static_cast<uint32_t>(min_size);
+  std::memcpy(data_region_ + old_idx, &claimed32, sizeof(uint32_t));
+  // Zero actual_size — consumer spins on this until commit_write fires.
+  uint32_t zero = 0;
+  std::memcpy(data_region_ + (old_idx + sizeof(uint32_t)) % header_->buffer_size,
+              &zero, sizeof(uint32_t));
 
-  // Clamp to MAX_MESSAGE_SIZE
-  max_data_size =
-      std::min(max_data_size, static_cast<size_t>(header_->max_message_size));
-
-  // Check if we have at least the minimum requested
-  if (max_data_size < min_size) {
-    return result; // Buffer too full for the minimum requested size
-  }
-
-  // Load current write index
-  size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
-
-  // Write placeholder size header (will be updated in commit_write)
-  uint32_t placeholder = 0;
-  std::memcpy(data_region_ + write_idx, &placeholder, sizeof(uint32_t));
-
-  // Store the position where we wrote the size header
-  result.write_idx = write_idx;
-
-  // Advance past size header
-  write_idx = (write_idx + sizeof(uint32_t)) % header_->buffer_size;
-
-  // Return pointer to data area (with mirrored mapping, this is safe for any
-  // write)
-  result.data = data_region_ + write_idx;
-  // Return the FULL available space, not just what was requested!
-  result.max_size = max_data_size;
-  result.valid = true;
-
+  WriteReservation result;
+  result.write_idx = old_idx;
+  result.data      = data_region_ + (old_idx + kHdr) % header_->buffer_size;
+  result.max_size  = min_size;
+  result.valid     = true;
   return result;
 }
 
@@ -501,17 +513,14 @@ void LockFreeRingBuffer::commit_write(const WriteReservation& reservation,
     return;
   }
 
-  // Write actual size to the header position
-  uint32_t size32 = static_cast<uint32_t>(actual_size);
-  std::memcpy(data_region_ + reservation.write_idx, &size32, sizeof(uint32_t));
-
-  // Calculate new write index
-  size_t data_start =
-      (reservation.write_idx + sizeof(uint32_t)) % header_->buffer_size;
-  size_t new_write_idx = (data_start + actual_size) % header_->buffer_size;
-
-  // Update write index with release semantics
-  header_->write_idx.store(new_write_idx, std::memory_order_release);
+  // Write actual_size into the slot header with release semantics.
+  // This is the only commit signal the consumer waits on; write_idx was
+  // already advanced during try_reserve_write so we must NOT touch it here.
+  auto* actual_slot = reinterpret_cast<std::atomic<uint32_t>*>(
+      data_region_ +
+      (reservation.write_idx + sizeof(uint32_t)) % header_->buffer_size);
+  actual_slot->store(static_cast<uint32_t>(actual_size),
+                     std::memory_order_release);
 
   // Notify waiting readers
   {
@@ -523,38 +532,52 @@ void LockFreeRingBuffer::commit_write(const WriteReservation& reservation,
 
 LockFreeRingBuffer::ReadView LockFreeRingBuffer::try_read_view()
 {
-  ReadView result{nullptr, 0, 0, false};
+  static constexpr size_t kHdr = sizeof(uint32_t) * 2;
 
-  // Load indices with acquire semantics
-  size_t read_idx = header_->read_idx.load(std::memory_order_acquire);
-  size_t write_idx = header_->write_idx.load(std::memory_order_acquire);
+  // commit_idx is the consumer's scan cursor (single consumer — no CAS).
+  size_t commit_idx = header_->commit_idx.load(std::memory_order_relaxed);
+  size_t write_idx  = header_->write_idx.load(std::memory_order_acquire);
 
-  // Check if buffer is empty
-  if (read_idx == write_idx) {
-    return result; // Empty
+  if (commit_idx == write_idx)
+    return {}; // Nothing claimed yet
+
+  // claimed_size tells us how large this slot is so we can find the next one
+  // even before actual_size is committed.
+  uint32_t claimed_size = 0;
+  std::memcpy(&claimed_size,
+              data_region_ + commit_idx, sizeof(uint32_t));
+
+  if (claimed_size == 0 || claimed_size > header_->max_message_size) {
+    NPRPC_LOG_ERROR("Corrupt claimed_size in read_view: {}", claimed_size);
+    return {};
   }
 
-  // std::cout << "[D] try_read_view: r=" << read_idx << " w=" << write_idx <<
-  // std::endl;
+  // Spin until the producer commits by storing a non-zero actual_size.
+  // This is a bounded spin: producers write actual_size immediately after
+  // filling the data bytes, so the window is at most one memcpy wide.
+  auto* actual_slot = reinterpret_cast<std::atomic<uint32_t>*>(
+      data_region_ +
+      (commit_idx + sizeof(uint32_t)) % header_->buffer_size);
+  uint32_t actual_size;
+  while ((actual_size = actual_slot->load(std::memory_order_acquire)) == 0)
+    std::this_thread::yield();
 
-  // Read size header - with mirrored mapping, no wrap-around needed!
-  uint32_t message_size = 0;
-  std::memcpy(&message_size, data_region_ + read_idx, sizeof(uint32_t));
-  size_t data_start = (read_idx + sizeof(uint32_t)) % header_->buffer_size;
-
-  // Validate size
-  if (message_size > header_->max_message_size) {
-    NPRPC_LOG_ERROR("Corrupt message size in read_view: {}", message_size);
-    return result;
+  if (actual_size > claimed_size) {
+    NPRPC_LOG_ERROR("actual_size {} > claimed_size {} in read_view",
+                    actual_size, claimed_size);
+    return {};
   }
 
-  // Return pointer directly into the ring buffer
-  // With mirrored mapping, this is always a valid contiguous view
-  result.data = data_region_ + data_start;
-  result.size = message_size;
-  result.read_idx = (data_start + message_size) % header_->buffer_size;
-  result.valid = true;
+  size_t data_start = (commit_idx + kHdr) % header_->buffer_size;
+  // Advance commit_idx to the next slot (uses the full claimed slot size).
+  size_t next_commit = (commit_idx + kHdr + claimed_size) % header_->buffer_size;
+  header_->commit_idx.store(next_commit, std::memory_order_relaxed);
 
+  ReadView result;
+  result.data      = data_region_ + data_start;
+  result.size      = actual_size;
+  result.read_idx  = next_commit;
+  result.valid     = true;
   return result;
 }
 

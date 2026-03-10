@@ -178,20 +178,11 @@ void SharedMemoryChannel::read_loop()
         // std::cout << "Zero-copy read view attempt returned valid=" <<
         // view.valid << std::endl;
         if (view) {
-          // std::cout << "[nprpc][D] " << side << " read_loop got
-          // view from "
-          // << recv_ring_name_
-          //           << " size=" << view.size << std::endl;
-          // Zero-copy path: provide view directly to callback
-          // Call synchronously in read thread to ensure commit_read()
-          // completes before next iteration
+          // Callback copies the data; commit the read immediately so that
+          // the next try_read_view() call sees fresh data, not this message
+          // again.
           on_data_received_view(view);
-          // this->commit_read(view);
-          // boost::asio::post(ioc_, [this, view]() mutable {
-          //     if (on_data_received_view) {
-          //         on_data_received_view(view);
-          // }
-          // });
+          this->commit_read(view);
         }
         continue;
       }

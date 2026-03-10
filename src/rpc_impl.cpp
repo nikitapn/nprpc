@@ -464,6 +464,7 @@ RpcImpl::get_session(const EndPoint& endpoint)
     }
   }
 
+  std::scoped_lock<std::shared_mutex> lk(connections_mut_);
   std::shared_ptr<Session> con;
   switch (endpoint.type()) {
   case EndPointType::TcpTethered:
@@ -503,7 +504,8 @@ RpcImpl::get_session(const EndPoint& endpoint)
          std::to_string(static_cast<int>(endpoint.type())));
   }
 
-  add_connection(con);
+  opened_sessions_.push_back(con);
+
   return con;
 }
 
@@ -669,61 +671,23 @@ NPRPC_API bool RpcImpl::prepare_zero_copy_buffer(SessionContext& ctx,
   if (!is_shared_memory(ctx.remote_endpoint))
     return false;
 
-  // Check if we're on a server-side shared memory session
-  // In that case, ctx.shm_channel is set and we should use it directly
-  // instead of trying to create a client connection to the "remote" endpoint
-  if (ctx.shm_channel) {
-    // std::cout << "[nprpc][D] SERVER prepare_zero_copy_buffer for
-    // max_size: "
-    // << max_size << std::endl; Server-side: use the existing channel for
-    // zero-copy response
-    auto reservation = ctx.shm_channel->reserve_write(max_size);
-    if (!reservation) {
-      // std::cout << "[nprpc][D] SERVER reserve_write FAILED" <<
-      // std::endl;
-      return false;
-    }
-
-    // std::cout << "[nprpc][D] SERVER got reservation: data=" <<
-    // (void*)reservation.data
-    //           << " write_idx=" << reservation.write_idx << " max_size="
-    //           << reservation.max_size << std::endl;
-
-    buffer.set_view(reservation.data, 0, reservation.max_size,
-                    &ctx.remote_endpoint, reservation.write_idx, true);
-    return true;
-  }
-
-  // Client-side: get/create a connection to the server
-  // std::cout << "[nprpc][D] prepare_zero_copy_buffer called on client-side
-  // for endpoint: "
-  //           << ctx.remote_endpoint.to_string() << " with max_size: " <<
-  //           max_size << std::endl;
-
-  try {
-    auto session = get_session(ctx.remote_endpoint);
-
-    if (dynamic_cast<SharedMemoryConnection*>(session.get()) == nullptr) {
-      NPRPC_LOG_ERROR("prepare_zero_copy_buffer: Session is not a "
-                      "SharedMemoryConnection but "
-                      "{}, typeid: {}",
-                      static_cast<int>(ctx.remote_endpoint.type()),
-                      typeid(*session).name());
-      std::abort();
-    }
-
-    auto* shm_conn = static_cast<SharedMemoryConnection*>(session.get());
-    if (!shm_conn)
-      return false;
-
-    return shm_conn->prepare_write_buffer(buffer, max_size,
-                                          &ctx.remote_endpoint);
-  } catch (const std::exception& e) {
-    NPRPC_LOG_ERROR("Error in prepare_zero_copy_buffer: {}", e.what());
-    // Connection failed - fall back to normal buffer
-    // The actual error will be thrown when call() is made
-    return false;
-  }
+  // Zero-copy reservation is disabled for both server-side and client-side
+  // SHM paths.
+  //
+  // The ring buffer requires try_reserve_write to claim the exact final size
+  // upfront.  Dispatch stubs call prepare_zero_copy_buffer with a minimum
+  // hint (e.g. 152 bytes) before the response is serialised; if the actual
+  // response is larger (e.g. 1 MB), the flat_buffer overflows the reserved
+  // slot and reverts to heap mode.  The original slot's actual_size field
+  // remains zero forever, causing the consumer to spin-wait indefinitely on
+  // what is now an abandoned slot.
+  //
+  // All SHM writes therefore go through the copy path: build into a heap
+  // buffer first, then reserve + copy + commit with the exact final size.
+  // This is handled by on_message_received (server) and the work_impl in
+  // send_receive (client).
+  (void)buffer; (void)max_size;
+  return false;
 }
 
 // Helper function called from flat_buffer::grow() when view mode buffer needs

@@ -107,11 +107,9 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
     }
   };
 
-  // Transfer reservation from connection to work item
-  auto reservation = std::exchange(active_reservation_, {});
   // Post work and wait for completion
   // Work remains owned by the connection until completion
-  auto w = std::make_shared<work_impl>(buffer, *this, timeout_ms, reservation);
+  auto w = std::make_shared<work_impl>(buffer, *this, timeout_ms, LockFreeRingBuffer::WriteReservation{});
   add_work(w);
   auto ec = w->wait();
 
@@ -232,39 +230,29 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
     throw nprpc::Exception(error_msg.c_str());
   }
 
-  // Use zero-copy reads by default
+  // Copy response into the flat_buffer so the ring buffer read can be
+  // committed immediately in the read_loop.  Deferring commit_read via
+  // set_view_from_read was unsound: the read_loop would call try_read_view()
+  // again before commit_read ran and re-present the same message to the next
+  // wq_ entry, corrupting the request/response pairing.
   channel_->on_data_received_view =
       [this](const LockFreeRingBuffer::ReadView& read_view) {
         std::lock_guard lock(mutex_);
         if (wq_.empty()) {
-          // std::cerr << "SharedMemoryConnection: Received unsolicited
-          // response"
-          // << std::endl;
-          return;
+          return; // read_loop will still call commit_read
         }
 
         // Validate header size (security check)
         if (read_view.size < sizeof(impl::flat::Header)) {
-          // std::cerr << "SharedMemoryConnection: Message too small: " <<
-          // read_view.size << std::endl;
           return;
         }
 
-        // Zero-copy: create a view directly into the ring buffer
-        // The flat_buffer will track the ReadView and commit_read when done
         auto& current_buffer = current_rx_buffer();
-        // std::cout << "SharedMemoryConnection: Received zero-copy message of
-        // size "
-        //           << read_view.size << std::endl;
         current_buffer.consume(current_buffer.size());
-        current_buffer.set_view_from_read(
-            read_view.data, read_view.size,
-            channel_->get_recv_ring(), // Pass ring buffer pointer for commit
-            read_view.read_idx);
+        auto mb = current_buffer.prepare(read_view.size);
+        std::memcpy(mb.data(), read_view.data, read_view.size);
+        current_buffer.commit(read_view.size);
 
-        // Mark current operation as complete
-        // The proxy will unmarshal from current_buffer, then call
-        // commit_read_if_needed()
         (*wq_.front()).on_executed();
         pop_and_execute_next_task();
       };
@@ -304,35 +292,18 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
 
 SharedMemoryConnection::~SharedMemoryConnection() { close(); }
 
-bool SharedMemoryConnection::prepare_write_buffer(flat_buffer& buffer,
-                                                  size_t max_size,
-                                                  const EndPoint* endpoint)
+bool SharedMemoryConnection::prepare_write_buffer(flat_buffer& /*buffer*/,
+                                                  size_t /*max_size*/,
+                                                  const EndPoint* /*endpoint*/)
 {
-  if (!channel_)
-    return false;
-
-  // std::cout << "prepare_write_buffer called for channel ID: "
-  //           << channel_->channel_id() << std::endl;
-
-  auto reservation = channel_->reserve_write(max_size);
-  if (!reservation) {
-    std::cerr << "SharedMemoryConnection: prepare_write_buffer failed to "
-                 "reserve buffer of size "
-              << max_size << std::endl;
-    return false; // Buffer full
-  }
-
-  // Store reservation for later commit (used by send_receive)
-  active_reservation_ = reservation;
-
-  // Set buffer to view mode pointing into the ring buffer
-  // Pass endpoint and reservation info so the buffer can:
-  // 1. Request a larger buffer if needed (using endpoint)
-  // 2. Return the reservation for commit (using write_idx)
-  buffer.set_view(reservation.data, 0, reservation.max_size, endpoint,
-                  reservation.write_idx, true);
-
-  return true;
+  // Zero-copy reservation is disabled: try_reserve_write does not advance
+  // write_idx until commit_write, so concurrent callers would receive the
+  // same write position and corrupt each other's data.  The SPSC ring
+  // supports at most one outstanding reservation at a time, making the
+  // zero-copy path fundamentally incompatible with concurrent use.
+  // All callers fall back to the copy path inside send_receive's work queue,
+  // which is already correctly serialised.
+  return false;
 }
 
 } // namespace nprpc::impl

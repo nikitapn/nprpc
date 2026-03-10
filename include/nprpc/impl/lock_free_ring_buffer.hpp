@@ -15,34 +15,52 @@
 
 namespace nprpc::impl {
 
-// Lock-free ring buffer for single producer, single consumer (SPSC)
-// Uses memory-mapped shared memory for true zero-copy IPC
+// Lock-free ring buffer for multiple producers, single consumer (MPSC).
+// Uses memory-mapped shared memory with a mirrored mapping for true zero-copy IPC.
 //
-// Memory Layout:
+// Slot format (8-byte header per message):
 // +------------------+
-// | RingBufferHeader | (metadata: read_idx, write_idx, buffer_size, etc.)
+// | RingBufferHeader | (metadata: write_idx, commit_idx, read_idx, ...)
 // +------------------+
 // | Continuous Buffer| (circular byte array for variable-sized messages)
-// | [uint32_t size]  | <- Message 1
-// | [data bytes]     |
-// | [uint32_t size]  | <- Message 2
-// | [data bytes]     |
-// | ...              |
+// | [uint32_t claimed_size] | <- reserved at try_reserve_write / try_write
+// | [uint32_t actual_size]  | <- written at commit; reader spins until != 0
+// | [data bytes]            |
+// | ...                     |
 // +------------------+
 //
-// Message format: [uint32_t size][data bytes]
-// - Variable-sized messages (no wasted space)
-// - Wraparound handled automatically
-// - Byte-level indices (not slot-based)
+// Producer protocol (try_reserve_write + commit_write):
+//   1. CAS-claim a slot: write_idx advances by (8 + claimed_size).
+//   2. Write claimed_size and zero out actual_size immediately.
+//   3. Fill data bytes.
+//   4. atomic-store actual_size with release — this is the commit signal.
+//
+// Non-zero-copy path (try_write):
+//   Performs steps 1-4 in one shot: claims, writes data, then stores actual_size.
+//
+// Consumer protocol (try_read_view):
+//   Reads commit_idx (the "safe to read up to" frontier), then spins on
+//   actual_size at commit_idx until non-zero, then returns the data view.
+//   commit_idx advances slot-by-slot in order, so the consumer always sees
+//   messages in the order producers claimed slots.
+//
+// ABA note: the CAS on write_idx is not ABA-proof without a generation counter.
+//   In practice ABA requires producers to lap the entire ring between a single
+//   thread's load and its CAS — extremely unlikely with a 16 MB buffer.
 //
 // Synchronization:
-// - read_idx and write_idx are atomics with byte offsets (lock-free for SPSC)
-// - For blocking reads: condition variable + mutex
-// - Memory barriers handled by std::atomic
+// - write_idx: claimed by producers via CAS (acq_rel).
+// - actual_size: zero-initialized at claim, written at commit (release).
+// - commit_idx: consumer's scan cursor, advanced in order (relaxed store OK,
+//   single writer).
+// - read_idx: advanced after the caller is done with the view (release).
+// - For blocking reads: condition variable + mutex.
 
 struct alignas(64) RingBufferHeader {
-  // Atomic byte-level indices for lock-free operations
-  alignas(64) std::atomic<size_t> write_idx{0}; // Next byte position to write
+  // write_idx: next byte position to claim (advanced by producers via CAS)
+  alignas(64) std::atomic<size_t> write_idx{0};
+  // commit_idx: next slot the consumer will inspect (single-consumer, no CAS)
+  alignas(64) std::atomic<size_t> commit_idx{0};
   alignas(64) std::atomic<size_t> read_idx{0};  // Next byte position to read
 
   // Fixed at creation
