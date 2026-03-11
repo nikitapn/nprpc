@@ -51,7 +51,7 @@ private:
   void emit_client_proxy(AstInterfaceDecl* ifs);
   void emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionDecl* fn);  // Streaming method in client proxy
   void emit_servant_base(AstInterfaceDecl* ifs);
-  void emit_servant_stream_dispatch(AstFunctionDecl* fn);  // Streaming method dispatch in servant
+  void emit_servant_stream_dispatch(AstInterfaceDecl* ifs, AstFunctionDecl* fn);  // Streaming method dispatch in servant
   void emit_swift_trampolines(AstInterfaceDecl* ifs);  // C trampolines for Swift servants
   
   // Marshalling support

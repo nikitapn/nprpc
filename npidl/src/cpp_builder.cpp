@@ -22,6 +22,20 @@ namespace npidl::builders {
 using std::placeholders::_1;
 using std::placeholders::_2;
 
+namespace {
+
+std::string make_safety_check_name(AstStructDecl* s)
+{
+  auto name = s->get_function_struct_id();
+  for (auto& ch : name) {
+    if (!std::isalnum(static_cast<unsigned char>(ch)))
+      ch = '_';
+  }
+  return name;
+}
+
+} // namespace
+
 std::ostream& operator<<(std::ostream& os, const CppBuilder::_ns& ns)
 {
   if (ns.builder.always_full_namespace_) {
@@ -1232,10 +1246,12 @@ void CppBuilder::emit_safety_checks()
       if (!s)
         continue;
 
-      auto const name = s->get_function_struct_id();
-      if (set.find(name) != set.end())
+      auto const id = s->get_function_struct_id();
+      if (set.find(id) != set.end())
         continue;
-      set.emplace(name);
+      set.emplace(id);
+
+      auto const name = make_safety_check_name(s);
 
       ocpp << "bool check_" << name << "(::nprpc::flat_buffer& buf, " << fn->in_s->name
            << "_Direct& ia" << ") {\n";
@@ -2310,7 +2326,16 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       if (fn->in_s) {
         oc << "        " << fn->in_s->name << "_Direct ia(*ctx.rx_buffer, "
            << get_stream_init_arguments_offset() << ");\n";
+        if (ifs->trusted == false) {
+           oc << "        if ( !check_" << make_safety_check_name(fn->in_s)
+             << "(*ctx.rx_buffer, ia) ) {\n"
+                "          ::nprpc::impl::make_simple_answer(ctx, "
+                "::nprpc::impl::MessageId::Error_BadInput);\n"
+                "          break;\n"
+                "        }\n";
+        }
       }
+  void emit_servant_stream_dispatch(AstInterfaceDecl* ifs, AstFunctionDecl* fn);
 
       if (fn->stream_kind == StreamKind::Server) {
         oc << "        auto writer = " << fn->name << "(";
@@ -2466,7 +2491,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       if (ifs->trusted == false) {
         // const auto fixed_size = get_arguments_offset() +
         // fn->in_s->size;
-        oc << "      if ( !check_" << fn->in_s->get_function_struct_id()
+        oc << "      if ( !check_" << make_safety_check_name(fn->in_s)
            << "(*ctx.rx_buffer, ia) ) {\n"
               "        ::nprpc::impl::make_simple_answer(ctx, "
               "::nprpc::impl::MessageId::Error_BadInput);\n"

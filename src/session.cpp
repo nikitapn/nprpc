@@ -103,8 +103,9 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
         try {
           // Dispatch to servant (servant must handle StreamInit msg_id)
           real_obj->dispatch(ctx_, false);
-          // ACK: tell the client that stream setup succeeded
-          make_simple_answer(ctx_, MessageId::Success);
+          // Preserve explicit servant replies such as Error_BadInput.
+          if (tx_buffer.size() < sizeof(impl::flat::Header))
+            make_simple_answer(ctx_, MessageId::Success);
         } catch (const std::exception& e) {
           NPRPC_LOG_ERROR( "[SESSION] {:p} {}: Exception during stream dispatch: {}",
               (void*)this, remote_endpoint().to_string(), e.what());

@@ -501,6 +501,7 @@ TEST_F(NprpcTest, TestBadInput)
     bool InStrings (::nprpc::flat::Span<char> a, ::nprpc::flat::Span<char> b) override { return true; }
     bool Send (::nprpc::test::flat::ChatMessage_Direct msg) override { return true; }
     bool SendObject (::nprpc::Object* o) override { return true; }
+    void UploadBadStream(std::vector<uint8_t> a, nprpc::StreamReader<uint8_t> data) override {}
   } servant;
 
   auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
@@ -543,11 +544,59 @@ TEST_F(NprpcTest, TestBadInput)
       FAIL() << "Unexpected exception in TestBadInput: " << ex.what();
     }
   };
+
+  auto exec_stream_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
+    try {
+      auto obj = bind_and_resolve<nprpc::test::TestBadInput>(servant, flags);
+
+      nprpc::flat_buffer buf;
+      auto mb = buf.prepare(2048);
+      buf.commit(48);
+      static_cast<::nprpc::impl::Header*>(mb.data())->msg_id =
+          ::nprpc::impl::MessageId::StreamInitialization;
+      static_cast<::nprpc::impl::Header*>(mb.data())->msg_type =
+          ::nprpc::impl::MessageType::Request;
+      ::nprpc::impl::flat::StreamInit_Direct init(
+          buf, sizeof(::nprpc::impl::Header));
+      init.stream_id() = 0x1234;
+      init.poa_idx() = obj->poa_idx();
+      init.interface_idx() = 0;
+      init.object_id() = obj->object_id();
+      init.func_idx() = 4;
+      init.stream_kind() = ::nprpc::impl::StreamKind::Client;
+
+        auto vec_begin = reinterpret_cast<uint32_t*>(
+          static_cast<std::byte*>(mb.data()) + 48);
+        vec_begin[0] = 8;
+        vec_begin[1] = 1;
+
+      static_cast<::nprpc::impl::Header*>(buf.data().data())->size =
+          static_cast<uint32_t>(buf.size() - 4);
+
+      ::nprpc::impl::g_rpc->call(obj->get_endpoint(), buf, obj->get_timeout());
+      auto std_reply = nprpc::impl::handle_standart_reply(buf);
+      if (std_reply != 0) {
+        throw nprpc::Exception("Unknown Error");
+      }
+
+      FAIL() << "Expected nprpc::ExceptionBadInput to be thrown for stream init";
+    } catch (nprpc::ExceptionBadInput&) {
+      SUCCEED();
+    } catch (nprpc::Exception& ex) {
+      FAIL() << "Unexpected exception in TestBadInput stream path: " << ex.what();
+    }
+  };
+
   exec_test(nprpc::ObjectActivationFlags::tcp);
   exec_test(nprpc::ObjectActivationFlags::ws);
   exec_test(nprpc::ObjectActivationFlags::wss);
   exec_test(nprpc::ObjectActivationFlags::shm);
   exec_test(nprpc::ObjectActivationFlags::quic);
+  exec_stream_test(nprpc::ObjectActivationFlags::tcp);
+  exec_stream_test(nprpc::ObjectActivationFlags::ws);
+  exec_stream_test(nprpc::ObjectActivationFlags::wss);
+  exec_stream_test(nprpc::ObjectActivationFlags::shm);
+  exec_stream_test(nprpc::ObjectActivationFlags::quic);
 }
 
 #ifdef NPRPC_HAS_QUIC

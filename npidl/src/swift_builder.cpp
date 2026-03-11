@@ -4,6 +4,7 @@
 #include "swift_builder.hpp"
 #include "utils.hpp"
 #include <cassert>
+#include <cctype>
 #include <iostream>
 #include <fstream>
 #include <set>
@@ -30,6 +31,15 @@ bool needs_marshalling(AstTypeDecl* type) {
          type->id == FieldType::String ||
          type->id == FieldType::Vector ||
          type->id == FieldType::Array;
+}
+
+std::string make_safety_check_name(AstStructDecl* s) {
+  auto name = s->get_function_struct_id();
+  for (auto& ch : name) {
+    if (!std::isalnum(static_cast<unsigned char>(ch)))
+      ch = '_';
+  }
+  return name;
 }
 } // anonymous namespace
 
@@ -1263,7 +1273,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
     for (auto& fn : ifs->fns) {
       if (!fn->is_stream) continue;
       out << bl() << "case " << fn->idx << ": // " << fn->name << "\n" << bb(false);
-      emit_servant_stream_dispatch(fn);
+      emit_servant_stream_dispatch(ifs, fn);
       out << eb(false);
     }
 
@@ -1293,7 +1303,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
     // Safety check for untrusted interfaces before unmarshalling
     if (!ifs->trusted && fn->in_s) {
       out << bl() << "// Validate input buffer for untrusted interface\n";
-      out << bl() << "guard " << ns(fn->in_s->nm) << "check_" << fn->in_s->get_function_struct_id() << "(buffer: data, bufferSize: buffer.size, offset: " << get_arguments_offset() << ") else " << bb();
+      out << bl() << "guard check_" << make_safety_check_name(fn->in_s) << "(buffer: data, bufferSize: buffer.size, offset: " << get_arguments_offset() << ") else " << bb();
       out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_BadInput)\n";
       out << bl() << "return\n";
       out << eb() << "\n";
@@ -1459,7 +1469,8 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
   out << eb() << "\n";
 }
 
-void SwiftBuilder::emit_servant_stream_dispatch(AstFunctionDecl* fn)
+void SwiftBuilder::emit_servant_stream_dispatch(AstInterfaceDecl* ifs,
+                                                AstFunctionDecl* fn)
 {
   auto* stream_decl = fn->stream_decl;
   assert(stream_decl != nullptr);
@@ -1479,8 +1490,41 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstFunctionDecl* fn)
   // Input args start after StreamInit
   constexpr auto args_offset = get_stream_init_arguments_offset();
   if (fn->in_s) {
+    if (!ifs->trusted) {
+      out << bl() << "// Validate input buffer for untrusted interface\n";
+        out << bl() << "guard check_"
+          << make_safety_check_name(fn->in_s)
+          << "(buffer: data, bufferSize: buffer.size, offset: " << args_offset
+          << ") else " << bb();
+      out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_BadInput)\n";
+      out << bl() << "return\n";
+      out << eb() << "\n";
+    }
+
     out << bl() << "// Unmarshal input arguments\n";
-    out << bl() << "let ia = " << ns(fn->in_s->nm) << "unmarshal_" << fn->in_s->name << "(buffer: data, offset: " << args_offset << ")\n\n";
+    bool in_needs_endpoint = false;
+    for (auto f : fn->in_s->fields) {
+      if (contains_object(f->type)) {
+        in_needs_endpoint = true;
+        break;
+      }
+    }
+
+    if (in_needs_endpoint) {
+      out << bl() << "let ia: " << ns(fn->in_s->nm) << fn->in_s->name << "\n";
+      out << bl() << "do {\n";
+      out << bl() << "  ia = try " << ns(fn->in_s->nm) << "unmarshal_"
+          << fn->in_s->name << "(buffer: data, offset: " << args_offset
+          << ", endpoint: remoteEndpoint)\n";
+      out << bl() << "} catch {\n";
+      out << bl() << "  makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_BadInput)\n";
+      out << bl() << "  return\n";
+      out << bl() << "}\n\n";
+    } else {
+      out << bl() << "let ia = " << ns(fn->in_s->nm) << "unmarshal_"
+          << fn->in_s->name << "(buffer: data, offset: " << args_offset
+          << ")\n\n";
+    }
   }
 
   // Get stream_manager from session context (stream_manager is heap-allocated and stays alive)
@@ -2221,10 +2265,12 @@ void SwiftBuilder::emit_safety_checks()
       if (!s)
         continue;
 
-      auto name = s->get_function_struct_id();
-      if (emitted.find(name) != emitted.end())
+      auto id = s->get_function_struct_id();
+      if (emitted.find(id) != emitted.end())
         continue;
-      emitted.emplace(name);
+      emitted.emplace(id);
+
+      auto name = make_safety_check_name(s);
 
       out << "\n" << bl() << "// Safety check for " << s->name << "\n";
       out << bl() << "fileprivate func check_" << name << "(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool " << bb();

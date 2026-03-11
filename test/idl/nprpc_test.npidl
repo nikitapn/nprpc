@@ -184,6 +184,7 @@ interface TestBadInput {
 	boolean InStrings(a: string, b: string);
   boolean Send(msg: in ChatMessage);
 	boolean SendObject(o: /* SimpleObject */ object);
+	void UploadBadStream(a: vector<u8>, data: client_stream<u8>);
 }
 
 interface TestUnreliable {

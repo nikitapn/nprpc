@@ -436,7 +436,7 @@ struct AstStringDecl : AstTypeDecl {
 struct AstInterfaceDecl : AstTypeDecl, AstNodeWithPosition {
   std::vector<AstFunctionDecl*> fns;
   std::vector<AstInterfaceDecl*> plist;
-  bool trusted = true;
+  bool trusted = false;
 
   AstInterfaceDecl() { id = FieldType::Interface; }
 };
