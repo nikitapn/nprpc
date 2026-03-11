@@ -48,7 +48,7 @@
 	<ShellHero
 		badge="Author page"
 		title={`Author: ${slug}`}
-		description="Author pages are shell-rendered immediately, then hydrated with GetAuthor(slug) and ListAuthorPosts(slug, page) from the Swift backend."
+		description="Author pages are shell-rendered immediately, then hydrated with GetAuthor(slug) and ListAuthorPosts(slug, page) from the active NPRPC backend."
 	/>
 
 	<section class="grid gap-6 lg:grid-cols-[0.7fr_1.3fr]">
@@ -77,7 +77,7 @@
 			<div class="flex items-center justify-between">
 				<div>
 					<p class="eyebrow">Author posts</p>
-					<h2 class="mt-2 text-2xl font-semibold text-stone-900">Written from the Swift repository</h2>
+					<h2 class="mt-2 text-2xl font-semibold text-stone-900">Written from the shared demo repository</h2>
 				</div>
 				<div class="rounded-full border border-amber-900/15 bg-white/70 px-4 py-2 text-sm text-stone-600">
 					{isLoading ? 'Loading' : `${posts.length} loaded`}

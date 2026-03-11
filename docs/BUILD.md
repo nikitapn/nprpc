@@ -61,7 +61,9 @@ NPRPC provides several CMake options to customize the build:
 - `NPRPC_BUILD_TOOLS` (default: ON when standalone) - Build npidl tool and nameserver
 - `NPRPC_BUILD_TESTS` (default: ON when standalone) - Build test suite
 - `NPRPC_BUILD_JS` (default: ON when standalone) - Build JavaScript/TypeScript bindings
+- `NPRPC_BUILD_EXAMPLES` (default: OFF) - Build repo examples, including Docker-backed Swift examples
 - `NPRPC_INSTALL` (default: ON when standalone) - Generate install targets
+- `NPRPC_BUILD_DEV_DOCKER` (default: OFF) - Build the `nprpc-dev:latest` developer image from `Dockerfile.dev`
 - `BUILD_SHARED_LIBS` (default: ON) - Build shared libraries instead of static
 - `NPRPC_ENABLE_QUIC` (default: OFF) - Enable QUIC transport (builds MsQuic from submodule)
 - `NPRPC_ENABLE_HTTP3` (default: OFF) - Enable HTTP/3 server support (nghttp3 backend)
@@ -80,6 +82,38 @@ Build with QUIC and HTTP/3 support:
 ```bash
 cmake -DNPRPC_ENABLE_QUIC=ON -DNPRPC_ENABLE_HTTP3=ON ..
 cmake --build .
+```
+
+Build the developer Docker image from CMake:
+
+```bash
+cmake -S . -B build -DNPRPC_BUILD_DEV_DOCKER=ON
+cmake --build build
+```
+
+Invalidate the cached Docker build stamp so the next build reruns the image step:
+
+```bash
+cmake --build build --target nprpc_dev_docker_invalidate
+cmake --build build --target nprpc_dev_docker
+```
+
+Or force both steps in one command:
+
+```bash
+cmake --build build --target nprpc_dev_docker_rebuild
+```
+
+Build examples, including the Docker-backed Swift `live-blog` server:
+
+```bash
+cmake -S . -B build \
+  -DNPRPC_BUILD_EXAMPLES=ON \
+  -DNPRPC_BUILD_TOOLS=ON
+cmake --build build --target live_blog_example
+```
+
+When `NPRPC_BUILD_EXAMPLES=ON`, the `live_blog_example` target builds the `nprpc-dev:latest` image, regenerates TypeScript and Swift stubs, runs the Vite client build, and then runs the Swift server build inside the container.
 
 Build static library:
 

@@ -97,6 +97,17 @@ public:
         }
     }
 
+    nprpc::StreamWriter<nprpc::test::bytestream> GetAliasedBinaryStream(uint32_t count) override {
+        for (uint32_t i = 0; i < count; ++i) {
+            nprpc::test::bytestream chunk{
+                static_cast<uint8_t>(i + 10),
+                static_cast<uint8_t>(i + 11),
+                static_cast<uint8_t>(i + 12),
+            };
+            co_yield std::move(chunk);
+        }
+    }
+
     nprpc::StreamWriter<std::vector<uint16_t>> GetU16VectorStream(uint32_t count) override {
         for (uint32_t i = 0; i < count; ++i) {
             std::vector<uint16_t> chunk{
@@ -235,6 +246,26 @@ public:
         upload_cv.notify_all();
     }
 
+    void UploadAliasedBinaryStream(uint64_t expected_count, nprpc::StreamReader<nprpc::test::bytestream> data) override {
+        std::vector<std::vector<uint8_t>> local;
+        local.reserve(static_cast<size_t>(expected_count));
+        {
+            std::lock_guard lock(upload_mutex);
+            binary_upload_done = false;
+            uploaded_binary_chunks.clear();
+        }
+        for (auto& value : data) {
+            local.push_back(std::move(value));
+        }
+
+        {
+            std::lock_guard lock(upload_mutex);
+            uploaded_binary_chunks = std::move(local);
+            binary_upload_done = true;
+        }
+        upload_cv.notify_all();
+    }
+
     void UploadU16VectorStream(uint64_t expected_count, nprpc::StreamReader<std::vector<uint16_t>> data) override {
         std::vector<std::vector<uint16_t>> local;
         local.reserve(static_cast<size_t>(expected_count));
@@ -339,6 +370,16 @@ public:
         stream.writer.close();
     }
 
+    void EchoAliasedBinaryStream(uint8_t xor_mask, nprpc::BidiStream<nprpc::test::bytestream, nprpc::test::bytestream> stream) override {
+        for (auto& value : stream.reader) {
+            for (auto& byte : value) {
+                byte ^= xor_mask;
+            }
+            stream.writer.write(std::move(value));
+        }
+        stream.writer.close();
+    }
+
     void EchoU16VectorStream(uint16_t delta, nprpc::BidiStream<std::vector<uint16_t>, std::vector<uint16_t>> stream) override {
         for (auto& value : stream.reader) {
             for (auto& item : value) {
@@ -379,6 +420,17 @@ public:
                 item.c += suffix;
             }
             stream.writer.write(std::move(value));
+        }
+        stream.writer.close();
+    }
+
+    void EchoObjectToDifferentObjectStream(std::string suffix, nprpc::BidiStream<nprpc::test::AAA, nprpc::test::CCC> stream) override {
+        for (auto& object : stream.reader) {
+            nprpc::test::CCC response;
+            response.a = object.b + suffix;
+            response.b = object.c + suffix;
+            response.c = std::optional<bool>{(object.a % 2u) == 0u};
+            stream.writer.write(std::move(response));
         }
         stream.writer.close();
     }

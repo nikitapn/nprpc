@@ -761,6 +761,16 @@ TEST_F(NprpcTest, TestObjectStream)
       EXPECT_EQ(binary_values[1], (std::vector<uint8_t>{1, 2, 3}));
       EXPECT_EQ(binary_values[2], (std::vector<uint8_t>{2, 3, 4}));
 
+      auto aliased_binary_reader = obj->GetAliasedBinaryStream(2);
+      std::vector<std::vector<uint8_t>> aliased_binary_values;
+      for (auto& value : aliased_binary_reader) {
+        aliased_binary_values.push_back(value);
+      }
+
+      ASSERT_EQ(aliased_binary_values.size(), 2u);
+      EXPECT_EQ(aliased_binary_values[0], (std::vector<uint8_t>{10, 11, 12}));
+      EXPECT_EQ(aliased_binary_values[1], (std::vector<uint8_t>{11, 12, 13}));
+
       auto u16_vector_reader = obj->GetU16VectorStream(3);
       std::vector<std::vector<uint16_t>> u16_vector_values;
       for (auto& value : u16_vector_reader) {
@@ -873,6 +883,14 @@ TEST_F(NprpcTest, TestClientStream)
         binary_writer.write(value);
       }
       binary_writer.close();
+
+      EXPECT_TRUE(servant.wait_for_binary_upload(expected_binary));
+
+      auto aliased_binary_writer = obj->UploadAliasedBinaryStream(expected_binary.size());
+      for (const auto& value : expected_binary) {
+        aliased_binary_writer.write(value);
+      }
+      aliased_binary_writer.close();
 
       EXPECT_TRUE(servant.wait_for_binary_upload(expected_binary));
 
@@ -996,6 +1014,25 @@ TEST_F(NprpcTest, TestBidiStream)
         EXPECT_EQ(object_output[i].c, object_input[i].c + suffix);
       }
 
+      auto [mixed_writer, mixed_reader] = obj->EchoObjectToDifferentObjectStream(suffix);
+      for (const auto& object : object_input) {
+        mixed_writer.write(object);
+      }
+      mixed_writer.close();
+
+      std::vector<nprpc::test::CCC> mixed_output;
+      for (auto& object : mixed_reader) {
+        mixed_output.push_back(object);
+      }
+
+      ASSERT_EQ(mixed_output.size(), object_input.size());
+      for (size_t i = 0; i < object_input.size(); ++i) {
+        EXPECT_EQ(mixed_output[i].a, object_input[i].b + suffix);
+        EXPECT_EQ(mixed_output[i].b, object_input[i].c + suffix);
+        ASSERT_TRUE(mixed_output[i].c.has_value());
+        EXPECT_EQ(mixed_output[i].c.value(), (object_input[i].a % 2u) == 0u);
+      }
+
       auto [string_writer, string_reader] = obj->EchoStringStream("-ok");
       std::vector<std::string> string_input{"left", "right"};
       for (const auto& value : string_input) {
@@ -1030,6 +1067,25 @@ TEST_F(NprpcTest, TestBidiStream)
         ASSERT_EQ(binary_output[i].size(), binary_input[i].size());
         for (size_t j = 0; j < binary_input[i].size(); ++j) {
           EXPECT_EQ(binary_output[i][j], static_cast<uint8_t>(binary_input[i][j] ^ kMask));
+        }
+      }
+
+      auto [aliased_binary_writer, aliased_binary_reader] = obj->EchoAliasedBinaryStream(kMask);
+      for (const auto& value : binary_input) {
+        aliased_binary_writer.write(value);
+      }
+      aliased_binary_writer.close();
+
+      std::vector<std::vector<uint8_t>> aliased_binary_output;
+      for (auto& value : aliased_binary_reader) {
+        aliased_binary_output.push_back(value);
+      }
+
+      ASSERT_EQ(aliased_binary_output.size(), binary_input.size());
+      for (size_t i = 0; i < binary_input.size(); ++i) {
+        ASSERT_EQ(aliased_binary_output[i].size(), binary_input[i].size());
+        for (size_t j = 0; j < binary_input[i].size(); ++j) {
+          EXPECT_EQ(aliased_binary_output[i][j], static_cast<uint8_t>(binary_input[i][j] ^ kMask));
         }
       }
 

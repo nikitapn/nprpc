@@ -4,7 +4,7 @@
 import NPRPC
 
 public typealias binary = [UInt8]
-public enum PresenceEventKind: Int32, Codable, Sendable {
+public enum PresenceEventKind: UInt32, Codable, Sendable {
   case joined
   case left
   case typing
@@ -286,14 +286,14 @@ public struct PresenceEvent: Codable, Sendable {
 public func marshal_PresenceEvent(buffer: FlatBuffer, offset: Int, data: PresenceEvent) {
   guard let buf = buffer.data else { return }
   NPRPC.marshal_string(buffer: buffer, offset: offset + 0, string: data.user_name)
-  buf.storeBytes(of: data.kind.rawValue, toByteOffset: offset + 8, as: Int32.self)
+  buf.storeBytes(of: data.kind.rawValue, toByteOffset: offset + 8, as: UInt32.self)
 }
 
 // MARK: - Unmarshal PresenceEvent
 public func unmarshal_PresenceEvent(buffer: UnsafeRawPointer, offset: Int) -> PresenceEvent {
   var result = PresenceEvent()
   result.user_name = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 0)
-  result.kind = PresenceEventKind(rawValue: buffer.load(fromByteOffset: offset + 8, as: Int32.self))!
+  result.kind = PresenceEventKind(rawValue: buffer.load(fromByteOffset: offset + 8, as: UInt32.self))!
   return result
 }
 
@@ -840,8 +840,8 @@ open class BlogServiceServant: NPRPCServant, BlogServiceProtocol, @unchecked Sen
         marshal_live_blog_M2(buffer: buffer, offset: 16, data: out_data)
         guard let outData = buffer.data else { return }
         outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
-        outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: Int32.self)
-        outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)
+        outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
+        outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: UInt32.self)
       case 1: // GetPost
         // Unmarshal input arguments
         let ia = unmarshal_live_blog_M3(buffer: data, offset: 32)
@@ -859,8 +859,8 @@ open class BlogServiceServant: NPRPCServant, BlogServiceProtocol, @unchecked Sen
         marshal_live_blog_M4(buffer: buffer, offset: 16, data: out_data)
         guard let outData = buffer.data else { return }
         outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
-        outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: Int32.self)
-        outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)
+        outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
+        outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: UInt32.self)
       case 2: // ListComments
         // Unmarshal input arguments
         let ia = unmarshal_live_blog_M5(buffer: data, offset: 32)
@@ -878,8 +878,8 @@ open class BlogServiceServant: NPRPCServant, BlogServiceProtocol, @unchecked Sen
         marshal_live_blog_M6(buffer: buffer, offset: 16, data: out_data)
         guard let outData = buffer.data else { return }
         outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
-        outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: Int32.self)
-        outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)
+        outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
+        outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: UInt32.self)
       case 3: // ListAuthorPosts
         // Unmarshal input arguments
         let ia = unmarshal_live_blog_M7(buffer: data, offset: 32)
@@ -897,8 +897,8 @@ open class BlogServiceServant: NPRPCServant, BlogServiceProtocol, @unchecked Sen
         marshal_live_blog_M8(buffer: buffer, offset: 16, data: out_data)
         guard let outData = buffer.data else { return }
         outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
-        outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: Int32.self)
-        outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)
+        outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
+        outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: UInt32.self)
       case 4: // GetAuthor
         // Unmarshal input arguments
         let ia = unmarshal_live_blog_M3(buffer: data, offset: 32)
@@ -916,8 +916,8 @@ open class BlogServiceServant: NPRPCServant, BlogServiceProtocol, @unchecked Sen
         marshal_live_blog_M9(buffer: buffer, offset: 16, data: out_data)
         guard let outData = buffer.data else { return }
         outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
-        outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: Int32.self)
-        outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)
+        outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
+        outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: UInt32.self)
       default:
         makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_UnknownFunctionIdx)
     } // switch
@@ -982,8 +982,8 @@ final public class ChatService: NPRPCObject, @unchecked Sendable {
 
     // Write StreamInit message header
     data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
-    data.storeBytes(of: impl.MessageId.streamInitialization.rawValue, toByteOffset: 4, as: Int32.self)
-    data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: Int32.self)
+    data.storeBytes(of: impl.MessageId.streamInitialization.rawValue, toByteOffset: 4, as: UInt32.self)
+    data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: UInt32.self)
     data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self)  // reserved
 
     // Write StreamInit fields
@@ -992,7 +992,7 @@ final public class ChatService: NPRPCObject, @unchecked Sendable {
     data.storeBytes(of: UInt8(0), toByteOffset: 26, as: UInt8.self)  // interface_idx at offset 10
     data.storeBytes(of: objectId, toByteOffset: 32, as: UInt64.self)  // offset 16 (after 5-byte pad)
     data.storeBytes(of: UInt8(0), toByteOffset: 40, as: UInt8.self)  // func_idx at offset 24
-    data.storeBytes(of: impl.StreamKind.bidi.rawValue, toByteOffset: 41, as: Int32.self)
+    data.storeBytes(of: impl.StreamKind.bidi.rawValue, toByteOffset: 41, as: UInt8.self)
 
     // Marshal input arguments
     var inArgs = live_blog_M10()
@@ -1028,7 +1028,7 @@ open class ChatServiceServant: NPRPCServant, ChatServiceProtocol, @unchecked Sen
     guard let data = buffer.data else { return }
 
     // Check message type to route streaming vs regular calls
-    let msgId = data.load(fromByteOffset: MemoryLayout<NPRPC.impl.Header>.offset(of: \NPRPC.impl.Header.msg_id)!, as: Int32.self)
+    let msgId = data.load(fromByteOffset: MemoryLayout<NPRPC.impl.Header>.offset(of: \NPRPC.impl.Header.msg_id)!, as: UInt32.self)
 
     if msgId == impl.MessageId.streamInitialization.rawValue     {
       let streamFuncIdx = data.load(fromByteOffset: (16 + MemoryLayout<NPRPC.impl.StreamInit>.offset(of: \NPRPC.impl.StreamInit.func_idx)!), as: UInt8.self)
@@ -1123,8 +1123,8 @@ final public class MediaService: NPRPCObject, @unchecked Sendable {
 
     // Write StreamInit message header
     data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
-    data.storeBytes(of: impl.MessageId.streamInitialization.rawValue, toByteOffset: 4, as: Int32.self)
-    data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: Int32.self)
+    data.storeBytes(of: impl.MessageId.streamInitialization.rawValue, toByteOffset: 4, as: UInt32.self)
+    data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: UInt32.self)
     data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self)  // reserved
 
     // Write StreamInit fields
@@ -1133,7 +1133,7 @@ final public class MediaService: NPRPCObject, @unchecked Sendable {
     data.storeBytes(of: UInt8(0), toByteOffset: 26, as: UInt8.self)  // interface_idx at offset 10
     data.storeBytes(of: objectId, toByteOffset: 32, as: UInt64.self)  // offset 16 (after 5-byte pad)
     data.storeBytes(of: UInt8(0), toByteOffset: 40, as: UInt8.self)  // func_idx at offset 24
-    data.storeBytes(of: impl.StreamKind.server.rawValue, toByteOffset: 41, as: Int32.self)
+    data.storeBytes(of: impl.StreamKind.server.rawValue, toByteOffset: 41, as: UInt8.self)
 
     // Marshal input arguments
     var inArgs = live_blog_M11()
@@ -1168,7 +1168,7 @@ open class MediaServiceServant: NPRPCServant, MediaServiceProtocol, @unchecked S
     guard let data = buffer.data else { return }
 
     // Check message type to route streaming vs regular calls
-    let msgId = data.load(fromByteOffset: MemoryLayout<NPRPC.impl.Header>.offset(of: \NPRPC.impl.Header.msg_id)!, as: Int32.self)
+    let msgId = data.load(fromByteOffset: MemoryLayout<NPRPC.impl.Header>.offset(of: \NPRPC.impl.Header.msg_id)!, as: UInt32.self)
 
     if msgId == impl.MessageId.streamInitialization.rawValue     {
       let streamFuncIdx = data.load(fromByteOffset: (16 + MemoryLayout<NPRPC.impl.StreamInit>.offset(of: \NPRPC.impl.StreamInit.func_idx)!), as: UInt8.self)

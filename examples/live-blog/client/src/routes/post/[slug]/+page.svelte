@@ -212,7 +212,7 @@
 		<ShellHero
 			badge="Post page"
 			title={slug}
-			description="The SSR shell knows the slug and frames the page immediately. After hydration, the browser performs GetPost(slug) and ListComments(postId, page) against the Swift backend."
+			description="The SSR shell knows the slug and frames the page immediately. After hydration, the browser performs GetPost(slug) and ListComments(postId, page) against the active NPRPC backend."
 		/>
 
 		{#if errorMessage}

@@ -31,12 +31,61 @@ option(NPRPC_QUIC_USE_SYSTEM_LIBCRYPTO "Use system libcrypto for QUIC (requires 
 option(NPRPC_BUILD_TOOLS "Build npidl tool and nameserver" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_BUILD_TESTS "Build tests" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_BUILD_JS "Build JavaScript bindings" ${NPRPC_IS_TOPLEVEL_PROJECT})
+option(NPRPC_BUILD_EXAMPLES "Build examples" OFF)
 option(NPRPC_INSTALL "Generate install target" ${NPRPC_IS_TOPLEVEL_PROJECT})
+option(NPRPC_BUILD_DEV_DOCKER "Build developer Docker image from Dockerfile.dev" OFF)
 option(NPRPC_ENABLE_QUIC "Enable QUIC transport using MsQuic" OFF)
 option(NPRPC_ENABLE_HTTP3 "Enable HTTP/3 server" OFF)
 option(NPRPC_ENABLE_SSR "Enable SSR support via Node.js worker (requires Boost.Process)" OFF)
 option(NPRPC_BUILD_NODE_ADDON "Build Node.js addon" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+
+if(NPRPC_BUILD_DEV_DOCKER OR NPRPC_BUILD_EXAMPLES)
+  find_program(DOCKER_EXECUTABLE NAMES docker REQUIRED)
+  set(NPRPC_DEV_DOCKER_STAMP ${CMAKE_CURRENT_BINARY_DIR}/nprpc_dev_docker.stamp)
+  set(NPRPC_DEV_DOCKER_DEPENDENCIES
+    ${CMAKE_CURRENT_SOURCE_DIR}/Dockerfile.dev
+    ${CMAKE_CURRENT_SOURCE_DIR}/build-dev-image.sh
+  )
+
+  add_custom_command(
+    OUTPUT ${NPRPC_DEV_DOCKER_STAMP}
+    COMMAND ${CMAKE_COMMAND} -E env
+      IMAGE_NAME=nprpc-dev
+      IMAGE_TAG=latest
+      ${CMAKE_CURRENT_SOURCE_DIR}/build-dev-image.sh
+    COMMAND ${CMAKE_COMMAND} -E touch ${NPRPC_DEV_DOCKER_STAMP}
+    DEPENDS ${NPRPC_DEV_DOCKER_DEPENDENCIES}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Building NPRPC development Docker image"
+    USES_TERMINAL
+    VERBATIM
+  )
+
+  if(NPRPC_BUILD_DEV_DOCKER)
+    add_custom_target(nprpc_dev_docker ALL
+      DEPENDS ${NPRPC_DEV_DOCKER_STAMP}
+    )
+  else()
+    add_custom_target(nprpc_dev_docker
+      DEPENDS ${NPRPC_DEV_DOCKER_STAMP}
+    )
+  endif()
+
+  add_custom_target(nprpc_dev_docker_invalidate
+    COMMAND ${CMAKE_COMMAND} -E rm -f ${NPRPC_DEV_DOCKER_STAMP}
+    COMMENT "Invalidating NPRPC development Docker image stamp"
+    VERBATIM
+  )
+
+  add_custom_target(nprpc_dev_docker_rebuild
+    COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target nprpc_dev_docker_invalidate
+    COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target nprpc_dev_docker
+    COMMENT "Rebuilding NPRPC development Docker image"
+    USES_TERMINAL
+    VERBATIM
+  )
+endif()
 
 # Find dependencies
 find_package(Threads REQUIRED)

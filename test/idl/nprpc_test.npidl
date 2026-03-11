@@ -200,6 +200,7 @@ interface TestStreams {
 	stream<u8> GetByteStream(size: u64);
 	stream<string> GetStringStream(count: u32);
 	stream<vector<u8>> GetBinaryStream(count: u32);
+	stream<bytestream> GetAliasedBinaryStream(count: u32);
 	stream<vector<u16>> GetU16VectorStream(count: u32);
 	stream<vector<AAA>> GetObjectVectorStream(count: u32);
 	stream<u16[4]> GetU16ArrayStream(count: u32);
@@ -209,6 +210,7 @@ interface TestStreams {
 	void UploadByteStream(expected_size: u64, data: client_stream<u8>);
 	void UploadStringStream(expected_count: u64, data: client_stream<string>);
 	void UploadBinaryStream(expected_count: u64, data: client_stream<vector<u8>>);
+	void UploadAliasedBinaryStream(expected_count: u64, data: client_stream<bytestream>);
 	void UploadU16VectorStream(expected_count: u64, data: client_stream<vector<u16>>);
 	void UploadObjectVectorStream(expected_count: u64, data: client_stream<vector<AAA>>);
 	void UploadU16ArrayStream(expected_count: u64, data: client_stream<u16[4]>);
@@ -217,10 +219,12 @@ interface TestStreams {
 	bidi_stream<u8, u8> EchoByteStream(xor_mask: in u8);
 	bidi_stream<string, string> EchoStringStream(suffix: in string);
 	bidi_stream<vector<u8>, vector<u8>> EchoBinaryStream(xor_mask: in u8);
+	bidi_stream<bytestream, bytestream> EchoAliasedBinaryStream(xor_mask: in u8);
 	bidi_stream<vector<u16>, vector<u16>> EchoU16VectorStream(delta: in u16);
 	bidi_stream<vector<AAA>, vector<AAA>> EchoObjectVectorStream(suffix: in string);
 	bidi_stream<u16[4], u16[4]> EchoU16ArrayStream(delta: in u16);
 	bidi_stream<AAA[2], AAA[2]> EchoObjectArrayStream(suffix: in string);
+	bidi_stream<AAA, CCC> EchoObjectToDifferentObjectStream(suffix: in string);
 	bidi_stream<AliasOptionalStreamPayload, AliasOptionalStreamPayload> EchoAliasOptionalStream(suffix: in string, delta: in u32);
 	bidi_stream<AAA, AAA> EchoObjectStream(suffix: in string);
 }

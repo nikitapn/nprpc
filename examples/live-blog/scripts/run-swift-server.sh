@@ -21,10 +21,10 @@ for arg in "$@"; do
     esac
 done
 
-BINARY="/app/server/.build/$BUILD_CONFIG/$SERVER_EXE_NAME"
+BINARY="/app/swift/.build/$BUILD_CONFIG/$SERVER_EXE_NAME"
 
-if [ ! -f "$ROOT_DIR/server/.build/$BUILD_CONFIG/$SERVER_EXE_NAME" ]; then
-    echo "Binary not found: server/.build/$BUILD_CONFIG/$SERVER_EXE_NAME"
+if [ ! -f "$ROOT_DIR/swift/.build/$BUILD_CONFIG/$SERVER_EXE_NAME" ]; then
+    echo "Binary not found: swift/.build/$BUILD_CONFIG/$SERVER_EXE_NAME"
     echo "Run ./build_swift_server.sh first."
     exit 1
 fi
@@ -40,7 +40,7 @@ DOCKER_CMD=(
     --name live-blog-swift
 
     # Mount project sub-trees the server needs at runtime
-    -v "$ROOT_DIR/server":/app/server:ro
+    -v "$ROOT_DIR/swift":/app/swift:ro
     -v "$ROOT_DIR/../../certs":/app/certs:ro
     -v "$ROOT_DIR/client/build":/app/runtime-www:rw # We need rw for writing host.json
 

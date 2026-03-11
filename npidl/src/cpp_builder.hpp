@@ -92,8 +92,8 @@ private:
   // Emits the nprpc_stream::deserialize<T> specialisation for a stream
   // method whose element type is a non-fundamental struct/complex type.
   // Called once per such stream function from emit_interface.
-  void emit_stream_deserialize(AstFunctionDecl* fn);
-  void emit_stream_serialize(AstFunctionDecl* fn);
+  void emit_stream_deserialize(AstTypeDecl* type, bool direct);
+  void emit_stream_serialize(AstTypeDecl* type, bool direct);
 
   void proxy_call(AstFunctionDecl* fn);
   void proxy_call_coro(AstFunctionDecl* fn);  // coroutine variant

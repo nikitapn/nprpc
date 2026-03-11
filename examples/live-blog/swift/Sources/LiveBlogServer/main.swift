@@ -373,7 +373,7 @@ do {
     .build()
 
   let poa = try rpc.createPoa(maxObjects: 32, lifetime: .persistent, idPolicy: .systemGenerated)
-  let browserFlags: ObjectActivationFlags = [.allowSecuredHttp, .allowSslWebSocket, .allowQuic]
+  let browserFlags: ObjectActivationFlags = [.https, .wss]
 
   let blogObjectId = try poa.activateObject(BlogServiceImpl(repository: repository), flags: browserFlags)
   let chatObjectId = try poa.activateObject(ChatServiceImpl(), flags: browserFlags)

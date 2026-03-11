@@ -28,7 +28,7 @@ IDL_FILES = [
 
 # Output directories (relative to ROOT_DIR, mirrored as /app/... inside container)
 TS_OUTPUT_DIR    = "client/src/rpc"
-SWIFT_OUTPUT_DIR = "server/Sources/LiveBlogAPI"
+SWIFT_OUTPUT_DIR = "swift/Sources/LiveBlogAPI"
 
 def run_npidl(lang_flag: str, idl_files: list, output_dir: str) -> None:
     """Run npidl in the nprpc-dev Docker container for the given language."""

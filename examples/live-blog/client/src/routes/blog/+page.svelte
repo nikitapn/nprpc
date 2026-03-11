@@ -44,7 +44,7 @@
 	<ShellHero
 		badge="Blog listing"
 		title={`/blog?page=${pageNumber}`}
-		description="SSR already knows the requested page number and can render the correct shell. After hydration, this page performs a real BlogService.ListPosts(page, pageSize) call against the Swift backend."
+		description="SSR already knows the requested page number and can render the correct shell. After hydration, this page performs a real BlogService.ListPosts(page, pageSize) call against the active NPRPC backend."
 	/>
 
 	{#if errorMessage}
@@ -57,7 +57,7 @@
 			<div class="flex items-center justify-between">
 				<div>
 					<p class="eyebrow">Page {pageNumber}</p>
-					<h2 class="mt-2 text-2xl font-semibold text-stone-900">Latest posts hydrate from Swift RPC</h2>
+					<h2 class="mt-2 text-2xl font-semibold text-stone-900">Latest posts hydrate from NPRPC RPC</h2>
 				</div>
 				<div class="rounded-full border border-amber-900/15 bg-white/70 px-4 py-2 text-sm text-stone-600">
 					Loading
@@ -90,7 +90,7 @@
 			<div class="flex items-center justify-between">
 				<div>
 					<p class="eyebrow">Page {postPage.page}</p>
-					<h2 class="mt-2 text-2xl font-semibold text-stone-900">{postPage.total_posts} posts available in the Swift backend</h2>
+					<h2 class="mt-2 text-2xl font-semibold text-stone-900">{postPage.total_posts} posts available in the active backend</h2>
 				</div>
 				<div class="rounded-full border border-amber-900/15 bg-white/70 px-4 py-2 text-sm text-stone-600">
 					Hydrated from RPC

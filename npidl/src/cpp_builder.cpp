@@ -1035,16 +1035,31 @@ void CppBuilder::finalize()
         out_type->id != FieldType::Enum && !sd->direct) {
       auto key = stream_codec_type_key(out_type);
       if (emitted_stream_deserializers.insert(key).second)
-        emit_stream_deserialize(fn);
+        emit_stream_deserialize(out_type, false);
     }
 
-    if (auto* stream_type = canonical_stream_codec_type(
-            sd->stream_in_type() ? sd->stream_in_type() : sd->stream_out_type());
-        stream_type != nullptr && stream_type->id != FieldType::Fundamental &&
-        stream_type->id != FieldType::Enum && !sd->direct) {
-      auto key = stream_codec_type_key(stream_type);
+    if (auto* in_type = canonical_stream_codec_type(sd->stream_in_type());
+        in_type != nullptr && in_type->id != FieldType::Fundamental &&
+        in_type->id != FieldType::Enum && !sd->direct) {
+      auto key = stream_codec_type_key(in_type);
+      if (emitted_stream_deserializers.insert(key).second)
+        emit_stream_deserialize(in_type, false);
+    }
+
+    if (auto* in_type = canonical_stream_codec_type(sd->stream_in_type());
+        in_type != nullptr && in_type->id != FieldType::Fundamental &&
+        in_type->id != FieldType::Enum && !sd->direct) {
+      auto key = stream_codec_type_key(in_type);
       if (emitted_stream_serializers.insert(key).second)
-        emit_stream_serialize(fn);
+        emit_stream_serialize(in_type, false);
+    }
+
+    if (auto* out_type = canonical_stream_codec_type(sd->stream_out_type());
+        out_type != nullptr && out_type->id != FieldType::Fundamental &&
+        out_type->id != FieldType::Enum && !sd->direct) {
+      auto key = stream_codec_type_key(out_type);
+      if (emitted_stream_serializers.insert(key).second)
+        emit_stream_serialize(out_type, false);
     }
   }
 
@@ -1772,16 +1787,31 @@ static void emit_stream_reader_type(
   os << ">";
 }
 
-void CppBuilder::emit_stream_deserialize(AstFunctionDecl* fn)
+static void emit_stream_reader_value_type(
+  AstTypeDecl* type, bool direct, std::ostream& os,
+  std::function<void(AstTypeDecl*, std::ostream&)> emitType,
+  std::function<void(AstTypeDecl*, std::ostream&)> emitDirectType)
 {
-  auto* sd = fn->stream_decl;
-  if (sd == nullptr || sd->stream_out_type() == nullptr)
+  os << "::nprpc::StreamReader<";
+  if (direct) {
+    os << "::nprpc::flat::OwnedDirect<";
+    emitDirectType(type, os);
+    os << ">";
+  } else {
+    emitType(type, os);
+  }
+  os << ">";
+}
+
+void CppBuilder::emit_stream_deserialize(AstTypeDecl* stream_type, bool direct)
+{
+  if (stream_type == nullptr)
     return;
   // Only needed for non-fundamental, non-direct element types.
-  auto* elem = sd->stream_out_type();
+  auto* elem = stream_type;
   if (elem->id == FieldType::Alias) elem = calias(elem)->get_real_type();
   if (elem->id == FieldType::Fundamental || elem->id == FieldType::Enum) return;
-  if (sd->direct) return; // OwnedDirect path needs no deserializer
+  if (direct) return; // OwnedDirect path needs no deserializer
 
   // Fully-qualified names are required because we emit inside namespace nprpc_stream.
   auto bd_saved = bd; bd = 1;
@@ -1790,9 +1820,9 @@ void CppBuilder::emit_stream_deserialize(AstFunctionDecl* fn)
   oh << "namespace nprpc_stream {\n";
   oh << "template<>\n";
   oh << "inline ";
-  emit_type(sd->stream_out_type(), oh);
+  emit_type(stream_type, oh);
   oh << " deserialize<";
-  emit_type(sd->stream_out_type(), oh);
+  emit_type(stream_type, oh);
   oh << ">(::nprpc::flat_buffer& buf) {\n";
 
   if (elem->id == FieldType::Array) {
@@ -1803,7 +1833,7 @@ void CppBuilder::emit_stream_deserialize(AstFunctionDecl* fn)
 
     oh << "  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));\n";
     oh << "  ";
-    emit_type(sd->stream_out_type(), oh);
+    emit_type(stream_type, oh);
     oh << " __result{};\n";
 
     if (is_flat(wt)) {
@@ -1847,13 +1877,13 @@ void CppBuilder::emit_stream_deserialize(AstFunctionDecl* fn)
   oh << "  std::memcpy(__mb.data(), __span.data(), __span.size());\n";
   oh << "  __elem_buf.commit(__span.size());\n";
   oh << "  ";
-  emit_type(sd->stream_out_type(), oh);
+  emit_type(stream_type, oh);
   oh << " __result;\n";
   oh << "  ";
-  emit_direct_type(sd->stream_out_type(), oh);
+  emit_direct_type(stream_type, oh);
   oh << " __d(__elem_buf, 0);\n";
   // top_object=true: __d is the Direct object itself, use . not ().
-  assign_from_flat_type(sd->stream_out_type(), "__result", "__d", oh, false, true);
+  assign_from_flat_type(stream_type, "__result", "__d", oh, false, true);
   oh << "  return __result;\n";
   oh << "}\n} // namespace nprpc_stream\n\n";
 
@@ -1861,17 +1891,15 @@ void CppBuilder::emit_stream_deserialize(AstFunctionDecl* fn)
   bd = bd_saved;
 }
 
-void CppBuilder::emit_stream_serialize(AstFunctionDecl* fn)
+void CppBuilder::emit_stream_serialize(AstTypeDecl* stream_type, bool direct)
 {
-  auto* sd = fn->stream_decl;
-  if (sd == nullptr)
+  if (stream_type == nullptr)
     return;
   // Only needed for non-fundamental, non-direct element types.
-  auto* stream_type = sd->stream_in_type() ? sd->stream_in_type() : sd->stream_out_type();
   auto* elem = stream_type;
   if (elem->id == FieldType::Alias) elem = calias(elem)->get_real_type();
   if (elem->id == FieldType::Fundamental || elem->id == FieldType::Enum) return;
-  if (sd->direct) return;
+  if (direct) return;
 
   auto bd_saved = bd; bd = 1;
   always_full_namespace(true);
@@ -2344,7 +2372,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
           oc << "        }).detach();\n";
         } else {
           oc << "        ";
-          emit_stream_reader_type(*this, fn->stream_decl, oc,
+          emit_stream_reader_value_type(fn->stream_decl->stream_in_type(), false, oc,
             [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
             [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
           oc << " __reader(ctx, init.stream_id());\n";

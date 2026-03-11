@@ -7,7 +7,7 @@
 		<header class="glass-card flex flex-col gap-4 px-6 py-5 md:flex-row md:items-center md:justify-between">
 			<div>
 				<a href="/" class="text-2xl font-semibold tracking-tight text-stone-950">Live Blog</a>
-				<p class="mt-1 text-sm text-stone-600">Svelte shell, Swift business logic, NPRPC data + streams.</p>
+				<p class="mt-1 text-sm text-stone-600">One Svelte shell, NPRPC data + streams, backend implemented in Swift or C++.</p>
 			</div>
 			<nav class="flex flex-wrap gap-2 text-sm font-medium text-stone-700">
 				<a class="rounded-full border border-amber-900/15 px-4 py-2 hover:bg-white/70" href="/blog?page=1">Blog</a>

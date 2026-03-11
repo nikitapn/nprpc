@@ -5,8 +5,8 @@
 <div class="grid gap-6">
 	<ShellHero
 		badge="Example concept"
-		title="A route-aware blog shell that hydrates from a Swift NPRPC backend"
-		description="The page frame is server-rendered by SvelteKit, while posts, comments, chat, and future media streams come from a Swift application that owns all business logic."
+		title="A route-aware blog shell that hydrates from NPRPC backends in Swift or C++"
+		description="The page frame is server-rendered by SvelteKit, while posts, comments, chat, and future media streams come from a typed NPRPC backend. The same client is shared by both server implementations."
 	/>
 
 	<section class="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
