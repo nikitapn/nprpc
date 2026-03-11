@@ -9,7 +9,7 @@ module Cnprpc_system [system] {
     header "/home/nikita/projects/nprpc/include/nprpc/object_ptr.hpp"
     
     // Base types
-    header "/home/nikita/projects/nprpc/include/nprpc_base.hpp"
+    header "/home/nikita/projects/nprpc/include/nprpc_base_ext.hpp"
     
     link "nprpc"
     requires cplusplus

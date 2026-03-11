@@ -224,7 +224,7 @@ public:
 
     auto endpoint = socket_.remote_endpoint();
     ctx_.remote_endpoint =
-        EndPoint(EndPointType::TcpTethered,
+        EndPoint(EndPointType::TcpPrivate,
                  endpoint.address().to_v4().to_string(), endpoint.port());
   }
 };

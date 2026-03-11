@@ -157,7 +157,7 @@ public:
   {
     auto endpoint = this->ws().next_layer().socket().remote_endpoint();
     this->ctx_.remote_endpoint =
-        EndPoint(EndPointType::TcpTethered,
+        EndPoint(EndPointType::TcpPrivate,
                  endpoint.address().to_v4().to_string(), endpoint.port());
   }
 };
@@ -173,7 +173,7 @@ public:
     auto endpoint =
         this->ws().next_layer().next_layer().socket().remote_endpoint();
     this->ctx_.remote_endpoint =
-        EndPoint(EndPointType::TcpTethered,
+        EndPoint(EndPointType::TcpPrivate,
                  endpoint.address().to_v4().to_string(), endpoint.port());
   }
 };

@@ -15,7 +15,7 @@ public:
   TestObjectsImpl(nprpc::Poa* poa)
     : poa_(poa)
   {
-    // poa_->activate_object(&simple_object_, nprpc::ObjectActivationFlags::ALLOW_ALL, nullptr);
+    // poa_->activate_object(&simple_object_, nprpc::ObjectActivationFlags::all, nullptr);
   }
 
   void SendObject (nprpc::Object* o) override {

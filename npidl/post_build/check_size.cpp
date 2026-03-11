@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "utils.hpp"
-#include <nprpc_base.hpp>
+#include <nprpc_base_ext.hpp>
 
 static_assert(sizeof(nprpc::impl::flat::CallHeader) == npidl::size_of_call_header);
 static_assert(alignof(nprpc::impl::flat::CallHeader) == npidl::align_of_call_header);

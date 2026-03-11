@@ -1,4 +1,4 @@
-#include "nprpc_base.hpp"
+#include "nprpc_base_ext.hpp"
 using namespace std::string_literals;
 using namespace std::string_view_literals;
 
@@ -175,7 +175,7 @@ inline
 #endif
     void bind(
         typename T::servant_t& servant,
-        std::uint32_t flags,
+        nprpc::ObjectActivationFlags flags,
         const std::string& object_name = "nprpc_test_object"
     ) {
         auto oid = poa->activate_object(&servant, flags);
@@ -190,7 +190,7 @@ inline
 #endif
     auto bind_and_resolve(
         typename T::servant_t& servant,
-        std::uint32_t flags,
+        nprpc::ObjectActivationFlags flags,
         const std::string& object_name = "nprpc_test_object"
     ) {
         bind<T>(servant, flags, object_name);

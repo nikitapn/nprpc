@@ -183,7 +183,7 @@ int main(int argc, char** argv)
   Environment env;
   env.SetUp();
 
-  constexpr auto flags = nprpc::ObjectActivationFlags::ALLOW_ALL;
+  constexpr auto flags = nprpc::ObjectActivationFlags::all;
 
   auto nameserver = rpc->get_nameserver("127.0.0.1");
 

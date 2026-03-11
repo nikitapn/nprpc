@@ -26,12 +26,12 @@ g_server_listener_uuid = listener_uuid;
 
 #### **Server Side** (Object Activation)
 ```cpp
-// When POA activates an object with ALLOW_SHARED_MEMORY flag
+// When POA activates an object with shm flag
 ObjectId oid;
 oid.origin = get_machine_uuid();  // Machine0
 
 // Add shared memory URL (points to server's listener)
-if (flags & ALLOW_SHARED_MEMORY) {
+if (flags & shm) {
     oid.urls.push_back("mem://" + g_server_listener_uuid);
 }
 
@@ -68,7 +68,7 @@ if (object_id.origin == local_origin) {
 
 #### **Object Activation** (Server)
 1. Create object in POA
-2. Check if `ALLOW_SHARED_MEMORY` flag is set
+2. Check if `shm` flag is set
 3. If yes, add `"mem://<listener_uuid>"` to `ObjectId.urls`
 4. Add network URLs as fallback (`tcp://`, `ws://`)
 5. Publish ObjectId (nameserver or direct)
@@ -126,10 +126,10 @@ Client                          Server (Listener)
 ServerA Process (Machine0):
   1. Start: Generate listener UUID = "listener-aaa-111"
   2. Create SharedMemoryListener("listener-aaa-111")
-  3. Activate ObjectA with ALLOW_SHARED_MEMORY
+  3. Activate ObjectA with shm
      - ObjectA.origin = <Machine0 UUID>
      - ObjectA.urls = ["mem://listener-aaa-111", "tcp://192.168.1.10:8080"]
-  4. Activate ObjectB with ALLOW_SHARED_MEMORY
+  4. Activate ObjectB with shm
      - ObjectB.origin = <Machine0 UUID>
      - ObjectB.urls = ["mem://listener-aaa-111", "tcp://192.168.1.10:8080"]
   5. Register objects with nameserver
@@ -137,7 +137,7 @@ ServerA Process (Machine0):
 ServerB Process (Machine0):
   1. Start: Generate listener UUID = "listener-bbb-222"  
   2. Create SharedMemoryListener("listener-bbb-222")
-  3. Activate ObjectC with ALLOW_SHARED_MEMORY
+  3. Activate ObjectC with shm
      - ObjectC.origin = <Machine0 UUID>
      - ObjectC.urls = ["mem://listener-bbb-222", "tcp://192.168.1.11:8080"]
   4. Register objects with nameserver

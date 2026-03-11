@@ -559,7 +559,9 @@ void SwiftBuilder::emit_exception(AstStructDecl* s)
 
 void SwiftBuilder::emit_enum(AstEnumDecl* e)
 {
-  out << bl() << "public enum " << swift_type_name(e->name) << ": Int32, Codable, Sendable " << bb();
+  out << bl() << "public enum " << swift_type_name(e->name) << ": ";
+  emit_fundamental_type(e->token_id, out);
+  out <<", Codable, Sendable " << bb();
 
   // Emit cases
   for (auto& item : e->items) {
@@ -1033,8 +1035,8 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
   // Write message header with StreamInitialization message ID
   out << bl() << "// Write StreamInit message header\n";
   out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)\n";
-  out << bl() << "data.storeBytes(of: impl.MessageId.streamInitialization.rawValue, toByteOffset: 4, as: Int32.self)\n";
-  out << bl() << "data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: Int32.self)\n";
+  out << bl() << "data.storeBytes(of: impl.MessageId.streamInitialization.rawValue, toByteOffset: 4, as: UInt32.self)\n";
+  out << bl() << "data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: UInt32.self)\n";
   out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self)  // reserved\n\n";
 
   // Write StreamInit fields (matching C++ struct layout with alignment)
@@ -1058,7 +1060,7 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
   default:
     assert(false);
   }
-  out << ".rawValue, toByteOffset: " << (size_of_header + 25) << ", as: Int32.self)\n\n";
+  out << ".rawValue, toByteOffset: " << (size_of_header + 25) << ", as: UInt8.self)\n\n";
 
   // Marshal input arguments if any
   if (fn->in_s) {
@@ -1250,7 +1252,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
   if (has_streaming) {
     // Need to check message type first
     out << bl() << "// Check message type to route streaming vs regular calls\n";
-    out << bl() << "let msgId = data.load(fromByteOffset: MemoryLayout<NPRPC.impl.Header>.offset(of: \\NPRPC.impl.Header.msg_id)!, as: Int32.self)\n\n";
+    out << bl() << "let msgId = data.load(fromByteOffset: MemoryLayout<NPRPC.impl.Header>.offset(of: \\NPRPC.impl.Header.msg_id)!, as: UInt32.self)\n\n";
     out << bl() << "if msgId == impl.MessageId.streamInitialization.rawValue " << bb();
 
     // Streaming dispatch path
@@ -1419,8 +1421,8 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       out << bl() << ns(fn->out_s->nm) << "marshal_" << fn->out_s->name << "(buffer: buffer, offset: " << size_of_header << ", data: out_data)\n";
       out << bl() << "guard let outData = buffer.data else { return }\n";
       out << bl() << "outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n";
-      out << bl() << "outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: Int32.self)\n";
-      out << bl() << "outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)\n";
+      out << bl() << "outData.storeBytes(of: impl.MessageId.blockResponse.rawValue, toByteOffset: 4, as: UInt32.self)\n";
+      out << bl() << "outData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: UInt32.self)\n";
     }
 
     // Handle exception
@@ -1437,8 +1439,8 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       out << bl() << "guard let exData = obuf.data else { return }\n";
       out << bl() << "marshal_" << fn->ex->name << "(buffer: obuf, offset: " << offset << ", data: e)\n";
       out << bl() << "exData.storeBytes(of: UInt32(obuf.size - 4), toByteOffset: 0, as: UInt32.self)\n";
-      out << bl() << "exData.storeBytes(of: impl.MessageId.exception.rawValue, toByteOffset: 4, as: Int32.self)\n";
-      out << bl() << "exData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)\n";
+      out << bl() << "exData.storeBytes(of: impl.MessageId.exception.rawValue, toByteOffset: 4, as: UInt32.self)\n";
+      out << bl() << "exData.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: UInt32.self)\n";
       out << eb();
       out << bl() << "catch {\n" << bb(false);
       out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.error_Unknown)\n";
@@ -1723,7 +1725,9 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
   case FieldType::Enum: {
     const int size = get_fundamental_size(cenum(f->type)->token_id);
     const int field_offset = align_offset(size, offset, size);
-    out << bl() << "buf.storeBytes(of: " << field_access << ".rawValue, toByteOffset: offset + " << field_offset << ", as: Int32.self)\n";
+    out << bl() << "buf.storeBytes(of: " << field_access << ".rawValue, toByteOffset: offset + " << field_offset << ", as: ";
+    emit_fundamental_type(cenum(f->type)->token_id, out);
+    out << ".self)\n";
     break;
   }
   case FieldType::String: {
@@ -1926,7 +1930,9 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
   case FieldType::Enum: {
     const int size = get_fundamental_size(cenum(f->type)->token_id);
     const int field_offset = align_offset(size, offset, size);
-    out << bl() << field_name << " = " << cenum(f->type)->name << "(rawValue: buffer.load(fromByteOffset: offset + " << field_offset << ", as: Int32.self))!\n";
+    out << bl() << field_name << " = " << cenum(f->type)->name << "(rawValue: buffer.load(fromByteOffset: offset + " << field_offset << ", as: ";
+    emit_fundamental_type(cenum(f->type)->token_id, out);
+    out << ".self))!\n";
     break;
   }
   case FieldType::String: {

@@ -15,7 +15,7 @@
 #include <nprpc/session_context.h>
 #include <nprpc/stream_base.hpp>
 #include <nprpc/impl/stream_manager.hpp>
-#include <nprpc_base.hpp>
+#include <nprpc_base_ext.hpp>
 
 // Primary template for stream chunk deserialization.
 // npidl generates explicit specializations (inline, in the generated header)

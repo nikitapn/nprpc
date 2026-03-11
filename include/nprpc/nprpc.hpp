@@ -22,7 +22,7 @@
 #include <nprpc/serialization/serialization.h>
 #include <nprpc/session_context.h>
 #include <nprpc/utils.hpp>
-#include <nprpc_base.hpp>
+#include <nprpc_base_ext.hpp>
 
 namespace nprpc {
 
@@ -106,33 +106,6 @@ enum class Lifespan { Transient = 0, Persistent = 1 };
 enum class ObjectIdPolicy { SystemGenerated = 0, UserSupplied = 1 };
 } // namespace PoaPolicy
 
-namespace ObjectActivationFlags {
-enum Enum : uint32_t {
-  // For default, no flags are set
-  NONE = 0,
-  // Make this object session-specific (unaccessible outside of the session it
-  // was created in)
-  SESSION_SPECIFIC = 1 << 0,
-  // Allow TCP connections to this object
-  ALLOW_TCP = 1 << 1,
-  // Allow WebSocket connections to this object
-  ALLOW_WEBSOCKET = 1 << 2,
-  // Allow SSL WebSocket connections to this object
-  ALLOW_SSL_WEBSOCKET = 1 << 3,
-  // Allow HTTP connections to this object
-  ALLOW_HTTP = 1 << 4,
-  // Allow secured HTTP connections to this object
-  ALLOW_SECURED_HTTP = 1 << 5,
-  // Allow shared memory connections to this object
-  ALLOW_SHARED_MEMORY = 1 << 6,
-  // Allow QUIC connections to this object
-  ALLOW_QUIC = 1 << 8,
-  // Allow all connection types
-  ALLOW_ALL = ALLOW_TCP | ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET | ALLOW_HTTP |
-              ALLOW_SECURED_HTTP | ALLOW_SHARED_MEMORY | ALLOW_QUIC
-};
-}
-
 class NPRPC_API PoaBuilder
 {
   uint32_t objects_max_ = 32;
@@ -186,7 +159,7 @@ public:
    * @throws std::runtime_error if the object cannot be activated.
    */
   virtual ObjectId activate_object(ObjectServant* obj,
-                                   uint32_t activation_flags,
+                                   ObjectActivationFlags activation_flags,
                                    SessionContext* ctx = nullptr) = 0;
 
   /**
@@ -195,7 +168,7 @@ public:
    */
   virtual ObjectId activate_object_with_id(oid_t object_id,
                                            ObjectServant* obj,
-                                           uint32_t activation_flags,
+                                           ObjectActivationFlags activation_flags,
                                            SessionContext* ctx = nullptr) = 0;
 
   /**

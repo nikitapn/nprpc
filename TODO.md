@@ -56,7 +56,7 @@ Motivation: Add a modern, high-performance transport option with built-in encryp
   - Creates server sessions per connection
 * [x] Implement `QuicServerSession` for dispatching
 * [x] Wire up QUIC to RPC framework (endpoint URL: `quic://host:port`)
-* [x] Add `ALLOW_QUIC` activation flag
+* [x] Add `quic` activation flag
 * [x] Add `set_listen_quic_port()` to RpcBuilder
 
 ### Phase 2: Stream Management ✅

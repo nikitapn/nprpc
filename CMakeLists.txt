@@ -184,7 +184,7 @@ add_library(nprpc
   src/uuid.cpp
   src/framework.h
   # Public headers
-  include/nprpc_base.hpp
+  include/nprpc_base_ext.hpp
   include/nprpc_nameserver.hpp
   include/nprpc/common.hpp
   include/nprpc/basic.hpp

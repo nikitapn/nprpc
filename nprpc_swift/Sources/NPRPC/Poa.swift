@@ -12,7 +12,7 @@ import Glibc
 import Darwin
 #endif
 
-/// Object activation flags controlling which transports an object is available on
+// /// Object activation flags controlling which transports an object is available on
 public struct ObjectActivationFlags: OptionSet, Sendable {
     public let rawValue: UInt32
 
@@ -21,38 +21,38 @@ public struct ObjectActivationFlags: OptionSet, Sendable {
     }
 
     /// Make object session-specific (tethered to current session)
-    public static let sessionSpecific = ObjectActivationFlags(rawValue: 1 << 0)
+    public static let privateSession = ObjectActivationFlags(rawValue: detail.ObjectActivationFlags.privateSession.rawValue)
 
     /// Allow TCP connections
-    public static let allowTcp = ObjectActivationFlags(rawValue: 1 << 1)
+    public static let tcp = ObjectActivationFlags(rawValue: detail.ObjectActivationFlags.tcp.rawValue)
 
     /// Allow WebSocket connections
-    public static let allowWebSocket = ObjectActivationFlags(rawValue: 1 << 2)
+    public static let ws = ObjectActivationFlags(rawValue: detail.ObjectActivationFlags.ws.rawValue)
 
     /// Allow SSL WebSocket connections
-    public static let allowSslWebSocket = ObjectActivationFlags(rawValue: 1 << 3)
+    public static let wss = ObjectActivationFlags(rawValue: detail.ObjectActivationFlags.wss.rawValue)
 
     /// Allow HTTP connections
-    public static let allowHttp = ObjectActivationFlags(rawValue: 1 << 4)
+    public static let http = ObjectActivationFlags(rawValue: detail.ObjectActivationFlags.http.rawValue)
 
     /// Allow secured HTTP connections
-    public static let allowSecuredHttp = ObjectActivationFlags(rawValue: 1 << 5)
+    public static let https = ObjectActivationFlags(rawValue: detail.ObjectActivationFlags.https.rawValue)
 
     /// Allow shared memory transport
-    public static let allowSharedMemory = ObjectActivationFlags(rawValue: 1 << 6)
+    public static let shm = ObjectActivationFlags(rawValue: detail.ObjectActivationFlags.shm.rawValue)
 
     /// Allow QUIC connections
-    public static let allowQuic = ObjectActivationFlags(rawValue: 1 << 8)
+    public static let quic = ObjectActivationFlags(rawValue: detail.ObjectActivationFlags.quic.rawValue)
 
     /// Allow all transports
     public static let allowAll: ObjectActivationFlags = [
-        .allowTcp, .allowWebSocket, .allowSslWebSocket, .allowHttp, 
-        .allowSecuredHttp, .allowSharedMemory, .allowQuic
+        .tcp, .ws, .wss, .http, 
+        .https, .shm, .quic
     ]
 
     /// Network transports only (no shared memory)
     public static let networkOnly: ObjectActivationFlags = [
-        .allowTcp, .allowWebSocket, .allowHttp, .allowQuic
+        .tcp, .ws, .wss, .http, .https, .quic
     ]
 }
 
@@ -95,7 +95,7 @@ private let globalServantDispatch: @convention(c) (UnsafeMutableRawPointer?, Uns
     // Extract endpoint from C++ EndPoint pointer
     let endpoint: NPRPCEndpoint
     if let endpointPtr = endpointPtr {
-        let typeValue = Int32(nprpc_endpoint_get_type(endpointPtr))
+        let typeValue = UInt32(nprpc_endpoint_get_type(endpointPtr))
         let hostname = String(cString: nprpc_endpoint_get_hostname(endpointPtr))
         let port = nprpc_endpoint_get_port(endpointPtr)
         endpoint = NPRPCEndpoint(type: EndPointType(rawValue: typeValue) ?? .tcp, hostname: hostname, port: port)
@@ -170,7 +170,7 @@ public final class Poa {
     /// - Throws: RuntimeError if activation fails
     public func activateObject(
         _ servant: NPRPCServant,
-        flags: ObjectActivationFlags = .networkOnly,
+        flags: ObjectActivationFlags,
         sessionContext: UnsafeMutableRawPointer? = nil
     ) throws -> detail.ObjectId {
         // Get unmanaged pointer to servant (we need to prevent Swift from deallocating it)
@@ -212,7 +212,7 @@ public final class Poa {
     public func activateObjectWithId(
         objectId: UInt64,
         servant: NPRPCServant,
-        flags: ObjectActivationFlags = .networkOnly,
+        flags: ObjectActivationFlags,
         sessionContext: UnsafeMutableRawPointer? = nil
     ) throws -> detail.ObjectId {
         // Get unmanaged pointer to servant (we need to prevent Swift from deallocating it)

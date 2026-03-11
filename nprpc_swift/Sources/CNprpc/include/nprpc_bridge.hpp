@@ -26,7 +26,7 @@ namespace nprpc {
     template<typename T> class ObjectPtr;
     class flat_buffer;
 
-    // Forward declare LogLevel (defined in nprpc_base.hpp)
+    // Forward declare LogLevel (defined in nprpc_base_ext.hpp)
     enum class LogLevel : uint32_t;
 
     namespace impl {

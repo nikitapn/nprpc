@@ -26,6 +26,7 @@ NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framewo
 
 | Transport | Use Case | Pros | Cons |
 |-----------|----------|------|------|
+| **WebTransport** |
 | **WebSocket** | Real-time apps, persistent connections | Bidirectional, low latency, stateful | Requires persistent connection |
 | **HTTP** | Web apps, stateless APIs, SSR | Browser compatible, SSR-capable | Higher overhead per request |
 | **TCP** | High-performance IPC | Low overhead, reliable | No browser support |
@@ -250,9 +251,9 @@ int main() {
   auto calc = std::make_shared<CalculatorImpl>();
   auto oid = poa->activate_object(
     calc.get(),
-    nprpc::ObjectActivationFlags::ALLOW_TCP |
-    nprpc::ObjectActivationFlags::ALLOW_WEBSOCKET |
-    nprpc::ObjectActivationFlags::ALLOW_HTTP
+    nprpc::ObjectActivationFlags::tcp |
+    nprpc::ObjectActivationFlags::ws |
+    nprpc::ObjectActivationFlags::http
   );
 
   // Optional: publish origin-local objects for browser bootstrap
@@ -367,7 +368,7 @@ constexpr nprpc::oid_t calculator_id = 0;
 static_poa->activate_object_with_id(
   calculator_id,
   calculator_servant.get(),
-  nprpc::ObjectActivationFlags::ALLOW_TCP | nprpc::ObjectActivationFlags::ALLOW_HTTP
+  nprpc::ObjectActivationFlags::tcp | nprpc::ObjectActivationFlags::http
 );
 ```
 
@@ -390,7 +391,7 @@ auto rpc = nprpc::RpcBuilder()
 // Activate with SSL WebSocket only
 poa->activate_object(
   obj.get(),
-  nprpc::ObjectActivationFlags::ALLOW_SSL_WEBSOCKET
+  nprpc::ObjectActivationFlags::wss
 );
 ```
 
@@ -411,7 +412,7 @@ auto rpc = nprpc::RpcBuilder()
 
 poa->activate_object(
   obj.get(),
-  nprpc::ObjectActivationFlags::ALLOW_SHARED_MEMORY
+  nprpc::ObjectActivationFlags::shm
 );
 ```
 
@@ -487,9 +488,9 @@ public:
     auto processor = std::make_shared<MyProcessor>();
     processors_.push_back(processor);
     // This will make the object accessible remotely for everyone
-    return poa->activate_object(processor.get(), nprpc::ObjectActivationFlags::ALLOW_ALL);
+    return poa->activate_object(processor.get(), nprpc::ObjectActivationFlags::all);
     // If you want to restrict access for anyone else but this connection, add session context parameter
-    return poa->activate_object(processor.get(), nprpc::ObjectActivationFlags::ALLOW_ALL, &nprpc::get_context());
+    return poa->activate_object(processor.get(), nprpc::ObjectActivationFlags::all, &nprpc::get_context());
   }
 
   void RegisterProcessor(processor: in object) override {

@@ -13,7 +13,7 @@
 #include <mutex>
 
 #include <nprpc/export.hpp>
-#include <nprpc_base.hpp>
+#include <nprpc_base_ext.hpp>
 
 namespace nprpc::impl {
 

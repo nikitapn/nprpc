@@ -93,7 +93,7 @@ NPRPC_API uint32_t Object::release()
   if (policy_lifespan() == PoaPolicy::Lifespan::Transient) {
     const auto& endpoint = get_endpoint();
 
-    if (endpoint.type() == EndPointType::TcpTethered &&
+    if (endpoint.type() == EndPointType::TcpPrivate &&
         ::nprpc::impl::g_rpc->has_session(endpoint) == false) {
       // session was closed and cannot be created.
     } else {

@@ -7,7 +7,7 @@
 #include <boost/system/errc.hpp>
 #include <charconv>
 
-#include <nprpc_base.hpp>
+#include <nprpc_base_ext.hpp>
 
 namespace nprpc {
 static constexpr std::string_view tcp_prefix = "tcp://";
@@ -30,7 +30,7 @@ public:
   {
     switch (type) {
     case EndPointType::Tcp:
-    case EndPointType::TcpTethered:
+    case EndPointType::TcpPrivate:
       return tcp_prefix;
     case EndPointType::WebSocket:
       return ws_prefix;

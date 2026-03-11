@@ -70,7 +70,7 @@ struct EpollConn : Session {
     char ip[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
     ctx_.remote_endpoint =
-        EndPoint(EndPointType::TcpTethered, std::string(ip), ntohs(addr.sin_port));
+        EndPoint(EndPointType::TcpPrivate, std::string(ip), ntohs(addr.sin_port));
   }
 
   ~EpollConn() { ::close(fd_); }

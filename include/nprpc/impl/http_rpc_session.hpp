@@ -40,7 +40,7 @@ public:
       : Session(ioc.get_executor())
   {
     // HTTP sessions are "tethered" (ephemeral) - use TcpTethered type
-    ctx_.remote_endpoint = EndPoint(EndPointType::TcpTethered, "", 0);
+    ctx_.remote_endpoint = EndPoint(EndPointType::TcpPrivate, "", 0);
   }
 
   /**

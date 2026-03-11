@@ -107,6 +107,6 @@
   // header incompatibility with the system Swift toolchain.
   // The script mounts the workspace at its exact host path so all LSP URIs match.
 
-  // "swift.sourcekit-lsp.serverPath": "${workspaceFolder}/nprpc_swift/docker-sourcekit-lsp.sh",
-  "swift.sourcekit-lsp.serverPath": "${workspaceFolder}/examples/live-blog/scripts/docker-sourcekit-lsp.sh",
+  "swift.sourcekit-lsp.serverPath": "${workspaceFolder}/nprpc_swift/docker-sourcekit-lsp.sh",
+  // "swift.sourcekit-lsp.serverPath": "${workspaceFolder}/examples/live-blog/scripts/docker-sourcekit-lsp.sh",
 }

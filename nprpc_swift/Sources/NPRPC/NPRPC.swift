@@ -54,8 +54,8 @@ public func makeSimpleAnswer(buffer: FlatBuffer, messageId: impl.MessageId) {
     // - message_type (4 bytes, 1 = Answer)
     // - reserved (4 bytes)
     data.storeBytes(of: UInt32(12), toByteOffset: 0, as: UInt32.self)
-    data.storeBytes(of: messageId.rawValue, toByteOffset: 4, as: Int32.self)
-    data.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: Int32.self)
+    data.storeBytes(of: messageId.rawValue, toByteOffset: 4, as: UInt32.self)
+    data.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: UInt32.self)
     data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
 }
 
@@ -65,7 +65,7 @@ public func handleStandardReply(buffer: FlatBuffer) throws -> Int32 {
     guard let data = buffer.constData else { return -2 }
     
     // Read message_id from offset 4
-    let messageId = data.load(fromByteOffset: 4, as: Int32.self)
+    let messageId = data.load(fromByteOffset: 4, as: UInt32.self)
     
     // Check message type based on impl.MessageId enum values
     // functionCall=0, streamInit=1, streamDataChunk=2, streamCompletion=3,

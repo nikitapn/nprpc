@@ -30,7 +30,7 @@ TEST_F(NprpcTest, TestBasic)
 {
 #include "common/tests/basic.inl"
   TestBasicImpl servant;
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
     try {
       auto obj = bind_and_resolve<nprpc::test::TestBasic>(servant, flags);
 
@@ -88,11 +88,11 @@ TEST_F(NprpcTest, TestBasic)
     }
   };
 
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  exec_test(nprpc::ObjectActivationFlags::tcp);
+  exec_test(nprpc::ObjectActivationFlags::ws);
+  exec_test(nprpc::ObjectActivationFlags::wss);
+  exec_test(nprpc::ObjectActivationFlags::shm);
+  exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
 // Basic exception handling
@@ -100,7 +100,7 @@ TEST_F(NprpcTest, TestException)
 {
 #include "common/tests/basic.inl"
   TestBasicImpl servant;
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
     try {
       auto obj = bind_and_resolve<nprpc::test::TestBasic>(servant, flags);
 
@@ -124,11 +124,11 @@ TEST_F(NprpcTest, TestException)
     }
   };
 
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  exec_test(nprpc::ObjectActivationFlags::tcp);
+  exec_test(nprpc::ObjectActivationFlags::ws);
+  exec_test(nprpc::ObjectActivationFlags::wss);
+  exec_test(nprpc::ObjectActivationFlags::shm);
+  exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
 // Optional types test
@@ -136,7 +136,7 @@ TEST_F(NprpcTest, TestOptional)
 {
 #include "common/tests/optional.inl"
   TestOptionalImpl servant;
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
     try {
       auto obj = bind_and_resolve<nprpc::test::TestOptional>(servant, flags);
 
@@ -164,11 +164,11 @@ TEST_F(NprpcTest, TestOptional)
       FAIL() << "Exception in TestOptional: " << ex.what();
     }
   };
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  exec_test(nprpc::ObjectActivationFlags::tcp);
+  exec_test(nprpc::ObjectActivationFlags::ws);
+  exec_test(nprpc::ObjectActivationFlags::wss);
+  exec_test(nprpc::ObjectActivationFlags::shm);
+  exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
 TEST_F(NprpcTest, ProduceHostJson)
@@ -178,10 +178,10 @@ TEST_F(NprpcTest, ProduceHostJson)
 
   auto oid = poa->activate_object(
       &servant,
-      nprpc::ObjectActivationFlags::ALLOW_WEBSOCKET |
-          nprpc::ObjectActivationFlags::ALLOW_SSL_WEBSOCKET |
-          nprpc::ObjectActivationFlags::ALLOW_HTTP |
-          nprpc::ObjectActivationFlags::ALLOW_SECURED_HTTP);
+      nprpc::ObjectActivationFlags::ws |
+          nprpc::ObjectActivationFlags::wss |
+          nprpc::ObjectActivationFlags::http |
+          nprpc::ObjectActivationFlags::https);
 
   rpc->clear_host_json();
   rpc->add_to_host_json("calculator", oid);
@@ -219,7 +219,7 @@ TEST_F(NprpcTest, TestNested)
   Test::RecordProperty("timeout", "60");
 #include "common/tests/nested.inl"
   TestNestedImpl servant;
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
     try {
       auto obj = bind_and_resolve<nprpc::test::TestNested>(servant, flags);
       obj->set_timeout(5000); // Set a longer timeout for this test
@@ -253,18 +253,18 @@ TEST_F(NprpcTest, TestNested)
       FAIL() << "Exception in TestNested: " << ex.what();
     }
   };
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  exec_test(nprpc::ObjectActivationFlags::tcp);
+  exec_test(nprpc::ObjectActivationFlags::ws);
+  exec_test(nprpc::ObjectActivationFlags::wss);
+  exec_test(nprpc::ObjectActivationFlags::shm);
+  exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
 TEST_F(NprpcTest, TestFixedSizeArrays)
 {
   #include "common/tests/fixed_arrays.inl"
   TestFixedSizeArrayTestImpl servant;
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
     try {
       auto obj = bind_and_resolve<nprpc::test::FixedSizeArrayTest>(servant, flags);
 
@@ -316,11 +316,11 @@ TEST_F(NprpcTest, TestFixedSizeArrays)
       FAIL() << "Exception in TestFixedSizeArrays: " << ex.what();
     }
   };
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  exec_test(nprpc::ObjectActivationFlags::tcp);
+  exec_test(nprpc::ObjectActivationFlags::ws);
+  exec_test(nprpc::ObjectActivationFlags::wss);
+  exec_test(nprpc::ObjectActivationFlags::shm);
+  exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
 // Zero-copy out-direct test — verifies OwnedSpan and OwnedDirect wrappers
@@ -328,7 +328,7 @@ TEST_F(NprpcTest, TestDirect)
 {
 #include "common/tests/direct.inl"
   TestDirectImpl servant;
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
     try {
       auto obj = bind_and_resolve<nprpc::test::TestDirect>(servant, flags);
 
@@ -380,11 +380,11 @@ TEST_F(NprpcTest, TestDirect)
       FAIL() << "Exception in TestDirect: " << ex.what();
     }
   };
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  exec_test(nprpc::ObjectActivationFlags::tcp);
+  exec_test(nprpc::ObjectActivationFlags::ws);
+  exec_test(nprpc::ObjectActivationFlags::wss);
+  exec_test(nprpc::ObjectActivationFlags::shm);
+  exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
 // Large message test to verify async_write fix for messages >2.6MB
@@ -394,7 +394,7 @@ TEST_F(NprpcTest, TestLargeMessage)
   Test::RecordProperty("timeout", "120");
 #include "common/tests/large_message.inl"
   TestLargeMessage servant;
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
     try {
       auto obj =
           bind_and_resolve<nprpc::test::TestLargeMessage>(servant, flags);
@@ -434,11 +434,11 @@ TEST_F(NprpcTest, TestLargeMessage)
       FAIL() << "Exception in TestLargeMessage: " << ex.what();
     }
   };
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  exec_test(nprpc::ObjectActivationFlags::tcp);
+  exec_test(nprpc::ObjectActivationFlags::ws);
+  exec_test(nprpc::ObjectActivationFlags::wss);
+  exec_test(nprpc::ObjectActivationFlags::shm);
+  exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
 TEST_F(NprpcTest, UserSuppliedObjectIdPolicy)
@@ -466,25 +466,25 @@ TEST_F(NprpcTest, UserSuppliedObjectIdPolicy)
   const nprpc::oid_t manual_id = 2;
 
   auto oid = custom_poa->activate_object_with_id(
-      manual_id, &servant_one, nprpc::ObjectActivationFlags::ALLOW_TCP);
+      manual_id, &servant_one, nprpc::ObjectActivationFlags::tcp);
 
   EXPECT_EQ(oid.object_id(), manual_id);
 
   // Duplicate ID should fail
   EXPECT_THROW(
       custom_poa->activate_object_with_id(
-          manual_id, &servant_two, nprpc::ObjectActivationFlags::ALLOW_TCP),
+          manual_id, &servant_two, nprpc::ObjectActivationFlags::tcp),
       nprpc::Exception);
 
   // activate_object should fail on UserSupplied policy
   EXPECT_THROW(custom_poa->activate_object(
-                   &servant_two, nprpc::ObjectActivationFlags::ALLOW_TCP),
+                   &servant_two, nprpc::ObjectActivationFlags::tcp),
                nprpc::Exception);
 
   // ID out of range should fail
   EXPECT_THROW(custom_poa->activate_object_with_id(
                    100, // exceeds max_objects (4)
-                   &servant_three, nprpc::ObjectActivationFlags::ALLOW_TCP),
+                   &servant_three, nprpc::ObjectActivationFlags::tcp),
                nprpc::Exception);
 
   custom_poa->deactivate_object(manual_id);
@@ -503,7 +503,7 @@ TEST_F(NprpcTest, TestBadInput)
     bool SendObject (::nprpc::Object* o) override { return true; }
   } servant;
 
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
     try {
       auto obj = bind_and_resolve<nprpc::test::TestBadInput>(servant, flags);
 
@@ -543,11 +543,11 @@ TEST_F(NprpcTest, TestBadInput)
       FAIL() << "Unexpected exception in TestBadInput: " << ex.what();
     }
   };
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SSL_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_SHARED_MEMORY);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  exec_test(nprpc::ObjectActivationFlags::tcp);
+  exec_test(nprpc::ObjectActivationFlags::ws);
+  exec_test(nprpc::ObjectActivationFlags::wss);
+  exec_test(nprpc::ObjectActivationFlags::shm);
+  exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
 #ifdef NPRPC_HAS_QUIC
@@ -559,7 +559,7 @@ TEST_F(NprpcTest, TestQuicBasic)
 
   try {
     auto obj = bind_and_resolve<nprpc::test::TestBasic>(
-        servant, nprpc::ObjectActivationFlags::ALLOW_QUIC, "quic_basic_test");
+        servant, nprpc::ObjectActivationFlags::quic, "quic_basic_test");
 
     // ReturnBoolean test
     EXPECT_TRUE(obj->ReturnBoolean());
@@ -633,7 +633,7 @@ TEST_F(NprpcTest, TestQuicUnreliable)
 
   try {
     auto obj = bind_and_resolve<nprpc::test::TestUnreliable>(
-        servant, nprpc::ObjectActivationFlags::ALLOW_QUIC, "quic_unreliable_test");
+        servant, nprpc::ObjectActivationFlags::quic, "quic_unreliable_test");
 
     // Test reliable call first (over QUIC stream)
     std::vector<uint8_t> data(10, 0x55);
@@ -665,7 +665,7 @@ TEST_F(NprpcTest, TestStreams)
 {
 #include "common/tests/streams.inl"
   TestStreamsImpl servant;
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
     try {
       auto obj = bind_and_resolve<nprpc::test::TestStreams>(servant, flags, "streams_test");
 
@@ -694,17 +694,17 @@ TEST_F(NprpcTest, TestStreams)
     }
   };
 
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  exec_test(nprpc::ObjectActivationFlags::ws);
+  exec_test(nprpc::ObjectActivationFlags::quic);
   // TODO: TCP stream crashes...
-  // exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP);
+  // exec_test(nprpc::ObjectActivationFlags::tcp);
 }
 
 TEST_F(NprpcTest, TestObjectStream)
 {
 #include "common/tests/streams.inl"
   TestStreamsImpl servant;
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
     try {
       auto obj = bind_and_resolve<nprpc::test::TestStreams>(servant, flags, "object_stream_test");
 
@@ -819,15 +819,15 @@ TEST_F(NprpcTest, TestObjectStream)
     }
   };
 
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  exec_test(nprpc::ObjectActivationFlags::ws);
+  exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
 TEST_F(NprpcTest, TestClientStream)
 {
 #include "common/tests/streams.inl"
   TestStreamsImpl servant;
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
     try {
       auto obj = bind_and_resolve<nprpc::test::TestStreams>(servant, flags, "client_stream_test");
 
@@ -941,15 +941,15 @@ TEST_F(NprpcTest, TestClientStream)
     }
   };
 
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  exec_test(nprpc::ObjectActivationFlags::ws);
+  exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
 TEST_F(NprpcTest, TestBidiStream)
 {
 #include "common/tests/streams.inl"
   TestStreamsImpl servant;
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags::Enum flags) {
+  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
     try {
       auto obj = bind_and_resolve<nprpc::test::TestStreams>(servant, flags, "bidi_stream_test");
 
@@ -1196,8 +1196,8 @@ TEST_F(NprpcTest, TestBidiStream)
     }
   };
 
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET);
-  exec_test(nprpc::ObjectActivationFlags::Enum::ALLOW_QUIC);
+  exec_test(nprpc::ObjectActivationFlags::ws);
+  exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
 } // namespace nprpctest
@@ -1278,7 +1278,7 @@ TEST_F(NprpcTest, HighConcurrencyLoad)
 #include "common/tests/basic.inl"
   TestBasicImpl servant;
 
-  auto run_transport = [&](nprpc::ObjectActivationFlags::Enum flags,
+  auto run_transport = [&](nprpc::ObjectActivationFlags flags,
                            const std::string& transport_name)
   {
     // -----------------------------------------------------------------------
@@ -1432,8 +1432,8 @@ TEST_F(NprpcTest, HighConcurrencyLoad)
     }
   };
 
-  run_transport(nprpc::ObjectActivationFlags::Enum::ALLOW_TCP,       "TCP");
-  run_transport(nprpc::ObjectActivationFlags::Enum::ALLOW_WEBSOCKET, "WS");
+  run_transport(nprpc::ObjectActivationFlags::tcp,       "TCP");
+  run_transport(nprpc::ObjectActivationFlags::ws, "WS");
 
   restore_clog(); // restore before final metric output
 }

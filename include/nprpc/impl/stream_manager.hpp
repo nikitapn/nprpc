@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include <nprpc_base.hpp>
+#include <nprpc_base_ext.hpp>
 #include <nprpc/export.hpp>
 
 #include <boost/asio/any_io_executor.hpp>

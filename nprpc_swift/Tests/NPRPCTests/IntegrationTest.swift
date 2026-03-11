@@ -48,7 +48,7 @@ final class IntegrationTests: XCTestCase {
     }
 
     func testProduceHostJson() throws {
-        class HostJsonServant: ShapeServiceServant {
+        class HostJsonServant: ShapeServiceServant, @unchecked Sendable {
             override func getRectangle(id: UInt32) -> Rectangle { Rectangle() }
             override func setRectangle(id: UInt32, rect: Rectangle) {}
             override func getRectangles() -> [Rectangle] { [] }
@@ -59,7 +59,7 @@ final class IntegrationTests: XCTestCase {
         let servant = HostJsonServant()
         let oid = try Self.poa!.activateObject(
             servant,
-            flags: [.allowWebSocket, .allowSslWebSocket, .allowHttp, .allowSecuredHttp]
+            flags: [.ws, .wss, .http, .https]
         )
 
         Self.rpc!.clearHostJson()
@@ -83,7 +83,7 @@ final class IntegrationTests: XCTestCase {
 
     /// Test servant instantiation and direct method calls
     func testServantDirectCalls() throws {
-        class TestShapeServant: ShapeServiceServant {
+        class TestShapeServant: ShapeServiceServant, @unchecked Sendable {
             var storedRect: Rectangle?
 
             override func getRectangle(id: UInt32) -> Rectangle {
@@ -123,7 +123,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestShapeServant()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowWebSocket)
+        let oid = try Self.poa!.activateObject(servant, flags: .ws)
 
         // Create ShapeService client proxy from oid
         guard let obj = NPRPCObject.fromObjectId(oid) else {
@@ -196,7 +196,7 @@ final class IntegrationTests: XCTestCase {
 
     /// Test exception handling through RPC
     func testExceptionHandling() throws {
-        class ExceptionServant: ShapeServiceServant {
+        class ExceptionServant: ShapeServiceServant, @unchecked Sendable {
             override func getRectangle(id: UInt32) -> Rectangle {
                 return Rectangle()
             }
@@ -209,7 +209,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = ExceptionServant()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -241,7 +241,7 @@ final class IntegrationTests: XCTestCase {
 
     func testBasicTypes() throws {
         // nprpc_test.npidl defines a TestBasic interface with methods that use various basic types and arrays.
-        class TestBasicServantImpl: TestBasicServant {
+        class TestBasicServantImpl: TestBasicServant, @unchecked Sendable {
             var in_receivedA: UInt32 = 0
             var in_receivedB: Bool = false
             var in_receivedC: [UInt8] = []
@@ -317,7 +317,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestBasicServantImpl()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -392,7 +392,7 @@ final class IntegrationTests: XCTestCase {
     }
 
     func testLargeMessage() throws {
-        class TestLargeMessageServantImpl: TestLargeMessageServant {
+        class TestLargeMessageServantImpl: TestLargeMessageServant, @unchecked Sendable {
             var in_receivedA: UInt32 = 0
             var in_receivedB: Bool = false
             var in_receivedC: [UInt8] = []
@@ -412,7 +412,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestLargeMessageServantImpl()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -438,7 +438,7 @@ final class IntegrationTests: XCTestCase {
     }
 
     func testOptional() throws {
-        class TestOptionalServantImpl: TestOptionalServant {
+        class TestOptionalServantImpl: TestOptionalServant, @unchecked Sendable {
             var inEmpty_receivedA: UInt32? = nil
             var in_receivedA: UInt32? = nil
             var in_receivedB: AAA? = nil
@@ -468,7 +468,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestOptionalServantImpl()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -512,7 +512,7 @@ final class IntegrationTests: XCTestCase {
     }
 
     func testNested() throws {
-        class TestNestedServantImpl: TestNestedServant {
+        class TestNestedServantImpl: TestNestedServant, @unchecked Sendable {
             override func out() throws -> BBB? {
                 return BBB(
                     a: [
@@ -545,7 +545,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestNestedServantImpl()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowQuic)
+        let oid = try Self.poa!.activateObject(servant, flags: .quic)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -581,7 +581,7 @@ final class IntegrationTests: XCTestCase {
     }
 
     func testArrays() throws {
-        class TestArraysServantImpl: FixedSizeArrayTestServant {
+        class TestArraysServantImpl: FixedSizeArrayTestServant, @unchecked Sendable {
             var inFixedArray_receivedA: [UInt32] = []
             var inFixedArrayOfStructs_receivedA: [SimpleStruct] = []
 
@@ -632,7 +632,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         let servant = TestArraysServantImpl()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -756,7 +756,7 @@ final class IntegrationTests: XCTestCase {
         let semaphore = DispatchSemaphore(value: 0)
 
         // SimpleObject servant that stores a value
-        class SimpleObjectImpl: SimpleObjectServant {
+        class SimpleObjectImpl: SimpleObjectServant, @unchecked Sendable {
             var value: UInt32 = 0
             override func setValue(a: UInt32) {
                 value = a
@@ -764,7 +764,7 @@ final class IntegrationTests: XCTestCase {
         }
 
         // TestObjects servant that receives and manipulates object references
-        class TestObjectsImpl: TestObjectsServant {
+        class TestObjectsImpl: TestObjectsServant, @unchecked Sendable {
             var receivedObject: SimpleObject?
             let semaphore: DispatchSemaphore
 
@@ -815,14 +815,14 @@ final class IntegrationTests: XCTestCase {
 
         // Create and activate SimpleObject servants
         let simpleServant1 = SimpleObjectImpl()
-        let simpleOid1 = try Self.poa!.activateObject(simpleServant1, flags: .allowTcp)
+        let simpleOid1 = try Self.poa!.activateObject(simpleServant1, flags: .tcp)
         guard let simpleObj1 = NPRPCObject.fromObjectId(simpleOid1) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
         }
 
         let simpleServant2 = SimpleObjectImpl()
-        let simpleOid2 = try Self.poa!.activateObject(simpleServant2, flags: .allowTcp)
+        let simpleOid2 = try Self.poa!.activateObject(simpleServant2, flags: .tcp)
         guard let simpleObj2 = NPRPCObject.fromObjectId(simpleOid2) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -830,7 +830,7 @@ final class IntegrationTests: XCTestCase {
 
         // Create and activate TestObjects servant
         let testObjectsServant = TestObjectsImpl(semaphore: semaphore)
-        let testOid = try Self.poa!.activateObject(testObjectsServant, flags: .allowTcp)
+        let testOid = try Self.poa!.activateObject(testObjectsServant, flags: .tcp)
         guard let testObj = NPRPCObject.fromObjectId(testOid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -856,7 +856,7 @@ final class IntegrationTests: XCTestCase {
     /// Test async methods with proper Swift async/await
     func testAsyncMethods() async throws {
         // AsyncTest servant implementation
-        class AsyncTestImpl: AsyncTestServant {
+        class AsyncTestImpl: AsyncTestServant, @unchecked Sendable {
             var receivedArg1: UInt32 = 0
             var receivedArg2: String = ""
             var method2Arg1: UInt32 = 0
@@ -874,7 +874,7 @@ final class IntegrationTests: XCTestCase {
 
         // Create and activate servant
         let servant = AsyncTestImpl()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -912,7 +912,7 @@ final class IntegrationTests: XCTestCase {
     /// This simulates a malicious client sending a malformed buffer with an oversized vector
     func testBadInput() throws {
         // TestBadInput servant implementation (interface marked as [trusted=false])
-        class TestBadInputImpl: TestBadInputServant {
+        class TestBadInputImpl: TestBadInputServant,@unchecked Sendable {
             override func in_(a: [UInt8]) {
                 // This should never be called - the safety check should reject the input
             }
@@ -920,7 +920,7 @@ final class IntegrationTests: XCTestCase {
 
         // Create and activate servant
         let servant = TestBadInputImpl()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -939,8 +939,8 @@ final class IntegrationTests: XCTestCase {
 
         // Write message header (16 bytes starting at offset 0)
         data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)    // size (set later)
-        data.storeBytes(of: impl.MessageId.functionCall.rawValue, toByteOffset: 4, as: Int32.self)  // msg_id: FunctionCall
-        data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: Int32.self)    // msg_type: Request
+        data.storeBytes(of: impl.MessageId.functionCall.rawValue, toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall
+        data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: UInt32.self)    // msg_type: Request
         data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self)   // reserved
 
         // Write call header (starting at offset 16)
@@ -980,7 +980,7 @@ final class IntegrationTests: XCTestCase {
     }
 
     func testUntrusted() throws {
-        class UntrustedImpl: TestBadInputServant {
+        class UntrustedImpl: TestBadInputServant, @unchecked Sendable {
             var in_receivedA: [UInt8] = []
             var inStrings_receivedA: String = ""
             var inStrings_receivedB: String = ""
@@ -1004,7 +1004,7 @@ final class IntegrationTests: XCTestCase {
 
         // Create and activate servant
         let servant = UntrustedImpl()
-        let oid = try Self.poa!.activateObject(servant, flags: .allowTcp)
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
             XCTFail("Failed to create NPRPCObject from ObjectId")
             return
@@ -1041,7 +1041,7 @@ final class IntegrationTests: XCTestCase {
             XCTAssertEqual(value.c, expected.c, file: file, line: line)
         }
 
-        class TestStreamsImpl: TestStreamsServant {
+        class TestStreamsImpl: TestStreamsServant, @unchecked Sendable {
             let uploadExpectation: XCTestExpectation
             let stringUploadExpectation: XCTestExpectation
             let binaryUploadExpectation: XCTestExpectation
@@ -1451,7 +1451,7 @@ final class IntegrationTests: XCTestCase {
             objectArrayUploadExpectation: objectArrayUploadExpectation,
             objectUploadExpectation: objectUploadExpectation
         )
-        let oid = try Self.poa!.activateObject(servant, flags: .allowWebSocket)
+        let oid = try Self.poa!.activateObject(servant, flags: .ws)
         XCTAssertEqual(oid.class_id, "nprpc_test/nprpc.test.TestStreams")
 
         // Create client proxy

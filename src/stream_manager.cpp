@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "logging.hpp"
-#include "nprpc_base.hpp"
+#include "nprpc_base_ext.hpp"
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/session.hpp>
 #include <nprpc/impl/shared_memory_channel.hpp>

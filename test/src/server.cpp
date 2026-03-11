@@ -43,9 +43,9 @@ int main(int argc, char** argv)
   // Calling it manually since we are not using gtest main
   env.SetUp();
 
-  using namespace nprpc::ObjectActivationFlags;
+  using F = nprpc::ObjectActivationFlags;
   constexpr auto flags =
-      ALLOW_WEBSOCKET | ALLOW_SSL_WEBSOCKET | ALLOW_HTTP | ALLOW_SECURED_HTTP;
+      F::ws | F::wss | F::http | F::https;
 
   ServerControlImpl server_control;
   nprpctest::bind<nprpc::test::ServerControl>( server_control, flags, "nprpc_test_server_control");

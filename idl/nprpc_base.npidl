@@ -38,7 +38,7 @@ enum LogLevel {
 enum EndPointType {
   // Plain TCP (no encryption and compression)
   Tcp,
-  TcpTethered,
+  TcpPrivate,
   // Plain WebSocket with no encryption and deflate compression
   WebSocket,
   // Secured WebSocket with TLS encryption and deflate compression
@@ -56,6 +56,23 @@ enum EndPointType {
 };
 
 namespace detail {
+// Bitmask controlling which transports an activated object accepts.
+// Note: in Swift the canonical form is the OptionSet in nprpc_swift/Sources/NPRPC/Poa.swift.
+enum ObjectActivationFlags : u32 {
+  NONE              = 0,
+  // Restrict access to the session that activated the object
+  privateSession    = 1,
+  tcp               = 2,
+  ws                = 4,
+  wss               = 8,
+  http              = 16,
+  https             = 32,
+  shm               = 64,
+  quic              = 256,
+  // All transport flags combined (excludes privateSession)
+  all               = 382,
+}
+
 message ObjectIdLocal {
   poa_idx: poa_idx_t;
   object_id: oid_t;

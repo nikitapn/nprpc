@@ -476,7 +476,7 @@ RpcImpl::get_session(const EndPoint& endpoint)
 
   std::shared_ptr<Session> con;
   switch (endpoint.type()) {
-  case EndPointType::TcpTethered:
+  case EndPointType::TcpPrivate:
     throw nprpc::ExceptionCommFailure(
         "nprpc::impl::RpcImpl::get_session: Cannot create tethered "
         "TCP "
@@ -848,7 +848,7 @@ std::optional<ObjectGuard> PoaImpl::get_object(oid_t oid) noexcept
 
 ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
                                       oid_t object_id,
-                                      uint32_t activation_flags,
+                                      ObjectActivationFlags activation_flags,
                                       SessionContext* ctx)
 {
   ObjectId result;
@@ -870,21 +870,21 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
   const std::string default_url =
       g_cfg.hostname.empty() ? "127.0.0.1"s : g_cfg.hostname;
 
-  if ((activation_flags & ObjectActivationFlags::ALLOW_TCP) &&
+  if ((activation_flags & ObjectActivationFlags::tcp) &&
       g_cfg.listen_tcp_port != 0) {
     oid.urls += (std::string(tcp_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_tcp_port)) +
                 ';';
   }
 
-  if ((activation_flags & ObjectActivationFlags::ALLOW_WEBSOCKET) &&
+  if ((activation_flags & ObjectActivationFlags::ws) &&
       g_cfg.listen_http_port != 0) {
     oid.urls += (std::string(ws_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_http_port)) +
                 ';';
   }
 
-  if (activation_flags & ObjectActivationFlags::ALLOW_SSL_WEBSOCKET) {
+  if (activation_flags & ObjectActivationFlags::wss) {
     if (g_cfg.hostname.empty()) {
       throw std::runtime_error("SSL websocket requires a hostname");
     }
@@ -895,14 +895,14 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
     }
   }
 
-  if ((activation_flags & ObjectActivationFlags::ALLOW_HTTP) &&
+  if ((activation_flags & ObjectActivationFlags::http) &&
       g_cfg.listen_http_port != 0) {
     oid.urls += (std::string(http_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_http_port)) +
                 ';';
   }
 
-  if (activation_flags & ObjectActivationFlags::ALLOW_SECURED_HTTP) {
+  if (activation_flags & ObjectActivationFlags::https) {
     if (g_cfg.hostname.empty()) {
       throw std::runtime_error("Secured HTTP requires a hostname");
     }
@@ -919,11 +919,11 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
     }
   }
 
-  if (activation_flags & ObjectActivationFlags::ALLOW_SHARED_MEMORY) {
+  if (activation_flags & ObjectActivationFlags::shm) {
     oid.urls += (std::string(mem_prefix) + g_server_listener_uuid) + ';';
   }
 
-  if ((activation_flags & ObjectActivationFlags::ALLOW_QUIC) &&
+  if ((activation_flags & ObjectActivationFlags::quic) &&
       g_cfg.listen_quic_port != 0) {
     oid.urls += (std::string(quic_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_quic_port)) +
@@ -931,7 +931,7 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
   }
 
   // Ensure at least one URL was added (unless session-specific which uses tethered connection)
-  if (oid.urls.empty() && !(activation_flags & ObjectActivationFlags::SESSION_SPECIFIC)) {
+  if (oid.urls.empty() && !(activation_flags & ObjectActivationFlags::privateSession)) {
     throw std::runtime_error("No transport configured for activation. "
                              "Check that at least one requested transport "
                              "(TCP, WebSocket, etc.) has been configured in RpcBuilder.");
@@ -946,7 +946,7 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
     ctx->ref_list.add_ref(obj);
   }
 
-  if (activation_flags & ObjectActivationFlags::SESSION_SPECIFIC) {
+  if (activation_flags & ObjectActivationFlags::privateSession) {
     obj->session_ctx_ = ctx;
     oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::Tethered);
   }
@@ -955,7 +955,7 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
 }
 
 ObjectId PoaImpl::activate_object(ObjectServant* obj,
-                                  uint32_t activation_flags,
+                                  ObjectActivationFlags activation_flags,
                                   SessionContext* ctx)
 {
   if (std::holds_alternative<UserObjects>(id_to_ptr_)) {
@@ -973,7 +973,7 @@ ObjectId PoaImpl::activate_object(ObjectServant* obj,
 
 ObjectId PoaImpl::activate_object_with_id(oid_t object_id,
                                           ObjectServant* obj,
-                                          uint32_t activation_flags,
+                                          ObjectActivationFlags activation_flags,
                                           SessionContext* ctx)
 {
   auto* user = std::get_if<UserObjects>(&id_to_ptr_);

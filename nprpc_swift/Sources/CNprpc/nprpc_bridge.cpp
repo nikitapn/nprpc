@@ -16,6 +16,7 @@
 
 // Use nprpc's internal logger for synchronized output
 #include "../../../src/logging.hpp"
+#include "nprpc_base.hpp"
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
@@ -949,7 +950,8 @@ void* nprpc_poa_activate_swift_servant(
             swift_servant, class_name, dispatch_func);
 
         auto* ctx = static_cast<nprpc::SessionContext*>(session_ctx);
-        auto oid = poa->activate_object(bridge.release(), activation_flags, ctx);
+        auto oid = poa->activate_object(bridge.release(),
+            static_cast<nprpc::ObjectActivationFlags>(activation_flags), ctx);
 
         // Allocate and copy ObjectId to return to Swift
         // Swift will need to free this memory
@@ -982,7 +984,8 @@ void* nprpc_poa_activate_swift_servant_with_id(
             swift_servant, class_name, dispatch_func);
 
         auto* ctx = static_cast<nprpc::SessionContext*>(session_ctx);
-        auto oid = poa->activate_object_with_id(object_id, bridge.release(), activation_flags, ctx);
+        auto oid = poa->activate_object_with_id(object_id, bridge.release(),
+            static_cast<nprpc::ObjectActivationFlags>(activation_flags), ctx);
 
         // Allocate and copy ObjectId to return to Swift
         // Swift will need to free this memory

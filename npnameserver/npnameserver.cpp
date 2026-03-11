@@ -77,11 +77,11 @@ int main()
 
     auto oid = poa->activate_object_with_id(
         0, &server,
-        nprpc::ObjectActivationFlags::ALLOW_TCP |
-        nprpc::ObjectActivationFlags::ALLOW_WEBSOCKET |
-        nprpc::ObjectActivationFlags::ALLOW_SSL_WEBSOCKET |
-        nprpc::ObjectActivationFlags::ALLOW_HTTP |
-        nprpc::ObjectActivationFlags::ALLOW_SECURED_HTTP);
+        nprpc::ObjectActivationFlags::tcp |
+        nprpc::ObjectActivationFlags::ws |
+        nprpc::ObjectActivationFlags::wss |
+        nprpc::ObjectActivationFlags::http |
+        nprpc::ObjectActivationFlags::https);
 
     boost::asio::signal_set signals(rpc->ioc(), SIGINT, SIGTERM);
     signals.async_wait(

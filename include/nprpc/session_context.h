@@ -5,7 +5,7 @@
 
 #include <nprpc/endpoint.hpp>
 #include <nprpc/export.hpp>
-#include <nprpc_base.hpp>
+#include <nprpc_base_ext.hpp>
 #include <string>
 #include <string_view>
 #include <vector>

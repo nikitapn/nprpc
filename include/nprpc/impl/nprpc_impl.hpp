@@ -342,12 +342,12 @@ public:
   std::optional<ObjectGuard> get_object(oid_t oid) noexcept;
 
   ObjectId activate_object(ObjectServant* obj,
-                           uint32_t activation_flags,
+                           ObjectActivationFlags activation_flags,
                            SessionContext* ctx) override;
 
   ObjectId activate_object_with_id(oid_t object_id,
                                    ObjectServant* obj,
-                                   uint32_t activation_flags,
+                                   ObjectActivationFlags activation_flags,
                                    SessionContext* ctx) override;
 
   void deactivate_object(oid_t object_id) override;
@@ -376,7 +376,7 @@ public:
 private:
   ObjectId finalize_activation(ObjectServant* obj,
                                oid_t object_id,
-                               uint32_t activation_flags,
+                               ObjectActivationFlags activation_flags,
                                SessionContext* ctx);
 };
 

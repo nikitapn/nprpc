@@ -28,7 +28,7 @@ public struct NPRPCEndpoint {
     public func toURL() -> String {
         let prefix: String
         switch type {
-        case .tcp, .tcpTethered: prefix = "tcp://"
+        case .tcp, .tcpPrivate: prefix = "tcp://"
         case .webSocket: prefix = "ws://"
         case .webTransport: prefix = "wt://"
         case .securedWebSocket: prefix = "wss://"
