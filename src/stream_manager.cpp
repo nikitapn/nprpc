@@ -218,6 +218,13 @@ void StreamManager::unregister_reader(uint64_t stream_id,
   }
 }
 
+void StreamManager::set_reader_unreliable(uint64_t stream_id, bool unreliable)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto& state = readers_[stream_id];
+  state.unreliable = unreliable;
+}
+
 void StreamManager::on_chunk_received(flat_buffer&& fb)
 {
   flat::StreamChunk_Direct chunk(fb, sizeof(flat::Header));
@@ -261,7 +268,10 @@ void StreamManager::on_stream_complete(uint64_t stream_id, uint64_t final_sequen
       return;
     }
 
-    if (it->second.has_received_chunk && it->second.highest_sequence_received >= final_sequence) {
+    if (it->second.unreliable || final_sequence == kEmptyStreamFinalSequence) {
+      reader = it->second.reader;
+      readers_.erase(it);
+    } else if (it->second.has_received_chunk && it->second.highest_sequence_received >= final_sequence) {
       reader = it->second.reader;
       readers_.erase(it);
     } else {

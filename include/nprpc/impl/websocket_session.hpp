@@ -34,8 +34,8 @@ template <class Derived> class WebSocketSession : public Session
         completion_handler;
     std::chrono::steady_clock::time_point timeout_point;
 
-    static constexpr std::function<void(const boost::system::error_code&,
-                                        flat_buffer&)>
+    static std::function<void(const boost::system::error_code&,
+                              flat_buffer&)>
     empty_handler()
     {
       return [](const boost::system::error_code&, flat_buffer&) {};

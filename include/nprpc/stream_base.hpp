@@ -3,10 +3,19 @@
 
 #pragma once
 
+#include <limits>
+
 #include <nprpc/export.hpp>
 #include <nprpc/flat_buffer.hpp>
 
 namespace nprpc {
+
+inline constexpr uint64_t kEmptyStreamFinalSequence = std::numeric_limits<uint64_t>::max();
+
+inline constexpr uint64_t stream_final_sequence_for_sent_chunks(uint64_t sent_chunk_count) noexcept
+{
+  return sent_chunk_count == 0 ? kEmptyStreamFinalSequence : sent_chunk_count - 1;
+}
 
 // Base class for type-erased storage of StreamWriters
 class NPRPC_API StreamWriterBase

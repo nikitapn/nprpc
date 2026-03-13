@@ -3,6 +3,12 @@
 
 import Foundation
 
+private let nprpcEmptyStreamFinalSequence = UInt64.max
+
+private func nprpcFinalSequenceForSentChunks(_ sentChunkCount: UInt64) -> UInt64 {
+    sentChunkCount == 0 ? nprpcEmptyStreamFinalSequence : sentChunkCount - 1
+}
+
 private class StreamReaderBridgeBase {
     func onChunk(data: UnsafeRawPointer, size: Int) {}
     func onComplete() {}
@@ -190,6 +196,7 @@ public func createObjectStreamReader<T: Sendable>(
     objectHandle: UnsafeMutableRawPointer,
     streamId: UInt64,
     buffer: FlatBuffer,
+    unreliable: Bool = false,
     deserializer: @escaping (UnsafeRawPointer, Int) -> T
 ) -> NPRPCStreamReader<T> {
     let reader = NPRPCStreamReader(streamId: streamId, buffer: buffer, deserializer: deserializer)
@@ -202,6 +209,9 @@ public func createObjectStreamReader<T: Sendable>(
         nprpcStreamReaderOnComplete,
         nprpcStreamReaderOnError
     )
+    if unreliable {
+        nprpc_stream_set_reader_unreliable(objectHandle, streamId, true)
+    }
     return reader
 }
 
@@ -209,6 +219,7 @@ public func createStreamManagerReader<T: Sendable>(
     streamManager: UnsafeMutableRawPointer,
     streamId: UInt64,
     buffer: FlatBuffer,
+    unreliable: Bool = false,
     deserializer: @escaping (UnsafeRawPointer, Int) -> T
 ) -> NPRPCStreamReader<T> {
     let reader = NPRPCStreamReader(streamId: streamId, buffer: buffer, deserializer: deserializer)
@@ -221,6 +232,9 @@ public func createStreamManagerReader<T: Sendable>(
         nprpcStreamReaderOnComplete,
         nprpcStreamReaderOnError
     )
+    if unreliable {
+        nprpc_stream_manager_set_reader_unreliable(streamManager, streamId, true)
+    }
     return reader
 }
 
@@ -276,7 +290,7 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard !closed else { return }
-        sendComplete(streamId, sequence == 0 ? 0 : sequence - 1)
+        sendComplete(streamId, nprpcFinalSequenceForSentChunks(sequence))
         closed = true
     }
 
@@ -356,6 +370,7 @@ public func createObjectBidiStream<TWrite: Sendable, TRead: Sendable>(
     streamId: UInt64,
     buffer: FlatBuffer,
     initialPayloadCapacity: Int,
+    unreliable: Bool = false,
     serializer: @escaping (FlatBuffer, Int, TWrite) -> Void,
     deserializer: @escaping (UnsafeRawPointer, Int) -> TRead
 ) throws -> NPRPCBidiStream<TWrite, TRead> {
@@ -363,6 +378,7 @@ public func createObjectBidiStream<TWrite: Sendable, TRead: Sendable>(
         objectHandle: objectHandle,
         streamId: streamId,
         buffer: buffer,
+        unreliable: unreliable,
         deserializer: deserializer
     )
     let writer = try createObjectStreamWriter(
@@ -379,6 +395,7 @@ public func createStreamManagerBidiStream<TWrite: Sendable, TRead: Sendable>(
     streamId: UInt64,
     buffer: FlatBuffer,
     initialPayloadCapacity: Int,
+    unreliable: Bool = false,
     serializer: @escaping (FlatBuffer, Int, TWrite) -> Void,
     deserializer: @escaping (UnsafeRawPointer, Int) -> TRead
 ) -> NPRPCBidiStream<TWrite, TRead> {
@@ -386,6 +403,7 @@ public func createStreamManagerBidiStream<TWrite: Sendable, TRead: Sendable>(
         streamManager: streamManager,
         streamId: streamId,
         buffer: buffer,
+        unreliable: unreliable,
         deserializer: deserializer
     )
     let writer = createStreamManagerWriter(
@@ -440,7 +458,7 @@ public class StreamYielder<T>: @unchecked Sendable {
     public func finish() {
         guard !finished else { return }
         finished = true
-        sendComplete(streamId, sequence)
+        sendComplete(streamId, nprpcFinalSequenceForSentChunks(sequence))
     }
     
     deinit {

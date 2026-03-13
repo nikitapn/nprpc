@@ -5,10 +5,7 @@
 
 #include <coroutine>
 #include <exception>
-#include <mutex>
-#include <optional>
 #include <utility>
-#include <variant>
 
 #include <nprpc/session_context.h>
 #include <nprpc/stream_base.hpp>
@@ -118,7 +115,7 @@ public:
         } else {
           if (coro_.promise().manager_) {
             coro_.promise().manager_->send_complete(coro_.promise().stream_id_,
-                                                    sequence_ == 0 ? 0 : sequence_ - 1);
+                                                    stream_final_sequence_for_sent_chunks(sequence_));
           }
         }
       } else if (coro_.promise().has_value_) {
@@ -179,7 +176,7 @@ public:
   {
     if (!client_manager_ || client_closed_)
       return;
-    client_manager_->send_complete(client_stream_id_, sequence_ == 0 ? 0 : sequence_ - 1);
+    client_manager_->send_complete(client_stream_id_, stream_final_sequence_for_sent_chunks(sequence_));
     client_closed_ = true;
   }
 

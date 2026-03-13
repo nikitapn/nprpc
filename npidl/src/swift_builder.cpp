@@ -1093,7 +1093,7 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
 
   switch (fn->stream_kind) {
   case StreamKind::Server:
-    out << bl() << "let reader = NPRPC.createObjectStreamReader(objectHandle: self.handle, streamId: streamId, buffer: buffer, deserializer: ";
+    out << bl() << "let reader = NPRPC.createObjectStreamReader(objectHandle: self.handle, streamId: streamId, buffer: buffer, unreliable: " << (fn->is_reliable ? "false" : "true") << ", deserializer: ";
     emit_stream_deserializer(stream_decl->stream_out_type(), "self.endpoint",
                              out);
     out << ")\n";
@@ -1108,6 +1108,7 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
   case StreamKind::Bidi:
     out << bl() << "let stream = try NPRPC.createObjectBidiStream(objectHandle: self.handle, streamId: streamId, buffer: buffer, initialPayloadCapacity: "
         << estimate_stream_initial_payload_capacity(stream_decl->stream_in_type())
+      << ", unreliable: " << (fn->is_reliable ? "false" : "true")
         << ", serializer: ";
     emit_stream_serializer(stream_decl->stream_in_type(), out);
     out << ", deserializer: ";
@@ -1120,7 +1121,7 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
   }
 
   out << bl() << "let result = nprpc_stream_send_init(self.handle, buffer.handle, self.timeout)\n";
-  out << bl() << "if result != 0 { throw RuntimeError(message: \"Failed to send StreamInit\") }\n";
+  out << bl() << "if result != 0 { throw RuntimeError(message: \"StreamInit failed (code: \\(result))\") }\n";
 
   switch (fn->stream_kind) {
   case StreamKind::Server:
@@ -1544,7 +1545,7 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstInterfaceDecl* ifs,
     out << bl() << "let source = " << swift_method_name(fn->name) << "(";
     break;
   case StreamKind::Client:
-    out << bl() << "let reader = NPRPC.createStreamManagerReader(streamManager: streamManager, streamId: streamId, buffer: buffer, deserializer: ";
+    out << bl() << "let reader = NPRPC.createStreamManagerReader(streamManager: streamManager, streamId: streamId, buffer: buffer, unreliable: " << (fn->is_reliable ? "false" : "true") << ", deserializer: ";
     emit_stream_deserializer(stream_decl->stream_in_type(), "remoteEndpoint",
                              out);
     out << ")\n";
@@ -1555,12 +1556,14 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstInterfaceDecl* ifs,
   case StreamKind::Bidi:
     out << bl() << "let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: "
         << estimate_stream_initial_payload_capacity(stream_decl->stream_out_type())
+      << ", unreliable: " << (fn->is_reliable ? "false" : "true")
         << ", serializer: ";
     emit_stream_serializer(stream_decl->stream_out_type(), out);
     out << ", deserializer: ";
     emit_stream_deserializer(stream_decl->stream_in_type(), "remoteEndpoint",
                              out);
     out << ")\n";
+    out << bl() << "nprpc_stream_manager_defer_stream_start(streamManager, streamId)\n";
     out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.success)\n";
     out << bl() << "Task {\n" << bb(false);
     out << bl() << "await " << swift_method_name(fn->name) << "(";
@@ -1593,6 +1596,7 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstInterfaceDecl* ifs,
 
   switch (fn->stream_kind) {
   case StreamKind::Server:
+    out << bl() << "nprpc_stream_manager_defer_stream_start(streamManager, streamId)\n";
     out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.success)\n";
     out << bl() << "Task {\n" << bb(false);
     out << bl() << "for await value in source {\n" << bb(false);

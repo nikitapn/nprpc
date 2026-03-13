@@ -29,7 +29,8 @@ let package = Package(
                 .unsafeFlags(["-I", "../include"]),
                 .unsafeFlags(["-I", "../.build_ubuntu_swift/include"]),
                 // Include Clang 17-built Boost (not system Boost)
-                .unsafeFlags(["-I", "../.build_ubuntu_swift/boost_install/include"])
+                .unsafeFlags(["-I", "../.build_ubuntu_swift/boost_install/include"]),
+                .unsafeFlags(["-I", "../.build_ubuntu_swift/openssl_install/include"])
             ],
             linkerSettings: [
                 // Link against libnprpc.so

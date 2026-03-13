@@ -1,10 +1,11 @@
 #include <cstdlib>
-#include <iostream>
+#include <future>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
 
+#include <boost/asio/io_context.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/stream_reader.hpp>
 #include <nprpc/stream_writer.hpp>
@@ -17,6 +18,61 @@
 #include "common/helper.inl"
 
 namespace nprpctest {
+TEST_F(NprpcTest, TestEmptyStreamCompletion)
+{
+  boost::asio::io_context io_context;
+  nprpc::SessionContext ctx;
+  nprpc::impl::StreamManager stream_manager(ctx, io_context.get_executor());
+  ctx.stream_manager = &stream_manager;
+
+  constexpr uint64_t stream_id = 42;
+  nprpc::StreamReader<uint8_t> reader(ctx, stream_id);
+
+  auto future = std::async(std::launch::async, [&reader]() {
+    return reader.read_next();
+  });
+
+  stream_manager.on_stream_complete(stream_id, nprpc::kEmptyStreamFinalSequence);
+
+  const auto status = future.wait_for(std::chrono::seconds(1));
+  if (status != std::future_status::ready) {
+    nprpc::flat_buffer empty_fb;
+    stream_manager.on_stream_error(stream_id, 1, std::move(empty_fb));
+    FAIL() << "Empty stream completion did not unblock the reader";
+  }
+
+  auto result = future.get();
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(NprpcTest, TestUnreliableStreamCompletionDoesNotWaitForMissingChunk)
+{
+  boost::asio::io_context io_context;
+  nprpc::SessionContext ctx;
+  nprpc::impl::StreamManager stream_manager(ctx, io_context.get_executor());
+  ctx.stream_manager = &stream_manager;
+
+  constexpr uint64_t stream_id = 43;
+  nprpc::StreamReader<uint8_t> reader(ctx, stream_id);
+  stream_manager.set_reader_unreliable(stream_id, true);
+
+  auto future = std::async(std::launch::async, [&reader]() {
+    return reader.read_next();
+  });
+
+  stream_manager.on_stream_complete(stream_id, 4);
+
+  const auto status = future.wait_for(std::chrono::seconds(1));
+  if (status != std::future_status::ready) {
+    nprpc::flat_buffer empty_fb;
+    stream_manager.on_stream_error(stream_id, 1, std::move(empty_fb));
+    FAIL() << "Unreliable stream completion waited for a dropped final chunk";
+  }
+
+  auto result = future.get();
+  EXPECT_FALSE(result.has_value());
+}
+
 // Streaming test
 TEST_F(NprpcTest, TestStreams)
 {
@@ -26,19 +82,24 @@ TEST_F(NprpcTest, TestStreams)
     try {
       auto obj = bind_and_resolve<nprpc::test::TestStreams>(servant, flags, "streams_test");
 
-      // Request a stream of 5 bytes
-      auto reader = obj->GetByteStream(5);
+      constexpr uint64_t kStreamSize = 500;
+      auto reader = obj->GetByteStream(kStreamSize);
 
       std::vector<uint8_t> received;
-      received.reserve(5);
+      received.reserve(kStreamSize);
 
       // Read all chunks from the stream
       for (auto& chunk : reader) {
         received.push_back(chunk);
       }
 
+      // std::cout << "Received stream of " << received.size() << " bytes." << std::endl;
+      // for (size_t i = 0; i < received.size(); ++i) {
+      //   std::cout << "Byte " << i << ": " << static_cast<int>(received[i]) << std::endl;
+      // }
+
       // Verify we received all expected bytes
-      EXPECT_EQ(received.size(), 5u);
+      EXPECT_EQ(received.size(), kStreamSize);
       for (uint64_t i = 0; i < received.size(); ++i) {
         EXPECT_EQ(received[i], static_cast<uint8_t>(i & 0xFF));
       }
@@ -48,7 +109,9 @@ TEST_F(NprpcTest, TestStreams)
   };
 
   exec_test(nprpc::ObjectActivationFlags::ws);
-  exec_test(nprpc::ObjectActivationFlags::quic);
+  // exec_test(nprpc::ObjectActivationFlags::quic);
+  // GetByteStream is marked [unreliable], so QUIC can reorder/drop datagrams.
+  // Exact delivery assertions are covered only on reliable transports.
   // TODO: TCP stream crashes...
   // exec_test(nprpc::ObjectActivationFlags::tcp);
 }

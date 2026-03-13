@@ -9,6 +9,7 @@
 #include <nprpc/endpoint.hpp>
 #include <nprpc/object_ptr.hpp>
 #include <nprpc/stream_base.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/stream_manager.hpp>
 #include <nprpc/impl/session.hpp>
 #include <nprpc/session_context.h>
@@ -1216,6 +1217,26 @@ void nprpc_stream_register_reader(
     NPRPC_LOG_INFO("[SWB] nprpc_stream_register_reader: Reader registered with stream_manager={}", (void*)session->ctx().stream_manager);
 }
 
+void nprpc_stream_set_reader_unreliable(
+    void* object_ptr,
+    uint64_t stream_id,
+    bool unreliable)
+{
+    auto* obj = static_cast<nprpc::Object*>(object_ptr);
+    if (!obj) {
+        NPRPC_LOG_ERROR("[SWB] nprpc_stream_set_reader_unreliable: object_ptr is null");
+        return;
+    }
+
+    auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
+    if (!session || !session->ctx().stream_manager) {
+        NPRPC_LOG_ERROR("[SWB] nprpc_stream_set_reader_unreliable: no session or stream_manager");
+        return;
+    }
+
+    session->ctx().stream_manager->set_reader_unreliable(stream_id, unreliable);
+}
+
 void nprpc_stream_manager_register_reader(
     void* stream_manager,
     uint64_t stream_id,
@@ -1235,6 +1256,33 @@ void nprpc_stream_manager_register_reader(
     mgr->register_reader(stream_id, reader);
 }
 
+void nprpc_stream_manager_set_reader_unreliable(
+    void* stream_manager,
+    uint64_t stream_id,
+    bool unreliable)
+{
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) {
+        NPRPC_LOG_ERROR("[SWB] nprpc_stream_manager_set_reader_unreliable: stream_manager is null");
+        return;
+    }
+
+    mgr->set_reader_unreliable(stream_id, unreliable);
+}
+
+void nprpc_stream_manager_defer_stream_start(
+    void* stream_manager,
+    uint64_t stream_id)
+{
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) {
+        NPRPC_LOG_ERROR("[SWB] nprpc_stream_manager_defer_stream_start: stream_manager is null");
+        return;
+    }
+
+    mgr->defer_stream_start(stream_id);
+}
+
 int nprpc_stream_send_init(
     void* object_ptr,
     void* buffer_ptr,
@@ -1244,13 +1292,28 @@ int nprpc_stream_send_init(
     auto* buf = static_cast<nprpc::flat_buffer*>(buffer_ptr);
     if (!obj || !buf) return -1;
 
+    nprpc::impl::flat::StreamInit_Direct init(*buf, sizeof(nprpc::impl::Header));
+    const auto stream_id = init.stream_id();
+
+    if (obj->get_endpoint().empty()) {
+        if (!obj->select_endpoint()) {
+            return -2;
+        }
+    }
+
     try {
-        // Send asynchronously with no callback - StreamInit doesn't get a reply,
-        // the server will start sending chunks directly to the registered reader
-        nprpc::impl::rpc_call_async_no_reply(
-            obj->get_endpoint(),
-            std::move(*buf),
-            timeout_ms);
+        nprpc::impl::rpc_call(obj->get_endpoint(), *buf, timeout_ms);
+        const auto std_reply = nprpc::impl::handle_standart_reply(*buf);
+        if (std_reply != 0) {
+            return std_reply;
+        }
+
+        auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
+        if (session && session->ctx().stream_manager) {
+            session->ctx().stream_manager->defer_stream_start(stream_id);
+            session->ctx().stream_manager->on_reply_sent();
+        }
+
         return 0;
     } catch (...) {
         return -1;

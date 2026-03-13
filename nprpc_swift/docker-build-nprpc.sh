@@ -58,7 +58,7 @@ docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace ${DOCKER_IMAGE_NAME}
     # Clear stale cmake cache so OPENSSL_ROOT_DIR is not overridden by previously
     # cached system OpenSSL paths (OPENSSL_LIBRARIES, OPENSSL_INCLUDE_DIR, etc.)
     OPENSSL_INSTALL=/workspace/.build_ubuntu_swift/openssl_install
-    cmake -S . -B .build_ubuntu_swift \
+    cmake -G Ninja -S . -B .build_ubuntu_swift \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DCMAKE_C_COMPILER=clang \
         -DCMAKE_CXX_COMPILER=clang++ \

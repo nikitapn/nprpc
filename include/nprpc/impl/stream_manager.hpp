@@ -62,6 +62,7 @@ public:
   // Client-side: register incoming stream
   void register_reader(uint64_t stream_id, StreamReaderBase* reader);
   void unregister_reader(uint64_t stream_id, StreamReaderBase* reader);
+  void set_reader_unreliable(uint64_t stream_id, bool unreliable);
 
   // Handle incoming messages
   void on_chunk_received(flat_buffer&& fb);
@@ -112,6 +113,7 @@ private:
   // raw pointers
   struct ReaderState {
     StreamReaderBase* reader = nullptr;
+    bool unreliable = false;
     std::optional<uint64_t> final_sequence;
     uint64_t highest_sequence_received = 0;
     bool has_received_chunk = false;

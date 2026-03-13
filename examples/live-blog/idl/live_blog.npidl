@@ -71,8 +71,8 @@ message ChatServerEvent {
 interface BlogService {
   PostPage ListPosts(page: u32, page_size: u32);
   PostDetail GetPost(slug: string);
-  vector<Comment> ListComments(post_id: u64, page: u32, page_size: u32);
-  vector<PostPreview> ListAuthorPosts(author_slug: string, page: u32, page_size: u32);
+  Comment[] ListComments(post_id: u64, page: u32, page_size: u32);
+  PostPreview[] ListAuthorPosts(author_slug: string, page: u32, page_size: u32);
   AuthorPreview GetAuthor(author_slug: string);
 }
 

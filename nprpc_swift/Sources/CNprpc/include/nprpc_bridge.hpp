@@ -479,6 +479,11 @@ void nprpc_stream_register_reader(
     void (*on_complete)(void*),
     void (*on_error)(void*, uint32_t));
 
+void nprpc_stream_set_reader_unreliable(
+    void* object_ptr,
+    uint64_t stream_id,
+    bool unreliable);
+
 // Register a stream reader directly on a StreamManager (server-side streaming handlers)
 void nprpc_stream_manager_register_reader(
     void* stream_manager,
@@ -487,6 +492,15 @@ void nprpc_stream_manager_register_reader(
     void (*on_chunk)(void*, const void*, uint32_t),
     void (*on_complete)(void*),
     void (*on_error)(void*, uint32_t));
+
+void nprpc_stream_manager_set_reader_unreliable(
+    void* stream_manager,
+    uint64_t stream_id,
+    bool unreliable);
+
+void nprpc_stream_manager_defer_stream_start(
+    void* stream_manager,
+    uint64_t stream_id);
 
 // Send StreamInit message (client -> server)
 // Returns 0 on success, error code on failure

@@ -1688,6 +1688,8 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
   oc << "  session->send_receive(buf, this->get_timeout());\n";
   oc << "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n";
   emit_stream_proxy_reply_handling(fn);
+  if (!fn->is_reliable)
+    oc << "  session->ctx().stream_manager->set_reader_unreliable(stream_id, true);\n";
   oc << "  session->ctx().stream_manager->defer_stream_start(stream_id);\n";
   oc << "  session->ctx().stream_manager->on_reply_sent();\n";
 
@@ -1803,6 +1805,8 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
     oc << "  session->send_receive(buf, this->get_timeout());\n";
     oc << "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n";
     emit_stream_proxy_reply_handling(fn);
+    if (!fn->is_reliable)
+      oc << "  session->ctx().stream_manager->set_reader_unreliable(stream_id, true);\n";
     oc << "  session->ctx().stream_manager->defer_stream_start(stream_id);\n";
     oc << "  session->ctx().stream_manager->on_reply_sent();\n";
     oc << "  return { std::move(writer), std::move(reader) };\n";

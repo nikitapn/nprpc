@@ -197,9 +197,8 @@ interface TestUnreliable {
 }
 
 interface TestStreams {
-	[unreliable]
 	// Server will send a stream of the specified size, then close it
-	stream<u8> GetByteStream(size: u64);
+	[unreliable] stream<u8> GetByteStream(size: u64);
 	stream<string> GetStringStream(count: u32);
 	stream<vector<u8>> GetBinaryStream(count: u32);
 	stream<bytestream> GetAliasedBinaryStream(count: u32);

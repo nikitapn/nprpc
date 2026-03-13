@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     sudo \
     wget \
+    ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
 # Create user with same UID/GID as host user
