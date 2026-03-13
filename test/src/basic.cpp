@@ -45,8 +45,6 @@ TEST_F(NprpcTest, TestBasic)
 
       EXPECT_TRUE(obj->In_(100, true, nprpc::flat::make_read_only_span(ints)));
 
-      std::cout << "In/Out passed" << std::endl;
-
       uint32_t a;
       bool b;
 
@@ -406,8 +404,6 @@ TEST_F(NprpcTest, TestLargeMessage)
         large_data[i] = static_cast<uint8_t>(i % 256);
       }
 
-      std::cout << "Testing large message transmission (3MB)..." << std::endl;
-
       // This should work with our async_write fix
       EXPECT_TRUE(
           obj->In_(42, true, nprpc::flat::make_read_only_span(large_data)));
@@ -417,7 +413,6 @@ TEST_F(NprpcTest, TestLargeMessage)
       bool b;
       std::vector<uint8_t> received_data;
 
-      std::cout << "Testing large message reception (3MB)..." << std::endl;
       obj->Out(a, b, received_data);
 
       EXPECT_EQ(a, 42u);
@@ -425,9 +420,6 @@ TEST_F(NprpcTest, TestLargeMessage)
       EXPECT_EQ(received_data.size(), 3 * 1024 * 1024u);
       EXPECT_EQ(received_data[0], 0xAB);
       EXPECT_EQ(received_data[received_data.size() - 1], 0xCD);
-
-      std::cout << "Large message test completed successfully!" << std::endl;
-
     } catch (nprpc::Exception& ex) {
       FAIL() << "Exception in TestLargeMessage: " << ex.what();
     }
@@ -633,9 +625,6 @@ TEST_F(NprpcTest, TestQuicBasic)
 
     // ReturnU32 test
     EXPECT_EQ(obj->ReturnU32(), 42u);
-
-    std::cout << "QUIC basic test completed successfully!" << std::endl;
-
   } catch (nprpc::Exception& ex) {
     FAIL() << "Exception in TestQuicBasic: " << ex.what();
   }
@@ -698,9 +687,6 @@ TEST_F(NprpcTest, TestQuicUnreliable)
     EXPECT_EQ(servant.fire_and_forget_count.load(), 10);
     EXPECT_EQ(servant.last_a.load(), 9u); // Last call had a=9
     EXPECT_FALSE(servant.last_b.load());  // 9 % 2 != 0
-
-    std::cout << "QUIC unreliable test completed successfully!" << std::endl;
-
   } catch (nprpc::Exception& ex) {
     FAIL() << "Exception in TestQuicUnreliable: " << ex.what();
   }

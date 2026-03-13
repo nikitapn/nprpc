@@ -60,13 +60,13 @@ struct LatencyStats {
     double avg = sum / static_cast<double>(sorted.size());
     double p50 = sorted[sorted.size() * 50 / 100];
     double p99 = sorted[sorted.size() * 99 / 100];
-    std::cout << label
-              << "  n=" << sorted.size()
-              << "  min=" << sorted.front() << " µs"
-              << "  avg=" << avg << " µs"
-              << "  p50=" << p50 << " µs"
-              << "  p99=" << p99 << " µs"
-              << "  max=" << sorted.back() << " µs\n";
+    // std::cout << label
+    //           << "  n=" << sorted.size()
+    //           << "  min=" << sorted.front() << " µs"
+    //           << "  avg=" << avg << " µs"
+    //           << "  p50=" << p50 << " µs"
+    //           << "  p99=" << p99 << " µs"
+    //           << "  max=" << sorted.back() << " µs\n";
   }
 };
 
@@ -153,12 +153,12 @@ TEST_F(NprpcTest, HighConcurrencyLoad)
       merged.samples_us.reserve(total_calls);
       for (auto& s : per_thread_stats) merged.merge(std::move(s));
 
-      std::cout << "\n[Load/" << transport_name << "/SmallRPC] "
-                << "threads=" << kLoadConcurrency
-                << " calls_per_thread=" << kCallsPerWorker
-                << " total=" << total_calls
-                << " failures=" << failures.load()
-                << " throughput=" << throughput << " calls/s\n";
+      // std::cout << "\n[Load/" << transport_name << "/SmallRPC] "
+      //           << "threads=" << kLoadConcurrency
+      //           << " calls_per_thread=" << kCallsPerWorker
+      //           << " total=" << total_calls
+      //           << " failures=" << failures.load()
+      //           << " throughput=" << throughput << " calls/s\n";
       merged.print("[Load/" + transport_name + "/SmallRPC/latency]");
 
       EXPECT_EQ(failures.load(), 0)
@@ -236,12 +236,12 @@ TEST_F(NprpcTest, HighConcurrencyLoad)
       merged.samples_us.reserve(total_calls);
       for (auto& s : per_thread_stats) merged.merge(std::move(s));
 
-      std::cout << "\n[Load/" << transport_name << "/MixedPayload] "
-                << "threads=" << kLoadConcurrency
-                << " calls_per_thread=" << kCallsPerWorker
-                << " total=" << total_calls
-                << " failures=" << failures.load()
-                << " throughput=" << throughput << " calls/s\n";
+      // std::cout << "\n[Load/" << transport_name << "/MixedPayload] "
+      //           << "threads=" << kLoadConcurrency
+      //           << " calls_per_thread=" << kCallsPerWorker
+      //           << " total=" << total_calls
+      //           << " failures=" << failures.load()
+      //           << " throughput=" << throughput << " calls/s\n";
       merged.print("[Load/" + transport_name + "/MixedPayload/latency]");
 
       EXPECT_EQ(failures.load(), 0)

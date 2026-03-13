@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <unordered_set>
 #include <unordered_map>
@@ -64,7 +65,7 @@ public:
 
   // Handle incoming messages
   void on_chunk_received(flat_buffer&& fb);
-  void on_stream_complete(uint64_t stream_id);
+  void on_stream_complete(uint64_t stream_id, uint64_t final_sequence);
   void on_stream_error(uint64_t stream_id, uint32_t error_code, flat_buffer&& error_data);
   void on_stream_cancel(uint64_t stream_id);
 
@@ -109,7 +110,13 @@ private:
   // Active incoming streams (client-side)
   // Readers are owned by the client application (StreamReader<T>), so we hold
   // raw pointers
-  std::unordered_map<uint64_t, StreamReaderBase*> readers_;
+  struct ReaderState {
+    StreamReaderBase* reader = nullptr;
+    std::optional<uint64_t> final_sequence;
+    uint64_t highest_sequence_received = 0;
+    bool has_received_chunk = false;
+  };
+  std::unordered_map<uint64_t, ReaderState> readers_;
 
   std::unordered_map<uint64_t, std::vector<flat_buffer>> pending_messages_;
   std::unordered_map<uint64_t, ::nprpc::Task<>> active_tasks_;

@@ -287,7 +287,7 @@ void SocketConnection::on_read_body(const boost::system::error_code& ec,
         ctx_.stream_manager->on_chunk_received(std::move(chunk_buf));
       } else if (header->msg_id == MessageId::StreamCompletion) {
         flat::StreamComplete_Direct msg(buf, sizeof(flat::Header));
-        ctx_.stream_manager->on_stream_complete(msg.stream_id());
+        ctx_.stream_manager->on_stream_complete(msg.stream_id(), msg.final_sequence());
       } else if (header->msg_id == MessageId::StreamError) {
         flat::StreamError_Direct msg(buf, sizeof(flat::Header));
         flat_buffer error_buf;  // Empty for now

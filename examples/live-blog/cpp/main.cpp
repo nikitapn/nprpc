@@ -329,36 +329,118 @@ private:
   const BlogRepository& repository_;
 };
 
+class ChatHub {
+public:
+  struct Participant {
+    explicit Participant(nprpc::StreamWriter<ChatServerEvent>&& stream_writer)
+        : writer(std::move(stream_writer)) {}
+
+    void send(const ChatServerEvent& event) {
+      std::lock_guard lock(write_mutex);
+      if (!active) return;
+      writer.write(event);
+    }
+
+    void close() {
+      std::lock_guard lock(write_mutex);
+      if (!active) return;
+      active = false;
+      writer.close();
+    }
+
+    void abort() {
+      std::lock_guard lock(write_mutex);
+      if (!active) return;
+      active = false;
+      writer.abort();
+    }
+
+    std::mutex write_mutex;
+    bool active = true;
+    nprpc::StreamWriter<ChatServerEvent> writer;
+  };
+
+  using ParticipantPtr = std::shared_ptr<Participant>;
+
+  std::pair<uint64_t, ParticipantPtr> join(
+      uint64_t post_id,
+      nprpc::StreamWriter<ChatServerEvent>&& writer)
+  {
+    auto participant = std::make_shared<Participant>(std::move(writer));
+
+    std::lock_guard lock(rooms_mutex_);
+    const auto participant_id = next_participant_id_++;
+    rooms_[post_id][participant_id] = participant;
+    return {participant_id, std::move(participant)};
+  }
+
+  void leave(uint64_t post_id, uint64_t participant_id) {
+    std::lock_guard lock(rooms_mutex_);
+    auto room_it = rooms_.find(post_id);
+    if (room_it == rooms_.end()) return;
+
+    room_it->second.erase(participant_id);
+    if (room_it->second.empty()) {
+      rooms_.erase(room_it);
+    }
+  }
+
+  void broadcast(uint64_t post_id, const ChatServerEvent& event) {
+    std::vector<ParticipantPtr> recipients;
+
+    {
+      std::lock_guard lock(rooms_mutex_);
+      auto room_it = rooms_.find(post_id);
+      if (room_it == rooms_.end()) return;
+
+      recipients.reserve(room_it->second.size());
+      for (const auto& [_, participant] : room_it->second) {
+        recipients.push_back(participant);
+      }
+    }
+
+    for (const auto& participant : recipients) {
+      participant->send(event);
+    }
+  }
+
+private:
+  std::mutex rooms_mutex_;
+  uint64_t next_participant_id_ = 1;
+  std::unordered_map<uint64_t, std::unordered_map<uint64_t, ParticipantPtr>> rooms_;
+};
+
 class ChatServiceImpl final : public live_blog::IChatService_Servant {
+  ChatHub chat_hub_;
 public:
   nprpc::Task<> JoinPostChat(uint64_t post_id,
                              std::string user_name,
                              nprpc::BidiStream<ChatEnvelope, ChatServerEvent> stream) override
   {
+    auto [participant_id, participant] = chat_hub_.join(post_id, std::move(stream.writer));
     try {
-      stream.writer.write(make_chat_event(user_name,
-                                          PresenceEventKind::Joined,
-                                          "system",
-                                          user_name + " joined post #" + std::to_string(post_id),
-                                          "2026-03-09T09:00:00Z"));
-
+      chat_hub_.broadcast(post_id, make_chat_event(user_name,
+                                                  PresenceEventKind::Joined,
+                                                  "system",
+                                                  user_name + " joined post #" + std::to_string(post_id),
+                                                  "2026-03-09T09:00:00Z"));
       while (auto incoming = co_await stream.reader) {
         auto echoed = make_chat_event(user_name,
                                       PresenceEventKind::Typing,
                                       incoming->author.empty() ? user_name : incoming->author,
                                       incoming->body,
                                       incoming->created_at.empty() ? "2026-03-09T09:01:00Z" : incoming->created_at);
-        stream.writer.write(std::move(echoed));
+        chat_hub_.broadcast(post_id, echoed);
       }
 
-      stream.writer.write(make_chat_event(user_name,
-                                          PresenceEventKind::Left,
-                                          "system",
-                                          user_name + " left the room.",
-                                          "2026-03-09T09:02:00Z"));
-      stream.writer.close();
+      chat_hub_.broadcast(post_id, make_chat_event(user_name,
+                                                  PresenceEventKind::Left,
+                                                  "system",
+                                                  user_name + " left post #" + std::to_string(post_id),
+                                                  "2026-03-09T09:02:00Z"));
+      chat_hub_.leave(post_id, participant_id);
     } catch (...) {
-      stream.writer.abort();
+      participant->abort();
       throw;
     }
 

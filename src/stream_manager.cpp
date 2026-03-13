@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT
 
 #include "logging.hpp"
-#include "nprpc_base_ext.hpp"
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/session.hpp>
 #include <nprpc/impl/shared_memory_channel.hpp>
@@ -205,7 +204,8 @@ void StreamManager::register_reader(uint64_t stream_id,
                                     StreamReaderBase* reader)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  readers_[stream_id] = reader;
+  auto& state = readers_[stream_id];
+  state.reader = reader;
 }
 
 void StreamManager::unregister_reader(uint64_t stream_id,
@@ -213,7 +213,7 @@ void StreamManager::unregister_reader(uint64_t stream_id,
 {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = readers_.find(stream_id);
-  if (it != readers_.end() && it->second == reader) {
+  if (it != readers_.end() && it->second.reader == reader) {
     readers_.erase(it);
   }
 }
@@ -222,50 +222,102 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
 {
   flat::StreamChunk_Direct chunk(fb, sizeof(flat::Header));
   const auto stream_id = chunk.stream_id();
+  const auto sequence = chunk.sequence();
 
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto it = readers_.find(stream_id);
-  if (it != readers_.end()) {
-    // Pass the buffer to the reader - it contains the chunk data
-    it->second->on_chunk_received(std::move(fb));
-  } else {
-    NPRPC_LOG_WARN("Received chunk for unknown stream: {}", stream_id);
+  StreamReaderBase* reader = nullptr;
+  bool should_complete = false;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = readers_.find(stream_id);
+    if (it == readers_.end() || it->second.reader == nullptr) {
+      NPRPC_LOG_WARN("Received chunk for unknown stream: {}", stream_id);
+      return;
+    }
+
+    reader = it->second.reader;
+    it->second.highest_sequence_received = sequence;
+    it->second.has_received_chunk = true;
+    if (it->second.final_sequence && sequence >= *it->second.final_sequence) {
+      should_complete = true;
+      readers_.erase(it);
+    }
+  }
+
+  reader->on_chunk_received(std::move(fb));
+  if (should_complete) {
+    reader->on_complete();
   }
 }
 
-void StreamManager::on_stream_complete(uint64_t stream_id)
+void StreamManager::on_stream_complete(uint64_t stream_id, uint64_t final_sequence)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto it = readers_.find(stream_id);
-  if (it != readers_.end()) {
-    it->second->on_complete();
-    readers_.erase(it);
+  StreamReaderBase* reader = nullptr;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = readers_.find(stream_id);
+    if (it == readers_.end() || it->second.reader == nullptr) {
+      return;
+    }
+
+    if (it->second.has_received_chunk && it->second.highest_sequence_received >= final_sequence) {
+      reader = it->second.reader;
+      readers_.erase(it);
+    } else {
+      it->second.final_sequence = final_sequence;
+    }
+  }
+
+  if (reader) {
+    reader->on_complete();
   }
 }
 
 void StreamManager::on_stream_error(uint64_t stream_id, uint32_t error_code, flat_buffer&& error_data)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto it = readers_.find(stream_id);
-  if (it != readers_.end()) {
-    it->second->on_error(error_code, std::move(error_data));
-    readers_.erase(it);
+  StreamReaderBase* reader = nullptr;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = readers_.find(stream_id);
+    if (it != readers_.end()) {
+      reader = it->second.reader;
+      readers_.erase(it);
+    }
+  }
+
+  if (reader) {
+    reader->on_error(error_code, std::move(error_data));
   }
 }
 
 void StreamManager::on_stream_cancel(uint64_t stream_id)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto reader_it = readers_.find(stream_id);
-  if (reader_it != readers_.end()) {
-    reader_it->second->on_complete();
-    readers_.erase(reader_it);
+  StreamReaderBase* reader = nullptr;
+  std::unique_ptr<StreamWriterBase> writer;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto reader_it = readers_.find(stream_id);
+    if (reader_it != readers_.end()) {
+      reader = reader_it->second.reader;
+      readers_.erase(reader_it);
+    }
+
+    auto writer_it = writers_.find(stream_id);
+    if (writer_it != writers_.end()) {
+      writer = std::move(writer_it->second.writer);
+      writers_.erase(writer_it);
+    }
   }
 
-  auto it = writers_.find(stream_id);
-  if (it != writers_.end()) {
-    it->second.writer->cancel();
-    writers_.erase(it);
+  if (reader) {
+    reader->on_complete();
+  }
+
+  if (writer) {
+    writer->cancel();
   }
 }
 
@@ -457,7 +509,9 @@ void StreamManager::cancel_all()
   for (auto& [id, reader] : readers_) {
     // Send empty error buffer to indicate connection closed
     flat_buffer empty_fb;
-    reader->on_error(0, std::move(empty_fb));
+    if (reader.reader) {
+      reader.reader->on_error(0, std::move(empty_fb));
+    }
   }
   readers_.clear();
 }

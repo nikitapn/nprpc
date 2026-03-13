@@ -34,7 +34,6 @@ TEST_F(NprpcTest, TestStreams)
 
       // Read all chunks from the stream
       for (auto& chunk : reader) {
-        std::cout << "[CLIENT] Received a byte." << std::endl;
         received.push_back(chunk);
       }
 
@@ -43,9 +42,6 @@ TEST_F(NprpcTest, TestStreams)
       for (uint64_t i = 0; i < received.size(); ++i) {
         EXPECT_EQ(received[i], static_cast<uint8_t>(i & 0xFF));
       }
-
-      std::cout << "Stream test passed for transport" << std::endl;
-
     } catch (nprpc::Exception& ex) {
       FAIL() << "Exception in TestStreams: " << ex.what();
     }
@@ -178,9 +174,6 @@ TEST_F(NprpcTest, TestObjectStream)
       EXPECT_EQ(object_array_values[1][1].a, 12u);
       EXPECT_EQ(object_array_values[1][1].b, "arr_1_1");
       EXPECT_EQ(object_array_values[1][1].c, "item_1_1");
-
-      std::cout << "Object stream test passed for transport" << std::endl;
-
     } catch (nprpc::Exception& ex) {
       FAIL() << "Exception in TestObjectStream: " << ex.what();
     }

@@ -142,7 +142,7 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
   case MessageId::StreamCompletion: {
     NPRPC_LOG_INFO("[SESSION] {:p} {} StreamCompletion.", (void*)this, remote_endpoint().to_string());
     impl::flat::StreamComplete_Direct msg(rx_buffer, sizeof(impl::Header));
-    ctx_.stream_manager->on_stream_complete(msg.stream_id());
+    ctx_.stream_manager->on_stream_complete(msg.stream_id(), msg.final_sequence());
     needs_reply = false;  // Fire-and-forget
     break;
   }
