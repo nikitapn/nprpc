@@ -25,6 +25,9 @@ add_custom_target(
 # Main test executable for C++ tests
 add_executable(nprpc_test
   src/main.cpp
+  src/basic.cpp
+  src/streams.cpp
+  src/concurrent.cpp
   ${nprpc_test_stub_GENERATED_SOURCES}
 )
 

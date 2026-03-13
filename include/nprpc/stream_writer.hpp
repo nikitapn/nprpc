@@ -75,12 +75,12 @@ public:
   {
   }
 
-    StreamWriter(SessionContext& session, uint64_t stream_id)
-      : client_manager_(session.stream_manager)
-      , client_stream_id_(stream_id)
-        , client_closed_(false)
-    {
-    }
+  StreamWriter(SessionContext& session, uint64_t stream_id)
+    : client_manager_(session.stream_manager)
+    , client_stream_id_(stream_id)
+    , client_closed_(false)
+  {
+  }
 
   StreamWriter(StreamWriter&& other) noexcept
       : coro_(std::exchange(other.coro_, {}))

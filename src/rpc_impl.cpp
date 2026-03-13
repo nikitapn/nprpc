@@ -27,6 +27,7 @@ std::shared_ptr<Session> make_uring_client_connection(
 #include <fstream>
 #include <functional>
 #include <sstream>
+#include <thread>
 
 #ifdef _WIN32
 #include <boost/asio/ssl/context.hpp>
@@ -59,6 +60,16 @@ void add_windows_root_certs(boost::asio::ssl::context& ctx)
 #endif // BOOST_OS_WINDOWS
 
 namespace nprpc::impl {
+
+namespace {
+size_t default_stream_pool_size() noexcept
+{
+  const auto hw = std::thread::hardware_concurrency();
+  if (hw == 0)
+    return 1;
+  return std::min<size_t>(4, hw);
+}
+} // namespace
 
 namespace {
 std::string escape_json_string(std::string_view value)
@@ -299,9 +310,6 @@ extern void stop_ssr();
 void RpcImpl::destroy()
 {
   ioc_.stop();
-  if (pool_) {
-    pool_->join();
-  }
 
   // Stop all listeners first
   stop_socket_listener();
@@ -335,6 +343,14 @@ void RpcImpl::destroy()
   // completions). ioc_ was stopped above, so restart it to allow poll() to run.
   ioc_.restart();
   ioc_.poll();
+
+  if (pool_) {
+    pool_->join();
+  }
+
+  if (stream_pool_) {
+    stream_pool_->join();
+  }
 
   delete this;
   g_rpc = nullptr;
@@ -732,6 +748,7 @@ RpcImpl::get_nameserver(std::string_view nameserver_ip)
 RpcImpl::RpcImpl()
     : work_guard_(boost::asio::make_work_guard(ioc_))
 {
+  stream_pool_ = std::make_unique<boost::asio::thread_pool>(default_stream_pool_size());
   poas_created_.fill(false);
 
   init_socket(ioc_);

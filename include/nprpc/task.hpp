@@ -20,6 +20,7 @@
 
 #include <coroutine>
 #include <exception>
+#include <functional>
 #include <semaphore>
 #include <stdexcept>
 #include <utility>
@@ -46,6 +47,12 @@ struct TaskResult {
       std::rethrow_exception(*ep);
     return std::move(std::get<1>(storage));
   }
+
+  std::exception_ptr get_exception() const {
+    if (auto* ep = std::get_if<2>(&storage))
+      return *ep;
+    return {};
+  }
 };
 
 template<>
@@ -58,6 +65,10 @@ struct TaskResult<void> {
   void get() {
     if (exception) std::rethrow_exception(exception);
   }
+
+  std::exception_ptr get_exception() const noexcept {
+    return exception;
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -69,10 +80,13 @@ struct TaskPromiseBase {
   TaskResult<T>           result;
   std::coroutine_handle<> continuation;  // set by co_await; resumed at end
   std::binary_semaphore   ready{0};      // released at end; used by get()
+  std::function<void(std::exception_ptr)> completion_handler;
 
   // Called by final_suspend's awaiter after the coroutine body finishes.
   void on_final() noexcept {
     ready.release();                     // unblock any blocking get()
+    if (completion_handler)
+      completion_handler(result.get_exception());
     if (continuation) continuation.resume();
   }
 
@@ -133,6 +147,23 @@ public:
   decltype(auto) get() {
     handle_.promise().ready.acquire();
     return handle_.promise().result.get();
+  }
+
+  bool done() const noexcept {
+    return !handle_ || handle_.done();
+  }
+
+  void rethrow_if_exception() const {
+    if (!handle_)
+      return;
+    if (auto ep = handle_.promise().result.get_exception())
+      std::rethrow_exception(ep);
+  }
+
+  void set_completion_handler(std::function<void(std::exception_ptr)> handler) {
+    if (!handle_)
+      return;
+    handle_.promise().completion_handler = std::move(handler);
   }
 
   // --- Lifecycle -----------------------------------------------------------

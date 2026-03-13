@@ -172,6 +172,7 @@ class RpcImpl : public Rpc
   boost::asio::io_context ioc_;
   boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard_;
   std::unique_ptr<boost::asio::thread_pool> pool_;
+  std::unique_ptr<boost::asio::thread_pool> stream_pool_;
   std::mutex poas_mut_;
   std::array<std::shared_ptr<PoaImpl>, max_poa_objects> poas_;
   std::array<bool, max_poa_objects> poas_created_;
@@ -253,6 +254,10 @@ public:
   std::string produce_host_json(std::string_view output_path = {}) override;
 
   boost::asio::io_context& ioc() noexcept override { return ioc_; }
+  boost::asio::any_io_executor stream_executor() noexcept
+  {
+    return stream_pool_->get_executor();
+  }
   void start_thread_pool(size_t thread_count) noexcept override;
   void run() override;
   void destroy() override;

@@ -94,6 +94,10 @@ private:
   // Called once per such stream function from emit_interface.
   void emit_stream_deserialize(AstTypeDecl* type, bool direct);
   void emit_stream_serialize(AstTypeDecl* type, bool direct);
+  void emit_declared_exception_reply(AstFunctionDecl* fn,
+                                     std::ostream& os,
+                                     const std::string& indent);
+  void emit_stream_proxy_reply_handling(AstFunctionDecl* fn);
 
   void proxy_call(AstFunctionDecl* fn);
   void proxy_call_coro(AstFunctionDecl* fn);  // coroutine variant

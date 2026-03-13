@@ -99,9 +99,9 @@ public:
     }
 };
 
-nprpc::Rpc* rpc;
-nprpc::Poa* poa;
-NameserverManager nameserver_manager;
+extern nprpc::Rpc* rpc;
+extern nprpc::Poa* poa;
+extern NameserverManager nameserver_manager;
 
 // Google Test Environment for setup and teardown
 class NprpcTestEnvironment

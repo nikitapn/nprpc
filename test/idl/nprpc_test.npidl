@@ -198,6 +198,7 @@ interface TestUnreliable {
 
 interface TestStreams {
 	[unreliable]
+	// Server will send a stream of the specified size, then close it
 	stream<u8> GetByteStream(size: u64);
 	stream<string> GetStringStream(count: u32);
 	stream<vector<u8>> GetBinaryStream(count: u32);
@@ -208,6 +209,8 @@ interface TestStreams {
 	stream<AAA[2]> GetObjectArrayStream(count: u32);
 	stream<AAA> GetObjectStream(count: u32);
 	stream<direct AAA> GetObjectStreamDirect(count: u32);
+
+	// Client will send a stream of the specified size, then close it. Server will verify the contents match the expected pattern.
 	void UploadByteStream(expected_size: u64, data: client_stream<u8>);
 	void UploadStringStream(expected_count: u64, data: client_stream<string>);
 	void UploadBinaryStream(expected_count: u64, data: client_stream<vector<u8>>);
@@ -217,6 +220,9 @@ interface TestStreams {
 	void UploadU16ArrayStream(expected_count: u64, data: client_stream<u16[4]>);
 	void UploadObjectArrayStream(expected_count: u64, data: client_stream<AAA[2]>);
 	void UploadObjectStream(expected_count: u64, data: client_stream<AAA>);
+	void UploadObjectStreamCanThrow(expected_count: u64, data: client_stream<AAA>) raises (AssertionFailed);
+
+  // Bidirectional stream where server echoes back whatever client sends, until client closes the stream. Server will verify the contents match the expected pattern.
 	bidi_stream<u8, u8> EchoByteStream(xor_mask: in u8);
 	bidi_stream<string, string> EchoStringStream(suffix: in string);
 	bidi_stream<vector<u8>, vector<u8>> EchoBinaryStream(xor_mask: in u8);

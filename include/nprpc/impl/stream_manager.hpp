@@ -7,11 +7,14 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <unordered_set>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <nprpc_base_ext.hpp>
 #include <nprpc/export.hpp>
+#include <nprpc/task.hpp>
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/post.hpp>
@@ -75,18 +78,23 @@ public:
                   std::span<const uint8_t> error_data);
   void send_cancel(uint64_t stream_id);
 
+  // Defer stream activation until after the current reply is queued.
+  void defer_stream_start(uint64_t stream_id);
+  void start_task_after_reply(uint64_t stream_id, ::nprpc::Task<> task);
+  void on_reply_sent();
+
   // Cleanup
   void cancel_all();
 
   template <typename Fn>
   void post(Fn&& fn)
   {
-    boost::asio::post(executor_, [fn = std::forward<Fn>(fn)]() mutable { fn(); });
+    boost::asio::post(stream_executor_, [fn = std::forward<Fn>(fn)]() mutable { fn(); });
   }
 
 private:
   SessionContext& session_;
-  boost::asio::any_io_executor executor_;
+  boost::asio::any_io_executor stream_executor_;
   SendCallback send_callback_;
   SendNativeStreamCallback send_native_stream_callback_;
   SendDatagramCallback send_datagram_callback_;
@@ -103,11 +111,19 @@ private:
   // raw pointers
   std::unordered_map<uint64_t, StreamReaderBase*> readers_;
 
+  std::unordered_map<uint64_t, std::vector<flat_buffer>> pending_messages_;
+  std::unordered_map<uint64_t, ::nprpc::Task<>> active_tasks_;
+  std::vector<uint64_t> pending_stream_starts_;
+  std::unordered_set<uint64_t> started_streams_;
+
   // Mutex for thread-safe access
   std::mutex mutex_;
 
   // Internal helper to determine if a stream is unreliable
   bool is_stream_unreliable(uint64_t stream_id) const;
+  bool is_stream_started(uint64_t stream_id) const;
+  void dispatch_buffer(uint64_t stream_id, flat_buffer&& fb);
+  void start_stream(uint64_t stream_id);
 };
 
 }} // namespace impl

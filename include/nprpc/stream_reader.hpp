@@ -58,6 +58,7 @@ public:
     }
     // Mark the moved-from object as cancelled so it doesn't unregister
     other.cancelled_ = true;
+    other.resume_handle_ = {};
   }
 
   // Disable copy
@@ -110,9 +111,9 @@ public:
 
       bool await_ready() const noexcept { return reader->has_pending_chunk(); }
 
-      void await_suspend(std::coroutine_handle<> h)
+      bool await_suspend(std::coroutine_handle<> h)
       {
-        reader->set_resume_handle(h);
+        return reader->arm_resume_handle(h);
       }
 
       std::optional<T> await_resume() { return reader->read_next(); }
@@ -178,52 +179,64 @@ public:
   // Called by StreamManager when chunk arrives
   void on_chunk_received(flat_buffer fb) override
   {
+    std::coroutine_handle<> resume_handle;
     {
       std::lock_guard lock(mutex_);
       chunks_.push(std::move(fb));
       window_size_--;
+      resume_handle = std::exchange(resume_handle_, {});
     }
 
     cv_.notify_one();
 
-    if (resume_handle_) {
-      auto h = resume_handle_;
-      resume_handle_ = {};
-      h.resume();
+    if (resume_handle) {
+      if (session_.stream_manager) {
+        session_.stream_manager->post([resume_handle]() mutable { resume_handle.resume(); });
+      } else {
+        resume_handle.resume();
+      }
     }
   }
 
   void on_complete() override
   {
+    std::coroutine_handle<> resume_handle;
     {
       std::lock_guard lock(mutex_);
       completed_ = true;
+      resume_handle = std::exchange(resume_handle_, {});
     }
 
     cv_.notify_one();
 
-    if (resume_handle_) {
-      auto h = resume_handle_;
-      resume_handle_ = {};
-      h.resume();
+    if (resume_handle) {
+      if (session_.stream_manager) {
+        session_.stream_manager->post([resume_handle]() mutable { resume_handle.resume(); });
+      } else {
+        resume_handle.resume();
+      }
     }
   }
 
   void on_error(uint32_t error_code, flat_buffer error_data) override
   {
+    std::coroutine_handle<> resume_handle;
     {
       std::lock_guard lock(mutex_);
       // TODO: create proper exception from code/data
       error_ = std::make_exception_ptr(
           std::runtime_error("Stream error: " + std::to_string(error_code)));
+      resume_handle = std::exchange(resume_handle_, {});
     }
 
     cv_.notify_one();
 
-    if (resume_handle_) {
-      auto h = resume_handle_;
-      resume_handle_ = {};
-      h.resume();
+    if (resume_handle) {
+      if (session_.stream_manager) {
+        session_.stream_manager->post([resume_handle]() mutable { resume_handle.resume(); });
+      } else {
+        resume_handle.resume();
+      }
     }
   }
 
@@ -282,9 +295,14 @@ private:
     return !chunks_.empty() || completed_ || error_;
   }
 
-  void set_resume_handle(std::coroutine_handle<> h)
+  bool arm_resume_handle(std::coroutine_handle<> h)
   {
+    std::lock_guard lock(mutex_);
+    if (!chunks_.empty() || completed_ || error_) {
+      return false;
+    }
     resume_handle_ = h;
+    return true;
   }
 };
 

@@ -15,6 +15,12 @@
 
 #include "common/helper.inl"
 
+namespace nprpctest {
+  nprpc::Rpc* rpc;
+  nprpc::Poa* poa;
+  NameserverManager nameserver_manager;
+}
+
 std::condition_variable cv;
 std::mutex cv_m;
 int shutdown_requested = 0;

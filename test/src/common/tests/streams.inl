@@ -166,7 +166,7 @@ public:
         return GetObjectStream(count); 
     }
 
-    void UploadByteStream(uint64_t expected_size, nprpc::StreamReader<uint8_t> data) override {
+    ::nprpc::Task<> UploadByteStream(uint64_t expected_size, nprpc::StreamReader<uint8_t> data) override {
         std::vector<uint8_t> local;
         local.reserve(expected_size);
         {
@@ -174,8 +174,8 @@ public:
             upload_done = false;
             uploaded_bytes.clear();
         }
-        for (auto& byte : data) {
-            local.push_back(byte);
+        while (auto byte = co_await data) {
+            local.push_back(*byte);
         }
 
         {
@@ -184,9 +184,10 @@ public:
             upload_done = true;
         }
         upload_cv.notify_all();
+        co_return;
     }
 
-    void UploadObjectStream(uint64_t expected_count, nprpc::StreamReader<nprpc::test::AAA> data) override {
+    ::nprpc::Task<> UploadObjectStream(uint64_t expected_count, nprpc::StreamReader<nprpc::test::AAA> data) override {
         std::vector<nprpc::test::AAA> local;
         local.reserve(static_cast<size_t>(expected_count));
         {
@@ -194,8 +195,8 @@ public:
             object_upload_done = false;
             uploaded_objects.clear();
         }
-        for (auto& object : data) {
-            local.push_back(std::move(object));
+        while (auto object = co_await data) {
+            local.push_back(std::move(*object));
         }
 
         {
@@ -204,9 +205,17 @@ public:
             object_upload_done = true;
         }
         upload_cv.notify_all();
+        co_return;
     }
 
-    void UploadStringStream(uint64_t expected_count, nprpc::StreamReader<std::string> data) override {
+    ::nprpc::Task<> UploadObjectStreamCanThrow(uint64_t expected_count, nprpc::StreamReader<nprpc::test::AAA> data) override {
+        (void)expected_count;
+        (void)data;
+        throw nprpc::test::AssertionFailed{"UploadObjectStreamCanThrow rejected"};
+        co_return;
+    }
+
+    ::nprpc::Task<> UploadStringStream(uint64_t expected_count, nprpc::StreamReader<std::string> data) override {
         std::vector<std::string> local;
         local.reserve(static_cast<size_t>(expected_count));
         {
@@ -214,8 +223,8 @@ public:
             string_upload_done = false;
             uploaded_strings.clear();
         }
-        for (auto& value : data) {
-            local.push_back(std::move(value));
+        while (auto value = co_await data) {
+            local.push_back(std::move(*value));
         }
 
         {
@@ -224,9 +233,10 @@ public:
             string_upload_done = true;
         }
         upload_cv.notify_all();
+        co_return;
     }
 
-    void UploadBinaryStream(uint64_t expected_count, nprpc::StreamReader<std::vector<uint8_t>> data) override {
+    ::nprpc::Task<> UploadBinaryStream(uint64_t expected_count, nprpc::StreamReader<std::vector<uint8_t>> data) override {
         std::vector<std::vector<uint8_t>> local;
         local.reserve(static_cast<size_t>(expected_count));
         {
@@ -234,8 +244,8 @@ public:
             binary_upload_done = false;
             uploaded_binary_chunks.clear();
         }
-        for (auto& value : data) {
-            local.push_back(std::move(value));
+        while (auto value = co_await data) {
+            local.push_back(std::move(*value));
         }
 
         {
@@ -244,9 +254,10 @@ public:
             binary_upload_done = true;
         }
         upload_cv.notify_all();
+        co_return;
     }
 
-    void UploadAliasedBinaryStream(uint64_t expected_count, nprpc::StreamReader<nprpc::test::bytestream> data) override {
+    ::nprpc::Task<> UploadAliasedBinaryStream(uint64_t expected_count, nprpc::StreamReader<nprpc::test::bytestream> data) override {
         std::vector<std::vector<uint8_t>> local;
         local.reserve(static_cast<size_t>(expected_count));
         {
@@ -254,8 +265,8 @@ public:
             binary_upload_done = false;
             uploaded_binary_chunks.clear();
         }
-        for (auto& value : data) {
-            local.push_back(std::move(value));
+        while (auto value = co_await data) {
+            local.push_back(std::move(*value));
         }
 
         {
@@ -264,9 +275,10 @@ public:
             binary_upload_done = true;
         }
         upload_cv.notify_all();
+        co_return;
     }
 
-    void UploadU16VectorStream(uint64_t expected_count, nprpc::StreamReader<std::vector<uint16_t>> data) override {
+    ::nprpc::Task<> UploadU16VectorStream(uint64_t expected_count, nprpc::StreamReader<std::vector<uint16_t>> data) override {
         std::vector<std::vector<uint16_t>> local;
         local.reserve(static_cast<size_t>(expected_count));
         {
@@ -274,8 +286,8 @@ public:
             u16_vector_upload_done = false;
             uploaded_u16_vectors.clear();
         }
-        for (auto& value : data) {
-            local.push_back(std::move(value));
+        while (auto value = co_await data) {
+            local.push_back(std::move(*value));
         }
 
         {
@@ -284,9 +296,10 @@ public:
             u16_vector_upload_done = true;
         }
         upload_cv.notify_all();
+        co_return;
     }
 
-    void UploadObjectVectorStream(uint64_t expected_count, nprpc::StreamReader<std::vector<nprpc::test::AAA>> data) override {
+    ::nprpc::Task<> UploadObjectVectorStream(uint64_t expected_count, nprpc::StreamReader<std::vector<nprpc::test::AAA>> data) override {
         std::vector<std::vector<nprpc::test::AAA>> local;
         local.reserve(static_cast<size_t>(expected_count));
         {
@@ -294,8 +307,8 @@ public:
             object_vector_upload_done = false;
             uploaded_object_vectors.clear();
         }
-        for (auto& value : data) {
-            local.push_back(std::move(value));
+        while (auto value = co_await data) {
+            local.push_back(std::move(*value));
         }
 
         {
@@ -304,9 +317,10 @@ public:
             object_vector_upload_done = true;
         }
         upload_cv.notify_all();
+        co_return;
     }
 
-    void UploadU16ArrayStream(uint64_t expected_count, nprpc::StreamReader<std::array<uint16_t, 4>> data) override {
+    ::nprpc::Task<> UploadU16ArrayStream(uint64_t expected_count, nprpc::StreamReader<std::array<uint16_t, 4>> data) override {
         std::vector<std::array<uint16_t, 4>> local;
         local.reserve(static_cast<size_t>(expected_count));
         {
@@ -314,8 +328,8 @@ public:
             u16_array_upload_done = false;
             uploaded_u16_arrays.clear();
         }
-        for (auto& value : data) {
-            local.push_back(std::move(value));
+        while (auto value = co_await data) {
+            local.push_back(std::move(*value));
         }
 
         {
@@ -324,9 +338,10 @@ public:
             u16_array_upload_done = true;
         }
         upload_cv.notify_all();
+        co_return;
     }
 
-    void UploadObjectArrayStream(uint64_t expected_count, nprpc::StreamReader<std::array<nprpc::test::AAA, 2>> data) override {
+    ::nprpc::Task<> UploadObjectArrayStream(uint64_t expected_count, nprpc::StreamReader<std::array<nprpc::test::AAA, 2>> data) override {
         std::vector<std::array<nprpc::test::AAA, 2>> local;
         local.reserve(static_cast<size_t>(expected_count));
         {
@@ -334,8 +349,8 @@ public:
             object_array_upload_done = false;
             uploaded_object_arrays.clear();
         }
-        for (auto& value : data) {
-            local.push_back(std::move(value));
+        while (auto value = co_await data) {
+            local.push_back(std::move(*value));
         }
 
         {
@@ -344,113 +359,125 @@ public:
             object_array_upload_done = true;
         }
         upload_cv.notify_all();
+        co_return;
     }
 
-    void EchoByteStream(uint8_t xor_mask, nprpc::BidiStream<uint8_t, uint8_t> stream) override {
-        for (auto& byte : stream.reader) {
-            stream.writer.write(static_cast<uint8_t>(byte ^ xor_mask));
+    ::nprpc::Task<> EchoByteStream(uint8_t xor_mask, nprpc::BidiStream<uint8_t, uint8_t> stream) override {
+        while (auto byte = co_await stream.reader) {
+            stream.writer.write(static_cast<uint8_t>(*byte ^ xor_mask));
         }
         stream.writer.close();
+        co_return;
     }
 
-    void EchoStringStream(std::string suffix, nprpc::BidiStream<std::string, std::string> stream) override {
-        for (auto& value : stream.reader) {
-            stream.writer.write(value + suffix);
+    ::nprpc::Task<> EchoStringStream(std::string suffix, nprpc::BidiStream<std::string, std::string> stream) override {
+        while (auto value = co_await stream.reader) {
+            stream.writer.write(*value + suffix);
         }
         stream.writer.close();
+        co_return;
     }
 
-    void EchoBinaryStream(uint8_t xor_mask, nprpc::BidiStream<std::vector<uint8_t>, std::vector<uint8_t>> stream) override {
-        for (auto& value : stream.reader) {
-            for (auto& byte : value) {
+    ::nprpc::Task<> EchoBinaryStream(uint8_t xor_mask, nprpc::BidiStream<std::vector<uint8_t>, std::vector<uint8_t>> stream) override {
+        while (auto value = co_await stream.reader) {
+            for (auto& byte : *value) {
                 byte ^= xor_mask;
             }
-            stream.writer.write(std::move(value));
+            stream.writer.write(std::move(*value));
         }
         stream.writer.close();
+        co_return;
     }
 
-    void EchoAliasedBinaryStream(uint8_t xor_mask, nprpc::BidiStream<nprpc::test::bytestream, nprpc::test::bytestream> stream) override {
-        for (auto& value : stream.reader) {
-            for (auto& byte : value) {
+    ::nprpc::Task<> EchoAliasedBinaryStream(uint8_t xor_mask, nprpc::BidiStream<nprpc::test::bytestream, nprpc::test::bytestream> stream) override {
+        while (auto value = co_await stream.reader) {
+            for (auto& byte : *value) {
                 byte ^= xor_mask;
             }
-            stream.writer.write(std::move(value));
+            stream.writer.write(std::move(*value));
         }
         stream.writer.close();
+        co_return;
     }
 
-    void EchoU16VectorStream(uint16_t delta, nprpc::BidiStream<std::vector<uint16_t>, std::vector<uint16_t>> stream) override {
-        for (auto& value : stream.reader) {
-            for (auto& item : value) {
+    ::nprpc::Task<> EchoU16VectorStream(uint16_t delta, nprpc::BidiStream<std::vector<uint16_t>, std::vector<uint16_t>> stream) override {
+        while (auto value = co_await stream.reader) {
+            for (auto& item : *value) {
                 item = static_cast<uint16_t>(item + delta);
             }
-            stream.writer.write(std::move(value));
+            stream.writer.write(std::move(*value));
         }
         stream.writer.close();
+        co_return;
     }
 
-    void EchoObjectVectorStream(std::string suffix, nprpc::BidiStream<std::vector<nprpc::test::AAA>, std::vector<nprpc::test::AAA>> stream) override {
-        for (auto& value : stream.reader) {
-            for (auto& item : value) {
+    ::nprpc::Task<> EchoObjectVectorStream(std::string suffix, nprpc::BidiStream<std::vector<nprpc::test::AAA>, std::vector<nprpc::test::AAA>> stream) override {
+        while (auto value = co_await stream.reader) {
+            for (auto& item : *value) {
                 item.a += 100;
                 item.b += suffix;
                 item.c += suffix;
             }
-            stream.writer.write(std::move(value));
+            stream.writer.write(std::move(*value));
         }
         stream.writer.close();
+        co_return;
     }
 
-    void EchoU16ArrayStream(uint16_t delta, nprpc::BidiStream<std::array<uint16_t, 4>, std::array<uint16_t, 4>> stream) override {
-        for (auto& value : stream.reader) {
-            for (auto& item : value) {
+    ::nprpc::Task<> EchoU16ArrayStream(uint16_t delta, nprpc::BidiStream<std::array<uint16_t, 4>, std::array<uint16_t, 4>> stream) override {
+        while (auto value = co_await stream.reader) {
+            for (auto& item : *value) {
                 item = static_cast<uint16_t>(item + delta);
             }
-            stream.writer.write(std::move(value));
+            stream.writer.write(std::move(*value));
         }
         stream.writer.close();
+        co_return;
     }
 
-    void EchoObjectArrayStream(std::string suffix, nprpc::BidiStream<std::array<nprpc::test::AAA, 2>, std::array<nprpc::test::AAA, 2>> stream) override {
-        for (auto& value : stream.reader) {
-            for (auto& item : value) {
+    ::nprpc::Task<> EchoObjectArrayStream(std::string suffix, nprpc::BidiStream<std::array<nprpc::test::AAA, 2>, std::array<nprpc::test::AAA, 2>> stream) override {
+        while (auto value = co_await stream.reader) {
+            for (auto& item : *value) {
                 item.a += 100;
                 item.b += suffix;
                 item.c += suffix;
             }
-            stream.writer.write(std::move(value));
+            stream.writer.write(std::move(*value));
         }
         stream.writer.close();
+        co_return;
     }
 
-    void EchoObjectToDifferentObjectStream(std::string suffix, nprpc::BidiStream<nprpc::test::AAA, nprpc::test::CCC> stream) override {
-        for (auto& object : stream.reader) {
+    ::nprpc::Task<> EchoObjectToDifferentObjectStream(std::string suffix, nprpc::BidiStream<nprpc::test::AAA, nprpc::test::CCC> stream) override {
+        while (auto object = co_await stream.reader) {
             nprpc::test::CCC response;
-            response.a = object.b + suffix;
-            response.b = object.c + suffix;
-            response.c = std::optional<bool>{(object.a % 2u) == 0u};
+            response.a = object->b + suffix;
+            response.b = object->c + suffix;
+            response.c = std::optional<bool>{(object->a % 2u) == 0u};
             stream.writer.write(std::move(response));
         }
         stream.writer.close();
+        co_return;
     }
 
-    void EchoAliasOptionalStream(std::string suffix, uint32_t delta, nprpc::BidiStream<nprpc::test::AliasOptionalStreamPayload, nprpc::test::AliasOptionalStreamPayload> stream) override {
-        for (auto& value : stream.reader) {
-            stream.writer.write(transform_alias_optional_payload(std::move(value), suffix, delta));
+    ::nprpc::Task<> EchoAliasOptionalStream(std::string suffix, uint32_t delta, nprpc::BidiStream<nprpc::test::AliasOptionalStreamPayload, nprpc::test::AliasOptionalStreamPayload> stream) override {
+        while (auto value = co_await stream.reader) {
+            stream.writer.write(transform_alias_optional_payload(std::move(*value), suffix, delta));
         }
         stream.writer.close();
+        co_return;
     }
 
-    void EchoObjectStream(std::string suffix, nprpc::BidiStream<nprpc::test::AAA, nprpc::test::AAA> stream) override {
-        for (auto& object : stream.reader) {
+    ::nprpc::Task<> EchoObjectStream(std::string suffix, nprpc::BidiStream<nprpc::test::AAA, nprpc::test::AAA> stream) override {
+        while (auto object = co_await stream.reader) {
             nprpc::test::AAA response;
-            response.a = object.a + 100;
-            response.b = object.b + suffix;
-            response.c = object.c + suffix;
+            response.a = object->a + 100;
+            response.b = object->b + suffix;
+            response.c = object->c + suffix;
             stream.writer.write(std::move(response));
         }
         stream.writer.close();
+        co_return;
     }
 
     static bool aaa_equal(const nprpc::test::AAA& lhs, const nprpc::test::AAA& rhs) {

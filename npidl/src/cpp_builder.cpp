@@ -971,7 +971,6 @@ void CppBuilder::finalize()
     ofs_hpp << "#include <nprpc/bidi_stream.hpp>\n";
     ofs_hpp << "#include <nprpc/stream_writer.hpp>\n";
     ofs_hpp << "#include <nprpc/stream_reader.hpp>\n\n";
-    ofs_hpp << "#include <thread>\n\n";
   } else {
     ofs_hpp << "#include <nprpc/exception.hpp>\n";
     ofs_hpp << "#include <string_view>\n\n";
@@ -1518,6 +1517,51 @@ void CppBuilder::proxy_call(AstFunctionDecl* fn)
   }
 }
 
+void CppBuilder::emit_declared_exception_reply(AstFunctionDecl* fn,
+                                               std::ostream& os,
+                                               const std::string& indent)
+{
+  if (!fn->ex)
+    return;
+
+  const auto offset = size_of_header;
+  const auto initial_size = offset + fn->ex->size;
+
+  always_full_namespace(true);
+  os << indent << "}\n"
+     << indent << "catch(" << ns(fn->ex->nm) << fn->ex->name << "& e) {\n"
+     << indent << "  assert(ctx.tx_buffer != nullptr);\n"
+     << indent << "  auto& obuf = *ctx.tx_buffer;\n"
+     << indent << "  obuf.consume(obuf.size());\n"
+     << indent << "  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, "
+     << initial_size << "))\n"
+     << indent << "    obuf.prepare(" << initial_size << ");\n"
+     << indent << "  obuf.commit(" << initial_size << ");\n"
+     << indent << "  " << ns(fn->ex->nm) << "flat::" << fn->ex->name << "_Direct oa(obuf,"
+     << offset << ");\n"
+     << indent << "  oa.__ex_id() = " << fn->ex->exception_id << ";\n";
+  always_full_namespace(false);
+
+  for (size_t i = 1; i < fn->ex->fields.size(); ++i) {
+    auto mb = fn->ex->fields[i];
+    assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name, os);
+  }
+
+  os << indent << "  auto* out_header = static_cast<::nprpc::impl::Header*>(obuf.data().data());\n"
+     << indent << "  out_header->size = static_cast<uint32_t>(obuf.size() - 4);\n"
+     << indent << "  out_header->msg_id = ::nprpc::impl::MessageId::Exception;\n"
+     << indent << "  out_header->msg_type = ::nprpc::impl::MessageType::Answer;\n"
+     << indent << "  out_header->request_id = static_cast<const ::nprpc::impl::Header*>(ctx.rx_buffer->cdata().data())->request_id;\n"
+     << indent << "}\n";
+}
+
+void CppBuilder::emit_stream_proxy_reply_handling(AstFunctionDecl* fn)
+{
+  if (fn->ex)
+    oc << "  if (std_reply == 1) " << ctx_->current_file() << "_throw_exception(buf);\n";
+  oc << "  if (std_reply != 0) { throw ::nprpc::Exception(\"Unknown Error\"); }\n";
+}
+
 void CppBuilder::proxy_call_coro(AstFunctionDecl* fn)
 {
   oc << "  co_await session->send_receive_coro(buf, this->get_timeout());\n"
@@ -1640,9 +1684,12 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
 
   oc << "  header->size = static_cast<uint32_t>(buf.size() - 4);\n";
 
-  // Send reliable (StreamInit must be reliable)
-  oc << "  ::nprpc::impl::g_rpc->call_async(this->get_endpoint(), "
-        "std::move(buf), std::nullopt, this->get_timeout());\n";
+  // Wait for the init ACK so stream initialization failures propagate to the caller.
+  oc << "  session->send_receive(buf, this->get_timeout());\n";
+  oc << "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n";
+  emit_stream_proxy_reply_handling(fn);
+  oc << "  session->ctx().stream_manager->defer_stream_start(stream_id);\n";
+  oc << "  session->ctx().stream_manager->on_reply_sent();\n";
 
   // Return the already-created reader
   oc << "  return reader;\n";
@@ -1694,8 +1741,11 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
     }
 
     oc << "  header->size = static_cast<uint32_t>(buf.size() - 4);\n";
-    oc << "  ::nprpc::impl::g_rpc->call_async(this->get_endpoint(), "
-      "std::move(buf), std::nullopt, this->get_timeout());\n";
+    oc << "  session->send_receive(buf, this->get_timeout());\n";
+    oc << "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n";
+    emit_stream_proxy_reply_handling(fn);
+    oc << "  session->ctx().stream_manager->defer_stream_start(stream_id);\n";
+    oc << "  session->ctx().stream_manager->on_reply_sent();\n";
     oc << "  return writer;\n";
   }
 
@@ -1750,8 +1800,11 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
     }
 
     oc << "  header->size = static_cast<uint32_t>(buf.size() - 4);\n";
-    oc << "  ::nprpc::impl::g_rpc->call_async(this->get_endpoint(), "
-      "std::move(buf), std::nullopt, this->get_timeout());\n";
+    oc << "  session->send_receive(buf, this->get_timeout());\n";
+    oc << "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n";
+    emit_stream_proxy_reply_handling(fn);
+    oc << "  session->ctx().stream_manager->defer_stream_start(stream_id);\n";
+    oc << "  session->ctx().stream_manager->on_reply_sent();\n";
     oc << "  return { std::move(writer), std::move(reader) };\n";
   }
 
@@ -2032,7 +2085,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
         break;
       case StreamKind::Client:
       case StreamKind::Bidi:
-        oh << "void";
+        oh << "::nprpc::Task<>";
         break;
       default:
         assert(false);
@@ -2338,6 +2391,8 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   void emit_servant_stream_dispatch(AstInterfaceDecl* ifs, AstFunctionDecl* fn);
 
       if (fn->stream_kind == StreamKind::Server) {
+        if (fn->ex)
+          oc << "        try {\n";
         oc << "        auto writer = " << fn->name << "(";
         int in_ix = 0;
         for (auto arg : fn->args) {
@@ -2355,6 +2410,9 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
               "std::make_unique<::nprpc::StreamWriter<";
         emit_type(fn->stream_decl->stream_out_type(), oc);
         oc << ">>(std::move(writer)), " << (fn->is_reliable ? "false" : "true") << ");\n";
+        oc << "        ctx.stream_manager->defer_stream_start(init.stream_id());\n";
+        if (fn->ex)
+          emit_declared_exception_reply(fn, oc, "        ");
       } else {
         int in_ix = 0;
         int stable_ix = 0;
@@ -2373,17 +2431,14 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
         }
 
         if (fn->stream_kind == StreamKind::Client) {
+          if (fn->ex)
+            oc << "        try {\n";
           oc << "        ";
           emit_stream_reader_type(*this, fn->stream_decl, oc,
             [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
             [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
           oc << " __stream(ctx, init.stream_id());\n";
-          oc << "        std::thread([this";
-          for (int i = 1; i <= stable_ix; ++i) {
-            oc << ", __arg" << i << " = std::move(__arg" << i << ")";
-          }
-          oc << ", __stream = std::move(__stream)]() mutable {\n";
-          oc << "          this->" << fn->name << "(";
+          oc << "        auto __task = this->" << fn->name << "(";
           bool first = true;
           for (int i = 1; i <= stable_ix; ++i) {
             if (!first)
@@ -2394,8 +2449,13 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
           if (!first)
             oc << ", ";
           oc << "std::move(__stream));\n";
-          oc << "        }).detach();\n";
+          oc << "        if (__task.done()) __task.rethrow_if_exception();\n";
+          oc << "        ctx.stream_manager->start_task_after_reply(init.stream_id(), std::move(__task));\n";
+          if (fn->ex)
+            emit_declared_exception_reply(fn, oc, "        ");
         } else {
+          if (fn->ex)
+            oc << "        try {\n";
           oc << "        ";
           emit_stream_reader_value_type(fn->stream_decl->stream_in_type(), false, oc,
             [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
@@ -2410,12 +2470,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
           oc << ", ";
           emit_type(fn->stream_decl->stream_out_type(), oc);
           oc << "> __stream(std::move(__reader), std::move(__writer));\n";
-          oc << "        std::thread([this";
-          for (int i = 1; i <= stable_ix; ++i) {
-            oc << ", __arg" << i << " = std::move(__arg" << i << ")";
-          }
-          oc << ", __stream = std::move(__stream)]() mutable {\n";
-          oc << "          this->" << fn->name << "(";
+          oc << "        auto __task = this->" << fn->name << "(";
           bool first = true;
           for (int i = 1; i <= stable_ix; ++i) {
             if (!first)
@@ -2426,7 +2481,10 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
           if (!first)
             oc << ", ";
           oc << "std::move(__stream));\n";
-          oc << "        }).detach();\n";
+          oc << "        if (__task.done()) __task.rethrow_if_exception();\n";
+          oc << "        ctx.stream_manager->start_task_after_reply(init.stream_id(), std::move(__task));\n";
+          if (fn->ex)
+            emit_declared_exception_reply(fn, oc, "        ");
         }
       }
 
@@ -2435,8 +2493,8 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
   }
   oc << "      default:\n"
-        "        // Error\n"
-        "        break;\n"
+      "        ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_UnknownFunctionIdx);\n"
+      "        break;\n"
         "    }\n"
         "    return;\n"
         "  }\n";

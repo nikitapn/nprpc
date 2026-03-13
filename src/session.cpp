@@ -42,7 +42,8 @@ Session::Session(boost::asio::any_io_executor executor)
     : timeout_timer_{executor}
     , inactive_timer_{executor}
 {
-  ctx_.stream_manager = new impl::StreamManager(ctx_, executor);
+  ctx_.stream_manager = new impl::StreamManager(
+      ctx_, static_cast<impl::RpcImpl*>(g_rpc)->stream_executor());
   // Set up send callback for control messages - uses main stream
   ctx_.stream_manager->set_send_callback([this](flat_buffer&& fb) {
     this->send_main_stream_message(std::move(fb));
@@ -88,6 +89,7 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
   switch (header->msg_id) {
   case MessageId::StreamInitialization: {
     impl::flat::StreamInit_Direct msg(rx_buffer, sizeof(impl::Header));
+    const auto request_id = header->request_id;
 
     NPRPC_LOG_INFO("[SESSION] {:p} {} StreamInit. stream_id: {}, "
                    "interface_idx: {}, fn_idx: {}, poa_idx: {}, oid: {}",
@@ -109,9 +111,12 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
         } catch (const std::exception& e) {
           NPRPC_LOG_ERROR( "[SESSION] {:p} {}: Exception during stream dispatch: {}",
               (void*)this, remote_endpoint().to_string(), e.what());
-          // Send StreamError
-          ctx_.stream_manager->send_error(msg.stream_id(), 1,
-                                          {}); // TODO: proper error code
+          if (tx_buffer.size() < sizeof(impl::flat::Header)) {
+            make_simple_answer(ctx_, MessageId::Error_BadInput);
+          }
+        }
+        if (tx_buffer.size() >= sizeof(impl::flat::Header)) {
+          static_cast<impl::flat::Header*>(tx_buffer.data().data())->request_id = request_id;
         }
         reset_context();
         not_found = false;
@@ -119,10 +124,12 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     }
 
     if (not_found) {
-      NPRPC_LOG_ERROR("[SESSION] {:p} {} Object not found for stream. {}",
-                      (void*)this, remote_endpoint().to_string(), msg.object_id());
-      ctx_.stream_manager->send_error(msg.stream_id(), 1,
-                                      {}); // TODO: proper error code
+      if (tx_buffer.size() < sizeof(impl::flat::Header)) {
+        NPRPC_LOG_ERROR("[SESSION] {:p} {} Object not found for stream. {}",
+                        (void*)this, remote_endpoint().to_string(), msg.object_id());
+        ctx_.stream_manager->send_error(msg.stream_id(), 1,
+                                        {}); // TODO: proper error code
+      }
     }
     break;
   }
@@ -257,6 +264,9 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
   if (needs_reply) {
     NPRPC_LOG_INFO("[SESSION] {:p} {} sending reply:", (void*)this, remote_endpoint().to_string());
     // dump_message(tx_buffer, true);
+    if (ctx_.stream_manager) {
+      ctx_.stream_manager->on_reply_sent();
+    }
   }
   return needs_reply;
 }

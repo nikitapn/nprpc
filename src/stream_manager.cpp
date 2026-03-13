@@ -26,41 +26,169 @@ uint64_t StreamManager::generate_stream_id()
   return random_base ^ (++counter);
 }
 
-StreamManager::StreamManager(SessionContext& session, boost::asio::any_io_executor executor)
-    : session_(session), executor_(executor)
+StreamManager::StreamManager(SessionContext& session, boost::asio::any_io_executor stream_executor)
+    : session_(session), stream_executor_(stream_executor)
 {
 }
 
 StreamManager::~StreamManager() { cancel_all(); }
 
+bool StreamManager::is_stream_started(uint64_t stream_id) const
+{
+  return started_streams_.contains(stream_id);
+}
+
+void StreamManager::dispatch_buffer(uint64_t stream_id, flat_buffer&& fb)
+{
+  auto* header = reinterpret_cast<flat::Header*>(fb.data().data());
+  if (header->msg_id == MessageId::StreamDataChunk) {
+    const bool unreliable = is_stream_unreliable(stream_id);
+    if (unreliable && send_datagram_callback_) {
+      if (!send_datagram_callback_(std::move(fb))) {
+        NPRPC_LOG_WARN("StreamManager::send_chunk: datagram send failed (may be too large)");
+      }
+    } else if (send_native_stream_callback_) {
+      send_native_stream_callback_(std::move(fb));
+    } else if (send_callback_) {
+      send_callback_(std::move(fb));
+    } else {
+      NPRPC_LOG_ERROR("StreamManager::dispatch_buffer: no send callback set for stream chunk");
+    }
+    return;
+  }
+
+  if (send_callback_) {
+    send_callback_(std::move(fb));
+  } else {
+    NPRPC_LOG_ERROR("StreamManager::dispatch_buffer: no send callback set");
+  }
+}
+
+void StreamManager::defer_stream_start(uint64_t stream_id)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  pending_stream_starts_.push_back(stream_id);
+}
+
+void StreamManager::start_task_after_reply(uint64_t stream_id, ::nprpc::Task<> task)
+{
+  task.set_completion_handler([this, stream_id](std::exception_ptr ep) {
+    this->post([this, stream_id, ep]() mutable {
+      ::nprpc::Task<> completed_task;
+
+      if (ep) {
+        try {
+          std::rethrow_exception(ep);
+        } catch (const std::exception& e) {
+          NPRPC_LOG_ERROR("StreamManager: async stream task {} failed: {}", stream_id, e.what());
+          send_error(stream_id, 1, {});
+        } catch (...) {
+          NPRPC_LOG_ERROR("StreamManager: async stream task {} failed with unknown exception", stream_id);
+          send_error(stream_id, 1, {});
+        }
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = active_tasks_.find(stream_id);
+        if (it != active_tasks_.end()) {
+          completed_task = std::move(it->second);
+          active_tasks_.erase(it);
+        }
+      }
+    });
+  });
+
+  const bool completed_inline = task.done();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    active_tasks_[stream_id] = std::move(task);
+    pending_stream_starts_.push_back(stream_id);
+  }
+
+  if (completed_inline) {
+    post([this, stream_id]() { start_stream(stream_id); });
+  }
+}
+
+void StreamManager::on_reply_sent()
+{
+  std::vector<uint64_t> streams;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    streams.swap(pending_stream_starts_);
+  }
+
+  for (auto stream_id : streams) {
+    post([this, stream_id]() { start_stream(stream_id); });
+  }
+}
+
+void StreamManager::start_stream(uint64_t stream_id)
+{
+  StreamWriterBase* raw_writer = nullptr;
+  std::vector<flat_buffer> pending;
+  bool has_task = false;
+  bool task_done = false;
+  ::nprpc::Task<> completed_task;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!started_streams_.insert(stream_id).second)
+      return;
+
+    if (auto it = pending_messages_.find(stream_id); it != pending_messages_.end()) {
+      pending = std::move(it->second);
+      pending_messages_.erase(it);
+    }
+
+    if (auto writer_it = writers_.find(stream_id); writer_it != writers_.end()) {
+      raw_writer = writer_it->second.writer.get();
+    }
+
+    if (auto task_it = active_tasks_.find(stream_id); task_it != active_tasks_.end()) {
+      has_task = true;
+      task_done = task_it->second.done();
+    }
+  }
+
+  for (auto& fb : pending) {
+    dispatch_buffer(stream_id, std::move(fb));
+  }
+
+  if (raw_writer) {
+    boost::asio::co_spawn(stream_executor_,
+      [this, stream_id, raw_writer]() -> boost::asio::awaitable<void> {
+        while (!raw_writer->is_done()) {
+          raw_writer->resume();
+          co_await boost::asio::post(stream_executor_, boost::asio::use_awaitable);
+        }
+        std::lock_guard lock(mutex_);
+        writers_.erase(stream_id);
+      },
+      boost::asio::detached);
+  }
+
+  if (has_task && task_done) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = active_tasks_.find(stream_id);
+    if (it != active_tasks_.end()) {
+      completed_task = std::move(it->second);
+      active_tasks_.erase(it);
+    }
+  }
+}
+
 void StreamManager::register_stream(uint64_t stream_id,
                                     std::unique_ptr<StreamWriterBase> writer,
                                     bool unreliable)
 {
-  StreamWriterBase* raw_writer = writer.get();
   {
     std::lock_guard<std::mutex> lock(mutex_);
     writers_[stream_id] = StreamInfo{std::move(writer), unreliable};
   }
 
   NPRPC_LOG_INFO("Stream registered: {} (unreliable={})", stream_id, unreliable);
-
-  // Post the stream pumping to run asynchronously AFTER the reply is sent
-  // This ensures the client receives the StreamInit reply before any data chunks
-  boost::asio::co_spawn(executor_,
-    [this, stream_id, raw_writer]() -> boost::asio::awaitable<void> {
-      // Pump the stream - call resume() until the coroutine is done
-      // Each resume() runs to the next co_yield and sends a chunk
-      while (!raw_writer->is_done()) {
-        raw_writer->resume();
-        // Yield to ioc between every chunk — processes incoming msgs, timers, etc.
-        co_await boost::asio::post(executor_, boost::asio::use_awaitable);
-      }
-      std::lock_guard lock(mutex_);
-      writers_.erase(stream_id);
-    },
-    boost::asio::detached
-  );
 }
 
 bool StreamManager::is_stream_unreliable(uint64_t stream_id) const
@@ -196,23 +324,15 @@ void StreamManager::send_chunk(uint64_t stream_id,
   header = reinterpret_cast<flat::Header*>(fb.data().data());
   header->size = static_cast<uint32_t>(fb.size() - 4);
 
-  // Send via appropriate callback based on reliability
-  if (unreliable && send_datagram_callback_) {
-    // Use QUIC datagram for unreliable streams (lowest latency, may drop)
-    if (!send_datagram_callback_(std::move(fb))) {
-      NPRPC_LOG_WARN("StreamManager::send_chunk: datagram send failed (may be too large)");
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!is_stream_started(stream_id)) {
+      pending_messages_[stream_id].push_back(std::move(fb));
+      return;
     }
-  } else if (send_native_stream_callback_) {
-    // Use native QUIC stream for reliable streams (zero head-of-line blocking)
-    NPRPC_LOG_INFO("StreamManager::send_chunk: using send_native_stream_callback_");
-    send_native_stream_callback_(std::move(fb));
-  } else if (send_callback_) {
-    // Fallback to main stream (for non-QUIC transports like WebSocket)
-    NPRPC_LOG_INFO("StreamManager::send_chunk: using send_callback_");
-    send_callback_(std::move(fb));
-  } else {
-    NPRPC_LOG_ERROR("StreamManager::send_chunk: no send callback set");
   }
+
+  dispatch_buffer(stream_id, std::move(fb));
 }
 
 void StreamManager::send_complete(uint64_t stream_id, uint64_t final_sequence)
@@ -235,11 +355,15 @@ void StreamManager::send_complete(uint64_t stream_id, uint64_t final_sequence)
   msg.stream_id() = stream_id;
   msg.final_sequence() = final_sequence;
 
-  if (send_callback_) {
-    send_callback_(std::move(fb));
-  } else {
-    NPRPC_LOG_ERROR("StreamManager::send_complete: no send callback set");
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!is_stream_started(stream_id)) {
+      pending_messages_[stream_id].push_back(std::move(fb));
+      return;
+    }
   }
+
+  dispatch_buffer(stream_id, std::move(fb));
 }
 
 void StreamManager::send_error(uint64_t stream_id,
@@ -276,11 +400,15 @@ void StreamManager::send_error(uint64_t stream_id,
   header = reinterpret_cast<flat::Header*>(fb.data().data());
   header->size = static_cast<uint32_t>(fb.size() - 4);
 
-  if (send_callback_) {
-    send_callback_(std::move(fb));
-  } else {
-    NPRPC_LOG_ERROR("StreamManager::send_error: no send callback set");
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!is_stream_started(stream_id)) {
+      pending_messages_[stream_id].push_back(std::move(fb));
+      return;
+    }
   }
+
+  dispatch_buffer(stream_id, std::move(fb));
 }
 
 void StreamManager::send_cancel(uint64_t stream_id)
@@ -302,11 +430,15 @@ void StreamManager::send_cancel(uint64_t stream_id)
   flat::StreamCancel_Direct msg(fb, header_size);
   msg.stream_id() = stream_id;
 
-  if (send_callback_) {
-    send_callback_(std::move(fb));
-  } else {
-    NPRPC_LOG_ERROR("StreamManager::send_cancel: no send callback set");
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!is_stream_started(stream_id)) {
+      pending_messages_[stream_id].push_back(std::move(fb));
+      return;
+    }
   }
+
+  dispatch_buffer(stream_id, std::move(fb));
 }
 
 void StreamManager::cancel_all()
@@ -317,6 +449,10 @@ void StreamManager::cancel_all()
     info.writer->cancel();
   }
   writers_.clear();
+  active_tasks_.clear();
+  pending_messages_.clear();
+  pending_stream_starts_.clear();
+  started_streams_.clear();
 
   for (auto& [id, reader] : readers_) {
     // Send empty error buffer to indicate connection closed

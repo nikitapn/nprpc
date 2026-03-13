@@ -331,37 +331,38 @@ private:
 
 class ChatServiceImpl final : public live_blog::IChatService_Servant {
 public:
-  void JoinPostChat(uint64_t post_id,
-                    std::string user_name,
-                    nprpc::BidiStream<ChatEnvelope, ChatServerEvent> stream) override
+  nprpc::Task<> JoinPostChat(uint64_t post_id,
+                             std::string user_name,
+                             nprpc::BidiStream<ChatEnvelope, ChatServerEvent> stream) override
   {
-    std::thread([post_id, user_name = std::move(user_name), stream = std::move(stream)]() mutable {
-      try {
-        stream.writer.write(make_chat_event(user_name,
-                                            PresenceEventKind::Joined,
-                                            "system",
-                                            user_name + " joined post #" + std::to_string(post_id),
-                                            "2026-03-09T09:00:00Z"));
+    try {
+      stream.writer.write(make_chat_event(user_name,
+                                          PresenceEventKind::Joined,
+                                          "system",
+                                          user_name + " joined post #" + std::to_string(post_id),
+                                          "2026-03-09T09:00:00Z"));
 
-        while (auto incoming = stream.reader.read_next()) {
-          auto echoed = make_chat_event(user_name,
-                                        PresenceEventKind::Typing,
-                                        incoming->author.empty() ? user_name : incoming->author,
-                                        incoming->body,
-                                        incoming->created_at.empty() ? "2026-03-09T09:01:00Z" : incoming->created_at);
-          stream.writer.write(std::move(echoed));
-        }
-
-        stream.writer.write(make_chat_event(user_name,
-                                            PresenceEventKind::Left,
-                                            "system",
-                                            user_name + " left the room.",
-                                            "2026-03-09T09:02:00Z"));
-        stream.writer.close();
-      } catch (...) {
-        stream.writer.abort();
+      while (auto incoming = co_await stream.reader) {
+        auto echoed = make_chat_event(user_name,
+                                      PresenceEventKind::Typing,
+                                      incoming->author.empty() ? user_name : incoming->author,
+                                      incoming->body,
+                                      incoming->created_at.empty() ? "2026-03-09T09:01:00Z" : incoming->created_at);
+        stream.writer.write(std::move(echoed));
       }
-    }).detach();
+
+      stream.writer.write(make_chat_event(user_name,
+                                          PresenceEventKind::Left,
+                                          "system",
+                                          user_name + " left the room.",
+                                          "2026-03-09T09:02:00Z"));
+      stream.writer.close();
+    } catch (...) {
+      stream.writer.abort();
+      throw;
+    }
+
+    co_return;
   }
 };
 
