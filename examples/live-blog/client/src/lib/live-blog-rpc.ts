@@ -3,6 +3,7 @@ import * as NPRPC from 'nprpc';
 import {
 	BlogService,
 	ChatService,
+	MediaService,
 	type AuthorPreview,
 	type ChatEnvelope,
 	type ChatServerEvent,
@@ -15,6 +16,7 @@ import {
 
 let blogServicePromise: Promise<BlogService> | undefined;
 let chatServicePromise: Promise<ChatService> | undefined;
+let mediaServicePromise: Promise<MediaService> | undefined;
 
 export async function getBlogService(): Promise<BlogService> {
 	if (!blogServicePromise) {
@@ -48,6 +50,22 @@ export async function getChatService(): Promise<ChatService> {
 	return chatServicePromise;
 }
 
+export async function getMediaService(): Promise<MediaService> {
+	if (!mediaServicePromise) {
+		mediaServicePromise = (async () => {
+			const rpc = await NPRPC.init();
+			const media = NPRPC.narrow(rpc.host_info.objects.media, MediaService);
+			if (!media) {
+				throw new Error('host.json did not expose a valid media service');
+			}
+
+			return media;
+		})();
+	}
+
+	return mediaServicePromise;
+}
+
 export async function loadBlogPage(page: number, pageSize: number): Promise<PostPage> {
 	const blog = await getBlogService();
 	return blog.ListPosts(page, pageSize);
@@ -77,6 +95,11 @@ export async function loadAuthorPage(
 export async function joinPostChat(postId: bigint, userName: string): Promise<Awaited<ReturnType<ChatService['JoinPostChat']>>> {
 	const chat = await getChatService();
 	return chat.JoinPostChat(postId, userName);
+}
+
+export async function streamPostVideo(postId: bigint): Promise<Awaited<ReturnType<MediaService['OpenPostVideo']>>> {
+	const media = await getMediaService();
+	return media.OpenPostVideo(postId);
 }
 
 export function formatIsoDate(value: string): string {

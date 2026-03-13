@@ -6,12 +6,14 @@
 		formatIsoDate,
 		joinPostChat,
 		loadPostPage,
+		streamPostVideo,
 		PresenceEventKind,
 		type ChatServerEvent,
 		type Comment,
 		type PostDetail
 	} from '$lib/live-blog-rpc';
 	import ShellHero from '$lib/components/ShellHero.svelte';
+	import VideoPlayer from '$lib/components/VideoPlayer.svelte';
 
 	const slug = $derived(page.params.slug ?? '');
 	type ChatEntry = {
@@ -383,10 +385,14 @@
 		</section>
 
 		<section class="glass-card p-7">
-			<p class="eyebrow">Media later</p>
-			<div class="mt-5 aspect-video rounded-[22px] border border-amber-900/10 bg-stone-900/90 p-5 text-sm text-stone-300">
-				Reserved for server-side media streaming after the core blog + chat flow is in place.
-			</div>
+			{#if post}
+				<VideoPlayer postId={post.id} />
+			{:else}
+				<p class="eyebrow">Server stream — MSE video</p>
+				<div class="mt-5 aspect-video rounded-[22px] border border-amber-900/10 bg-stone-900/90 flex items-center justify-center">
+					<p class="text-sm text-stone-400">Waiting for post to load…</p>
+				</div>
+			{/if}
 		</section>
 	</aside>
 </div>

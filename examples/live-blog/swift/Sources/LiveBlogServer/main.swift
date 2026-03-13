@@ -337,11 +337,41 @@ private final class ChatServiceImpl: ChatServiceServant, @unchecked Sendable {
 }
 
 private final class MediaServiceImpl: MediaServiceServant, @unchecked Sendable {
+  // Directory that holds fragmented MP4 files named post-<id>.fmp4.
+  // Create one with:
+  //   ffmpeg -i input.mp4 \
+  //          -c:v libx264 -c:a aac \
+  //          -movflags frag_keyframe+empty_moov+faststart \
+  //          -f mp4 /app/media/post-101.fmp4
+  private let mediaDir: String
+  // Stream chunks of 256 KB — large enough to keep throughput high,
+  // small enough that the SourceBuffer drain loop stays responsive.
+  private static let chunkSize = 4 * 1024 * 1024
+
+  init(mediaDir: String) {
+    self.mediaDir = mediaDir
+    super.init()
+  }
+
   override func openPostVideo(post_id: UInt64) -> AsyncStream<binary> {
-    AsyncStream { continuation in
-      continuation.yield(Array("placeholder-video-post-\(post_id)-chunk-1".utf8))
-      continuation.yield(Array("placeholder-video-post-\(post_id)-chunk-2".utf8))
-      continuation.finish()
+    let path = "\(mediaDir)/post-\(post_id).fmp4"
+    return AsyncStream { continuation in
+      Task {
+        guard let handle = FileHandle(forReadingAtPath: path) else {
+          // File not present — stream closes immediately so the client
+          // gets an empty stream rather than hanging.
+          continuation.finish()
+          return
+        }
+        defer { handle.closeFile() }
+
+        while true {
+          let data = handle.readData(ofLength: Self.chunkSize)
+          if data.isEmpty { break }
+          continuation.yield(Array(data))
+        }
+        continuation.finish()
+      }
     }
   }
 }
@@ -356,11 +386,14 @@ do {
   let keyFile = "/app/certs/out/localhost.key"
   let runtimeRoot = "/app/runtime-www"
   let staticRoot = runtimeRoot + "/client"
+  let mediaDir = "/app/media"
   let httpPort: UInt16 = 8443
   let repository = BlogRepository()
 
   try FileManager.default.createDirectory(atPath: runtimeRoot, withIntermediateDirectories: true)
   try FileManager.default.createDirectory(atPath: staticRoot, withIntermediateDirectories: true)
+  // Media directory is created if absent; fMP4 files must be placed here manually.
+  try FileManager.default.createDirectory(atPath: mediaDir, withIntermediateDirectories: true)
 
   let rpc = try RpcBuilder()
     .setLogLevel(.trace)
@@ -377,7 +410,7 @@ do {
 
   let blogObjectId = try poa.activateObject(BlogServiceImpl(repository: repository), flags: browserFlags)
   let chatObjectId = try poa.activateObject(ChatServiceImpl(), flags: browserFlags)
-  let mediaObjectId = try poa.activateObject(MediaServiceImpl(), flags: browserFlags)
+  let mediaObjectId = try poa.activateObject(MediaServiceImpl(mediaDir: mediaDir), flags: browserFlags)
 
   rpc.clearHostJson()
   try rpc.addToHostJson(name: "blog", objectId: blogObjectId)
@@ -387,6 +420,7 @@ do {
 
   print("HTTP root: \(staticRoot)")
   print("SSR handler root: \(runtimeRoot)")
+  print("Media dir: \(mediaDir)  (place post-<id>.fmp4 files here)")
   print("HTTPS/WebTransport port: \(httpPort)")
   print("host.json: \(hostJsonPath)")
   print("Objects: blog, chat, media")
