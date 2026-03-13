@@ -89,6 +89,26 @@
       "target": "LiveBlogServer",
       "configuration": "release",
       "preLaunchTask": "swift: Build Release LiveBlogServer (examples/live-blog/server)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:nprpc}/examples/live-blog/swift",
+      "name": "Debug LiveBlogServer (examples/live-blog/swift)",
+      "target": "LiveBlogServer",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug LiveBlogServer (examples/live-blog/swift)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:nprpc}/examples/live-blog/swift",
+      "name": "Release LiveBlogServer (examples/live-blog/swift)",
+      "target": "LiveBlogServer",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release LiveBlogServer (examples/live-blog/swift)"
     }
   ]
 }

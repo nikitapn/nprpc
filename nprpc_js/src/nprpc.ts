@@ -232,6 +232,11 @@ export class Connection {
           this.stream_manager.on_stream_cancel(msg.stream_id);
           return;
         }
+        case impl.MessageId.StreamWindowUpdate: {
+          const msg = impl.unmarshal_StreamWindowUpdate(buf, header_size);
+          this.stream_manager.on_stream_window_update(msg.stream_id, msg.credits);
+          return;
+        }
       }
 
       // Remaining messages require a reply - store request_id to echo back

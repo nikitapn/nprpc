@@ -306,7 +306,7 @@ private final class ChatServiceImpl: ChatServiceServant, @unchecked Sendable {
       message: ChatEnvelope(author: "system", body: "\(user_name) joined post #\(post_id).", created_at: "2026-03-09T09:00:00Z"),
       presence: PresenceEvent(user_name: user_name, kind: .joined)
     )
-    stream.writer.write(joined)
+    await stream.writer.write(joined)
 
     do {
       for try await incoming in stream.reader {
@@ -321,7 +321,7 @@ private final class ChatServiceImpl: ChatServiceServant, @unchecked Sendable {
         await chatHub.broadcast(postId: post_id, event: echoed)
       }
 
-      stream.writer.write(
+      await stream.writer.write(
         ChatServerEvent(
           message: ChatEnvelope(author: "system", body: "\(user_name) left the room.", created_at: "2026-03-09T09:01:00Z"),
           presence: PresenceEvent(user_name: user_name, kind: .left)
@@ -341,7 +341,7 @@ private final class MediaServiceImpl: MediaServiceServant, @unchecked Sendable {
   // Create one with:
   //   ffmpeg -i input.mp4 \
   //          -c:v libx264 -c:a aac \
-  //          -movflags frag_keyframe+empty_moov+faststart \
+  //          -movflags frag_keyframe+empty_moov+default_base_moof \
   //          -f mp4 /app/media/post-101.fmp4
   private let mediaDir: String
   // Stream chunks of 256 KB — large enough to keep throughput high,

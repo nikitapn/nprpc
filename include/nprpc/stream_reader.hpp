@@ -286,7 +286,9 @@ private:
 
   void send_window_update()
   {
-    // TODO: implement window update message
+    if (session_.stream_manager) {
+      session_.stream_manager->send_window_update(stream_id_, 1);
+    }
   }
 
   bool has_pending_chunk() const

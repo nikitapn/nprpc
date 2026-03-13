@@ -124,7 +124,10 @@ public:
                      coro_.promise().stream_id_,
                      coro_.promise().current_value_);
           coro_.promise().has_value_ = false;
-          resume();
+          // NOTE: do NOT recursively call resume() here.
+          // StreamManager::start_stream calls resume() once per credit and
+          // co_awaits between calls so the event loop stays responsive and
+          // backpressure can apply.
         }
       }
     }

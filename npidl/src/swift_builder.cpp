@@ -1605,7 +1605,7 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstInterfaceDecl* ifs,
     out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.success)\n";
     out << bl() << "Task {\n" << bb(false);
     out << bl() << "for await value in source {\n" << bb(false);
-    out << bl() << "writer.write(value)\n";
+    out << bl() << "await writer.write(value)\n";
     out << eb();
     out << bl() << "writer.close()\n";
     out << eb() << "\n";

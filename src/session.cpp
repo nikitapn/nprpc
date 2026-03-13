@@ -168,6 +168,13 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     needs_reply = false;  // Fire-and-forget
     break;
   }
+  case MessageId::StreamWindowUpdate: {
+    NPRPC_LOG_INFO("[SESSION] {:p} {} StreamWindowUpdate.", (void*)this, remote_endpoint().to_string());
+    impl::flat::StreamWindowUpdate_Direct msg(rx_buffer, sizeof(impl::Header));
+    ctx_.stream_manager->on_window_update(msg.stream_id(), msg.credits());
+    needs_reply = false;  // Fire-and-forget
+    break;
+  }
   case MessageId::FunctionCall: {
     impl::flat::CallHeader_Direct ch(rx_buffer, sizeof(impl::Header));
 

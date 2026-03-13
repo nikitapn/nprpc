@@ -11,7 +11,7 @@
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
+#include <deque>
 #include <vector>
 
 #include <nprpc_base_ext.hpp>
@@ -20,6 +20,7 @@
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/post.hpp>
+#include <boost/asio/steady_timer.hpp>
 
 namespace nprpc {
 
@@ -70,6 +71,22 @@ public:
   void on_stream_complete(uint64_t stream_id, uint64_t final_sequence);
   void on_stream_error(uint64_t stream_id, uint32_t error_code, flat_buffer&& error_data);
   void on_stream_cancel(uint64_t stream_id);
+  // Flow control: credit grant from the remote consumer
+  void on_window_update(uint64_t stream_id, uint32_t credits);
+
+  // External writer interface (called from C bridge / Swift).
+  // Registers a stream entry with the initial credit window so that
+  // write_chunk_or_queue() can perform credit-based flow control.
+  void register_external_writer(uint64_t stream_id);
+
+  // Try to send a chunk for an external writer.  If credits are available
+  // the chunk is sent synchronously and callback() is called before return.
+  // If no credits are available the data is queued and callback() is called
+  // (on the stream executor) when credits are granted via on_window_update().
+  void write_chunk_or_queue(uint64_t stream_id,
+                            std::span<const uint8_t> data,
+                            uint64_t sequence,
+                            std::function<void()> callback);
 
   // Send methods
   void send_chunk(uint64_t stream_id,
@@ -80,6 +97,8 @@ public:
                   uint32_t error_code,
                   std::span<const uint8_t> error_data);
   void send_cancel(uint64_t stream_id);
+  // Flow control: grant credits to the remote producer
+  void send_window_update(uint64_t stream_id, uint32_t credits);
 
   // Defer stream activation until after the current reply is queued.
   void defer_stream_start(uint64_t stream_id);
@@ -103,9 +122,23 @@ private:
   SendDatagramCallback send_datagram_callback_;
 
   // Active outgoing streams (server-side)
+  static constexpr int32_t kInitialWindowSize = 8; // pre-grant before first update
   struct StreamInfo {
-    std::unique_ptr<StreamWriterBase> writer;
+    std::unique_ptr<StreamWriterBase> writer;  // null for external (Swift) writers
     bool unreliable = false;
+    int32_t credits = kInitialWindowSize;
+    // Timer used to put the coroutine to sleep when credits are exhausted.
+    // Owned by the coroutine stack; we store only a non-owning pointer here.
+    // Guarded by mutex_.
+    boost::asio::steady_timer* credit_timer = nullptr;
+    // Queue for external (non-coroutine) writers.  When credits reach 0,
+    // write requests are parked here and drained by on_window_update().
+    struct PendingWrite {
+      std::vector<uint8_t> data;
+      uint64_t sequence;
+      std::function<void()> callback; // invoked when the chunk is sent
+    };
+    std::deque<PendingWrite> pending_writes;
   };
   std::unordered_map<uint64_t, StreamInfo> writers_;
 

@@ -1123,6 +1123,65 @@ void nprpc_stream_manager_send_error(
     mgr->send_error(stream_id, error_code, data_span);
 }
 
+void nprpc_stream_manager_on_window_update(
+    void* stream_manager,
+    uint64_t stream_id,
+    uint32_t credits)
+{
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) return;
+    mgr->on_window_update(stream_id, credits);
+}
+
+void nprpc_stream_manager_send_window_update(
+    void* stream_manager,
+    uint64_t stream_id,
+    uint32_t credits)
+{
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) return;
+    mgr->send_window_update(stream_id, credits);
+}
+
+void nprpc_stream_manager_register_external_writer(
+    void* stream_manager,
+    uint64_t stream_id)
+{
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) return;
+    mgr->register_external_writer(stream_id);
+}
+
+void nprpc_stream_manager_write_chunk_async(
+    void* stream_manager,
+    uint64_t stream_id,
+    const void* data,
+    uint32_t data_size,
+    uint64_t sequence,
+    void* context,
+    nprpc_write_callback callback)
+{
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) {
+        if (callback) callback(context);
+        return;
+    }
+
+    std::span<const uint8_t> data_span(
+        static_cast<const uint8_t*>(data),
+        data_size);
+
+    // write_chunk_or_queue checks the per-stream credits and either sends
+    // immediately or parks the write until on_window_update() drains it.
+    mgr->write_chunk_or_queue(
+        stream_id,
+        data_span,
+        sequence,
+        [ctx = context, cb = callback]() {
+            if (cb) cb(ctx);
+        });
+}
+
 // Legacy session context versions
 void nprpc_stream_send_chunk(
     void* session_ctx,

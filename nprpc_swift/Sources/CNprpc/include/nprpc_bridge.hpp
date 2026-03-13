@@ -445,6 +445,41 @@ void nprpc_stream_manager_send_error(
     const void* error_data,
     uint32_t error_data_size);
 
+// Notify the stream_manager that the remote consumer granted N additional
+// chunk credits.  Called when a StreamWindowUpdate message is received.
+void nprpc_stream_manager_on_window_update(
+    void* stream_manager,
+    uint64_t stream_id,
+    uint32_t credits);
+
+// Send a StreamWindowUpdate to the other side (receiver -> sender).
+void nprpc_stream_manager_send_window_update(
+    void* stream_manager,
+    uint64_t stream_id,
+    uint32_t credits);
+
+// Register an external (Swift/C) writer for a stream so that it participates
+// in credit-based flow control.  Must be called once per stream before the
+// first nprpc_stream_manager_write_chunk_async() call.
+void nprpc_stream_manager_register_external_writer(
+    void* stream_manager,
+    uint64_t stream_id);
+
+// Async write helper: calls 'callback(context)' when the chunk has been
+// queued (either immediately if credits are available, or after the next
+// StreamWindowUpdate unlocks the sender).  The callback is always invoked
+// exactly once, on the stream executor thread.
+typedef void (*nprpc_write_callback)(void* context);
+
+void nprpc_stream_manager_write_chunk_async(
+    void* stream_manager,
+    uint64_t stream_id,
+    const void* data,
+    uint32_t data_size,
+    uint64_t sequence,
+    void* context,
+    nprpc_write_callback callback);
+
 // Legacy: Send a stream chunk via session context (deprecated - use stream_manager versions)
 // Parameters:
 //   session_ctx: SessionContext* from dispatch

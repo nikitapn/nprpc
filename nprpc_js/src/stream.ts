@@ -82,6 +82,10 @@ export class StreamReader<T> extends StreamReaderBase {
       }
       while (this.chunks.length > 0) {
         yield this.chunks.shift()!;
+        // Grant one credit back to the server after each consumed chunk.
+        if (this.manager && this.stream_id !== undefined) {
+          this.manager.send_window_update(this.stream_id, 1);
+        }
       }
       if (this.done_) {
         return;
@@ -281,6 +285,24 @@ export class StreamManager {
     impl.marshal_StreamCancel(buf, header_size, { stream_id });
     buf.write_len(buf.size - 4);
     this.send_message(buf.writable_view);
+  }
+
+  send_window_update(stream_id: bigint, credits: number): void {
+    // stream_id (u64, 8 bytes) + credits (u32, 4 bytes) = 12 bytes payload
+    const buf = FlatBuffer.create(header_size + 12);
+    buf.commit(header_size + 12);
+    buf.write_msg_id(impl.MessageId.StreamWindowUpdate);
+    buf.write_msg_type(impl.MessageType.Request);
+    impl.marshal_StreamWindowUpdate(buf, header_size, { stream_id, credits });
+    buf.write_len(buf.size - 4);
+    this.send_message(buf.writable_view);
+  }
+
+  // Called when a remote stream consumer grants credits to a local StreamWriter.
+  on_stream_window_update(stream_id: bigint, credits: number): void {
+    // For TS-side writers this is currently a no-op because the TS StreamWriter
+    // does not implement backpressure yet. Reserved for future client-stream use.
+    void stream_id; void credits;
   }
 
   cancel_all(): void {

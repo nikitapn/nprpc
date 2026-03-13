@@ -133,6 +133,8 @@ enum MessageId: u32 {
   StreamError,
   // Streaming cancellation
   StreamCancellation,
+  // Streaming flow-control credit grant
+  StreamWindowUpdate,
   // Function or Stream response
   BlockResponse,
   // Increase reference count
@@ -237,6 +239,13 @@ message StreamError {
 // Client cancellation request
 message StreamCancel {
   stream_id: u64;       // Stream identifier
+}
+
+// Flow-control credit grant (receiver → sender)
+// Sent by the stream consumer to allow the producer to send N more chunks.
+message StreamWindowUpdate {
+  stream_id: u64;  // Stream identifier
+  credits: u32;    // Number of additional chunks the sender may transmit
 }
 
 } // namespace impl

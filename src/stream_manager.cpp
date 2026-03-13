@@ -158,12 +158,60 @@ void StreamManager::start_stream(uint64_t stream_id)
   if (raw_writer) {
     boost::asio::co_spawn(stream_executor_,
       [this, stream_id, raw_writer]() -> boost::asio::awaitable<void> {
-        while (!raw_writer->is_done()) {
+        // Per-chunk credit-based flow control.
+        // The coroutine parks itself on a steady_timer when credits run out.
+        // on_window_update() cancels the timer to wake it back up.
+        boost::asio::steady_timer credit_timer(stream_executor_,
+            boost::asio::steady_timer::time_point::max());
+
+        while (true) {
+          // Grab one credit or register the timer to wait for one.
+          bool need_wait = false;
+          {
+            std::lock_guard lock(mutex_);
+            auto it = writers_.find(stream_id);
+            if (it == writers_.end()) break; // writer was cancelled
+
+            if (it->second.credits > 0) {
+              --it->second.credits;
+            } else {
+              // Arm the timer and register the pointer while holding the lock.
+              // This eliminates the race where on_window_update() arrives and
+              // cancels the timer before we co_await it.
+              credit_timer.expires_at(
+                  boost::asio::steady_timer::time_point::max());
+              it->second.credit_timer = &credit_timer;
+              need_wait = true;
+            }
+          }
+
+          if (need_wait) {
+            try {
+              co_await credit_timer.async_wait(boost::asio::use_awaitable);
+            } catch (const boost::system::system_error&) {
+              // operation_aborted: on_window_update() cancelled the timer.
+            }
+            // Loop back to re-check credits; credit_timer pointer was already
+            // cleared by on_window_update().
+            continue;
+          }
+
+          if (raw_writer->is_done()) break;
           raw_writer->resume();
+          if (raw_writer->is_done()) break;
+
           co_await boost::asio::post(stream_executor_, boost::asio::use_awaitable);
         }
-        std::lock_guard lock(mutex_);
-        writers_.erase(stream_id);
+
+        // Tear down: remove timer pointer and erase the writer entry
+        {
+          std::lock_guard lock(mutex_);
+          auto it = writers_.find(stream_id);
+          if (it != writers_.end()) {
+            it->second.credit_timer = nullptr;
+            writers_.erase(it);
+          }
+        }
       },
       boost::asio::detached);
   }
@@ -516,6 +564,138 @@ void StreamManager::send_cancel(uint64_t stream_id)
   }
 
   dispatch_buffer(stream_id, std::move(fb));
+}
+
+void StreamManager::send_window_update(uint64_t stream_id, uint32_t credits)
+{
+  // Window updates flow from receiver to sender via the main reliable channel.
+  flat_buffer fb;
+  constexpr size_t header_size = sizeof(flat::Header);
+  // stream_id (u64, 8 bytes) + credits (u32, 4 bytes) = 12 bytes payload;
+  // sizeof(flat::StreamWindowUpdate) = 16 (including 4-byte padding).
+  constexpr size_t msg_size = 12; // only the bytes we actually write
+  constexpr size_t total_size = header_size + msg_size;
+
+  fb.prepare(total_size);
+  fb.commit(total_size);
+
+  auto* header = reinterpret_cast<flat::Header*>(fb.data().data());
+  header->size = total_size - 4;
+  header->msg_id = MessageId::StreamWindowUpdate;
+  header->msg_type = MessageType::Request;
+  header->request_id = 0;
+
+  flat::StreamWindowUpdate_Direct msg(fb, header_size);
+  msg.stream_id() = stream_id;
+  msg.credits() = credits;
+
+  // Window updates are always sent on the main (reliable) channel.
+  if (send_callback_)
+    send_callback_(std::move(fb));
+}
+
+void StreamManager::on_window_update(uint64_t stream_id, uint32_t credits)
+{
+  NPRPC_LOG_INFO("StreamManager::on_window_update stream_id={} credits={}", stream_id, credits);
+
+  boost::asio::steady_timer* timer = nullptr;
+  std::vector<std::pair<flat_buffer, std::function<void()>>> to_dispatch;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = writers_.find(stream_id);
+    if (it == writers_.end()) return;
+
+    it->second.credits += static_cast<int32_t>(credits);
+
+    // Drain any pending external (Swift/C) writes using newly granted credits.
+    while (it->second.credits > 0 && !it->second.pending_writes.empty()) {
+      auto& pw = it->second.pending_writes.front();
+      flat_buffer fb;
+      constexpr size_t hdr = sizeof(flat::Header);
+      constexpr size_t fixed = sizeof(flat::StreamChunk);
+      fb.prepare(hdr + fixed);
+      fb.commit(hdr + fixed);
+      auto* header = reinterpret_cast<flat::Header*>(fb.data().data());
+      header->msg_id = MessageId::StreamDataChunk;
+      header->msg_type = MessageType::Request;
+      header->request_id = 0;
+      flat::StreamChunk_Direct msg(fb, hdr);
+      msg.stream_id() = stream_id;
+      msg.sequence() = pw.sequence;
+      msg.window_size() = 0;
+      msg.data(static_cast<uint32_t>(pw.data.size()));
+      if (!pw.data.empty()) {
+        auto span = msg.data();
+        std::memcpy(span.data(), pw.data.data(), pw.data.size());
+      }
+      header = reinterpret_cast<flat::Header*>(fb.data().data());
+      header->size = static_cast<uint32_t>(fb.size() - 4);
+      to_dispatch.emplace_back(std::move(fb), std::move(pw.callback));
+      it->second.pending_writes.pop_front();
+      --it->second.credits;
+    }
+
+    timer = it->second.credit_timer;
+    it->second.credit_timer = nullptr;
+  }
+
+  // Send queued external chunks and invoke their callbacks (outside the lock).
+  for (auto& [fb, cb] : to_dispatch) {
+    dispatch_buffer(stream_id, std::move(fb));
+    if (cb) cb();
+  }
+
+  // Wake the co_spawn coroutine if it was parked waiting for credits.
+  if (timer) {
+    boost::asio::dispatch(timer->get_executor(),
+        [timer]() { timer->cancel(); });
+  }
+}
+
+void StreamManager::register_external_writer(uint64_t stream_id)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = writers_.find(stream_id);
+  if (it == writers_.end()) {
+    // Create a StreamInfo entry with no coroutine writer but with credits.
+    writers_[stream_id] = StreamInfo{};
+  }
+  // If already present (e.g. from a deferred stream start), leave credits alone.
+}
+
+void StreamManager::write_chunk_or_queue(uint64_t stream_id,
+                                         std::span<const uint8_t> data,
+                                         uint64_t sequence,
+                                         std::function<void()> callback)
+{
+  flat_buffer fb_to_send;
+  bool send_now = false;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = writers_.find(stream_id);
+    if (it == writers_.end()) {
+      // Stream not registered — just send and callback without credits.
+      send_now = true;
+    } else if (it->second.pending_writes.empty() && it->second.credits > 0) {
+      --it->second.credits;
+      send_now = true;
+    } else {
+      // No credits: enqueue.
+      StreamInfo::PendingWrite pw;
+      pw.data.assign(data.begin(), data.end());
+      pw.sequence = sequence;
+      pw.callback = std::move(callback);
+      it->second.pending_writes.push_back(std::move(pw));
+      return; // callback will be invoked by on_window_update
+    }
+  }
+
+  if (send_now) {
+    send_chunk(stream_id, data, sequence);
+    if (callback) callback();
+  }
 }
 
 void StreamManager::cancel_all()
