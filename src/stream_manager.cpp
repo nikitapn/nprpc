@@ -233,6 +233,7 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
 
   StreamReaderBase* reader = nullptr;
   bool should_complete = false;
+  std::vector<flat_buffer> ready_chunks;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -243,15 +244,29 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
     }
 
     reader = it->second.reader;
-    it->second.highest_sequence_received = sequence;
-    it->second.has_received_chunk = true;
-    if (it->second.final_sequence && sequence >= *it->second.final_sequence) {
+    auto& state = it->second;
+    if (state.unreliable) {
+      ready_chunks.push_back(std::move(fb));
+    } else if (sequence >= state.next_expected_sequence) {
+      state.pending_chunks.emplace(sequence, std::move(fb));
+      auto ready_it = state.pending_chunks.find(state.next_expected_sequence);
+      while (ready_it != state.pending_chunks.end()) {
+        ready_chunks.push_back(std::move(ready_it->second));
+        state.pending_chunks.erase(ready_it);
+        ++state.next_expected_sequence;
+        ready_it = state.pending_chunks.find(state.next_expected_sequence);
+      }
+    }
+
+    if (state.final_sequence && state.next_expected_sequence > *state.final_sequence) {
       should_complete = true;
       readers_.erase(it);
     }
   }
 
-  reader->on_chunk_received(std::move(fb));
+  for (auto& ready_fb : ready_chunks) {
+    reader->on_chunk_received(std::move(ready_fb));
+  }
   if (should_complete) {
     reader->on_complete();
   }
@@ -271,7 +286,7 @@ void StreamManager::on_stream_complete(uint64_t stream_id, uint64_t final_sequen
     if (it->second.unreliable || final_sequence == kEmptyStreamFinalSequence) {
       reader = it->second.reader;
       readers_.erase(it);
-    } else if (it->second.has_received_chunk && it->second.highest_sequence_received >= final_sequence) {
+    } else if (it->second.next_expected_sequence > final_sequence) {
       reader = it->second.reader;
       readers_.erase(it);
     } else {

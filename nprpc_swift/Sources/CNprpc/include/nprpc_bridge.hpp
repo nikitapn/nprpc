@@ -406,6 +406,13 @@ uint64_t nprpc_generate_stream_id();
 // The returned pointer is valid for the lifetime of the underlying session.
 void* nprpc_object_get_stream_manager(void* object_ptr);
 
+// Get or create the exact Session* used for RPCs from this object.
+// Ensures endpoint selection has happened before looking up the session.
+void* nprpc_object_get_session(void* object_ptr);
+
+// Get stream_manager pointer from a Session* returned by nprpc_object_get_session.
+void* nprpc_session_get_stream_manager(void* session_ptr);
+
 // Get stream_manager pointer from session context (for use in async Tasks)
 // The stream_manager pointer remains valid for the lifetime of the session
 void* nprpc_get_stream_manager(void* session_ctx);
@@ -506,6 +513,13 @@ void nprpc_stream_manager_defer_stream_start(
 // Returns 0 on success, error code on failure
 int nprpc_stream_send_init(
     void* object_ptr,
+    void* buffer_ptr,
+    uint32_t timeout_ms);
+
+// Send StreamInit over an already selected Session* and arm the exact same
+// session's StreamManager after the reply succeeds.
+int nprpc_session_stream_send_init(
+    void* session_ptr,
     void* buffer_ptr,
     uint32_t timeout_ms);
 

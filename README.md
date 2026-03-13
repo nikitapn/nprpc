@@ -1,180 +1,38 @@
 # NPRPC - Multi-Transport RPC Framework
 
-NPRPC is a high-performance, multi-transport RPC (Remote Procedure Call) framework designed for distributed systems. It features an efficient binary protocol with flat buffers serialization and supports multiple transport layers for maximum flexibility.
+NPRPC is a high-performance, multi-transport RPC framework for distributed systems. It features a compact binary protocol with flat-buffer serialization, a type-safe IDL with code generation for C++, TypeScript, and Swift, and first-class streaming support (server, client, and bidirectional streams) over every transport.
 
-## 🚀 Key Features
+## Key Features
 
-- **Multiple Transport Options**: Choose the best transport for your use case
-  - **WebSocket** - Persistent bidirectional communication
-  - **Secure WebSocket (WSS)** - Encrypted persistent connections
-  - **HTTP** - Stateless request/response for web applications
-  - **HTTP/3** - Modern web transport over QUIC (via nghttp3/ngtcp2)
-  - **TCP** - Direct socket communication
-  - **Shared Memory** - Zero-copy IPC with 8x memory efficiency
-  - **QUIC** - Next-gen encrypted transport (via MsQuic)
-- **Server-Side Rendering**: Built-in SvelteKit SSR support via shared memory IPC
-- **Efficient Binary Protocol**: FlatBuffers-based serialization for minimal overhead
-- **Type-Safe IDL**: Interface Definition Language with code generation for C++, TypeScript, and Swift
-- **Cross-Language Support**: Seamless C++ ↔ TypeScript/JavaScript ↔ Swift communication
-- **Modern Async API**: Built on Boost.Asio (C++), async/await (TypeScript), and Swift concurrency
-- **Built-in Object Management**: POA (Portable Object Adapter) for lifecycle management
-- **Nameserver**: Service discovery and object binding
-- **SSL/TLS Support**: Secure communications out of the box
-- **Exception Handling**: Type-safe exception propagation across language boundaries
+- **Multiple transports** — WebSocket, WSS, HTTP, HTTP/3, TCP, Shared Memory, QUIC, WebTransport
+- **Streaming RPC** — server (`stream<T>`), client (`client_stream<T>`), and bidi (`bidi_stream<In,Out>`) streams with C++20 coroutines
+- **Type-safe IDL** — `.npidl` → C++/TypeScript/Swift stubs with `npidl`
+- **Cross-language** — seamless C++ ↔ TypeScript/JavaScript ↔ Swift interop
+- **Browser-first** — WebSocket, HTTP, and WebTransport endpoints; `host.json` bootstrap for static deployments
+- **SSR support** — built-in SvelteKit SSR via shared memory IPC (see [docs/SSR_ARCHITECTURE.md](docs/SSR_ARCHITECTURE.md))
+- **Cookie auth** — httpOnly cookie-based auth for HTTP/WebSocket (see [docs/HTTP_AUTH.md](docs/HTTP_AUTH.md))
+- **POA** — Portable Object Adapter for lifecycle management and session-scoped activation
+- **Nameserver** — service discovery and named object binding
 
-## 📦 Transport Comparison
+## Transport Overview
 
-| Transport | Use Case | Pros | Cons |
-|-----------|----------|------|------|
-| **WebTransport** |
-| **WebSocket** | Real-time apps, persistent connections | Bidirectional, low latency, stateful | Requires persistent connection |
-| **HTTP** | Web apps, stateless APIs, SSR | Browser compatible, SSR-capable | Higher overhead per request |
-| **TCP** | High-performance IPC | Low overhead, reliable | No browser support |
-| **Shared Memory** | Same-machine IPC | Zero-copy, 8x memory efficient | Local only |
-| **QUIC** | Next-gen transport | Multiplexed, encrypted, 0-RTT, ~43k calls/sec | Requires MsQuic |
-| **HTTP/3** | Modern web, SSR | HTTP/3 over QUIC, SSR-capable | Requires nghttp3/ngtcp2 |
+| Transport | Use Case | Notes |
+|-----------|----------|-------|
+| **TCP** | Native IPC, microservices | Lowest overhead, no browser support; optional epoll/io_uring backend |
+| **WebSocket (WS)** | Real-time, bidirectional | Persistent connection, streams supported |
+| **WebSocket (WSS)** | Secure real-time | Encrypted WS |
+| **HTTP** | Stateless web APIs | Browser-compatible, SSR-capable |
+| **HTTPS** | Secure web APIs | Encrypted HTTP |
+| **HTTP/3** | Modern web | QUIC-based, SSR-capable; requires `-DNPRPC_ENABLE_HTTP3=ON` |
+| **WebTransport** | Browser streaming | Multiplexed streams over HTTP/3; native stream mapping for `stream<T>` |
+| **QUIC** | Native next-gen | Multiplexed, encrypted, ~43k calls/s; requires `-DNPRPC_ENABLE_QUIC=ON` |
+| **Shared Memory** | Same-machine IPC | Zero-copy, 8× memory efficiency vs TCP |
 
-## � Server-Side Rendering (SSR) Support
-
-NPRPC includes built-in support for serving SvelteKit applications with server-side rendering over HTTP/3. This enables high-performance web applications with:
-
-- **Full SSR** - Initial page loads are rendered server-side for SEO and fast first paint
-- **Client-side Navigation** - SvelteKit's `__data.json` endpoints handled seamlessly
-- **Form Actions** - POST requests with `?/action` patterns fully supported
-- **Shared Memory IPC** - Zero-copy communication between C++ and Node.js
-- **HTTP/3** - Modern QUIC-based transport for optimal performance
-
-### Architecture
-
-```
-Browser ──HTTP/3──► C++ Server ──Shared Memory──► Node.js (SvelteKit)
-                        │
-                        └── Static files (zero-copy cache)
-```
-
-### Quick Start
-
-1. **Build your SvelteKit app** with `@nprpc/adapter-sveltekit`:
-
-```javascript
-// svelte.config.js
-import adapter from '@nprpc/adapter-sveltekit';
-
-export default {
-  kit: {
-    adapter: adapter()
-  }
-};
-```
-
-2. **Configure the C++ server**:
-
-```cpp
-#include <nprpc/nprpc.hpp>
-
-int main() {
-    boost::asio::io_context ioc;
-    
-    auto rpc = nprpc::RpcBuilder()
-        .set_hostname("myserver")
-        .with_http()
-            .port(3000)
-            .root_dir("/path/to/build/client")  // Static assets
-            .ssl("cert.pem", "key.pem")
-            .enable_http3()
-            .enable_ssr("/path/to/build")       // SSR handler directory
-        .build(ioc);
-
-    ioc.run();
-    return 0;
-}
-```
-
-3. **Build with SSR support**:
-
-```bash
-cmake -DNPRPC_ENABLE_SSR=ON -DNPRPC_BUILD_HTTP3=ON ..
-cmake --build .
-```
-
-### How It Works
-
-- **HTML Page Requests** - Forwarded to Node.js for SSR, returns fully rendered HTML
-- **Data Requests** (`__data.json`) - SvelteKit client navigation data
-- **Form Actions** (`POST ?/action`) - Server-side form handling
-- **Static Assets** - Served directly from C++ with zero-copy file cache
-- **RPC Calls** - Still handled by NPRPC's binary protocol at `/rpc`
-
-See [SSR_ARCHITECTURE.md](docs/SSR_ARCHITECTURE.md) for detailed documentation.
-
-## 🍪 Cookie-Based Authentication
-
-NPRPC supports httpOnly cookie authentication for HTTP and WebSocket transports.
-
-```cpp
-// Server-side: read a cookie
-auto token = nprpc::get_cookie("session_token");
-
-// Set a cookie
-nprpc::set_cookie("session_token", token_value, {
-    .http_only = true,
-    .secure    = true,
-    .same_site = "Strict",
-    .max_age   = 86400
-});
-```
-
-The TypeScript client automatically sends cookies with every HTTP/WebSocket RPC call (`credentials: 'include'`).
-
-See [HTTP_AUTH.md](docs/HTTP_AUTH.md) for the full C++, TypeScript, and Swift API reference.
-
-## 🛠️ Installation
-
-### Prerequisites
-
-- C++23 compiler
-- CMake 3.15+
-- OpenSSL
-- Boost (optional, for npidl tool)
-- Node.js 16+ (optional, for TypeScript/JavaScript bindings)
-
-### Quick Install
-
-```bash
-# Ubuntu/Debian
-sudo apt install build-essential cmake libssl-dev
-
-# macOS
-brew install cmake openssl
-
-# Clone and build
-git clone https://github.com/yourusername/nprpc.git
-cd nprpc
-mkdir build && cd build
-cmake ..
-cmake --build .
-sudo cmake --install .
-```
-
-See [BUILD.md](BUILD.md) for detailed build instructions and options.
-
-### Using in Your Project
-
-**With CMake:**
-
-```cmake
-find_package(nprpc REQUIRED)
-add_executable(myapp main.cpp)
-target_link_libraries(myapp PRIVATE nprpc::nprpc)
-```
-
-## 📝 Quick Start
+## Quick Start
 
 ### 1. Define Your Interface (IDL)
 
-Create a `.npidl` file describing your service:
-
-```cpp
+```
 // calculator.npidl
 module example;
 
@@ -194,14 +52,13 @@ interface Calculator {
 ### 2. Generate Code
 
 ```bash
-npidl calculator.npidl --cpp --ts
+npidl calculator.npidl --cpp --ts        # C++ + TypeScript
+npidl calculator.npidl --cpp --ts --swift # add Swift
 ```
 
-This generates:
-- `calculator.hpp` / `calculator.cpp` - C++ stubs
-- `calculator.ts` - TypeScript client
+Generates `calculator.hpp` / `calculator.cpp` (C++) and `calculator.ts` (TypeScript).
 
-### 3. Implement Server (C++)
+### 3. Implement the Server (C++)
 
 ```cpp
 #include <nprpc/nprpc.hpp>
@@ -209,398 +66,460 @@ This generates:
 
 class CalculatorImpl : public example::ICalculator_Servant {
 public:
-  double Add(double a, double b) override {
-    return a + b;
-  }
-
-  double Subtract(double a, double b) override {
-    return a - b;
-  }
-
-  double Multiply(double a, double b) override {
-    return a * b;
-  }
-
+  double Add(double a, double b) override { return a + b; }
+  double Subtract(double a, double b) override { return a - b; }
+  double Multiply(double a, double b) override { return a * b; }
   double Divide(double a, double b) override {
-    if (b == 0.0) {
-      throw example::CalculationError{"Division by zero", 1};
-    }
+    if (b == 0.0) throw example::CalculationError{"Division by zero", 1};
     return a / b;
   }
 };
 
 int main() {
-  boost::asio::io_context ioc;
+  // Build RPC — chain transport builders, then call build()
+  auto* rpc = nprpc::RpcBuilder()
+    .set_log_level(nprpc::LogLevel::info)
+    .with_hostname("localhost")
+    .with_tcp(15000)
+    .with_http(8080)
+      .root_dir("./public")
+    .build();
 
-  // Create RPC with multiple transports
-  auto rpc = nprpc::RpcBuilder()
-    .set_log_level(nprpc::LogLevel::Error)
-    .set_listen_tcp_port(15000)
-    .set_listen_http_port(8080)
-    .set_http_root_dir("./public")
-    .set_hostname("localhost")
-    .build(ioc);
-
-  // Create POA for object management
-  auto poa = nprpc::PoaBuilder(rpc)
+  // Create a POA
+  auto* poa = nprpc::PoaBuilder(rpc)
     .with_max_objects(10)
     .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
     .build();
 
-  // Activate object with multiple transports
-  auto calc = std::make_shared<CalculatorImpl>();
+  // Activate object — specify which transports it accepts
+  CalculatorImpl calc;
   auto oid = poa->activate_object(
-    calc.get(),
-    nprpc::ObjectActivationFlags::tcp |
-    nprpc::ObjectActivationFlags::ws |
+    &calc,
+    nprpc::ObjectActivationFlags::tcp  |
+    nprpc::ObjectActivationFlags::ws   |
     nprpc::ObjectActivationFlags::http
   );
 
-  // Optional: publish origin-local objects for browser bootstrap
+  // Publish for browser clients (writes <root_dir>/host.json)
   rpc->add_to_host_json("calculator", oid);
-  rpc->produce_host_json(); // writes <http_root_dir>/host.json
+  rpc->produce_host_json();
 
-  // Optional: Register with nameserver
-  auto nameserver = nprpc::get_nameserver("localhost:15001");
-  nameserver->Bind(oid, "calculator");
+  // Or register with the nameserver
+  auto ns = rpc->get_nameserver("localhost:15001");
+  ns->Bind(oid, "calculator");
 
-  ioc.run();
+  rpc->run(); // blocks; use rpc->start_thread_pool(n) for async
   return 0;
 }
 ```
 
-### 4. Use Client (TypeScript/JavaScript)
+### 4. Use the Client (TypeScript)
 
-#### WebSocket Client (Persistent Connection)
+#### Via WebSocket (persistent connection)
 
 ```typescript
 import * as NPRPC from 'nprpc';
 import * as example from './gen/calculator';
 
-// Initialize RPC with WebSocket
 const rpc = await NPRPC.init();
+const ns = NPRPC.get_nameserver('localhost:15001');
+const ref = NPRPC.make_ref<NPRPC.ObjectProxy>();
+await ns.Resolve('calculator', ref);
 
-// Get object from nameserver
-const nameserver = NPRPC.get_nameserver('localhost:15001');
-const objRef = NPRPC.make_ref<NPRPC.ObjectProxy>();
-await nameserver.Resolve('calculator', objRef);
-
-// Narrow to specific type
-const calculator = NPRPC.narrow(objRef.value, example.Calculator);
-
-// Call methods - uses WebSocket
-const sum = await calculator.Add(10, 20);        // 30
-const diff = await calculator.Subtract(20, 10);  // 10
-const product = await calculator.Multiply(5, 6); // 30
+const calc = NPRPC.narrow(ref.value, example.Calculator);
+console.log(await calc.Add(10, 20));   // 30
 
 try {
-  await calculator.Divide(10, 0);
-} catch (err) {
-  if (err instanceof example.CalculationError) {
-    console.error(`Error ${err.code}: ${err.message}`);
-  }
+  await calc.Divide(10, 0);
+} catch (e) {
+  if (e instanceof example.CalculationError)
+    console.error(`${e.code}: ${e.message}`);
 }
 ```
 
-#### HTTP Client (Stateless)
+#### Via HTTP (stateless, from `host.json`)
 
 ```typescript
-import * as NPRPC from 'nprpc';
-import * as example from './gen/calculator';
+// host.json is served by the C++ server at /host.json
+const host = await fetch('/host.json').then(r => r.json());
+const calc = NPRPC.narrow(host.objects.calculator, example.Calculator);
 
-// Get calculator proxy (from host.json or nameserver)
-const calculator = NPRPC.narrow(host_info.objects.calculator, example.Calculator);
+// .http sub-proxy returns values directly
+console.log(await calc.http.Add(10, 20));  // 30
+```
 
-// Call via HTTP - returns values directly, no out parameters
-const sum = await calculator.http.Add(10, 20);        // 30
-const diff = await calculator.http.Subtract(20, 10);  // 10
-const product = await calculator.http.Multiply(5, 6); // 30
+## Streaming RPC
 
-try {
-  await calculator.http.Divide(10, 0);
-} catch (err) {
-  if (err instanceof example.CalculationError) {
-    console.error(`Error ${err.code}: ${err.message}`);
-  }
+All three stream directions are supported at the IDL level and map to C++20 coroutines on the server side and range-based iteration / `AsyncThrowingStream` on clients.
+
+### IDL Syntax
+
+```
+interface FileServer {
+  // Server → Client  (stream<T> is an alias for server_stream<T>)
+  stream<vector<u8>>       DownloadFile(filename: in string);
+
+  // Client → Server  (void reply after stream closes)
+  void UploadFile(filename: in string, data: client_stream<vector<u8>>);
+
+  // Bidirectional
+  bidi_stream<string, string> Chat(room: in string);
 }
 ```
 
-## 🔧 Advanced Features
+Optional `in` parameters before the stream keyword are sent in the handshake phase; the server can raise exceptions there before any data flows.
 
-### Nameserver for Service Discovery
+### C++ Server (coroutine)
 
-**Server Side:**
 ```cpp
-// Bind objects to names
-auto nameserver = nprpc::get_nameserver("localhost:15001");
-nameserver->Bind(calculator_oid, "calculator");
-nameserver->Bind(auth_oid, "authorizator");
-nameserver->Bind(chat_oid, "chat");
+// server_stream — return a StreamWriter<T> coroutine
+nprpc::StreamWriter<uint8_t>
+FileServerImpl::DownloadFile(std::string_view filename) {
+  auto data = read_file(filename);
+  for (uint8_t byte : data)
+    co_yield byte;
+}
+
+// client_stream — StreamReader<T> delivered as a parameter
+void FileServerImpl::UploadFile(
+    std::string_view filename,
+    nprpc::StreamReader<std::vector<uint8_t>>& data) {
+  std::ofstream out(std::string(filename), std::ios::binary);
+  for (auto& chunk : data)   // blocking range-based for
+    out.write((char*)chunk.data(), chunk.size());
+}
 ```
 
-**Client Side:**
+### C++ Client
+
+```cpp
+// Server stream — range-based for loop
+auto reader = file_server->DownloadFile("large.bin");
+for (auto& chunk : reader)
+  process(chunk);
+
+// Client stream — write chunks then close
+auto writer = file_server->UploadFile("upload.bin");
+while (has_data())
+  writer.send(next_chunk());
+writer.close();
+```
+
+### TypeScript Client
+
 ```typescript
-const nameserver = NPRPC.get_nameserver('localhost:15001');
+// Server stream
+const stream = await fileServer.DownloadFile('large.bin');
+for await (const chunk of stream) {
+  process(chunk);
+}
 
-// Resolve by name
-const calcRef = NPRPC.make_ref<NPRPC.ObjectProxy>();
-const found = await nameserver.Resolve('calculator', calcRef);
-
-if (found) {
-  const calculator = NPRPC.narrow(calcRef.value, nscalc.Calculator);
-  // Use calculator...
+// Bidirectional
+const chat = await chatService.Chat('lobby');
+chat.send('Hello!');
+for await (const msg of chat) {
+  console.log(msg);
 }
 ```
 
-### POA Object ID Policy (deterministic IDs)
+### Swift Client
 
-Use `with_object_id_policy(PoaPolicy::ObjectIdPolicy::UserSupplied)` when you need stable object IDs (for example, when bundling pre-known IDs into a web client). In this mode you must provide the ID explicitly:
+```swift
+// Server stream — AsyncThrowingStream
+let stream = try client.downloadFile(filename: "large.bin")
+for try await chunk in stream {
+    process(chunk)
+}
+```
+
+## WebTransport
+
+WebTransport is the browser-native streaming transport built on HTTP/3. When an object is advertised with a secured HTTPS endpoint and the server has `enable_http3()` active, browsers can open a WebTransport session to `https://host:port/wt` and use it as the NPRPC transport.
+
+- Unary RPC uses a single reliable bidirectional control stream.
+- `stream<T>` methods map to server-opened unidirectional WebTransport streams.
+- `client_stream<T>` maps to client-opened unidirectional streams.
+- `bidi_stream<In,Out>` maps to a dedicated bidirectional stream.
+
+Enable it server-side by activating objects with `ObjectActivationFlags::https` and calling `enable_http3()` on the HTTP builder:
 
 ```cpp
-auto static_poa = rpc->create_poa()
-  .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
-  .with_object_id_policy(nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied)
-  .with_max_objects(10)
+auto* rpc = nprpc::RpcBuilder()
+  .with_hostname("example.com")
+  .with_http(443)
+    .ssl("cert.crt", "key.key")
+    .enable_http3()
   .build();
 
-constexpr nprpc::oid_t calculator_id = 0;
-
-static_poa->activate_object_with_id(
-  calculator_id,
-  calculator_servant.get(),
-  nprpc::ObjectActivationFlags::tcp | nprpc::ObjectActivationFlags::http
-);
+auto oid = poa->activate_object(&servant,
+    nprpc::ObjectActivationFlags::https);
 ```
 
-NOTE: Ensure the IDs are unique and in the valid range (0 to max_objects - 1).
+The TypeScript runtime automatically prefers WebTransport when available (`globalThis.WebTransport` present) and the object carries a secured endpoint.
 
-POAs default to `SystemGenerated`, so `activate_object_with_id` is only available when the policy is set to `UserSupplied`, and plain `activate_object` is disabled to prevent accidental mismatches.
+## Advanced Features
 
-### SSL/TLS Support
+### SSL / TLS
+
+Chain `.ssl()` on the HTTP or QUIC builder. The `dhparams` file is optional.
 
 ```cpp
-auto rpc = nprpc::RpcBuilder()
-  .set_listen_http_port(443)
-  .enable_ssl_server(
-    "cert.pem",      // public key
-    "key.pem",       // private key
-    "dhparam.pem"    // DH parameters
-  )
-  .build(ioc);
+auto* rpc = nprpc::RpcBuilder()
+  .with_hostname("example.com")
+  .with_http(443)
+    .ssl("cert.crt", "key.key", "dhparam.pem")
+    .enable_http3()
+  .with_tcp(15000)
+  .build();
 
-// Activate with SSL WebSocket only
-poa->activate_object(
-  obj.get(),
-  nprpc::ObjectActivationFlags::wss
-);
+// Activate for secure WebSocket only
+poa->activate_object(&obj, nprpc::ObjectActivationFlags::wss);
 ```
 
 ```typescript
-// Client automatically uses wss:// when connecting to HTTPS
-const rpc = await NPRPC.init(); // Detects protocol from page URL
+// TypeScript client automatically uses wss:// when served over HTTPS
+const rpc = await NPRPC.init();
 ```
 
-### Shared Memory Transport (IPC)
+### Nameserver
 
-For same-machine communication with zero-copy efficiency:
+```cpp
+// Server: bind by name
+auto ns = rpc->get_nameserver("localhost:15001");
+ns->Bind(calc_oid,  "calculator");
+ns->Bind(auth_oid,  "authorizator");
+```
+
+```typescript
+// Client: resolve by name
+const ref = NPRPC.make_ref<NPRPC.ObjectProxy>();
+if (await nameserver.Resolve('calculator', ref))
+  const calc = NPRPC.narrow(ref.value, example.Calculator);
+```
+
+### Deterministic Object IDs
+
+Use `ObjectIdPolicy::UserSupplied` when you need stable IDs baked into a web bundle:
+
+```cpp
+auto* poa = nprpc::PoaBuilder(rpc)
+  .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+  .with_object_id_policy(nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied)
+  .with_max_objects(16)
+  .build();
+
+constexpr nprpc::oid_t kCalcId = 0;
+poa->activate_object_with_id(kCalcId, &calc,
+    nprpc::ObjectActivationFlags::tcp | nprpc::ObjectActivationFlags::http);
+```
+
+IDs must be in `[0, max_objects)`. With `UserSupplied`, `activate_object` (auto-ID) is disabled to prevent mismatches.
+
+### Shared Memory Transport
 
 ```cpp
 // Server
-auto rpc = nprpc::RpcBuilder()
-  .set_shared_memory_size(64 * 1024 * 1024) // 64MB
-  .build(ioc);
+auto* rpc = nprpc::RpcBuilder()
+  .with_hostname("localhost")
+  .build();
 
-poa->activate_object(
-  obj.get(),
-  nprpc::ObjectActivationFlags::shm
-);
+poa->activate_object(&obj, nprpc::ObjectActivationFlags::shm);
+rpc->run();
 ```
 
 ```cpp
-// Client
-auto rpc = nprpc::init_client_only();
-auto obj = nprpc::resolve_shared_memory<MyInterface>("my_object");
-obj->MyMethod(data);
+// Client (same machine)
+auto* rpc = nprpc::RpcBuilder().build();
+auto ns = rpc->get_nameserver("localhost:15001");
+Object* obj;
+ns->Resolve("my_object", obj);
+auto* svc = nprpc::narrow<MyInterface>(obj);
+svc->MyMethod(data);
 ```
 
-### Complex Data Types
+### Session-Scoped Activation
 
-NPRPC supports rich data types in IDL:
+Pass the current session context to restrict an object to the caller's connection:
 
-```typescript
-message UserProfile {
-  username: string;
-  email: string;
-  avatar?: avatar_url; // optional field
-  roles: vector<string>; // dynamic array
-}
-
-// Alias for convenience
-alias UserList = vector<UserProfile>;
-
-struct NestedData {
-  id: i32;
-  users: UserList;
-  tenItemsOfSomething: f64[10]; // fixed-size array
-}
-
-
-interface DataService {
-  UserProfile GetUser(username: in string);
-  UserList SearchUsers(query: in string);
-  void UpdateProfile(profile: in UserProfile);
-  NestedData GetComplexData() raises(DataError);
-  // Async method
-  async GetIdsAsync(u32 count, ids: out vector<i32>);
+```cpp
+nprpc::ObjectId CreateProcessor() override {
+  auto proc = std::make_unique<MyProcessor>();
+  // Only the calling client can reach this object
+  return poa_->activate_object(proc.release(),
+      nprpc::ObjectActivationFlags::all,
+      &nprpc::get_context());
 }
 ```
 
-### Object References
+### Object References as Parameters
 
-Pass objects as parameters:
-NOTE: For the time being, use `object` to define parameter type for custom interfaces. Support for typed interface parameters is planned for future releases.
-
-```typescript
-interface IDataProcessor {
-  void ProcessData(data: in vector<u8>);
-}
-
+```
+// IDL — use `object` for interface-typed parameters
 interface ObjectManager {
-  object CreateProcessor(type: string);
-  void RegisterProcessor(processor: in object);
+  object CreateProcessor(type: in string);
+  void   RegisterProcessor(proc: in object);
 }
 ```
 
+```cpp
+void RegisterProcessor(nprpc::Object* proc) override {
+  auto* typed = nprpc::narrow<IDataProcessor>(proc);
+  if (!typed) throw nprpc::Exception("wrong type");
+  processors_.emplace_back(typed);
+}
+```
+
+TypeScript servants can be passed as parameters too — the server can call back on them over a bidirectional transport (WebSocket/WebTransport):
+
 ```typescript
-// Implement a processor
 class MyProcessor extends example.IDataProcessor_Servant {
-  ProcessData(data: Uint8Array): void {
-    // Process data...
-  }
+  ProcessData(data: Uint8Array): void { /* ... */ }
 }
-// Object manager that creates processors
-class MyObjectManager extends example.I_Servant {
-  nprpc::Poa* poa_; // Assume initialized
-  std::vector<std::shared_ptr<MyProcessor>> processors_;
-  std::vector<nprpc::ObjectPtr<IDataProcessor>> remote_processors_;
-public:
-  nprpc::ObjectId CreateProcessor(type: string) override {
-    auto processor = std::make_shared<MyProcessor>();
-    processors_.push_back(processor);
-    // This will make the object accessible remotely for everyone
-    return poa->activate_object(processor.get(), nprpc::ObjectActivationFlags::all);
-    // If you want to restrict access for anyone else but this connection, add session context parameter
-    return poa->activate_object(processor.get(), nprpc::ObjectActivationFlags::all, &nprpc::get_context());
-  }
-
-  void RegisterProcessor(processor: in object) override {
-    const auto proc = nprpc::narrow<IDataProcessor>(processor);
-    if (!proc) {
-      throw nprpc::Exception("Invalid processor object");
-    }
-    remote_processors_.push_back(proc);
-  }
-}
-```
-You can pass your local javascript servant objects as parameters too and your server can call back into them! Assuming you use a bidirectional transport like WebSocket.
-```typescript
-class MyDataProcessor extends example.IDataProcessor_Servant {
-  // This is now callable from the server side
-  ProcessData(data: Uint8Array): void {
-    // Process data...
-  }
-}
-const manager = NPRPC.narrow(host_info.objects.object_manager, example.ObjectManager);
-const processor = new MyDataProcessor();
-await manager.RegisterProcessor(processor); // Pass servant as parameter
+const proc = new MyProcessor();
+await manager.RegisterProcessor(proc);
 ```
 
-## 🎯 Transport Selection Guide
+### Server-Side Rendering (SSR)
 
-### Use WebSocket when:
-- You need bidirectional communication (server push)
-- Low latency is critical
-- You're building real-time applications (chat, notifications, live updates)
-- Connection overhead is amortized over many calls
+NPRPC can serve SvelteKit apps with full SSR over HTTP/3. See [docs/SSR_ARCHITECTURE.md](docs/SSR_ARCHITECTURE.md) for setup and architecture details.
 
-### Use HTTP when:
-- You're building web applications
-- You need stateless operations
-- You want simple request/response patterns
-- You need maximum browser compatibility
-- You're behind restrictive firewalls
+```cpp
+auto* rpc = nprpc::RpcBuilder()
+  .with_hostname("mysite.com")
+  .with_http(443)
+    .ssl("cert.crt", "key.key")
+    .root_dir("/srv/www")
+    .enable_http3()
+    .enable_ssr("/srv/www") // path to SvelteKit build containing index.js
+  .build();
+rpc->run();
+```
 
-### Use TCP when:
-- You need maximum performance
-- You're not in a browser environment
-- You have direct network access
+### Cookie-Based Authentication
 
-### Use Shared Memory when:
-- Both client and server are on the same machine
-- You need zero-copy performance
-- You're transferring large amounts of data
-- Memory efficiency is critical (8x reduction vs TCP)
+See [docs/HTTP_AUTH.md](docs/HTTP_AUTH.md) for the full API reference. Quick example:
 
-## 📊 Performance
+```cpp
+// Inside any servant method — read / write httpOnly cookies
+auto token = nprpc::get_cookie("session");
+nprpc::set_cookie("session", new_token, {
+    .http_only = true, .secure = true, .same_site = "Strict", .max_age = 86400
+});
+```
 
-NPRPC includes comprehensive benchmarks comparing against gRPC and Cap'n Proto.
+## IDL Reference
 
-### Running Benchmarks
+### Types
+
+| Category | Tokens |
+|----------|--------|
+| Booleans | `boolean` |
+| Integers | `i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` |
+| Floats   | `f32` `f64` |
+| String   | `string` |
+| Object ref | `object` |
+| Dynamic array | `T[]` or `vector<T>` |
+| Fixed array | `T[N]` |
+| Alias | `alias Foo = vector<Bar>` |
+
+### Qualifiers
+
+- `?` — nullable/optional field or parameter
+- `in` — input parameter (by value)
+- `out` — output parameter
+- `raises(E1, E2)` — exception specification
+- `async` — fire-and-forget (no reply)
+- `[unreliable]` — best-effort delivery (QUIC/WebTransport only, others ignore)
+- `[force_helpers=1]` — emit helper `from_flat` / `to_flat` functions for a `message`
+- `[trusted=true]` — disable strict bounds checking for untrusted input
+
+### Streaming IDL
+
+```
+interface DataService {
+  // Server → Client
+  stream<vector<u8>>       Download(id: in u32) raises(NotFound);
+  // server_stream<T> is the canonical spelling; stream<T> is an alias
+
+  // Client → Server
+  void Upload(name: in string, data: client_stream<vector<u8>>);
+
+  // Bidirectional
+  bidi_stream<string, string> Chat(room: in string);
+  bidi_stream<AAA, CCC>       Transform(suffix: in string);
+}
+```
+
+### Full Example
+
+```
+module blog;
+
+exception NotFound { id: u32; }
+
+message Post { id: u32; title: string; body: string; }
+
+interface BlogService {
+  Post        GetPost(id: in u32) raises(NotFound);
+  vector<Post> ListPosts(page: in u32, size: in u32);
+  async       DeletePost(id: in u32);
+
+  // Stream all posts matching a query
+  stream<Post> Search(query: in string) raises(NotFound);
+
+  // Live feed — bidi (client sends ack, server sends posts)
+  bidi_stream<u32, Post> LiveFeed(channel: in string);
+}
+```
+
+## Swift Bindings
+
+NPRPC provides native Swift bindings via Swift 6.2+ C++ interop. The full feature set is supported: servants, client proxies, exceptions, object references, async methods, and all three stream directions.
+
+### Building (Docker workflow)
+
+Swift must be built inside a dedicated Docker container because it requires NPRPC and Boost to be compiled with Swift's bundled Clang toolchain.
 
 ```bash
-# Run all benchmarks
-./run_benchmarks.sh
+cd nprpc_swift
 
-# Run specific benchmark suite
-./run_benchmarks.sh --benchmark_filter=LargeData
-./run_benchmarks.sh --benchmark_filter=EmptyCall
+# Step 1 — build the Docker image (once)
+cd ..
+./build-dev-image.sh          # builds nprpc-dev:latest used by CMake examples
+cd nprpc_swift
+
+# OR build the Swift-specific image directly
+docker build -f Dockerfile \
+  --build-arg USER_ID=$(id -u) \
+  --build-arg GROUP_ID=$(id -g) \
+  --build-arg USERNAME=$(id -un) \
+  -t nprpc-swift-ubuntu ..
+
+# Step 2 — build Boost + OpenSSL inside the container (first time only, ~10 min)
+./docker-build-boost.sh
+
+# Step 3 — build libnprpc.so with Swift's Clang
+./docker-build-nprpc.sh
+
+# Step 4 — generate Swift stubs from IDL (requires npidl built in Step 3)
+./gen_stubs.sh
+
+# Step 5 — build and optionally test the Swift package
+./docker-build-swift.sh          # build only
+./docker-build-swift.sh --test   # build + run tests (timeout 15 s)
 ```
 
-See [`benchmark/README.md`](benchmark/README.md) for detailed benchmark documentation.
+To rebuild the Docker image (after Dockerfile changes):
 
-## 🔍 IDL Language Reference
-
-### Basic Types
-- `boolean`, `i8`, `i16`, `i32`, `i64`
-- `u8`, `u16`, `u32`, `u64`
-- `f32`, `f64`
-- `string`
-- `object` - generic object reference
-
-### Collections
-- `vector<T>` - dynamic arrays
-- `T[N]` - fixed-size arrays
-
-### Modifiers
-- `?` - nullable values
-- `in` - input parameters
-- `out` - output parameters
-- `raises(ExceptionType)` - exception specification
-
-It pretty much copies CORBA IDL with some simplifications and additions.
-
-### Example:
-```cpp
-message Point { x: f64; y: f64; }
-
-exception OutOfBounds { message: string; }
-
-interface Geometry {
-  f64 Distance(a: in Point, b: in Point);
-  void Transform(pt: in Point, result: out Point);
-  Point? FindCenter(points: in vector<Point>);
-  vector<Point> GeneratePoints(count: in u32) raises(OutOfBounds);
-}
+```bash
+./docker-build-nprpc.sh --rebuild
 ```
-
-## 🍎 Swift Bindings
-
-NPRPC provides native Swift bindings via C++ interop (Swift 6.2+), supporting the full feature set: servants, client proxies, async methods, exceptions, object references, and streaming.
 
 ### Generate Swift Stubs
 
 ```bash
-npidl calculator.npidl --swift
+# Run from repo root; npidl must be built first
+npidl myservice.npidl --swift --output-dir nprpc_swift/Sources/NPRPC/Generated
 ```
 
 ### Implement a Servant
@@ -608,15 +527,10 @@ npidl calculator.npidl --swift
 ```swift
 import NPRPC
 
-class CalculatorImpl: CalculatorServant {
-    override func add(a: Float64, b: Float64) throws -> Float64 {
-        return a + b
-    }
-
+class CalculatorImpl: CalculatorServant, @unchecked Sendable {
+    override func add(a: Float64, b: Float64) throws -> Float64 { a + b }
     override func divide(a: Float64, b: Float64) throws -> Float64 {
-        guard b != 0 else {
-            throw CalculationError(message: "Division by zero", code: 1)
-        }
+        guard b != 0 else { throw CalculationError(message: "div/0", code: 1) }
         return a / b
     }
 }
@@ -626,77 +540,88 @@ class CalculatorImpl: CalculatorServant {
 
 ```swift
 let rpc = try RpcBuilder()
+    .setLogLevel(.info)
     .setHostname("localhost")
     .withTcp(15000)
     .withHttp(15001)
+        .ssl(certFile: "cert.crt", keyFile: "key.key")
     .build()
 
 let poa = try rpc.createPoa(maxObjects: 100)
 
 let servant = CalculatorImpl()
-let oid = try poa.activateObject(servant, flags: .allowWebSocket)
+let oid = try poa.activateObject(servant, flags: [.tcp, .ws])
 
-// Create client proxy from ObjectId
 let obj = NPRPCObject.fromObjectId(oid)!
 let client = narrow(obj, to: Calculator.self)!
-
-let result = try client.add(a: 10, b: 20)  // 30.0
+let result = try client.add(a: 10, b: 20)   // 30.0
 ```
 
-### Async Methods and Streaming
+### Streaming (Swift)
 
 ```swift
-// Async fire-and-forget
-await client.playerMoved(x: 1.0, y: 2.0, z: 3.0)
-
-// Async with return value
-let response = try await client.method2(arg1: 42)  // "Response for 42"
-
-// Streaming - servant returns AsyncStream, client receives AsyncThrowingStream
-let stream = try client.getByteStream(size: 1024)
-for try await byte in stream {
-    process(byte)
+// Server stream
+let stream = try client.downloadFile(filename: "data.bin")
+for try await chunk in stream {
+    process(chunk)
 }
+
+// Async fire-and-forget
+await client.playerMoved(x: 1.0, y: 2.0, z: 0.0)
+
+// Async with out value
+let reply = try await client.method2(arg1: 42)
 ```
 
-### Building
+See [nprpc_swift/README.md](nprpc_swift/README.md) and [nprpc_swift/EXAMPLES.md](nprpc_swift/EXAMPLES.md) for more.
+
+## Building
 
 ```bash
-cd nprpc_swift
-./gen_stubs.sh                # Generate Swift stubs from IDL
-./docker-build-boost.sh       # Build Boost (first time only)
-./docker-build-nprpc.sh        # Build NPRPC C++ library
-./docker-build-swift.sh        # Build and run Swift package
-./docker-build-swift.sh --test # Run tests
+# Standard dev build (Ninja, RelWithDebInfo, all features)
+./configure.sh
+cmake --build .build_release -j$(nproc)
+
+# Minimal build (library only)
+cmake -S . -B build
+cmake --build build -j$(nproc)
+
+# With QUIC + HTTP/3
+cmake -S . -B build -DNPRPC_ENABLE_QUIC=ON -DNPRPC_ENABLE_HTTP3=ON
+cmake --build build -j$(nproc)
+
+# Run C++ tests
+./run_cpp_test.sh        # or: ctest --output-on-failure --test-dir .build_release
 ```
 
-See [`nprpc_swift/README.md`](nprpc_swift/README.md) for details.
+See [docs/BUILD.md](docs/BUILD.md) for all CMake options, the JS/TS build, and install instructions.
 
-## 🤝 Contributing
+## Performance
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+NPRPC is benchmarked against gRPC and Cap'n Proto RPC.
 
-## 📄 License
+```bash
+./run_benchmark.sh                                    # all suites
+./run_benchmark.sh --benchmark_filter=EmptyCall       # latency
+./run_benchmark.sh --benchmark_filter=LargeData1MB    # throughput
+```
 
-See [LICENSE](../LICENSE) file in the topmost directory.
+See [benchmark/README.md](benchmark/README.md) for methodology and results.
 
-## 🙏 Acknowledgments
+## More Resources
 
-NPRPC is built on top of excellent open-source libraries:
-- [Boost.Asio](https://www.boost.org/doc/libs/release/libs/asio/) - Async I/O
-- [Boost.Beast](https://www.boost.org/doc/libs/release/libs/beast/) - HTTP/WebSocket
-- [nghttp3/ngtcp2](https://github.com/ngtcp2/ngtcp2.git) - HTTP/3 and QUIC
-- [MsQuic](https://github.com/microsoft/msquic.git) - QUIC transport
+| Topic | Document |
+|-------|----------|
+| Full build options | [docs/BUILD.md](docs/BUILD.md) |
+| SSR architecture | [docs/SSR_ARCHITECTURE.md](docs/SSR_ARCHITECTURE.md) |
+| Cookie auth API | [docs/HTTP_AUTH.md](docs/HTTP_AUTH.md) |
+| HTTP/3 + WebTransport debugging | [.github/skills/http3-webtransport-debugging/SKILL.md](.github/skills/http3-webtransport-debugging/SKILL.md) |
+| Nameserver source | [npnameserver/npnameserver.cpp](npnameserver/npnameserver.cpp) |
+| Swift integration tests | [nprpc_swift/Tests/NPRPCTests/IntegrationTest.swift](nprpc_swift/Tests/NPRPCTests/IntegrationTest.swift) |
+| C++ test suite | [test/src/](test/src/) |
+| JS/TS test suite | [test/js/](test/js/) |
+| Live Blog example | [examples/live-blog/README.md](examples/live-blog/README.md) |
 
-## 📚 More Examples
+## License
 
-Check out the complete examples:
-- [Nameserver](npnameserver/npnameserver.cpp) - Service discovery server
-- [Calculator Service](../nscalc/server/src/main.cpp) - Full-featured web service
-- [TypeScript Client](../nscalc/client/src/rpc/rpc.ts) - Browser client
-- [Swift Integration Tests](nprpc_swift/Tests/NPRPCTests/IntegrationTest.swift) - Comprehensive Swift tests
-- [Test Suite](test/js/test/nprpc-integration.test.ts) - Comprehensive JS tests
-
----
-
-**NPRPC** - 2-4x faster than gRPC, with zero-copy shared memory reaching 4.28 GiB/s! 🚀
+See [LICENSE](LICENSE).

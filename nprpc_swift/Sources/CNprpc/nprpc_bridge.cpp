@@ -1023,6 +1023,39 @@ void* nprpc_object_get_stream_manager(void* object_ptr) {
     return session->ctx().stream_manager;
 }
 
+void* nprpc_object_get_session(void* object_ptr) {
+    auto* obj = static_cast<nprpc::Object*>(object_ptr);
+    if (!obj) {
+        NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: object_ptr is null");
+        return nullptr;
+    }
+
+    if (obj->get_endpoint().empty()) {
+        if (!obj->select_endpoint()) {
+            NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: failed to select endpoint");
+            return nullptr;
+        }
+    }
+
+    auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
+    if (!session) {
+        NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: session lookup failed");
+        return nullptr;
+    }
+
+    return session.get();
+}
+
+void* nprpc_session_get_stream_manager(void* session_ptr) {
+    auto* session = static_cast<nprpc::impl::Session*>(session_ptr);
+    if (!session || !session->ctx().stream_manager) {
+        NPRPC_LOG_WARN("[SWB] nprpc_session_get_stream_manager: no session or stream_manager");
+        return nullptr;
+    }
+
+    return session->ctx().stream_manager;
+}
+
 void* nprpc_get_stream_manager(void* session_ctx) {
     auto* ctx = static_cast<nprpc::SessionContext*>(session_ctx);
     if (!ctx) {
@@ -1289,27 +1322,36 @@ int nprpc_stream_send_init(
     uint32_t timeout_ms)
 {
     auto* obj = static_cast<nprpc::Object*>(object_ptr);
+    if (!obj || !buffer_ptr) return -1;
+
+    auto* session = static_cast<nprpc::impl::Session*>(nprpc_object_get_session(object_ptr));
+    if (!session) {
+        return -2;
+    }
+
+    return nprpc_session_stream_send_init(session, buffer_ptr, timeout_ms);
+}
+
+int nprpc_session_stream_send_init(
+    void* session_ptr,
+    void* buffer_ptr,
+    uint32_t timeout_ms)
+{
+    auto* session = static_cast<nprpc::impl::Session*>(session_ptr);
     auto* buf = static_cast<nprpc::flat_buffer*>(buffer_ptr);
-    if (!obj || !buf) return -1;
+    if (!session || !buf) return -1;
 
     nprpc::impl::flat::StreamInit_Direct init(*buf, sizeof(nprpc::impl::Header));
     const auto stream_id = init.stream_id();
 
-    if (obj->get_endpoint().empty()) {
-        if (!obj->select_endpoint()) {
-            return -2;
-        }
-    }
-
     try {
-        nprpc::impl::rpc_call(obj->get_endpoint(), *buf, timeout_ms);
+        session->send_receive(*buf, timeout_ms);
         const auto std_reply = nprpc::impl::handle_standart_reply(*buf);
         if (std_reply != 0) {
             return std_reply;
         }
 
-        auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
-        if (session && session->ctx().stream_manager) {
+        if (session->ctx().stream_manager) {
             session->ctx().stream_manager->defer_stream_start(stream_id);
             session->ctx().stream_manager->on_reply_sent();
         }

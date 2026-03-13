@@ -5,11 +5,12 @@
 
 #include <functional>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <span>
-#include <unordered_set>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -115,8 +116,8 @@ private:
     StreamReaderBase* reader = nullptr;
     bool unreliable = false;
     std::optional<uint64_t> final_sequence;
-    uint64_t highest_sequence_received = 0;
-    bool has_received_chunk = false;
+    uint64_t next_expected_sequence = 0;
+    std::map<uint64_t, flat_buffer> pending_chunks;
   };
   std::unordered_map<uint64_t, ReaderState> readers_;
 

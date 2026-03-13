@@ -1091,22 +1091,27 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
   out << bl() << "guard let finalData = buffer.data else { throw BufferError(message: \"Failed to get buffer data\") }\n";
   out << bl() << "finalData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n\n";
 
+  out << bl() << "guard let session = nprpc_object_get_session(self.handle),\n";
+  out << bl() << "      let streamManager = nprpc_session_get_stream_manager(session) else {\n";
+  out << bl() << "  throw RuntimeError(message: \"Failed to get session for stream\")\n";
+  out << bl() << "}\n\n";
+
   switch (fn->stream_kind) {
   case StreamKind::Server:
-    out << bl() << "let reader = NPRPC.createObjectStreamReader(objectHandle: self.handle, streamId: streamId, buffer: buffer, unreliable: " << (fn->is_reliable ? "false" : "true") << ", deserializer: ";
+    out << bl() << "let reader = NPRPC.createStreamManagerReader(streamManager: streamManager, streamId: streamId, buffer: buffer, unreliable: " << (fn->is_reliable ? "false" : "true") << ", deserializer: ";
     emit_stream_deserializer(stream_decl->stream_out_type(), "self.endpoint",
                              out);
     out << ")\n";
     break;
   case StreamKind::Client:
-    out << bl() << "let writer = try NPRPC.createObjectStreamWriter(objectHandle: self.handle, streamId: streamId, initialPayloadCapacity: "
+    out << bl() << "let writer = NPRPC.createStreamManagerWriter(streamManager: streamManager, streamId: streamId, initialPayloadCapacity: "
         << estimate_stream_initial_payload_capacity(stream_decl->stream_in_type())
         << ", serializer: ";
     emit_stream_serializer(stream_decl->stream_in_type(), out);
     out << ")\n";
     break;
   case StreamKind::Bidi:
-    out << bl() << "let stream = try NPRPC.createObjectBidiStream(objectHandle: self.handle, streamId: streamId, buffer: buffer, initialPayloadCapacity: "
+    out << bl() << "let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: "
         << estimate_stream_initial_payload_capacity(stream_decl->stream_in_type())
       << ", unreliable: " << (fn->is_reliable ? "false" : "true")
         << ", serializer: ";
@@ -1120,7 +1125,7 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
     assert(false);
   }
 
-  out << bl() << "let result = nprpc_stream_send_init(self.handle, buffer.handle, self.timeout)\n";
+  out << bl() << "let result = nprpc_session_stream_send_init(session, buffer.handle, self.timeout)\n";
   out << bl() << "if result != 0 { throw RuntimeError(message: \"StreamInit failed (code: \\(result))\") }\n";
 
   switch (fn->stream_kind) {
