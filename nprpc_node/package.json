@@ -1,7 +1,11 @@
 {
-  "name": "nprpc_node",
+  "name": "@nprpc/node_addon",
   "version": "1.0.0",
   "description": "Native Node.js addon for nprpc shared memory transport",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nikitapn/nprpc.git"
+  },
   "main": "index.js",
   "types": "index.d.ts",
   "scripts": {
@@ -11,13 +15,16 @@
     "build:debug": "npm run configure && node-gyp build --debug",
     "rebuild": "npm run configure && node-gyp rebuild",
     "clean": "node-gyp clean",
+    "prepack": "node scripts/bundle-sources.js",
     "test": "npm run build && node test/test_shm.js && node test/test_async.js && node test/test_large.js"
   },
   "files": [
     "index.js",
     "index.d.ts",
     "binding.gyp",
-    "src/"
+    "src/",
+    "nprpc_src/",
+    "nprpc_include/"
   ],
   "keywords": [
     "nprpc",
@@ -39,5 +46,7 @@
   "engines": {
     "node": ">=18.0.0"
   },
+  "os": ["linux"],
+  "cpu": ["x64"],
   "gypfile": true
 }

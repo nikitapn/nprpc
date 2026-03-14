@@ -14,8 +14,8 @@
 		"lint": "prettier --check ."
 	},
 	"devDependencies": {
-		"@nprpc/adapter-sveltekit": "file:../../../nprpc_adapter_sveltekit",
-		"@nprpc/vite-plugin": "file:../../../nprpc_vite_plugin",
+		"@nprpc/adapter-sveltekit": "^1.0.0",
+		"@nprpc/vite-plugin": "^1.0.0",
 		"@sveltejs/adapter-auto": "^6.1.0",
 		"@sveltejs/kit": "^2.48.5",
 		"@sveltejs/vite-plugin-svelte": "^6.2.1",
@@ -29,7 +29,7 @@
 		"vite": "^7.2.2"
 	},
 	"dependencies": {
-		"nprpc_node": "file:../../../nprpc_node",
+		"nprpc": "^1.0.0",
 		"shaka-player": "^5.0.5"
 	}
 }

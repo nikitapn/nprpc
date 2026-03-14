@@ -9,10 +9,7 @@ const config = {
 		adapter: adapter({
 			out: 'build',
 			channelId: 'svelte-ssr-demo'
-		}),
-		alias: {
-			nprpc: '../../../nprpc_js'
-		}
+		})
 	}
 };
 

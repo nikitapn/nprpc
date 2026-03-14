@@ -1,4 +1,4 @@
-// nprpc_node - JavaScript entry point
+// @nprpc/node_addon - JavaScript entry point
 // Loads the native N-API addon
 
 const path = require('path');
@@ -8,8 +8,7 @@ let addon;
 const candidates = [
     './nprpc_shm.node',
     './build/Release/nprpc_shm.node',
-    './build/Debug/nprpc_shm.node',
-    './build/Debug/Release/nprpc_shm.node'
+    './build/Debug/nprpc_shm.node'
 ];
 
 let lastError = null;

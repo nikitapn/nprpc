@@ -38,7 +38,7 @@ sudo pacman -S boost openssl
 ## Usage
 
 ```javascript
-const { ShmChannel } = require('nprpc_node');
+const { ShmChannel } = require('@nprpc/node_addon');
 
 // Server side (creates shared memory)
 const server = new ShmChannel('my_channel', { isServer: true, create: true });
@@ -120,7 +120,7 @@ This addon is designed to enable NPRPC communication from SvelteKit server-side 
 
 ```javascript
 // In a SvelteKit server route (+page.server.ts)
-import { ShmChannel } from 'nprpc_node';
+import { ShmChannel } from '@nprpc/node_addon';
 
 let channel: ShmChannel | null = null;
 

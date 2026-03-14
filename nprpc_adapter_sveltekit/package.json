@@ -2,6 +2,10 @@
     "name": "@nprpc/adapter-sveltekit",
     "version": "1.0.0",
     "description": "SvelteKit adapter for NPRPC - serves SSR via shared memory IPC",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/nikitapn/nprpc.git"
+    },
     "type": "module",
     "main": "index.js",
     "types": "index.d.ts",
@@ -40,7 +44,11 @@
         "@sveltejs/kit": "^2.0.0"
     },
     "dependencies": {
-        "nprpc_node": "file:../nprpc_node"
+        "@nprpc/node_addon": "^1.0.0",
+        "@rollup/plugin-commonjs": "^29.0.0",
+        "@rollup/plugin-json": "^6.1.0",
+        "@rollup/plugin-node-resolve": "^16.0.0",
+        "rollup": "^4.59.0"
     },
     "devDependencies": {
         "@sveltejs/kit": "^2.0.0",

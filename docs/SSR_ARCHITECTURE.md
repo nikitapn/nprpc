@@ -93,7 +93,7 @@ Configuration:
 - Ring buffer size: 16 MB per direction (32 MB total per connection)
 - Max message size: 32 MB (same as TCP/WebSocket limits)
 
-### 3. nprpc_node Native Addon
+### 3. nprpc_node_addon Native Addon
 
 Located in `nprpc_node/`.
 

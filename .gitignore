@@ -15,3 +15,5 @@
 /hotspots_with_symbols.txt
 /certs/out/*
 /third_party
+
+/node_modules

@@ -1,15 +1,19 @@
 // @nprpc/adapter-sveltekit
 // SvelteKit adapter that serves SSR via shared memory IPC with NPRPC C++ server
 
-import { cpSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { rollup } from 'rollup';
+import { nodeResolve } from '@rollup/plugin-node-resolve';
+import commonjs from '@rollup/plugin-commonjs';
+import json from '@rollup/plugin-json';
 
 const files = fileURLToPath(new URL('./files', import.meta.url));
 const require = createRequire(import.meta.url);
 
-function copyIfExists(from, to) {
+function copyIfExists(from, to, dereference = false) {
     if (!existsSync(from)) {
         return;
     }
@@ -20,28 +24,67 @@ function copyIfExists(from, to) {
         return;
     }
 
-    cpSync(from, to, { recursive: true });
+    cpSync(from, to, { recursive: true, dereference });
 }
 
 function stageNprpcNodeRuntime(out) {
-    const packageJsonPath = require.resolve('nprpc_node/package.json');
+    const packageJsonPath = require.resolve('@nprpc/node_addon/package.json');
     const packageDir = path.dirname(packageJsonPath);
-    const runtimeDir = path.join(out, 'node_modules', 'nprpc_node');
+    const runtimeDir = path.join(out, 'node_modules', '@nprpc', 'node_addon');
 
     rmSync(runtimeDir, { recursive: true, force: true });
-    mkdirSync(path.dirname(runtimeDir), { recursive: true });
-    cpSync(packageDir, runtimeDir, { recursive: true, dereference: true });
-}
+    mkdirSync(runtimeDir, { recursive: true });
 
-function stageApplicationNodeModules(out) {
-    const appNodeModules = path.resolve('node_modules');
-    const runtimeNodeModules = path.join(out, 'node_modules');
-
-    if (!existsSync(appNodeModules)) {
-        return;
+    // Copy only the essential runtime files — no sources, makefiles, tests, or
+    // object files.  The native addon is placed at ./nprpc_shm.node (the first
+    // candidate in index.js) so no build/ sub-directory is needed at all.
+    for (const f of ['index.js', 'package.json']) {
+        const src = path.join(packageDir, f);
+        if (existsSync(src)) cpSync(src, path.join(runtimeDir, f));
     }
 
-    copyIfExists(appNodeModules, runtimeNodeModules);
+    // Locate the compiled .node binary (Release preferred, Debug fallback).
+    for (const variant of ['Release', 'Debug']) {
+        const src = path.join(packageDir, 'build', variant, 'nprpc_shm.node');
+        if (existsSync(src)) {
+            cpSync(src, path.join(runtimeDir, 'nprpc_shm.node'));
+            break;
+        }
+    }
+}
+
+/**
+ * Copy a single package directory into destNodeModules, preserving scoped
+ * package paths (e.g. @scope/pkg → node_modules/@scope/pkg).
+ *
+ * @param {string} packageName
+ * @param {string} destNodeModules
+ */
+function stagePackage(packageName, destNodeModules) {
+    let packageDir;
+    try {
+        packageDir = path.dirname(require.resolve(`${packageName}/package.json`));
+    } catch {
+        // package has a restrictive exports field — resolve main and walk up
+        try {
+            let file = require.resolve(packageName);
+            let dir = path.dirname(file);
+            while (true) {
+                if (existsSync(path.join(dir, 'package.json'))) { packageDir = dir; break; }
+                const parent = path.dirname(dir);
+                if (parent === dir) break;
+                dir = parent;
+            }
+        } catch {}
+    }
+    if (!packageDir) return;
+
+    const parts = packageName.startsWith('@') ? packageName.split('/') : [packageName];
+    const destDir = path.join(destNodeModules, ...parts);
+    if (!existsSync(destDir)) {
+        mkdirSync(path.dirname(destDir), { recursive: true });
+        cpSync(packageDir, destDir, { recursive: true, dereference: true });
+    }
 }
 
 /**
@@ -96,8 +139,37 @@ export default function adapter(opts = {}) {
                 ].join('\n\n')
             );
 
-            // Copy server files to output
-            builder.copy(tmp, `${out}/server`);
+            // Re-bundle the Vite server output with Rollup, inlining all
+            // framework code (svelte, @sveltejs/kit, clsx, etc.) so that only
+            // the project's own `dependencies` need to exist at runtime.
+            // This mirrors how @sveltejs/adapter-node works.
+            builder.log.minor('Bundling server (Rollup)');
+            const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+            const bundle = await rollup({
+                input: {
+                    index: `${tmp}/index.js`,
+                    manifest: `${tmp}/manifest.js`
+                },
+                external: [
+                    // Keep project dependencies external so they are loaded
+                    // from build/node_modules at runtime.
+                    ...Object.keys(pkg.dependencies ?? {}).map((d) => new RegExp(`^${d}(\/.*)?$`)),
+                    // Always keep the native addon external.
+                    /^@nprpc\/node_addon(\/.*)?$/
+                ],
+                plugins: [
+                    nodeResolve({ preferBuiltins: true, exportConditions: ['node'] }),
+                    commonjs({ strictRequires: true }),
+                    json()
+                ]
+            });
+            await bundle.write({
+                dir: `${out}/server`,
+                format: 'esm',
+                sourcemap: true,
+                chunkFileNames: 'chunks/[name]-[hash].js'
+            });
+            await bundle.close();
 
             // Copy handler files
             builder.copy(files, out, {
@@ -110,20 +182,10 @@ export default function adapter(opts = {}) {
 
             writeFileSync(
                 `${out}/package.json`,
-                JSON.stringify(
-                    {
-                        type: 'module',
-                        private: true
-                    },
-                    null,
-                    2
-                )
+                JSON.stringify({ type: 'module', private: true }, null, 2)
             );
 
-            builder.log.minor('Staging application node_modules');
-            stageApplicationNodeModules(out);
-
-            builder.log.minor('Staging nprpc_node runtime');
+            builder.log.minor('Staging @nprpc/node_addon native runtime');
             stageNprpcNodeRuntime(out);
 
             builder.log.minor('Build complete');

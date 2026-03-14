@@ -2,6 +2,10 @@
   "name": "@nprpc/vite-plugin",
   "version": "1.0.0",
   "description": "Vite plugin for NPRPC — notifies the C++ backend to reload SSR and host.json after each build",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nikitapn/nprpc.git"
+  },
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",

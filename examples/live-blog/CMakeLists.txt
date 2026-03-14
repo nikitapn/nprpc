@@ -44,7 +44,6 @@ add_custom_command(
   WORKING_DIRECTORY ${LIVE_BLOG_CLIENT_ROOT}
   DEPENDS
     ${LIVE_BLOG_CLIENT_ROOT}/package.json
-    ${LIVE_BLOG_CLIENT_ROOT}/package-lock.json
     ${CMAKE_SOURCE_DIR}/nprpc_node/package.json
     ${CMAKE_SOURCE_DIR}/nprpc_adapter_sveltekit/package.json
     ${CMAKE_SOURCE_DIR}/nprpc_vite_plugin/package.json

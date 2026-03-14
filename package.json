@@ -1,0 +1,11 @@
+{
+  "name": "nprpc-monorepo",
+  "private": true,
+  "workspaces": [
+    "nprpc_node",
+    "nprpc_js",
+    "nprpc_adapter_sveltekit",
+    "nprpc_vite_plugin",
+    "examples/live-blog/client"
+  ]
+}
