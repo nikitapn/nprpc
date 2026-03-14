@@ -23,6 +23,7 @@ class BuildConfig {
     var httpDhparamsFile: String = ""
     var httpRootDir: String = ""
     var ssrHandlerDir: String = ""
+    var watchFiles: Bool = false
     
     // QUIC
     var quicPort: UInt16 = 0
@@ -137,6 +138,7 @@ extension RpcBuilderInternal {
         cxxConfig.http_dhparams_file = std.string(config.httpDhparamsFile)
         cxxConfig.http_root_dir = std.string(config.httpRootDir)
         cxxConfig.ssr_handler_dir = std.string(config.ssrHandlerDir)
+        cxxConfig.watch_files = config.watchFiles
         
         // QUIC settings
         cxxConfig.quic_cert_file = std.string(config.quicCertFile)
@@ -216,6 +218,16 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
     @discardableResult
     public func rootDir(_ path: String) -> RpcBuilderHttp {
         config.httpRootDir = path
+        return self
+    }
+
+    /// Enable inotify-based cache invalidation on the HTTP root directory.
+    /// Any file written or renamed under rootDir() is immediately evicted
+    /// from the file cache so the next request reloads it from disk.
+    /// Useful during development — no effect on non-Linux platforms.
+    @discardableResult
+    public func watchFiles() -> RpcBuilderHttp {
+        config.watchFiles = true
         return self
     }
 }

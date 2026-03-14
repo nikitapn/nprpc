@@ -121,6 +121,10 @@ bool NodeWorkerManager::start(const std::string& handler_path,
     NPRPC_LOG_INFO("  Working dir: {}", working_dir.string());
     NPRPC_LOG_INFO("  Channel: {}", channel_id_);
 
+    // Remember for restart.
+    handler_path_    = handler_path;
+    node_executable_ = node_executable;
+
     // Create pipes for stdout/stderr
     node_stdout_ = std::make_unique<boost::asio::readable_pipe>(ioc_);
     node_stderr_ = std::make_unique<boost::asio::readable_pipe>(ioc_);
@@ -202,6 +206,22 @@ void NodeWorkerManager::stop()
 
   // Destroy channel
   channel_.reset();
+}
+
+void NodeWorkerManager::schedule_restart()
+{
+  restarting_ = true;
+  boost::asio::post(ioc_, [this] {
+    if (handler_path_.empty()) {
+      NPRPC_LOG_ERROR("[SSR] schedule_restart: handler path not set");
+      restarting_ = false;
+      return;
+    }
+    NPRPC_LOG_INFO("[SSR] Restarting Node.js worker after build...");
+    stop();
+    start(handler_path_, node_executable_);
+    restarting_ = false;
+  });
 }
 
 void NodeWorkerManager::async_read_stdout()

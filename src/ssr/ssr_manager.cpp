@@ -63,6 +63,13 @@ NPRPC_API void stop_ssr()
   }
 }
 
+NPRPC_API void restart_ssr()
+{
+  if (g_ssr_manager) {
+    g_ssr_manager->schedule_restart();
+  }
+}
+
 } // namespace nprpc::impl
 
 #endif // NPRPC_SSR_ENABLED

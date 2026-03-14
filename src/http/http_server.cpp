@@ -263,6 +263,30 @@ handle_request(beast::string_view doc_root,
     return handle_rpc_request(req);
   }
 
+#if defined(NPRPC_SSR_ENABLED)
+  // Dev-mode reload endpoint: POST /_nprpc/dev/reload
+  // Called by the Vite plugin after each successful build so the SSR worker
+  // is restarted and host.json is regenerated without needing inotify.
+  if (g_cfg.watch_files &&
+      req.method() == http::verb::post &&
+      req.target() == "/_nprpc/dev/reload") {
+    try {
+      g_rpc->produce_host_json();
+      NPRPC_LOG_INFO("[DevReload] host.json regenerated");
+    } catch (const std::exception& e) {
+      NPRPC_LOG_ERROR("[DevReload] Failed to regenerate host.json: {}", e.what());
+    }
+    restart_ssr();
+    NPRPC_LOG_INFO("[DevReload] SSR restart triggered by Vite");
+    http::response<http::string_body> res{http::status::ok, req.version()};
+    res.set(http::field::content_type, "text/plain");
+    res.keep_alive(false);
+    res.body() = "ok";
+    res.prepare_payload();
+    return res;
+  }
+#endif
+
 #ifdef NPRPC_SSR_ENABLED
   // Check if this request should be handled by SSR
   if (g_cfg.ssr_enabled &&
@@ -330,7 +354,20 @@ handle_request(beast::string_view doc_root,
         res.prepare_payload();
         return res;
       }
-      // SSR failed, fall through to static file serving
+      // SSR is mid-restart — tell the browser to retry rather than caching
+      // a bad fallback response (e.g. 404 "resource not found").
+      if (is_ssr_restarting()) {
+        http::response<http::string_body> res{http::status::service_unavailable,
+                                             req.version()};
+        res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(http::field::retry_after, "2");
+        res.set(http::field::content_type, "text/plain");
+        res.keep_alive(false);
+        res.body() = "SSR restarting, please retry.";
+        res.prepare_payload();
+        return res;
+      }
+      // SSR not ready (disabled/crashed) — fall through to static file serving
     }
   }
 #endif

@@ -47,6 +47,7 @@ add_custom_command(
     ${LIVE_BLOG_CLIENT_ROOT}/package-lock.json
     ${CMAKE_SOURCE_DIR}/nprpc_node/package.json
     ${CMAKE_SOURCE_DIR}/nprpc_adapter_sveltekit/package.json
+    ${CMAKE_SOURCE_DIR}/nprpc_vite_plugin/package.json
   COMMENT "Installing live-blog client dependencies"
   USES_TERMINAL
   VERBATIM

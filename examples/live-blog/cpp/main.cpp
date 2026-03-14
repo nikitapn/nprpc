@@ -459,11 +459,12 @@ int main()
     auto rpc = nprpc::RpcBuilder()
                    .set_log_level(nprpc::LogLevel::trace)
                    .with_hostname("localhost")
-                   .with_http(3000)
-                   .root_dir(static_root.string())
-                   .ssl(NPRPC_LIVE_BLOG_CERT_FILE, NPRPC_LIVE_BLOG_KEY_FILE)
-                   .enable_http3()
-                   .enable_ssr(runtime_root.string())
+                   .with_http(8443)
+                     .root_dir(static_root.string())
+                     .ssl(NPRPC_LIVE_BLOG_CERT_FILE, NPRPC_LIVE_BLOG_KEY_FILE)
+                     .enable_http3()
+                     .enable_ssr(runtime_root.string())
+                     .watch_files()
                    .build();
 
     BlogRepository repository;
@@ -481,7 +482,7 @@ int main()
     boost::asio::signal_set signals(rpc->ioc(), SIGINT, SIGTERM);
     signals.async_wait([&](const boost::system::error_code&, int) { rpc->ioc().stop(); });
 
-    std::cout << "Starting live-blog C++ server on https://localhost:3000\n";
+    std::cout << "Starting live-blog C++ server on https://localhost:8443\n";
     std::cout << "Static root: " << static_root << "\n";
     std::cout << "SSR handler root: " << runtime_root << "\n";
     std::cout << "host.json: " << host_json_path << std::endl;

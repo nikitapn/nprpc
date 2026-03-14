@@ -93,9 +93,24 @@ public:
   void stop();
 
   /**
+   * @brief Schedule a graceful restart of the Node.js worker.
+   *
+   * Safe to call from any thread (posts to the io_context).
+   * The restart happens after the current io_context cycle, so in-flight
+   * requests receive a timeout/error rather than a crash.
+   */
+  void schedule_restart();
+
+  /**
    * @brief Check if the worker is running and ready
    */
   bool is_ready() const;
+
+  /**
+   * @brief Returns true while a restart is in progress (between
+   * schedule_restart() and the new process becoming ready).
+   */
+  bool is_restarting() const { return restarting_; }
 
   /**
    * @brief Get the shared memory channel ID
@@ -131,11 +146,11 @@ private:
   void read_loop();
 
   static std::string generate_channel_id();
-  // static std::string base64_encode(const std::string& data);
-  // static std::string base64_decode(const std::string& data);
 
   boost::asio::io_context& ioc_;
   std::string channel_id_;
+  std::string handler_path_;
+  std::string node_executable_;
   std::unique_ptr<SharedMemoryChannel> channel_;
 
   // Node.js process (Boost.Process v2 API)
@@ -163,6 +178,7 @@ private:
   std::map<uint64_t, std::shared_ptr<PendingRequest>> pending_requests_;
 
   std::atomic<bool> running_{false};
+  std::atomic<bool> restarting_{false};
 
   void async_read_stdout();
   void async_read_stderr();

@@ -92,6 +92,7 @@ struct RpcBuildConfig {
     std::string http_dhparams_file;
     std::string http_root_dir;
     std::string ssr_handler_dir;
+    bool watch_files = false;  // Enable inotify-based cache invalidation (dev mode)
 
     // QUIC
     uint16_t quic_port = 0;

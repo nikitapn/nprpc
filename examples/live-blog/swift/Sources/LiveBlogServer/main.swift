@@ -450,13 +450,14 @@ do {
   try FileManager.default.createDirectory(atPath: mediaDir, withIntermediateDirectories: true)
 
   let rpc = try RpcBuilder()
-    .setLogLevel(.trace)
+    .setLogLevel(.info)
     .withHostname("localhost")
     .withHttp(httpPort)
       .ssl(certFile: certFile, keyFile: keyFile)
       .enableSsr(handlerDir: runtimeRoot)
       .rootDir(staticRoot)
       .enableHttp3()
+      .watchFiles()
     .build()
 
   let poa = try rpc.createPoa(maxObjects: 32, lifetime: .persistent, idPolicy: .systemGenerated)

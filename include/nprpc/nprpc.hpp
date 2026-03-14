@@ -327,6 +327,7 @@ struct BuildConfig {
   std::string http_root_dir;
   std::string ssr_handler_dir; // Path to SSR handler (index.js), defaults to
                                // http_root_dir
+  bool watch_files = false; // Enable inotify-based cache invalidation (dev mode)
 
   // QUIC settings
   uint16_t quic_port = 0;
@@ -459,6 +460,17 @@ public:
   RpcBuilderHttp& root_dir(std::string_view root_dir) noexcept
   {
     cfg_.http_root_dir = root_dir;
+    return *this;
+  }
+
+  /// Enable inotify-based cache invalidation for the HTTP root directory.
+  /// Any file updated under root_dir() is immediately evicted from the cache
+  /// so the next request serves the fresh version from disk.
+  /// Useful during development (e.g. after `npm run build`).
+  /// On non-Linux platforms this is a no-op; mtime polling handles staleness.
+  RpcBuilderHttp& watch_files() noexcept
+  {
+    cfg_.watch_files = true;
     return *this;
   }
 };

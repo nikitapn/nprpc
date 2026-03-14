@@ -33,6 +33,14 @@ NPRPC_API void init_ssr(boost::asio::io_context& ioc);
 NPRPC_API void stop_ssr();
 
 /**
+ * @brief Restart the SSR Node.js worker.
+ *
+ * Safe to call from any thread (delegates to schedule_restart which posts
+ * to the io_context).  Used by the file watcher after a build completes.
+ */
+NPRPC_API void restart_ssr();
+
+/**
  * @brief Check if a request should be handled by SSR
  *
  * SSR is used for:
@@ -91,6 +99,16 @@ inline bool should_ssr(std::string_view method,
   }
 
   return true;
+}
+
+/**
+ * @brief Returns true while the SSR worker is restarting (between
+ * schedule_restart and the new process becoming is_ready).
+ * HTTP layer can return 503 instead of falling through to static files.
+ */
+inline bool is_ssr_restarting()
+{
+  return g_ssr_manager && g_ssr_manager->is_restarting();
 }
 
 /**

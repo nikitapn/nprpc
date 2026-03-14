@@ -15,6 +15,7 @@
 	},
 	"devDependencies": {
 		"@nprpc/adapter-sveltekit": "file:../../../nprpc_adapter_sveltekit",
+		"@nprpc/vite-plugin": "file:../../../nprpc_vite_plugin",
 		"@sveltejs/adapter-auto": "^6.1.0",
 		"@sveltejs/kit": "^2.48.5",
 		"@sveltejs/vite-plugin-svelte": "^6.2.1",

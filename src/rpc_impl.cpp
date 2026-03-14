@@ -248,6 +248,7 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   g_cfg.http_root_dir = cfg_.http_root_dir;
   g_cfg.ssr_handler_dir =
       cfg_.ssr_handler_dir.empty() ? cfg_.http_root_dir : cfg_.ssr_handler_dir;
+  g_cfg.watch_files = cfg_.watch_files;
   g_cfg.quic_cert_file = cfg_.quic_cert_file;
   g_cfg.quic_key_file = cfg_.quic_key_file;
 
@@ -299,6 +300,7 @@ NPRPC_API RpcImpl* g_rpc;
 void stop_shared_memory_listener();
 void stop_socket_listener();
 void stop_http_server();
+void stop_file_watcher();
 #ifdef NPRPC_HTTP3_ENABLED
 void stop_http3_server();
 #endif
@@ -315,6 +317,7 @@ void RpcImpl::destroy()
   stop_socket_listener();
   stop_http_server();
   stop_shared_memory_listener();
+  stop_file_watcher();
 #ifdef NPRPC_QUIC_ENABLED
   stop_quic_listener();
 #endif
@@ -750,6 +753,40 @@ RpcImpl::RpcImpl()
 {
   stream_pool_ = std::make_unique<boost::asio::thread_pool>(default_stream_pool_size());
   poas_created_.fill(false);
+
+  if (g_cfg.watch_files && !g_cfg.http_root_dir.empty()) {
+    extern void start_file_watcher(const std::filesystem::path&,
+                                   const std::filesystem::path&,
+                                   std::function<void()>);
+#ifdef NPRPC_SSR_ENABLED
+    namespace impl = nprpc::impl;
+    std::filesystem::path ssr_server_root;
+    if (g_cfg.ssr_enabled && !g_cfg.ssr_handler_dir.empty()) {
+      // Watch the whole handler dir (e.g. build/), not just build/server/.
+      // npm run build deletes build/server/ entirely and recreates it, which
+      // invalidates any inotify watch placed on that subdirectory.  By watching
+      // the parent we survive the delete+recreate cycle.
+      ssr_server_root = std::filesystem::path(g_cfg.ssr_handler_dir);
+    }
+    start_file_watcher(
+        g_cfg.http_root_dir,
+        ssr_server_root,
+        ssr_server_root.empty() ? std::function<void()>{} : []() {
+          // Re-emit host.json into the freshly-built static root so the
+          // browser can discover the object IDs after a full build wipe.
+          try {
+            g_rpc->produce_host_json();
+            NPRPC_LOG_INFO("[FileWatcher] host.json regenerated after build");
+          } catch (const std::exception& e) {
+            NPRPC_LOG_ERROR("[FileWatcher] Failed to regenerate host.json: {}", e.what());
+          }
+          extern void restart_ssr();
+          restart_ssr();
+        });
+#else
+    start_file_watcher(g_cfg.http_root_dir, {}, {});
+#endif
+  }
 
   init_socket(ioc_);
   init_http_server(ioc_);

@@ -155,6 +155,7 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.http_dhparams_file = config->http_dhparams_file;
         cxxConfig.http_root_dir = config->http_root_dir;
         cxxConfig.ssr_handler_dir = config->ssr_handler_dir;
+        cxxConfig.watch_files = config->watch_files;
         cxxConfig.quic_port = config->quic_port;
         cxxConfig.quic_cert_file = config->quic_cert_file;
         cxxConfig.quic_key_file = config->quic_key_file;

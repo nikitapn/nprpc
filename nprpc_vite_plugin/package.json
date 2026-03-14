@@ -1,0 +1,34 @@
+{
+  "name": "@nprpc/vite-plugin",
+  "version": "1.0.0",
+  "description": "Vite plugin for NPRPC — notifies the C++ backend to reload SSR and host.json after each build",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ],
+  "scripts": {
+    "test": "echo \"No tests yet\""
+  },
+  "keywords": [
+    "vite",
+    "vite-plugin",
+    "nprpc",
+    "ssr",
+    "sveltekit",
+    "dev"
+  ],
+  "author": "nikitapnn1@gmail.com",
+  "license": "MIT",
+  "peerDependencies": {
+    "vite": ">=5.0.0"
+  }
+}
