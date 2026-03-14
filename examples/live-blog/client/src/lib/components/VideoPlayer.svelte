@@ -80,6 +80,34 @@
 		}
 	}
 
+	// Maximum seconds to buffer ahead of the current playback position.
+	// When the buffer exceeds this, we stop pulling new chunks (and stop
+	// sending window-update credits) until playback catches up.
+	const MAX_BUFFER_AHEAD_S = 30;
+
+	function bufferedAhead(sb: SourceBuffer): number {
+		if (!videoEl) return 0;
+		const t = videoEl.currentTime;
+		for (let i = 0; i < sb.buffered.length; i++) {
+			if (sb.buffered.start(i) <= t + 0.1 && sb.buffered.end(i) > t) {
+				return sb.buffered.end(i) - t;
+			}
+		}
+		return 0;
+	}
+
+	function waitForTimeUpdate(): Promise<void> {
+		return new Promise<void>((resolve) =>
+			videoEl!.addEventListener('timeupdate', () => resolve(), { once: true })
+		);
+	}
+
+	async function waitForBufferSpace(sb: SourceBuffer): Promise<void> {
+		while (videoEl && bufferedAhead(sb) >= MAX_BUFFER_AHEAD_S) {
+			await waitForTimeUpdate();
+		}
+	}
+
 	function mediaErrorName(code: number): string {
 		return (
 			['', 'MEDIA_ERR_ABORTED', 'MEDIA_ERR_NETWORK', 'MEDIA_ERR_DECODE', 'MEDIA_ERR_SRC_NOT_SUPPORTED'][code] ??
@@ -144,6 +172,7 @@
 			bytesReceived += initChunk.byteLength;
 
 			for (;;) {
+				await waitForBufferSpace(sourceBuffer);
 				const { value: chunk, done } = await iter.next();
 				if (done || !chunk) break;
 				await safeAppend(sourceBuffer, chunk);

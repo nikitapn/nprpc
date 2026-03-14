@@ -82,4 +82,6 @@ interface ChatService {
 
 interface MediaService {
   server_stream<binary> OpenPostVideo(post_id: u64);
+  string GetVideoDashManifest(post_id: u64);
+  server_stream<binary> GetVideoDashSegmentRange(post_id: u64, byte_offset: u64, byte_length: u64);
 }

@@ -337,12 +337,8 @@ private final class ChatServiceImpl: ChatServiceServant, @unchecked Sendable {
 }
 
 private final class MediaServiceImpl: MediaServiceServant, @unchecked Sendable {
-  // Directory that holds fragmented MP4 files named post-<id>.fmp4.
-  // Create one with:
-  //   ffmpeg -i input.mp4 \
-  //          -c:v libx264 -c:a aac \
-  //          -movflags frag_keyframe+empty_moov+default_base_moof \
-  //          -f mp4 /app/media/post-101.fmp4
+  // Directory that holds fragmented MP4 files named post-<id>.fmp4 and
+  // their DASH manifests post-<id>.mpd (generated with MP4Box -profile onDemand).
   private let mediaDir: String
   // Stream chunks of 256 KB — large enough to keep throughput high,
   // small enough that the SourceBuffer drain loop stays responsive.
@@ -369,6 +365,64 @@ private final class MediaServiceImpl: MediaServiceServant, @unchecked Sendable {
           let data = handle.readData(ofLength: Self.chunkSize)
           if data.isEmpty { break }
           continuation.yield(Array(data))
+        }
+        continuation.finish()
+      }
+    }
+  }
+
+  // Returns the DASH MPD manifest for a post.
+  // Generate with: MP4Box -dash 4000 -frag 4000 -rap -profile onDemand post-<id>.fmp4
+  override func getVideoDashManifest(post_id: UInt64) -> String {
+    let path = "\(mediaDir)/post-\(post_id).mpd"
+    return (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+  }
+
+  // Resolves the actual media file that MP4Box wrote for a given post.
+  // MP4Box -profile onDemand produces a new file (e.g. post-101_dash.mp4) whose
+  // byte offsets differ from the original fmp4.  The MPD's <BaseURL> element
+  // names that file, so we read it here rather than assuming a fixed suffix.
+  private func dashMediaPath(post_id: UInt64) -> String {
+    let mpdPath = "\(mediaDir)/post-\(post_id).mpd"
+    if let mpd = try? String(contentsOfFile: mpdPath, encoding: .utf8),
+       let tagStart = mpd.range(of: "<BaseURL>"),
+       let tagEnd   = mpd.range(of: "</BaseURL>",
+                                range: tagStart.upperBound..<mpd.endIndex) {
+      let filename = String(mpd[tagStart.upperBound..<tagEnd.lowerBound])
+        .trimmingCharacters(in: .whitespaces)
+      if !filename.isEmpty && !filename.hasPrefix("http") {
+        return "\(mediaDir)/\(filename)"
+      }
+    }
+    // Fallback: the fmp4 itself (covers the case where the user already
+    // ran MP4Box in-place and renamed the output to post-<id>.fmp4).
+    return "\(mediaDir)/post-\(post_id).fmp4"
+  }
+
+  // Streams a byte range from the single-file DASH media (mmapped for zero-copy).
+  // Shaka Player issues these for each segment after reading the sidx box.
+  override func getVideoDashSegmentRange(
+    post_id: UInt64, byte_offset: UInt64, byte_length: UInt64
+  ) -> AsyncStream<binary> {
+    let path = dashMediaPath(post_id: post_id)
+    return AsyncStream { continuation in
+      Task {
+        guard let mapped = try? Data(
+          contentsOf: URL(fileURLWithPath: path), options: .alwaysMapped
+        ) else {
+          continuation.finish()
+          return
+        }
+        let start = Int(byte_offset)
+        let end   = min(start + Int(byte_length), mapped.count)
+        guard start < end else { continuation.finish(); return }
+
+        let chunkSize = Self.chunkSize
+        var pos = start
+        while pos < end {
+          let chunkEnd = min(pos + chunkSize, end)
+          continuation.yield(Array(mapped[pos..<chunkEnd]))
+          pos = chunkEnd
         }
         continuation.finish()
       }

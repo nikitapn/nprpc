@@ -102,6 +102,20 @@ export async function streamPostVideo(postId: bigint): Promise<Awaited<ReturnTyp
 	return media.OpenPostVideo(postId);
 }
 
+export async function getVideoDashManifest(postId: bigint): Promise<string> {
+	const media = await getMediaService();
+	return media.GetVideoDashManifest(postId);
+}
+
+export async function getVideoDashSegmentRange(
+	postId: bigint,
+	byteOffset: bigint,
+	byteLength: bigint
+): Promise<Awaited<ReturnType<MediaService['GetVideoDashSegmentRange']>>> {
+	const media = await getMediaService();
+	return media.GetVideoDashSegmentRange(postId, byteOffset, byteLength);
+}
+
 export function formatIsoDate(value: string): string {
 	if (!value) {
 		return 'Unscheduled';

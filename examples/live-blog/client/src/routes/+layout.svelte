@@ -13,6 +13,7 @@
 				<a class="rounded-full border border-amber-900/15 px-4 py-2 hover:bg-white/70" href="/blog?page=1">Blog</a>
 				<a class="rounded-full border border-amber-900/15 px-4 py-2 hover:bg-white/70" href="/post/first-steps-with-nprpc">Post</a>
 				<a class="rounded-full border border-amber-900/15 px-4 py-2 hover:bg-white/70" href="/author/editorial-desk">Author</a>
+				<a class="rounded-full border border-amber-900/15 px-4 py-2 hover:bg-white/70" href="/video/101">Video</a>
 			</nav>
 		</header>
 

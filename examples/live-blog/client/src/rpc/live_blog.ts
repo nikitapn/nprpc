@@ -760,15 +760,98 @@ export class _IChatService_Servant extends NPRPC.ObjectServant {
       buf.write_len(buf.size - 4);
       return await NPRPC.rpc.open_server_stream(this.endpoint, buf, stream_id, this.timeout, ((data: Uint8Array) => NPRPC.unmarshal_typed_array(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0, 1) as Uint8Array));
     }
+    public async GetVideoDashManifest(post_id: /*in*/bigint): Promise<string> {
+      let interface_idx = (arguments.length == 1 ? 0 : arguments[arguments.length - 1]);
+      const buf = NPRPC.FlatBuffer.create();
+      buf.prepare(40);
+      buf.commit(40);
+      buf.write_msg_id(NPRPC.impl.MessageId.FunctionCall);
+      buf.write_msg_type(NPRPC.impl.MessageType.Request);
+      // Write CallHeader directly
+      buf.dv.setUint16(16 + 0, this.data.poa_idx, true);
+      buf.dv.setUint8(16 + 2, interface_idx);
+      buf.dv.setUint8(16 + 3, 1);
+      buf.dv.setBigUint64(16 + 8, this.data.object_id, true);
+      marshal_live_blog_M11(buf, 32, {_1: post_id});
+      buf.write_len(buf.size - 4);
+      const __dbg_t0 = Date.now();
+      const __dbg_id = (globalThis as any).__nprpc_debug?.call_start({direction:'client',class_id:_IMediaService_Servant._get_class(),poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),interface_idx,func_idx:1,method_name:'GetVideoDashManifest',endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,transport:NPRPC.EndPoint.to_string(this.endpoint.type).replace('://','') as any},request_args:{post_id:post_id},request_bytes:buf.size});
+      await NPRPC.rpc.call(this.endpoint, buf, this.timeout);
+      let std_reply = NPRPC.handle_standart_reply(buf);
+      if (std_reply != -1) {
+        console.log("received an unusual reply for function with output arguments");
+        throw new NPRPC.Exception("Unknown Error");
+      }
+      const out = unmarshal_live_blog_M3(buf, 16);
+      (globalThis as any).__nprpc_debug?.call_end(__dbg_id,{status:'success',duration_ms:Date.now()-__dbg_t0,response_bytes:buf.size,response_args:out});
+      return out._1;
+    }
+    public async GetVideoDashSegmentRange(post_id: /*in*/bigint, byte_offset: /*in*/bigint, byte_length: /*in*/bigint): Promise<NPRPC.StreamReader<binary>> {
+      const interface_idx = (arguments.length == 3 ? 0 : arguments[arguments.length - 1]);
+      const conn = NPRPC.rpc.get_connection(this.endpoint);
+      const stream_id = conn.stream_manager.generate_stream_id();
+      const buf = NPRPC.FlatBuffer.create();
+      buf.prepare(72);
+      buf.commit(72);
+      buf.write_msg_id(NPRPC.impl.MessageId.StreamInitialization);
+      buf.write_msg_type(NPRPC.impl.MessageType.Request);
+      NPRPC.impl.marshal_StreamInit(buf, 16, {
+        stream_id,
+        poa_idx: this.data.poa_idx,
+        interface_idx,
+        object_id: this.data.object_id,
+        func_idx: 2,
+        stream_kind: NPRPC.impl.StreamKind.Server
+      });
+      marshal_live_blog_M12(buf, 48, {_1: post_id, _2: byte_offset, _3: byte_length});
+      buf.write_len(buf.size - 4);
+      return await NPRPC.rpc.open_server_stream(this.endpoint, buf, stream_id, this.timeout, ((data: Uint8Array) => NPRPC.unmarshal_typed_array(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0, 1) as Uint8Array));
+    }
 
     // HTTP Transport (alternative to WebSocket)
     public readonly http = {
+      GetVideoDashManifest: async (post_id: /*in*/bigint): Promise<string> => {
+        const buf = NPRPC.FlatBuffer.create();
+        buf.prepare(40);
+        buf.commit(40);
+        buf.write_msg_id(NPRPC.impl.MessageId.FunctionCall);
+        buf.write_msg_type(NPRPC.impl.MessageType.Request);
+        buf.dv.setUint16(16 + 0, this.data.poa_idx, true);
+        buf.dv.setUint8(16 + 2, 0);
+        buf.dv.setUint8(16 + 3, 1);
+        buf.dv.setBigUint64(16 + 8, this.data.object_id, true);
+        marshal_live_blog_M11(buf, 32, {_1: post_id});
+        buf.write_len(buf.size - 4);
 
+        const __dbg_t0 = Date.now();
+        const __dbg_id = (globalThis as any).__nprpc_debug?.call_start({direction:'client',class_id:_IMediaService_Servant._get_class(),poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),interface_idx:0,func_idx:1,method_name:'GetVideoDashManifest',endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,transport:'http'},request_args:{post_id:post_id},request_bytes:buf.size});
+
+        const url = `http${this.endpoint.is_ssl() ? 's' : ''}://${this.endpoint.hostname}:${this.endpoint.port}/rpc`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          credentials: 'include',
+          body: buf.array_buffer
+        }
+);
+
+        if (!response.ok) throw new NPRPC.Exception(`HTTP error: ${response.status}`);
+        const response_data = await response.arrayBuffer();
+        buf.set_buffer(response_data);
+
+        let std_reply = NPRPC.handle_standart_reply(buf);
+        if (std_reply != -1) throw new NPRPC.Exception("Unexpected reply");
+        const out = unmarshal_live_blog_M3(buf, 16);
+        (globalThis as any).__nprpc_debug?.call_end(__dbg_id,{status:'success',duration_ms:Date.now()-__dbg_t0,response_bytes:buf.size,response_args:out});
+        return out._1;
+      }
     };
   }
   export interface IMediaService_Servant
   {
     OpenPostVideo(post_id: /*in*/bigint): AsyncIterable<binary> | Iterable<binary> | Promise<AsyncIterable<binary> | Iterable<binary>>;
+    GetVideoDashManifest(post_id: /*in*/bigint): string;
+    GetVideoDashSegmentRange(post_id: /*in*/bigint, byte_offset: /*in*/bigint, byte_length: /*in*/bigint): AsyncIterable<binary> | Iterable<binary> | Promise<AsyncIterable<binary> | Iterable<binary>>;
   }
   export class _IMediaService_Servant extends NPRPC.ObjectServant {
     public static _get_class(): string { return "live_blog/live_blog.MediaService"; }
@@ -783,6 +866,24 @@ export class _IChatService_Servant extends NPRPC.ObjectServant {
       // Read CallHeader directly
       const function_idx = buf.dv.getUint8(16 + 3);
       switch(function_idx) {
+        case 1: {
+          const ia = unmarshal_live_blog_M11(buf, 32);
+          const obuf = buf;
+          obuf.consume(obuf.size);
+          obuf.prepare(152);
+          obuf.commit(24);
+          let __ret_val: string = '';
+          const __dbg_t0 = Date.now();
+          const __dbg_id = (globalThis as any).__nprpc_debug?.call_start({direction:'server',class_id:_IMediaService_Servant._get_class(),poa_idx:obj.poa.index,object_id:String(obj.oid),interface_idx:0,func_idx:1,method_name:'GetVideoDashManifest',endpoint:{hostname:remote_endpoint.hostname,port:remote_endpoint.port,transport:NPRPC.EndPoint.to_string(remote_endpoint.type).replace('://','') as any},request_args:ia});
+          __ret_val = (obj as any).GetVideoDashManifest(ia._1);
+          (globalThis as any).__nprpc_debug?.call_end(__dbg_id,{status:'success',duration_ms:Date.now()-__dbg_t0});
+          const out_data = {_1: __ret_val};
+          marshal_live_blog_M3(obuf, 16, out_data);
+          obuf.write_len(obuf.size - 4);
+          obuf.write_msg_id(NPRPC.impl.MessageId.BlockResponse);
+          obuf.write_msg_type(NPRPC.impl.MessageType.Answer);
+          break;
+        }
         default:
           NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Error_UnknownFunctionIdx);
       }
@@ -810,27 +911,45 @@ export class _IChatService_Servant extends NPRPC.ObjectServant {
             })();
             return;
           }
-          default:
-            NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Error_UnknownFunctionIdx);
+          case 2: {
+            const ia = unmarshal_live_blog_M12(buf, 48);
+            const writer = conn.stream_manager.create_writer(init.stream_id, ((value: Uint8Array) => { const buf = NPRPC.FlatBuffer.create(8 + value.byteLength); buf.commit(8); NPRPC.marshal_typed_array(buf, 0, value, 1, 1); return new Uint8Array(buf.array_buffer, 0, buf.size); }));
+            NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);
+            void (async () => {
+              try {
+                const source = await (obj as any).GetVideoDashSegmentRange(ia._1, ia._2, ia._3);
+                for await (const chunk of source as any) {
+                  writer.write(chunk);
+                }
+                writer.close();
+              } catch (e) {
+                writer.abort();
+                console.error('Stream handler failed', e);
+              }
+              })();
+              return;
+            }
+            default:
+              NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Error_UnknownFunctionIdx);
+          }
         }
       }
-    }
 
 export interface live_blog_M1 {
   _1: number/*u32*/;
   _2: number/*u32*/;
+    }
+
+    export function marshal_live_blog_M1(buf: NPRPC.FlatBuffer, offset: number, data: live_blog_M1): void {
+    buf.dv.setUint32(offset + 0, data._1, true);
+    buf.dv.setUint32(offset + 4, data._2, true);
   }
 
-  export function marshal_live_blog_M1(buf: NPRPC.FlatBuffer, offset: number, data: live_blog_M1): void {
-  buf.dv.setUint32(offset + 0, data._1, true);
-  buf.dv.setUint32(offset + 4, data._2, true);
-}
-
-export function unmarshal_live_blog_M1(buf: NPRPC.FlatBuffer, offset: number): live_blog_M1 {
-const result = {} as live_blog_M1;
-result._1 = buf.dv.getUint32(offset + 0, true);
-result._2 = buf.dv.getUint32(offset + 4, true);
-return result;
+  export function unmarshal_live_blog_M1(buf: NPRPC.FlatBuffer, offset: number): live_blog_M1 {
+  const result = {} as live_blog_M1;
+  result._1 = buf.dv.getUint32(offset + 0, true);
+  result._2 = buf.dv.getUint32(offset + 4, true);
+  return result;
 }
 
 export interface live_blog_M2 {
@@ -985,6 +1104,26 @@ buf.dv.setBigUint64(offset + 0, data._1, true);
 export function unmarshal_live_blog_M11(buf: NPRPC.FlatBuffer, offset: number): live_blog_M11 {
 const result = {} as live_blog_M11;
 result._1 = buf.dv.getBigUint64(offset + 0, true);
+return result;
+}
+
+export interface live_blog_M12 {
+  _1: bigint/*u64*/;
+  _2: bigint/*u64*/;
+  _3: bigint/*u64*/;
+}
+
+export function marshal_live_blog_M12(buf: NPRPC.FlatBuffer, offset: number, data: live_blog_M12): void {
+buf.dv.setBigUint64(offset + 0, data._1, true);
+buf.dv.setBigUint64(offset + 8, data._2, true);
+buf.dv.setBigUint64(offset + 16, data._3, true);
+}
+
+export function unmarshal_live_blog_M12(buf: NPRPC.FlatBuffer, offset: number): live_blog_M12 {
+const result = {} as live_blog_M12;
+result._1 = buf.dv.getBigUint64(offset + 0, true);
+result._2 = buf.dv.getBigUint64(offset + 8, true);
+result._3 = buf.dv.getBigUint64(offset + 16, true);
 return result;
 }
 
