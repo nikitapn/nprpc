@@ -86,12 +86,16 @@ The server is intended to run inside the updated development Docker image.
 
 ## Development Workflow
 
+The live-blog client is an npm workspace member of the repo root. Install JavaScript dependencies once from the repo root before building or running the client:
+
+```bash
+npm ci
+```
+
 ### Client
 
 ```bash
-cd examples/live-blog/client
-npm install
-npm run dev
+npm run dev --workspace live-blog-client
 ```
 
 ### Swift Server
@@ -105,6 +109,7 @@ From `examples/live-blog`:
 Or build it from the repo root with CMake:
 
 ```bash
+npm ci
 cmake -S . -B build \
   -DNPRPC_BUILD_EXAMPLES=ON \
   -DNPRPC_BUILD_TOOLS=ON

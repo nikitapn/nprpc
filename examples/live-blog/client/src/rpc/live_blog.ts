@@ -761,7 +761,7 @@ export class _IChatService_Servant extends NPRPC.ObjectServant {
       marshal_live_blog_M11(buf, 48, {_1: post_id});
       buf.write_len(buf.size - 4);
       (globalThis as any).__nprpc_debug?.stream_start({direction:'client',class_id:_IMediaService_Servant._get_class(),poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),interface_idx,func_idx:0,method_name:'OpenPostVideo',endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,transport:NPRPC.EndPoint.to_string(this.endpoint.type).replace('://','') as any},stream_id:String(stream_id),stream_kind:'server',request_args:{post_id:post_id},request_bytes:buf.size});
-      return await NPRPC.rpc.open_server_stream(this.endpoint, buf, stream_id, this.timeout, ((data: Uint8Array) => NPRPC.unmarshal_typed_array(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0, 1) as Uint8Array));
+      return await NPRPC.rpc.open_server_stream(this.endpoint, buf, stream_id, this.timeout, ((data: Uint8Array) => NPRPC.unmarshal_typed_array(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0, Uint8Array) as Uint8Array));
     }
     public async GetVideoDashManifest(post_id: /*in*/bigint): Promise<string> {
       let interface_idx = (arguments.length == 1 ? 0 : arguments[arguments.length - 1]);
@@ -809,7 +809,7 @@ export class _IChatService_Servant extends NPRPC.ObjectServant {
       marshal_live_blog_M12(buf, 48, {_1: post_id, _2: byte_offset, _3: byte_length});
       buf.write_len(buf.size - 4);
       (globalThis as any).__nprpc_debug?.stream_start({direction:'client',class_id:_IMediaService_Servant._get_class(),poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),interface_idx,func_idx:2,method_name:'GetVideoDashSegmentRange',endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,transport:NPRPC.EndPoint.to_string(this.endpoint.type).replace('://','') as any},stream_id:String(stream_id),stream_kind:'server',request_args:{post_id:post_id,byte_offset:byte_offset,byte_length:byte_length},request_bytes:buf.size});
-      return await NPRPC.rpc.open_server_stream(this.endpoint, buf, stream_id, this.timeout, ((data: Uint8Array) => NPRPC.unmarshal_typed_array(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0, 1) as Uint8Array));
+      return await NPRPC.rpc.open_server_stream(this.endpoint, buf, stream_id, this.timeout, ((data: Uint8Array) => NPRPC.unmarshal_typed_array(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0, Uint8Array) as Uint8Array));
     }
 
     // HTTP Transport (alternative to WebSocket)

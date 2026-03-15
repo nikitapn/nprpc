@@ -50,28 +50,49 @@ export function marshal_typed_array(buf: FlatBuffer, offset: number, arr: TypedA
 	new Uint8Array(buf.array_buffer, data_offset, bytes.length).set(bytes);
 }
 
-export function unmarshal_typed_array(buf: FlatBuffer, offset: number, elem_size: number): TypedArray {
+type FundamentalKind = 'bool' | 'i8' | 'u8' | 'i16' | 'u16' | 'i32' | 'u32' | 'i64' | 'u64' | 'f32' | 'f64';
+
+function get_typed_array_constructor(elem: FundamentalKind | TypedArrayConstructor): TypedArrayConstructor {
+	if (typeof elem !== 'string') {
+		return elem;
+	}
+
+	switch (elem) {
+		case 'bool':
+		case 'u8':
+			return Uint8Array;
+		case 'i8':
+			return Int8Array;
+		case 'i16':
+			return Int16Array;
+		case 'u16':
+			return Uint16Array;
+		case 'i32':
+			return Int32Array;
+		case 'u32':
+			return Uint32Array;
+		case 'i64':
+			return BigInt64Array;
+		case 'u64':
+			return BigUint64Array;
+		case 'f32':
+			return Float32Array;
+		case 'f64':
+			return Float64Array;
+	}
+}
+
+export function unmarshal_typed_array(buf: FlatBuffer, offset: number, elem: FundamentalKind | TypedArrayConstructor): TypedArray {
 	const relative_offset = buf.dv.getUint32(offset, true);
 	const n = buf.dv.getUint32(offset + 4, true);
+	const ctor = get_typed_array_constructor(elem);
 	
 	if (n === 0) {
-		switch (elem_size) {
-			case 1: return new Uint8Array(0);
-			case 2: return new Uint16Array(0);
-			case 4: return new Uint32Array(0);
-			case 8: return new BigUint64Array(0);
-			default: return new Uint8Array(0);
-		}
+		return new ctor(0);
 	}
 	
 	const data_offset = offset + relative_offset;
-	switch (elem_size) {
-		case 1: return new Uint8Array(buf.array_buffer, data_offset, n);
-		case 2: return new Uint16Array(buf.array_buffer, data_offset, n);
-		case 4: return new Uint32Array(buf.array_buffer, data_offset, n);
-		case 8: return new BigUint64Array(buf.array_buffer, data_offset, n);
-		default: return new Uint8Array(buf.array_buffer, data_offset, n);
-	}
+	return new ctor(buf.array_buffer, data_offset, n);
 }
 
 export function marshal_struct_array(buf: FlatBuffer, offset: number, arr: any[], marshal_fn: (buf: FlatBuffer, offset: number, data: any) => void, elem_size: number, elem_align: number): void {
@@ -95,32 +116,64 @@ export function unmarshal_struct_array(buf: FlatBuffer, offset: number, unmarsha
 	return result;
 }
 
-export function marshal_optional_fundamental(buf: FlatBuffer, offset: number, value: any, elem_size: number): void {
-	// Optional layout: 4-byte relative offset (same as optional struct)
-	// Allocate space for the fundamental value
-	const data_offset = _alloc1(buf, offset, elem_size, elem_size);
-	// Write the value to the allocated space
-	switch (elem_size) {
-		case 1: buf.dv.setUint8(data_offset, value); break;
-		case 2: buf.dv.setUint16(data_offset, value, true); break;
-		case 4: buf.dv.setUint32(data_offset, value, true); break;
-		case 8: buf.dv.setBigUint64(data_offset, value, true); break;
+function get_fundamental_size(kind: FundamentalKind): number {
+	switch (kind) {
+		case 'bool':
+		case 'i8':
+		case 'u8':
+			return 1;
+		case 'i16':
+		case 'u16':
+			return 2;
+		case 'i32':
+		case 'u32':
+		case 'f32':
+			return 4;
+		case 'i64':
+		case 'u64':
+		case 'f64':
+			return 8;
 	}
 }
 
-export function unmarshal_optional_fundamental(buf: FlatBuffer, offset: number, elem_size: number, is_bool: boolean = false): any | undefined {
+export function marshal_optional_fundamental(buf: FlatBuffer, offset: number, value: any, kind: FundamentalKind): void {
+	// Optional layout: 4-byte relative offset (same as optional struct)
+	// Allocate space for the fundamental value
+	const elem_size = get_fundamental_size(kind);
+	const data_offset = _alloc1(buf, offset, elem_size, elem_size);
+	// Write the value to the allocated space
+	switch (kind) {
+		case 'bool': buf.dv.setUint8(data_offset, value ? 1 : 0); break;
+		case 'i8': buf.dv.setInt8(data_offset, value); break;
+		case 'u8': buf.dv.setUint8(data_offset, value); break;
+		case 'i16': buf.dv.setInt16(data_offset, value, true); break;
+		case 'u16': buf.dv.setUint16(data_offset, value, true); break;
+		case 'i32': buf.dv.setInt32(data_offset, value, true); break;
+		case 'u32': buf.dv.setUint32(data_offset, value, true); break;
+		case 'i64': buf.dv.setBigInt64(data_offset, value, true); break;
+		case 'u64': buf.dv.setBigUint64(data_offset, value, true); break;
+		case 'f32': buf.dv.setFloat32(data_offset, value, true); break;
+		case 'f64': buf.dv.setFloat64(data_offset, value, true); break;
+	}
+}
+
+export function unmarshal_optional_fundamental(buf: FlatBuffer, offset: number, kind: FundamentalKind): any | undefined {
 	// Optional layout: 4-byte relative offset at 'offset'
 	// Caller already checked that offset is non-zero, so read the value
 	const rel_offset = buf.dv.getUint32(offset, true);
 	const data_offset = offset + rel_offset;
-	switch (elem_size) {
-		case 1: {
-			const val = buf.dv.getUint8(data_offset);
-			return is_bool ? (val !== 0) : val;
-		}
-		case 2: return buf.dv.getUint16(data_offset, true);
-		case 4: return buf.dv.getUint32(data_offset, true);
-		case 8: return buf.dv.getBigUint64(data_offset, true);
+	switch (kind) {
+		case 'bool': return buf.dv.getUint8(data_offset) !== 0;
+		case 'i8': return buf.dv.getInt8(data_offset);
+		case 'u8': return buf.dv.getUint8(data_offset);
+		case 'i16': return buf.dv.getInt16(data_offset, true);
+		case 'u16': return buf.dv.getUint16(data_offset, true);
+		case 'i32': return buf.dv.getInt32(data_offset, true);
+		case 'u32': return buf.dv.getUint32(data_offset, true);
+		case 'i64': return buf.dv.getBigInt64(data_offset, true);
+		case 'u64': return buf.dv.getBigUint64(data_offset, true);
+		case 'f32': return buf.dv.getFloat32(data_offset, true);
+		case 'f64': return buf.dv.getFloat64(data_offset, true);
 	}
 }
 
@@ -139,3 +192,7 @@ export function unmarshal_optional_struct(buf: FlatBuffer, offset: number, unmar
 }
 
 type TypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | BigInt64Array | BigUint64Array | Float32Array | Float64Array;
+type TypedArrayConstructor = {
+	new(length: number): TypedArray;
+	new(buffer: ArrayBufferLike, byteOffset: number, length: number): TypedArray;
+};

@@ -11,6 +11,7 @@
 namespace npidl::builders {
 
 static std::string_view fundamental_to_ts(TokenId id);
+static std::string_view fundamental_kind_literal(TokenId id);
 
 using std::placeholders::_1;
 using std::placeholders::_2;
@@ -226,6 +227,37 @@ static std::string_view fundamental_to_ts(TokenId id)
   default:
     assert(false);
     return ""sv;
+  }
+}
+
+static std::string_view fundamental_kind_literal(TokenId id)
+{
+  using namespace std::string_view_literals;
+  switch (id) {
+  case TokenId::Boolean:
+    return "'bool'"sv;
+  case TokenId::Int8:
+    return "'i8'"sv;
+  case TokenId::UInt8:
+    return "'u8'"sv;
+  case TokenId::Int16:
+    return "'i16'"sv;
+  case TokenId::UInt16:
+    return "'u16'"sv;
+  case TokenId::Int32:
+    return "'i32'"sv;
+  case TokenId::UInt32:
+    return "'u32'"sv;
+  case TokenId::Int64:
+    return "'i64'"sv;
+  case TokenId::UInt64:
+    return "'u64'"sv;
+  case TokenId::Float32:
+    return "'f32'"sv;
+  case TokenId::Float64:
+    return "'f64'"sv;
+  default:
+    assert(false);
   }
 }
 
@@ -648,7 +680,7 @@ void TSBuilder::emit_stream_deserializer(AstTypeDecl* type, std::ostream& os)
     auto [elem_size, elem_align] = get_type_size_align(wt);
     if (is_fundamental(wt)) {
       os << "((data: Uint8Array) => NPRPC.unmarshal_typed_array(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0, "
-         << elem_size << ") as ";
+         << get_typed_array_name(cft(wt)->token_id) << ") as ";
       emit_stream_value_type(type, os);
       os << ")";
     } else if (wt->id == FieldType::Struct) {
@@ -2463,7 +2495,7 @@ void TSBuilder::emit_field_marshal(AstFieldDecl* f,
     if (is_fundamental(wt)) {
       out << bl() << "NPRPC.marshal_optional_fundamental(buf, offset + "
           << field_offset << ", " << field_access << ", "
-          << get_fundamental_size(cft(wt)->token_id) << ");\n";
+          << fundamental_kind_literal(cft(wt)->token_id) << ");\n";
     } else if (wt->id == FieldType::Struct) {
       auto [wt_size, wt_align] = get_type_size_align(wt);
       out << bl() << "NPRPC.marshal_optional_struct(buf, offset + "
@@ -2714,7 +2746,7 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
       // Cast to specific typed array type (e.g., Uint8Array for uuid_t)
       out << bl() << field_name
           << " = NPRPC.unmarshal_typed_array(buf, offset + " << field_offset
-          << ", " << ut_size << ") as "
+          << ", " << get_typed_array_name(cft(wt)->token_id) << ") as "
           << get_typed_array_name(cft(wt)->token_id) << ";\n";
     } else if (wt->id == FieldType::String) {
       out << bl() << field_name
@@ -2744,11 +2776,10 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
         << bb(false);
 
     if (is_fundamental(wt)) {
-      const auto is_bool = cft(wt)->token_id == TokenId::Boolean;
       out << bl() << field_name
           << " = NPRPC.unmarshal_optional_fundamental(buf, offset + "
-          << field_offset << ", " << get_fundamental_size(cft(wt)->token_id)
-          << ", " << (is_bool ? "true" : "false") << ");\n";
+          << field_offset << ", "
+          << fundamental_kind_literal(cft(wt)->token_id) << ");\n";
     } else if (wt->id == FieldType::Struct) {
       auto [wt_size, wt_align] = get_type_size_align(wt);
       out << bl() << field_name
@@ -2776,14 +2807,14 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
           out << bl() << "const " << temp_var
               << " = NPRPC.unmarshal_optional_struct(buf, offset + "
               << field_offset << ", (b, o) => NPRPC.unmarshal_typed_array(b, o, "
-              << ut_size << ") as " << typed_array_name << ", 4) as "
+              << typed_array_name << ") as " << typed_array_name << ", 4) as "
               << typed_array_name << ";\n";
           out << bl() << field_name << " = Array.from(" << temp_var << ");\n";
         } else {
           out << bl() << field_name
               << " = NPRPC.unmarshal_optional_struct(buf, offset + "
               << field_offset << ", (b, o) => NPRPC.unmarshal_typed_array(b, o, "
-              << ut_size << ") as " << typed_array_name << ", 4) as "
+              << typed_array_name << ") as " << typed_array_name << ", 4) as "
               << typed_array_name << ";\n";
         }
       } else if (real_elem_type->id == FieldType::Struct) {
@@ -2822,12 +2853,12 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
         if (cft(elem_type)->token_id == TokenId::UInt8) {
           out << bl() << result_name << "." << f->name
               << " = NPRPC.unmarshal_typed_array(buf, offset + " << field_offset
-              << ", " << ut_size << ") as " << typed_array_name << ";\n";
+              << ", " << typed_array_name << ") as " << typed_array_name << ";\n";
         } else {
           auto temp_var = "temp_" + f->name;
           out << bl() << "const " << temp_var
               << " = NPRPC.unmarshal_typed_array(buf, offset + " << field_offset
-              << ", " << ut_size << ") as " << typed_array_name << ";\n";
+              << ", " << typed_array_name << ") as " << typed_array_name << ";\n";
           out << bl() << result_name << "." << f->name << " = Array.from("
               << temp_var << ");\n";
         }

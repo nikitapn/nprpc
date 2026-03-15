@@ -15,7 +15,6 @@ set(LIVE_BLOG_GEN_SCRIPT ${LIVE_BLOG_ROOT}/scripts/gen_stubs.py)
 set(LIVE_BLOG_BUILD_SCRIPT ${LIVE_BLOG_ROOT}/scripts/build-swift-server.sh)
 set(LIVE_BLOG_RUN_SCRIPT ${LIVE_BLOG_ROOT}/scripts/run-swift-server.sh)
 set(LIVE_BLOG_CLIENT_ROOT ${LIVE_BLOG_ROOT}/client)
-set(LIVE_BLOG_CLIENT_INSTALL_STAMP ${CMAKE_CURRENT_BINARY_DIR}/live_blog_client_npm_install.stamp)
 set(LIVE_BLOG_CPP_ROOT ${LIVE_BLOG_ROOT}/cpp)
 set(LIVE_BLOG_CPP_STATIC_ROOT ${LIVE_BLOG_CLIENT_ROOT}/build/client)
 set(LIVE_BLOG_CPP_RUNTIME_ROOT ${LIVE_BLOG_CLIENT_ROOT}/build)
@@ -38,23 +37,19 @@ add_custom_target(live_blog_stubs
   VERBATIM
 )
 
-add_custom_command(
-  OUTPUT ${LIVE_BLOG_CLIENT_INSTALL_STAMP}
-  COMMAND ${NPM_EXECUTABLE} ci
-  COMMAND ${CMAKE_COMMAND} -E touch ${LIVE_BLOG_CLIENT_INSTALL_STAMP}
-  WORKING_DIRECTORY ${LIVE_BLOG_CLIENT_ROOT}
+add_custom_target(live_blog_client_deps
+  COMMAND ${NPM_EXECUTABLE} ls --workspace live-blog-client --depth=0 vite @sveltejs/kit @nprpc/vite-plugin @nprpc/adapter-sveltekit
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   DEPENDS
+    ${CMAKE_SOURCE_DIR}/package.json
+    ${CMAKE_SOURCE_DIR}/package-lock.json
     ${LIVE_BLOG_CLIENT_ROOT}/package.json
     ${CMAKE_SOURCE_DIR}/nprpc_node/package.json
     ${CMAKE_SOURCE_DIR}/nprpc_adapter_sveltekit/package.json
     ${CMAKE_SOURCE_DIR}/nprpc_vite_plugin/package.json
-  COMMENT "Installing live-blog client dependencies"
+  COMMENT "Checking live-blog client workspace dependencies (run 'npm ci' at the repo root if this fails)"
   USES_TERMINAL
   VERBATIM
-)
-
-add_custom_target(live_blog_client_deps
-  DEPENDS ${LIVE_BLOG_CLIENT_INSTALL_STAMP}
 )
 
 add_custom_target(live_blog_client
