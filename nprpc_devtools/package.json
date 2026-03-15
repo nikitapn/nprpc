@@ -13,10 +13,13 @@
   ],
   "scripts": {
     "dev": "vite",
+    "prebuild": "npm run sync:manifest",
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "check:package": "npm pack --dry-run",
     "clean": "rm -rf dist",
+    "sync:manifest": "node ./scripts/sync-manifest-version.mjs",
     "prepack": "npm run build"
   },
   "keywords": [

@@ -1,0 +1,48 @@
+name: Devtools Package
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/devtools-package.yml'
+      - 'nprpc_devtools/**'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/devtools-package.yml'
+      - 'nprpc_devtools/**'
+      - 'package.json'
+      - 'package-lock.json'
+
+jobs:
+  build-and-pack:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: nprpc_devtools
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: nprpc_devtools/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run check
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Verify npm package contents
+        run: npm run check:package

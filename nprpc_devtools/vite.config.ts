@@ -12,10 +12,10 @@ export default defineConfig({
         content_script: resolve(__dirname, 'src/content_script.ts'),
       },
       output: {
-        // background and content_script must be predictable flat filenames
-        // so manifest.json can reference them without content-hash.
+        // content_script must keep a predictable flat filename so the
+        // extension manifest can reference it without a content hash.
         entryFileNames: (chunk) =>
-          ['background', 'content_script'].includes(chunk.name)
+          chunk.name === 'content_script'
             ? '[name].js'
             : 'assets/[name]-[hash].js',
       },

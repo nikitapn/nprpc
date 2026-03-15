@@ -37,4 +37,6 @@ After loading the extension, open Chrome DevTools on a page that uses NPRPC and 
 
 `npm pack` publishes the built extension bundle and README. The package includes `dist/` so consumers can unpack the already-built extension without running Vite themselves.
 
+The extension manifest version is synchronized from `package.json` before each build, so the npm package version is the only release version to update.
+
 `npm run prepack` rebuilds the extension before packaging.
