@@ -14,8 +14,28 @@ script.onload = () => script.remove();
 // The DevTools panel connects directly via chrome.tabs.connect.
 let panelPort: chrome.runtime.Port | null = null;
 const EARLY_EVENT_CAP = 200;
-const earlyEvents: (Record<string, unknown> & { id: number })[] = [];
+const earlyEvents: Record<string, unknown>[] = [];
 let idOffset: number = 0;
+
+function withOffset(detail: Record<string, unknown>): Record<string, unknown> {
+  const payload = detail.data;
+  if (!payload || typeof payload !== 'object' || payload === null) {
+    return detail;
+  }
+
+  const id = (payload as { id?: unknown }).id;
+  if (typeof id !== 'number') {
+    return detail;
+  }
+
+  return {
+    ...detail,
+    data: {
+      ...(payload as Record<string, unknown>),
+      id: id + idOffset,
+    },
+  };
+}
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'nprpc_devtools')
@@ -31,8 +51,7 @@ chrome.runtime.onConnect.addListener((port) => {
 
     for (const detail of earlyEvents) {
       try {
-        detail.id += idOffset;
-        port.postMessage({ source: 'nprpc_content', ...detail });
+        port.postMessage({ source: 'nprpc_content', ...withOffset(detail) });
       } catch { break; }
     }
     earlyEvents.length = 0;
@@ -40,12 +59,13 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 window.addEventListener('__nprpc_debug_event__', (e: Event) => {
-  const detail = (e as CustomEvent<Record<string, unknown> & { id: number }>).detail;
+  const detail = (e as CustomEvent<Record<string, unknown>>).detail;
+
+  console.log('Content script received event', detail);
 
   if (panelPort && earlyEvents.length === 0) {
     try {
-      detail.id += idOffset;
-      panelPort.postMessage({ source: 'nprpc_content', ...detail });
+      panelPort.postMessage({ source: 'nprpc_content', ...withOffset(detail) });
     } catch { /*panelPort = null;*/ }
   } else if (earlyEvents.length < EARLY_EVENT_CAP) {
     earlyEvents.push(detail);

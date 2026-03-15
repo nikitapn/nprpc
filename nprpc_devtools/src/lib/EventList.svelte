@@ -1,25 +1,29 @@
 <svelte:options runes={true} />
 
 <script lang="ts">
-  import type { RpcEvent } from '../types';
+  import type { DebugEntry } from '../types';
+
+  type SortKey = 'seq' | 'direction' | 'method' | 'duration' | 'bytes' | 'status';
 
   let {
     events = [],
-    selected = $bindable<RpcEvent | null>(null)
+    selected = $bindable<DebugEntry | null>(null)
   }: {
-    events?: RpcEvent[];
-    selected?: RpcEvent | null;
+    events?: DebugEntry[];
+    selected?: DebugEntry | null;
   } = $props();
 
   let tbody: HTMLElement | undefined = $state();
   let userScrolled = $state(false);
   let prevLen = $state(0);
+  let sortKey = $state<SortKey>('seq');
+  let sortDir = $state<'asc' | 'desc'>('asc');
 
   // Auto-scroll to newest row unless the user has scrolled up manually.
   $effect(() => {
     if (!tbody) return;
-    if (events.length === prevLen) return;
-    prevLen = events.length;
+    if (displayedEvents.length === prevLen) return;
+    prevLen = displayedEvents.length;
     if (!userScrolled) {
       tbody.scrollTop = tbody.scrollHeight;
     }
@@ -31,27 +35,27 @@
     userScrolled = !atBottom;
   }
 
-  function select(ev: RpcEvent) {
+  function select(ev: DebugEntry) {
     selected = ev;
   }
 
   // Keyboard navigation
   function onKeyDown(e: KeyboardEvent) {
-    if (!events.length) return;
+    if (!displayedEvents.length) return;
     const selectedId = selected?.id;
-    const idx = selectedId === undefined ? -1 : events.findIndex(x => x.id === selectedId);
+    const idx = selectedId === undefined ? -1 : displayedEvents.findIndex(x => x.id === selectedId);
     if (e.key === 'ArrowDown') {
-      const next = events[Math.min(idx + 1, events.length - 1)];
+      const next = displayedEvents[Math.min(idx + 1, displayedEvents.length - 1)];
       if (next) selected = next;
       e.preventDefault();
     } else if (e.key === 'ArrowUp') {
-      const prev = events[Math.max(idx - 1, 0)];
+      const prev = displayedEvents[Math.max(idx - 1, 0)];
       if (prev) selected = prev;
       e.preventDefault();
     }
   }
 
-  function onRowKeyDown(e: KeyboardEvent, ev: RpcEvent) {
+  function onRowKeyDown(e: KeyboardEvent, ev: DebugEntry) {
     if (e.key === 'Enter' || e.key === ' ') {
       selected = ev;
       e.preventDefault();
@@ -66,13 +70,15 @@
     return slash >= 0 ? class_id.slice(slash + 1) : class_id;
   }
 
-  function method_label(ev: RpcEvent): string {
+  function method_label(ev: DebugEntry): string {
     const cls = short_class(ev.class_id);
     const fn  = ev.method_name ?? `fn#${ev.func_idx}`;
-    return `${cls}.${fn}`;
+    return ev.entry_kind === 'stream'
+      ? `${cls}.${fn} [${ev.stream_kind}]`
+      : `${cls}.${fn}`;
   }
 
-  function fmt_duration(ev: RpcEvent): string {
+  function fmt_duration(ev: DebugEntry): string {
     if (ev.status === 'pending') return '…';
     if (ev.duration_ms === undefined) return '—';
     if (ev.duration_ms < 1000) return `${ev.duration_ms} ms`;
@@ -85,11 +91,95 @@
     return `${(b / 1024).toFixed(1)} K`;
   }
 
-  function row_class(ev: RpcEvent): string {
+  function fmt_entry_bytes(ev: DebugEntry): string {
+    if (ev.entry_kind === 'stream') {
+      const out = fmt_bytes(ev.sent_bytes);
+      const incoming = fmt_bytes(ev.received_bytes);
+      if (!out && !incoming) return '';
+      return `${out || '0 B'} / ${incoming || '0 B'}`;
+    }
+
+    if (ev.request_bytes === undefined) return '';
+    const request = fmt_bytes(ev.request_bytes);
+    if (ev.response_bytes !== undefined) {
+      return `${request} / ${fmt_bytes(ev.response_bytes)}`;
+    }
+    return request;
+  }
+
+  function bytes_value(ev: DebugEntry): number {
+    if (ev.entry_kind === 'stream') {
+      return ev.sent_bytes + ev.received_bytes;
+    }
+    return (ev.request_bytes ?? 0) + (ev.response_bytes ?? 0);
+  }
+
+  function status_rank(ev: DebugEntry): number {
+    switch (ev.status) {
+      case 'pending':
+        return 0;
+      case 'success':
+        return 1;
+      case 'cancelled':
+        return 2;
+      case 'error':
+        return 3;
+    }
+  }
+
+  function direction_label(ev: DebugEntry): string {
+    if (ev.entry_kind === 'stream') return 'stream';
+    return ev.direction;
+  }
+
+  function compareEntries(left: DebugEntry, right: DebugEntry): number {
+    switch (sortKey) {
+      case 'seq':
+        return left.seq - right.seq;
+      case 'direction':
+        return direction_label(left).localeCompare(direction_label(right));
+      case 'method':
+        return method_label(left).localeCompare(method_label(right));
+      case 'duration':
+        return (left.duration_ms ?? -1) - (right.duration_ms ?? -1);
+      case 'bytes':
+        return bytes_value(left) - bytes_value(right);
+      case 'status':
+        return status_rank(left) - status_rank(right);
+    }
+  }
+
+  function setSort(key: SortKey) {
+    if (sortKey === key) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+      return;
+    }
+
+    sortKey = key;
+    sortDir = key === 'seq' ? 'asc' : 'desc';
+  }
+
+  function sortIndicator(key: SortKey): string {
+    if (sortKey !== key) return '';
+    return sortDir === 'asc' ? ' ▲' : ' ▼';
+  }
+
+  const displayedEvents = $derived.by(() => {
+    const sorted = [...events].sort((left, right) => {
+      const result = compareEntries(left, right);
+      if (result !== 0) return sortDir === 'asc' ? result : -result;
+      return left.seq - right.seq;
+    });
+    return sorted;
+  });
+
+  function row_class(ev: DebugEntry): string {
     const parts = ['row'];
     if (ev.direction === 'server') parts.push('server');
     if (ev.status === 'error')     parts.push('error');
     if (ev.status === 'pending')   parts.push('pending');
+    if (ev.status === 'cancelled') parts.push('cancelled');
+    if (ev.entry_kind === 'stream') parts.push('stream');
     if (selected && selected.id === ev.id)
       parts.push('selected');
     return parts.join(' ');
@@ -103,12 +193,12 @@
   onkeydown={onKeyDown}
 >
   <div class="thead">
-    <span class="col-seq">#</span>
-    <span class="col-dir">Dir</span>
-    <span class="col-method">Method (Class)</span>
-    <span class="col-dur">Duration</span>
-    <span class="col-bytes">Bytes ↑↓</span>
-    <span class="col-status">St</span>
+    <button type="button" class="head-btn col-seq" onclick={() => setSort('seq')}>#{sortIndicator('seq')}</button>
+    <button type="button" class="head-btn col-dir" onclick={() => setSort('direction')}>Dir{sortIndicator('direction')}</button>
+    <button type="button" class="head-btn col-method" onclick={() => setSort('method')}>Entry{sortIndicator('method')}</button>
+    <button type="button" class="head-btn col-dur" onclick={() => setSort('duration')}>Duration{sortIndicator('duration')}</button>
+    <button type="button" class="head-btn col-bytes" onclick={() => setSort('bytes')}>Bytes{sortIndicator('bytes')}</button>
+    <button type="button" class="head-btn col-status" onclick={() => setSort('status')}>St{sortIndicator('status')}</button>
   </div>
 
   <div
@@ -116,7 +206,7 @@
     bind:this={tbody}
     onscroll={onScroll}
   >
-    {#each events as ev (ev.id)}
+    {#each displayedEvents as ev (ev.id)}
       <div
         class={row_class(ev)}
         role="row"
@@ -127,7 +217,9 @@
         <span class="col-seq mono">{ev.seq}</span>
 
         <span class="col-dir">
-          {#if ev.direction === 'client'}
+          {#if ev.entry_kind === 'stream'}
+            <span class="badge badge-stream" title="Stream session">⇄</span>
+          {:else if ev.direction === 'client'}
             <span class="badge badge-client" title="Client → Server">↑</span>
           {:else}
             <span class="badge badge-server" title="Server → Client">↓</span>
@@ -138,20 +230,15 @@
 
         <span class="col-dur mono dur-{ev.status}">{fmt_duration(ev)}</span>
 
-        <span class="col-bytes mono">
-          {#if ev.request_bytes !== undefined}
-            {fmt_bytes(ev.request_bytes)}
-            {#if ev.response_bytes !== undefined}
-              / {fmt_bytes(ev.response_bytes)}
-            {/if}
-          {/if}
-        </span>
+        <span class="col-bytes mono" title={fmt_entry_bytes(ev)}>{fmt_entry_bytes(ev)}</span>
 
         <span class="col-status">
           {#if ev.status === 'success'}
             <span class="dot dot-ok" title="Success">●</span>
           {:else if ev.status === 'error'}
             <span class="dot dot-err" title={ev.error ?? 'Error'}>●</span>
+          {:else if ev.status === 'cancelled'}
+            <span class="dot dot-cancel" title="Cancelled">●</span>
           {:else}
             <span class="dot dot-pending" title="Pending">●</span>
           {/if}
@@ -186,6 +273,21 @@
     user-select: none;
   }
 
+  .head-btn {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    height: 100%;
+    padding: 0;
+    cursor: pointer;
+    text-align: inherit;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .head-btn:hover { color: #e8eaed; }
+
   /* ─ body ─ */
   .tbody {
     flex: 1;
@@ -208,16 +310,24 @@
   .row:hover    { background: rgba(255,255,255,0.04); }
   .row.selected { background: #1a3a5c !important; }
   .row.server   { background: rgba(255,140,0,0.05); }
+  .row.stream   { background: rgba(74, 158, 255, 0.05); }
   .row.error    { background: rgba(244,67,54,0.08); color: #ef9a9a; }
-  .row.pending  { opacity: 0.6; }
+  .row.cancelled { background: rgba(158, 158, 158, 0.08); color: #c7c7c7; }
+  .row.pending:not(.stream) { opacity: 0.6; }
 
   /* ─ column widths ─ */
-  .col-seq    { width: 28px;  flex-shrink: 0; }
-  .col-dir    { width: 22px;  flex-shrink: 0; }
+  .col-seq    { width: 32px;  flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; }
+  .col-dir    { width: 28px;  flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; }
   .col-method { flex: 1; overflow: hidden; text-overflow: ellipsis; min-width: 80px; }
-  .col-dur    { width: 64px;  flex-shrink: 0; text-align: right; }
-  .col-bytes  { width: 80px;  flex-shrink: 0; text-align: right; }
-  .col-status { width: 18px;  flex-shrink: 0; text-align: center; }
+  .col-dur    { width: 72px;  flex-shrink: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; }
+  .col-bytes  {
+    width: 96px;
+    flex-shrink: 0;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .col-status { width: 24px;  flex-shrink: 0; text-align: center; overflow: hidden; }
 
   .mono { font-family: Menlo, Monaco, 'Courier New', monospace; }
 
@@ -234,11 +344,13 @@
   }
   .badge-client { background: #1a4775; color: #7ab8f5; }
   .badge-server { background: #4a2c00; color: #ffb347; }
+  .badge-stream { background: #233347; color: #8fd0ff; }
 
   /* ─ status dots ─ */
   .dot { font-size: 9px; }
   .dot-ok      { color: #4caf50; }
   .dot-err     { color: #f44336; }
+  .dot-cancel  { color: #b0bec5; }
   .dot-pending { color: #ff9800; animation: pulse 1s ease-in-out infinite; }
 
   @keyframes pulse {
@@ -249,6 +361,7 @@
   /* ─ duration colour ─ */
   .dur-success { color: #b5cea8; }
   .dur-error   { color: #ef9a9a; }
+  .dur-cancelled { color: #c7c7c7; }
   .dur-pending { color: #888; }
 
   .empty {

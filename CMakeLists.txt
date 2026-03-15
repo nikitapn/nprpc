@@ -405,6 +405,7 @@ endif()
 
 if(NPRPC_BUILD_JS AND UNIX)
   add_subdirectory(nprpc_js)
+  add_subdirectory(nprpc_devtools)
 endif()
 
 if(NPRPC_BUILD_TESTS AND UNIX)

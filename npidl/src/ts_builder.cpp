@@ -1233,6 +1233,40 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
 
       out << bl() << "buf.write_len(buf.size - 4);\n";
 
+      out << bl() << "(globalThis as any).__nprpc_debug?.stream_start({direction:'client',"
+          << "class_id:_" << servant_iname << "._get_class(),"
+          << "poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),interface_idx,"
+          << "func_idx:" << fn->idx << ",method_name:'" << fn->name << "',"
+          << "endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,"
+             "transport:NPRPC.EndPoint.to_string(this.endpoint.type).replace('://','') as any},"
+          << "stream_id:String(stream_id),stream_kind:'";
+
+      switch (fn->stream_kind) {
+      case StreamKind::Server:
+        out << "server";
+        break;
+      case StreamKind::Client:
+        out << "client";
+        break;
+      case StreamKind::Bidi:
+        out << "bidi";
+        break;
+      default:
+        assert(false);
+      }
+
+      out << "',request_args:{";
+      {
+        bool _dbg_first = true;
+        for (auto _dbg_a : fn->args) {
+          if (_dbg_a->modifier == ArgumentModifier::Out || _dbg_a->type->id == FieldType::Stream) continue;
+          if (!_dbg_first) out << ",";
+          out << _dbg_a->name << ":" << _dbg_a->name;
+          _dbg_first = false;
+        }
+      }
+      out << "},request_bytes:buf.size});\n";
+
       switch (fn->stream_kind) {
       case StreamKind::Server:
         out << bl() << "return await NPRPC.rpc.open_server_stream(this.endpoint, buf, stream_id, this.timeout, ";
@@ -2081,6 +2115,36 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
             << get_stream_init_arguments_offset() << ");\n";
       }
     }
+
+    out << bl() << "(globalThis as any).__nprpc_debug?.stream_start({direction:'server',"
+        << "class_id:_" << servant_iname << "._get_class(),"
+        << "poa_idx:obj.poa.index,object_id:String(obj.oid),"
+        << "interface_idx:init.interface_idx,func_idx:" << fn->idx << ",method_name:'" << fn->name << "',"
+        << "endpoint:{hostname:remote_endpoint.hostname,port:remote_endpoint.port,"
+           "transport:NPRPC.EndPoint.to_string(remote_endpoint.type).replace('://','') as any},"
+        << "stream_id:String(init.stream_id),stream_kind:'";
+
+    switch (fn->stream_kind) {
+    case StreamKind::Server:
+      out << "server";
+      break;
+    case StreamKind::Client:
+      out << "client";
+      break;
+    case StreamKind::Bidi:
+      out << "bidi";
+      break;
+    default:
+      assert(false);
+    }
+
+    out << "',request_args:";
+    if (fn->in_s) {
+      out << "ia";
+    } else {
+      out << "{}";
+    }
+    out << ",request_bytes:buf.size});\n";
 
     switch (fn->stream_kind) {
     case StreamKind::Server:

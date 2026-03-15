@@ -2,20 +2,21 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { RpcEvent, DebugMsg } from './types';
+  import type { DebugEntry, DebugMsg, RpcEvent, StreamEvent, StreamMessageEvent } from './types';
   import EventList   from './lib/EventList.svelte';
   import EventDetail from './lib/EventDetail.svelte';
 
   // ── State ────────────────────────────────────────────────────────
-  let events = $state<RpcEvent[]>([]);
-  let selected = $state<RpcEvent | null>(null);
+  let entries = $state<DebugEntry[]>([]);
+  let selected = $state<DebugEntry | null>(null);
   let filter = $state('');
   let recording = $state(true);
   let nextId = $state(0);
   let seq = $state(0); // 1-based display sequence number (reset on Clear)
 
-  // Pending events keyed by id -> index in the reactive events array.
+  // Pending RPC calls keyed by id -> index in the reactive entries array.
   const pending = new Map<number, number>();
+  const openStreams = new Map<number, number>();
 
   // ── Direct connection to content script (no background SW) ─────────
   onMount(() => {
@@ -26,20 +27,88 @@
       if (!recording) return;
 
       if (msg.type === 'nprpc_call_start') {
-        const ev: RpcEvent = { ...msg.data, seq: ++seq };
-        const index = events.length;
-        events = [...events, ev];
+        const ev: RpcEvent = { ...msg.data, entry_kind: 'rpc', seq: ++seq };
+        const index = entries.length;
+        entries = [...entries, ev];
         pending.set(ev.id, index);
-        nextId = nextId + 1;
+        nextId = Math.max(nextId, ev.id + 1);
       } else if (msg.type === 'nprpc_call_end') {
         const index = pending.get(msg.data.id);
         if (index !== undefined) {
-          const updated = { ...events[index], ...msg.data };
-          events[index] = updated;
+          const current = entries[index];
+          if (!current || current.entry_kind !== 'rpc') return;
+          const updated: RpcEvent = { ...current, ...msg.data };
+          entries[index] = updated;
           pending.delete(msg.data.id);
           if (selected && selected.id === updated.id)
             selected = updated;
         }
+      } else if (msg.type === 'nprpc_stream_start') {
+        const ev: StreamEvent = {
+          ...msg.data,
+          entry_kind: 'stream',
+          seq: ++seq,
+          sent_bytes: 0,
+          received_bytes: 0,
+          message_count: 0,
+          messages: [],
+        };
+        const index = entries.length;
+        entries = [...entries, ev];
+        openStreams.set(ev.id, index);
+        nextId = Math.max(nextId, ev.id + 1);
+      } else if (msg.type === 'nprpc_stream_message') {
+        const index = openStreams.get(msg.data.id);
+        if (index === undefined) return;
+
+        const current = entries[index];
+        if (!current || current.entry_kind !== 'stream') return;
+
+        const message: StreamMessageEvent = {
+          index: current.messages.length + 1,
+          ...msg.data.message,
+        };
+
+        let sent_bytes = current.sent_bytes;
+        let received_bytes = current.received_bytes;
+        if (message.bytes !== undefined) {
+          if (message.direction === 'outgoing') sent_bytes += message.bytes;
+          else received_bytes += message.bytes;
+        }
+
+        let status = current.status;
+        let duration_ms = current.duration_ms;
+        let error = current.error;
+        if (message.kind === 'complete') {
+          status = 'success';
+          duration_ms = message.timestamp - current.timestamp;
+        } else if (message.kind === 'error') {
+          status = 'error';
+          duration_ms = message.timestamp - current.timestamp;
+          error = message.error_code !== undefined
+            ? `Stream error (code=${message.error_code})`
+            : 'Stream error';
+        } else if (message.kind === 'cancel') {
+          status = 'cancelled';
+          duration_ms = message.timestamp - current.timestamp;
+        }
+
+        const updated: StreamEvent = {
+          ...current,
+          status,
+          duration_ms,
+          error,
+          sent_bytes,
+          received_bytes,
+          message_count: current.message_count + 1,
+          messages: [...current.messages, message],
+        };
+        entries[index] = updated;
+        if (status !== 'pending') {
+          openStreams.delete(msg.data.id);
+        }
+        if (selected && selected.id === updated.id)
+          selected = updated;
       }
     };
 
@@ -61,22 +130,24 @@
 
   // ── Actions ──────────────────────────────────────────────────────
   function clear() {
-    events   = [];
+    entries  = [];
     selected = null;
     seq      = 0;
+    nextId   = 0;
     pending.clear();
+    openStreams.clear();
   }
 
   function toggleRecording() { recording = !recording; }
 
   // ── Stats ────────────────────────────────────────────────────────
-  const total = $derived(events.length);
-  const errors = $derived(events.filter((e) => e.status === 'error').length);
+  const total = $derived(entries.length);
+  const errors = $derived(entries.filter((e) => e.status === 'error').length);
   const filtered = $derived.by(() => {
-    if (!filter) return events;
+    if (!filter) return entries;
 
     const q = filter.toLowerCase();
-    return events.filter((ev) => {
+    return entries.filter((ev) => {
       return (ev.method_name ?? '').toLowerCase().includes(q)
         || ev.class_id.toLowerCase().includes(q)
         || `${ev.endpoint.hostname}:${ev.endpoint.port}`.includes(q);
@@ -136,7 +207,7 @@
     </div>
 
     <div class="stats">
-      <span class="stat">{total} call{total !== 1 ? 's' : ''}</span>
+      <span class="stat">{total} entr{total !== 1 ? 'ies' : 'y'}</span>
       {#if errors > 0}
         <span class="stat stat-err">{errors} error{errors !== 1 ? 's' : ''}</span>
       {/if}
@@ -179,6 +250,34 @@
     font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
     font-size: 12px;
     overflow: hidden;
+  }
+
+  :global(*) {
+    scrollbar-width: thin;
+    scrollbar-color: #5a6169 #202225;
+  }
+
+  :global(*::-webkit-scrollbar) {
+    width: 10px;
+    height: 10px;
+  }
+
+  :global(*::-webkit-scrollbar-track) {
+    background: #202225;
+  }
+
+  :global(*::-webkit-scrollbar-thumb) {
+    background: linear-gradient(180deg, #5d6670 0%, #4a525b 100%);
+    border: 2px solid #202225;
+    border-radius: 999px;
+  }
+
+  :global(*::-webkit-scrollbar-thumb:hover) {
+    background: linear-gradient(180deg, #73808c 0%, #5c6670 100%);
+  }
+
+  :global(*::-webkit-scrollbar-corner) {
+    background: #202225;
   }
 
   .shell {

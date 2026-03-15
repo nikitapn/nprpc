@@ -20,6 +20,12 @@ ROOT_DIR = Path(__file__).parent.parent.resolve()
 os.chdir(ROOT_DIR)
 
 DOCKER_IMAGE = "nprpc-dev:latest"
+REPO_ROOT = ROOT_DIR.parent.parent.resolve()
+LOCAL_NPIDL_CANDIDATES = [
+    REPO_ROOT / ".build_relwith_debinfo" / "npidl" / "npidl",
+    REPO_ROOT / ".build_release" / "npidl" / "npidl",
+    REPO_ROOT / ".build" / "npidl" / "npidl",
+]
 
 # Input IDL files
 IDL_FILES = [
@@ -32,6 +38,18 @@ SWIFT_OUTPUT_DIR = "swift/Sources/LiveBlogAPI"
 
 def run_npidl(lang_flag: str, idl_files: list, output_dir: str) -> None:
     """Run npidl in the nprpc-dev Docker container for the given language."""
+    local_npidl = next((candidate for candidate in LOCAL_NPIDL_CANDIDATES if candidate.exists()), None)
+    if local_npidl is not None:
+        output_path = ROOT_DIR / output_dir
+        output_path.mkdir(parents=True, exist_ok=True)
+        cmd = [str(local_npidl), lang_flag, "--output-dir", str(output_path), *idl_files]
+        print(f"  npidl {lang_flag}  ->  {output_dir} (local: {local_npidl.relative_to(REPO_ROOT)})")
+        try:
+            subprocess.run(cmd, check=True, cwd=ROOT_DIR)
+            return
+        except subprocess.CalledProcessError as e:
+            print(f"WARN: local npidl failed (exit {e.returncode}), falling back to Docker", file=sys.stderr)
+
     container_output = f"/app/{output_dir}"
     container_idl_files = " ".join(f"/app/{f}" for f in idl_files)
 
@@ -50,7 +68,7 @@ def run_npidl(lang_flag: str, idl_files: list, output_dir: str) -> None:
         "sh", "-c", inner_cmd,
     ]
 
-    print(f"  npidl {lang_flag}  →  {output_dir}")
+    print(f"  npidl {lang_flag}  ->  {output_dir} (docker)")
     try:
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:

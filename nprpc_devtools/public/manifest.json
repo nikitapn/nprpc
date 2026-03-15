@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NPRPC DevTools",
-  "version": "1.0",
+  "version": "1.0.0",
   "description": "Inspect NPRPC calls in real time – request/response arguments, timings, object identity.",
   "devtools_page": "devtools.html",
   "content_scripts": [

@@ -6,6 +6,24 @@ import { impl } from './gen/nprpc_base';
 
 const header_size = 16;
 
+function describe_stream_payload(value: unknown): { payload?: unknown; payload_summary?: string } {
+  if (value instanceof Uint8Array) {
+    return { payload_summary: `Uint8Array(${value.byteLength} B)` };
+  }
+  if (value instanceof ArrayBuffer) {
+    return { payload_summary: `ArrayBuffer(${value.byteLength} B)` };
+  }
+  if (ArrayBuffer.isView(value)) {
+    const view = value as ArrayBufferView;
+    return { payload_summary: `${value.constructor.name}(${view.byteLength} B)` };
+  }
+  return { payload: value };
+}
+
+function emit_stream_debug_event(stream_id: bigint, event: Record<string, unknown>): void {
+  (globalThis as any).__nprpc_debug?.stream_event?.(String(stream_id), event);
+}
+
 abstract class StreamReaderBase {
   abstract push_chunk(data: Uint8Array, sequence: bigint): void;
   abstract complete(): void;
@@ -30,6 +48,15 @@ export class StreamReader<T> extends StreamReaderBase {
 
   push_chunk(data: Uint8Array, sequence: bigint): void {
     const value = this.deserialize(data);
+    if (this.stream_id !== undefined) {
+      emit_stream_debug_event(this.stream_id, {
+        kind: 'chunk',
+        direction: 'incoming',
+        sequence: String(sequence),
+        bytes: data.byteLength,
+        ...describe_stream_payload(value),
+      });
+    }
     if (sequence === this.next_expected_seq) {
       this.chunks.push(value);
       this.next_expected_seq++;
@@ -45,11 +72,24 @@ export class StreamReader<T> extends StreamReaderBase {
   }
 
   complete(): void {
+    if (this.stream_id !== undefined) {
+      emit_stream_debug_event(this.stream_id, {
+        kind: 'complete',
+        direction: 'incoming',
+      });
+    }
     this.done_ = true;
     this.signal();
   }
 
   fail(error_code: number): void {
+    if (this.stream_id !== undefined) {
+      emit_stream_debug_event(this.stream_id, {
+        kind: 'error',
+        direction: 'incoming',
+        error_code,
+      });
+    }
     this.error_ = new Error(`Stream error (code=${error_code})`);
     this.done_ = true;
     this.signal();
@@ -115,7 +155,16 @@ export class StreamWriter<T> {
     if (this.closed) {
       throw new Error('Stream is already closed');
     }
-    this.manager.send_chunk(this.stream_id, this.serialize(value), this.sequence++);
+    const sequence = this.sequence++;
+    const data = this.serialize(value);
+    emit_stream_debug_event(this.stream_id, {
+      kind: 'chunk',
+      direction: 'outgoing',
+      sequence: String(sequence),
+      bytes: data.byteLength,
+      ...describe_stream_payload(value),
+    });
+    this.manager.send_chunk(this.stream_id, data, sequence);
   }
 
   close(): void {
@@ -258,6 +307,11 @@ export class StreamManager {
   }
 
   send_complete(stream_id: bigint, final_sequence: bigint): void {
+    emit_stream_debug_event(stream_id, {
+      kind: 'complete',
+      direction: 'outgoing',
+      sequence: String(final_sequence),
+    });
     const buf = FlatBuffer.create(header_size + 16);
     buf.commit(header_size + 16);
     buf.write_msg_id(impl.MessageId.StreamCompletion);
@@ -268,6 +322,12 @@ export class StreamManager {
   }
 
   send_error(stream_id: bigint, error_code: number, error_data: Uint8Array): void {
+    emit_stream_debug_event(stream_id, {
+      kind: 'error',
+      direction: 'outgoing',
+      error_code,
+      bytes: error_data.byteLength,
+    });
     const buf = FlatBuffer.create(header_size + 32 + error_data.byteLength);
     buf.commit(header_size + 20);
     buf.write_msg_id(impl.MessageId.StreamError);
@@ -278,6 +338,10 @@ export class StreamManager {
   }
 
   send_cancel(stream_id: bigint): void {
+    emit_stream_debug_event(stream_id, {
+      kind: 'cancel',
+      direction: 'outgoing',
+    });
     const buf = FlatBuffer.create(header_size + 8);
     buf.commit(header_size + 8);
     buf.write_msg_id(impl.MessageId.StreamCancellation);
@@ -288,6 +352,11 @@ export class StreamManager {
   }
 
   send_window_update(stream_id: bigint, credits: number): void {
+    emit_stream_debug_event(stream_id, {
+      kind: 'window_update',
+      direction: 'outgoing',
+      credits,
+    });
     // stream_id (u64, 8 bytes) + credits (u32, 4 bytes) = 12 bytes payload
     const buf = FlatBuffer.create(header_size + 12);
     buf.commit(header_size + 12);
@@ -300,6 +369,11 @@ export class StreamManager {
 
   // Called when a remote stream consumer grants credits to a local StreamWriter.
   on_stream_window_update(stream_id: bigint, credits: number): void {
+    emit_stream_debug_event(stream_id, {
+      kind: 'window_update',
+      direction: 'incoming',
+      credits,
+    });
     // For TS-side writers this is currently a no-op because the TS StreamWriter
     // does not implement backpressure yet. Reserved for future client-stream use.
     void stream_id; void credits;

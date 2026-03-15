@@ -18,6 +18,7 @@
   if (globalThis.__nprpc_debug) return; // already installed
 
   let nextId = 1;
+  const streamEntryIds = new Map();
 
   // Structured-clone (used by postMessage) rejects BigInt values.
   // Tag them as { __bigint__: "<value>" } so the DevTools panel can
@@ -63,6 +64,39 @@
      */
     call_end(id, result) {
       dispatch('nprpc_call_end', { id, ...result });
+    },
+
+    stream_start(params) {
+      const stream_id = String(params.stream_id);
+      const id = nextId++;
+      streamEntryIds.set(stream_id, id);
+      dispatch('nprpc_stream_start', {
+        id,
+        timestamp: Date.now(),
+        status: 'pending',
+        ...params,
+        stream_id,
+      });
+      return id;
+    },
+
+    stream_event(stream_id, event) {
+      const key = String(stream_id);
+      const id = streamEntryIds.get(key);
+      if (id === undefined) return;
+
+      dispatch('nprpc_stream_message', {
+        id,
+        stream_id: key,
+        message: {
+          timestamp: Date.now(),
+          ...event,
+        },
+      });
+
+      if (event.kind === 'complete' || event.kind === 'error' || event.kind === 'cancel') {
+        streamEntryIds.delete(key);
+      }
     },
   };
 })();

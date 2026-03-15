@@ -678,6 +678,7 @@ export class ChatService extends NPRPC.ObjectProxy {
     });
     marshal_live_blog_M10(buf, 48, {_1: post_id, _2: user_name});
     buf.write_len(buf.size - 4);
+    (globalThis as any).__nprpc_debug?.stream_start({direction:'client',class_id:_IChatService_Servant._get_class(),poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),interface_idx,func_idx:0,method_name:'JoinPostChat',endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,transport:NPRPC.EndPoint.to_string(this.endpoint.type).replace('://','') as any},stream_id:String(stream_id),stream_kind:'bidi',request_args:{post_id:post_id,user_name:user_name},request_bytes:buf.size});
     return await NPRPC.rpc.open_bidi_stream(this.endpoint, buf, stream_id, this.timeout, ((value: ChatEnvelope) => { const buf = NPRPC.FlatBuffer.create(152); buf.commit(24); marshal_ChatEnvelope(buf, 0, value); return new Uint8Array(buf.array_buffer, 0, buf.size); }), ((data: Uint8Array) => unmarshal_ChatServerEvent(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0)));
   }
 
@@ -714,6 +715,7 @@ export class _IChatService_Servant extends NPRPC.ObjectServant {
     switch(function_idx) {
       case 0: {
         const ia = unmarshal_live_blog_M10(buf, 48);
+        (globalThis as any).__nprpc_debug?.stream_start({direction:'server',class_id:_IChatService_Servant._get_class(),poa_idx:obj.poa.index,object_id:String(obj.oid),interface_idx:init.interface_idx,func_idx:0,method_name:'JoinPostChat',endpoint:{hostname:remote_endpoint.hostname,port:remote_endpoint.port,transport:NPRPC.EndPoint.to_string(remote_endpoint.type).replace('://','') as any},stream_id:String(init.stream_id),stream_kind:'bidi',request_args:ia,request_bytes:buf.size});
         const stream = conn.stream_manager.create_bidi_stream(init.stream_id, ((value: ChatServerEvent) => { const buf = NPRPC.FlatBuffer.create(164); buf.commit(36); marshal_ChatServerEvent(buf, 0, value); return new Uint8Array(buf.array_buffer, 0, buf.size); }), ((data: Uint8Array) => unmarshal_ChatEnvelope(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0)));
         NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);
         void (async () => {
@@ -758,6 +760,7 @@ export class _IChatService_Servant extends NPRPC.ObjectServant {
       });
       marshal_live_blog_M11(buf, 48, {_1: post_id});
       buf.write_len(buf.size - 4);
+      (globalThis as any).__nprpc_debug?.stream_start({direction:'client',class_id:_IMediaService_Servant._get_class(),poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),interface_idx,func_idx:0,method_name:'OpenPostVideo',endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,transport:NPRPC.EndPoint.to_string(this.endpoint.type).replace('://','') as any},stream_id:String(stream_id),stream_kind:'server',request_args:{post_id:post_id},request_bytes:buf.size});
       return await NPRPC.rpc.open_server_stream(this.endpoint, buf, stream_id, this.timeout, ((data: Uint8Array) => NPRPC.unmarshal_typed_array(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0, 1) as Uint8Array));
     }
     public async GetVideoDashManifest(post_id: /*in*/bigint): Promise<string> {
@@ -805,6 +808,7 @@ export class _IChatService_Servant extends NPRPC.ObjectServant {
       });
       marshal_live_blog_M12(buf, 48, {_1: post_id, _2: byte_offset, _3: byte_length});
       buf.write_len(buf.size - 4);
+      (globalThis as any).__nprpc_debug?.stream_start({direction:'client',class_id:_IMediaService_Servant._get_class(),poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),interface_idx,func_idx:2,method_name:'GetVideoDashSegmentRange',endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,transport:NPRPC.EndPoint.to_string(this.endpoint.type).replace('://','') as any},stream_id:String(stream_id),stream_kind:'server',request_args:{post_id:post_id,byte_offset:byte_offset,byte_length:byte_length},request_bytes:buf.size});
       return await NPRPC.rpc.open_server_stream(this.endpoint, buf, stream_id, this.timeout, ((data: Uint8Array) => NPRPC.unmarshal_typed_array(NPRPC.FlatBuffer.from_array_buffer(data.slice().buffer), 0, 1) as Uint8Array));
     }
 
@@ -895,6 +899,7 @@ export class _IChatService_Servant extends NPRPC.ObjectServant {
       switch(function_idx) {
         case 0: {
           const ia = unmarshal_live_blog_M11(buf, 48);
+          (globalThis as any).__nprpc_debug?.stream_start({direction:'server',class_id:_IMediaService_Servant._get_class(),poa_idx:obj.poa.index,object_id:String(obj.oid),interface_idx:init.interface_idx,func_idx:0,method_name:'OpenPostVideo',endpoint:{hostname:remote_endpoint.hostname,port:remote_endpoint.port,transport:NPRPC.EndPoint.to_string(remote_endpoint.type).replace('://','') as any},stream_id:String(init.stream_id),stream_kind:'server',request_args:ia,request_bytes:buf.size});
           const writer = conn.stream_manager.create_writer(init.stream_id, ((value: Uint8Array) => { const buf = NPRPC.FlatBuffer.create(8 + value.byteLength); buf.commit(8); NPRPC.marshal_typed_array(buf, 0, value, 1, 1); return new Uint8Array(buf.array_buffer, 0, buf.size); }));
           NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);
           void (async () => {
@@ -913,6 +918,7 @@ export class _IChatService_Servant extends NPRPC.ObjectServant {
           }
           case 2: {
             const ia = unmarshal_live_blog_M12(buf, 48);
+            (globalThis as any).__nprpc_debug?.stream_start({direction:'server',class_id:_IMediaService_Servant._get_class(),poa_idx:obj.poa.index,object_id:String(obj.oid),interface_idx:init.interface_idx,func_idx:2,method_name:'GetVideoDashSegmentRange',endpoint:{hostname:remote_endpoint.hostname,port:remote_endpoint.port,transport:NPRPC.EndPoint.to_string(remote_endpoint.type).replace('://','') as any},stream_id:String(init.stream_id),stream_kind:'server',request_args:ia,request_bytes:buf.size});
             const writer = conn.stream_manager.create_writer(init.stream_id, ((value: Uint8Array) => { const buf = NPRPC.FlatBuffer.create(8 + value.byteLength); buf.commit(8); NPRPC.marshal_typed_array(buf, 0, value, 1, 1); return new Uint8Array(buf.array_buffer, 0, buf.size); }));
             NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);
             void (async () => {
