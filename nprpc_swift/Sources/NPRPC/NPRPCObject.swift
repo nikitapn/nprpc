@@ -89,7 +89,7 @@ open class NPRPCObject: Codable, @unchecked Sendable {
     /// The currently selected endpoint for communication
     public var endpoint: NPRPCEndpoint {
         NPRPCEndpoint(
-            type: EndPointType(rawValue: nprpc_object_get_endpoint_type(handle)) ?? .tcp,
+            type: EndPointType(rawValue: nprpc_object_get_endpoint_type(handle)) ?? .Tcp,
             hostname: String(cString: nprpc_object_get_endpoint_hostname(handle)),
             port: nprpc_object_get_endpoint_port(handle)
         )

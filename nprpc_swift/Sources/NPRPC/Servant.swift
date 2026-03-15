@@ -13,7 +13,7 @@ public struct NPRPCEndpoint {
     public let port: UInt16
     
     /// Initialize with all components
-    public init(type: EndPointType = .tcp, hostname: String = "", port: UInt16 = 0) {
+    public init(type: EndPointType = .Tcp, hostname: String = "", port: UInt16 = 0) {
         self.type = type
         self.hostname = hostname
         self.port = port
@@ -28,14 +28,14 @@ public struct NPRPCEndpoint {
     public func toURL() -> String {
         let prefix: String
         switch type {
-        case .tcp, .tcpPrivate: prefix = "tcp://"
-        case .webSocket: prefix = "ws://"
-        case .webTransport: prefix = "wt://"
-        case .securedWebSocket: prefix = "wss://"
-        case .http: prefix = "http://"
-        case .securedHttp: prefix = "https://"
-        case .sharedMemory: return "mem://\(hostname)"  // No port for shared memory
-        case .quic: prefix = "quic://"
+        case .Tcp, .TcpPrivate: prefix = "tcp://"
+        case .WebSocket: prefix = "ws://"
+        case .WebTransport: prefix = "wt://"
+        case .SecuredWebSocket: prefix = "wss://"
+        case .Http: prefix = "http://"
+        case .SecuredHttp: prefix = "https://"
+        case .SharedMemory: return "mem://\(hostname)"  // No port for shared memory
+        case .Quic: prefix = "quic://"
         }
         return "\(prefix)\(hostname):\(port)"
     }

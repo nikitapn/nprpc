@@ -460,7 +460,7 @@ do {
       .watchFiles()
     .build()
 
-  let poa = try rpc.createPoa(maxObjects: 32, lifetime: .persistent, idPolicy: .systemGenerated)
+  let poa = try rpc.createPoa(maxObjects: 32, lifetime: .Persistent, idPolicy: .systemGenerated)
   let browserFlags: ObjectActivationFlags = [.https, .wss]
 
   let blogObjectId = try poa.activateObject(BlogServiceImpl(repository: repository), flags: browserFlags)

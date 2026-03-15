@@ -7,16 +7,16 @@ import CNprpc
 
 /// Transport protocol for NPRPC communication
 public enum TransportType: UInt8, Sendable {
-    case unknown = 0
-    case tcp = 1
-    case webSocket = 2
-    case http = 3
-    case quic = 4
-    case sharedMemory = 6
+    case Unknown = 0
+    case Tcp = 1
+    case WebSocket = 2
+    case Http = 3
+    case Quic = 4
+    case SharedMemory = 6
 
     /// Initialize from C++ EndPointType
     init(from cxxType: nprpc_swift.EndPointType) {
-        self = TransportType(rawValue: cxxType.rawValue) ?? .unknown
+        self = TransportType(rawValue: cxxType.rawValue) ?? .Unknown
     }
 
     /// Convert to C++ EndPointType
@@ -27,24 +27,24 @@ public enum TransportType: UInt8, Sendable {
     /// Human-readable name
     public var description: String {
         switch self {
-        case .unknown: return "Unknown"
-        case .tcp: return "TCP"
-        case .webSocket: return "WebSocket"
-        case .http: return "HTTP"
-        case .quic: return "QUIC"
-        case .sharedMemory: return "SharedMemory"
+        case .Unknown: return "Unknown"
+        case .Tcp: return "TCP"
+        case .WebSocket: return "WebSocket"
+        case .Http: return "HTTP"
+        case .Quic: return "QUIC"
+        case .SharedMemory: return "SharedMemory"
         }
     }
     
     /// URL scheme for this transport
     public var scheme: String {
         switch self {
-        case .unknown: return "unknown"
-        case .tcp: return "tcp"
-        case .webSocket: return "ws"
-        case .http: return "http"
-        case .quic: return "quic"
-        case .sharedMemory: return "shm"
+        case .Unknown: return "unknown"
+        case .Tcp: return "tcp"
+        case .WebSocket: return "ws"
+        case .Http: return "http"
+        case .Quic: return "quic"
+        case .SharedMemory: return "shm"
         }
     }
 }
@@ -93,23 +93,23 @@ public struct EndPoint: Sendable {
     
     /// Convenience initializers for common transports
     public static func tcp(host: String, port: UInt16) -> EndPoint {
-        return EndPoint(type: .tcp, hostname: host, port: port)
+        return EndPoint(type: .Tcp, hostname: host, port: port)
     }
     
     public static func webSocket(host: String, port: UInt16, path: String = "/nprpc") -> EndPoint {
-        return EndPoint(type: .webSocket, hostname: host, port: port, path: path)
+        return EndPoint(type: .WebSocket, hostname: host, port: port, path: path)
     }
     
     public static func http(host: String, port: UInt16, path: String = "/nprpc") -> EndPoint {
-        return EndPoint(type: .http, hostname: host, port: port, path: path)
+        return EndPoint(type: .Http, hostname: host, port: port, path: path)
     }
     
     public static func quic(host: String, port: UInt16) -> EndPoint {
-        return EndPoint(type: .quic, hostname: host, port: port)
+        return EndPoint(type: .Quic, hostname: host, port: port)
     }
 
     public static func sharedMemory(uuid: String) -> EndPoint {
-        return EndPoint(type: .sharedMemory, hostname: uuid, port: 0)
+        return EndPoint(type: .SharedMemory, hostname: uuid, port: 0)
     }
 }
 

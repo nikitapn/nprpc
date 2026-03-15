@@ -55,7 +55,7 @@ public func makeSimpleAnswer(buffer: FlatBuffer, messageId: impl.MessageId) {
     // - reserved (4 bytes)
     data.storeBytes(of: UInt32(12), toByteOffset: 0, as: UInt32.self)
     data.storeBytes(of: messageId.rawValue, toByteOffset: 4, as: UInt32.self)
-    data.storeBytes(of: impl.MessageType.answer.rawValue, toByteOffset: 8, as: UInt32.self)
+    data.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
     data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
 }
 
@@ -73,23 +73,23 @@ public func handleStandardReply(buffer: FlatBuffer) throws -> Int32 {
     // releaseObject=8, success=9, exception=10, error_PoaNotExist=11, etc.
     
     switch messageId {
-    case impl.MessageId.success.rawValue:
+    case impl.MessageId.Success.rawValue:
         return 0
-    case impl.MessageId.exception.rawValue:
+    case impl.MessageId.Exception.rawValue:
         return 1
-    case impl.MessageId.blockResponse.rawValue:
+    case impl.MessageId.BlockResponse.rawValue:
         return -1
-    case impl.MessageId.error_ObjectNotExist.rawValue:
+    case impl.MessageId.Error_ObjectNotExist.rawValue:
         throw ExceptionObjectNotExist()
-    case impl.MessageId.error_CommFailure.rawValue:
+    case impl.MessageId.Error_CommFailure.rawValue:
         throw ExceptionCommFailure()
-    case impl.MessageId.error_UnknownFunctionIdx.rawValue:
+    case impl.MessageId.Error_UnknownFunctionIdx.rawValue:
         throw ExceptionUnknownFunctionIndex()
-    case impl.MessageId.error_UnknownMessageId.rawValue:
+    case impl.MessageId.Error_UnknownMessageId.rawValue:
         throw ExceptionUnknownMessageId()
-    case impl.MessageId.error_BadAccess.rawValue:
+    case impl.MessageId.Error_BadAccess.rawValue:
         throw ExceptionBadAccess()
-    case impl.MessageId.error_BadInput.rawValue:
+    case impl.MessageId.Error_BadInput.rawValue:
         throw ExceptionBadInput()
     default:
         return -1

@@ -90,7 +90,7 @@ final class IntegrationTests: XCTestCase {
                 return Rectangle(
                     topLeft: Point(x: 10, y: 20, z: nil, symbol: ""),
                     bottomRight: Point(x: 110, y: 120, z: nil, symbol: ""),
-                    color: .green
+                    color: .Green
                 )
             }
 
@@ -103,12 +103,12 @@ final class IntegrationTests: XCTestCase {
                     Rectangle(
                         topLeft: Point(x: 1, y: 2, z: nil, symbol: "a"),
                         bottomRight: Point(x: 3, y: 4, z: nil, symbol: "b"),
-                        color: .red
+                        color: .Red
                     ),
                     Rectangle(
                         topLeft: Point(x: 5, y: 6, z: nil, symbol: "c"),
                         bottomRight: Point(x: 7, y: 8, z: nil, symbol: "abcd"),
-                        color: .blue
+                        color: .Blue
                     )
                 ]
             }
@@ -145,13 +145,13 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(rect.topLeft.y, 20)
         XCTAssertEqual(rect.bottomRight.x, 110)
         XCTAssertEqual(rect.bottomRight.y, 120)
-        XCTAssertEqual(rect.color, .green)
+        XCTAssertEqual(rect.color, .Green)
 
         // Test setRectangle - should store the rectangle in our servant
         let newRect = Rectangle(
             topLeft: Point(x: 5, y: 15, z: 33, symbol: "Abcd"),
             bottomRight: Point(x: 40, y: 150, z: nil, symbol: ""),
-            color: .blue
+            color: .Blue
         )
 
         try client.setRectangle(id: 99, rect: newRect)
@@ -164,7 +164,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(servant.storedRect?.bottomRight.y, 150)
         XCTAssertEqual(servant.storedRect?.bottomRight.z, nil)
         XCTAssertEqual(servant.storedRect?.bottomRight.symbol, "")
-        XCTAssertEqual(servant.storedRect?.color, .blue)
+        XCTAssertEqual(servant.storedRect?.color, .Blue)
 
         // Test getRectangles - should return the array of rectangles from our servant
         let rects = try client.getRectangles()
@@ -177,7 +177,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(rects[0].bottomRight.y, 4)
         XCTAssertEqual(rects[0].bottomRight.z, nil) 
         XCTAssertEqual(rects[0].bottomRight.symbol, "b")
-        XCTAssertEqual(rects[0].color, .red)
+        XCTAssertEqual(rects[0].color, .Red)
 
         XCTAssertEqual(rects[1].topLeft.x, 5)
         XCTAssertEqual(rects[1].topLeft.y, 6)
@@ -187,7 +187,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(rects[1].bottomRight.y, 8)
         XCTAssertEqual(rects[1].bottomRight.z, nil)
         XCTAssertEqual(rects[1].bottomRight.symbol, "abcd")
-        XCTAssertEqual(rects[1].color, .blue)
+        XCTAssertEqual(rects[1].color, .Blue)
 
         // Test getNumbers - should return the array of integers from our servant
         let nums = try client.getNumbers()
@@ -939,8 +939,8 @@ final class IntegrationTests: XCTestCase {
 
         // Write message header (16 bytes starting at offset 0)
         data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)    // size (set later)
-        data.storeBytes(of: impl.MessageId.functionCall.rawValue, toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall
-        data.storeBytes(of: impl.MessageType.request.rawValue, toByteOffset: 8, as: UInt32.self)    // msg_type: Request
+        data.storeBytes(of: impl.MessageId.FunctionCall.rawValue, toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall
+        data.storeBytes(of: impl.MessageType.Request.rawValue, toByteOffset: 8, as: UInt32.self)    // msg_type: Request
         data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self)   // reserved
 
         // Write call header (starting at offset 16)

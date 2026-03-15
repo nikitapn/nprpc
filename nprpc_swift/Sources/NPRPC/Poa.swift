@@ -68,7 +68,7 @@ public enum ObjectIdPolicy {
 /// POA lifetime policy
 public enum PoaLifetime {
     /// POA lives until explicitly destroyed
-    case persistent
+    case Persistent
 
     /// POA is destroyed when all objects are deactivated
     case transient
@@ -98,10 +98,10 @@ private let globalServantDispatch: @convention(c) (UnsafeMutableRawPointer?, Uns
         let typeValue = UInt32(nprpc_endpoint_get_type(endpointPtr))
         let hostname = String(cString: nprpc_endpoint_get_hostname(endpointPtr))
         let port = nprpc_endpoint_get_port(endpointPtr)
-        endpoint = NPRPCEndpoint(type: EndPointType(rawValue: typeValue) ?? .tcp, hostname: hostname, port: port)
+        endpoint = NPRPCEndpoint(type: EndPointType(rawValue: typeValue) ?? .Tcp, hostname: hostname, port: port)
     } else {
         // Fallback - shouldn't happen in normal operation
-        endpoint = NPRPCEndpoint(type: .tcp, hostname: "localhost", port: 0)
+        endpoint = NPRPCEndpoint(type: .Tcp, hostname: "localhost", port: 0)
     }
 
     // Call servant dispatch - it writes response back to the same buffer
@@ -138,7 +138,7 @@ private let globalServantDispatch: @convention(c) (UnsafeMutableRawPointer?, Uns
 /// ```swift
 /// let poa = try rpc.createPoa(
 ///     maxObjects: 100,
-///     lifetime: .persistent,
+///     lifetime: .Persistent,
 ///     idPolicy: .systemGenerated
 /// )
 /// 
@@ -270,14 +270,14 @@ extension Rpc {
     /// - Throws: RuntimeError if creation fails
     public func createPoa(
         maxObjects: UInt32 = 0,
-        lifetime: PoaLifetime = .persistent,
+        lifetime: PoaLifetime = .Persistent,
         idPolicy: ObjectIdPolicy = .systemGenerated
     ) throws -> Poa {
         guard self.isInitialized, let rpcHandle = self.handle else {
             throw RuntimeError(message: "Rpc not initialized")
         }
 
-        let lifespanValue: UInt32 = (lifetime == .persistent) ? 0 : 1
+        let lifespanValue: UInt32 = (lifetime == .Persistent) ? 0 : 1
         let idPolicyValue: UInt32 = (idPolicy == .systemGenerated) ? 0 : 1
 
         // Use the C bridge function instead of C++ method 
