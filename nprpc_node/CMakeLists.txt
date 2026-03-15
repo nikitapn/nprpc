@@ -28,7 +28,7 @@ set(NODE_OUTPUT_FILES
 
 add_custom_command(
   OUTPUT ${NODE_OUTPUT_FILES}
-  COMMAND npm ci && npm run rebuild
+  COMMAND npm run install
   # This command fixes issue when compiling generated .d.ts files from different projects
   # CMake always rebuilds the target if output modified time is older than input file modified time
   # but in this case the generated .d.ts files are identical and should not trigger rebuild
