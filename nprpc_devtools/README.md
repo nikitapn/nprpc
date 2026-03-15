@@ -40,3 +40,24 @@ After loading the extension, open Chrome DevTools on a page that uses NPRPC and 
 The extension manifest version is synchronized from `package.json` before each build, so the npm package version is the only release version to update.
 
 `npm run prepack` rebuilds the extension before packaging.
+
+## GitHub Releases
+
+The repository workflow builds the package on pull requests and pushes to `main`.
+
+To publish an automatic GitHub release for the extension:
+
+1. Update `nprpc_devtools/package.json` to the version you want to ship.
+2. Push a matching tag in the form `devtools-vX.Y.Z`.
+
+Example:
+
+```sh
+git tag devtools-v1.0.0
+git push origin devtools-v1.0.0
+```
+
+The workflow verifies that the tag matches `package.json`, builds the extension, and attaches two release artifacts:
+
+- the npm package tarball
+- a zip archive of the unpacked `dist/` extension
