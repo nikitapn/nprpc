@@ -204,6 +204,27 @@ describe('NPRPC Integration Tests', function() {
             }
         });
 
+        it('should throw the declared exception variants from MultipleExceptions', async function() {
+            try {
+                await testBasic.MultipleExceptions(0);
+                expect.fail('Expected MultipleExceptions(0) to throw SimpleException');
+            } catch (error) {
+                expect(error).to.be.instanceOf(test.SimpleException);
+                const simpleEx = error as unknown as test.SimpleException;
+                expect(simpleEx.message).to.equal('Simple exception branch');
+                expect(simpleEx.code).to.equal(456);
+            }
+
+            try {
+                await testBasic.MultipleExceptions(1);
+                expect.fail('Expected MultipleExceptions(1) to throw AssertionFailed');
+            } catch (error) {
+                expect(error).to.be.instanceOf(test.AssertionFailed);
+                const assertionFailed = error as unknown as test.AssertionFailed;
+                expect(assertionFailed.message).to.equal('Assertion failed branch');
+            }
+        });
+
         it('should handle flat output struct with scalar out param and exception', async function() {
             // This tests the fix for: output parameters in flat structs with exception handlers
             // The C++ generator must declare output variables before the try block

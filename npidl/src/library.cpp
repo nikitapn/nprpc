@@ -468,7 +468,7 @@ public:
 //   enum_item      ::= IDENTIFIER ('=' NUMBER)?
 //   interface_decl ::= 'interface' IDENTIFIER (':' IDENTIFIER (',' IDENTIFIER)*)? '{' function_decl* '}'
 //   struct_decl    ::= '('message' | 'exception') IDENTIFIER '{' (field_decl ';' | version_decl)* '}'
-//   function_decl  ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (',' arg_decl)*)? ')' (';' | 'raises' '(' IDENTIFIER ')' ';')
+//   function_decl  ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (',' arg_decl)*)? ')' (';' | 'raises' '(' IDENTIFIER (',' IDENTIFIER)* ')' ';')
 //   field_decl     ::= (IDENTIFIER | 'message') '?'? ':' type_decl
 //   arg_decl       ::= (IDENTIFIER | 'message') '?'? ':' ('in' | 'out' 'direct'?) type_decl
 //   type_decl      ::= fundamental_type array_or_vec_decl? | IDENTIFIER array_or_vec_decl?
@@ -1202,7 +1202,7 @@ class Parser : public IParser
     return true;
   }
   // clang-format off
-  // function_decl ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (',' arg_decl)*)? ')' (';' | 'raises' '(' IDENTIFIER ')' ';')
+  // function_decl ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (',' arg_decl)*)? ')' (';' | 'raises' '(' IDENTIFIER (',' IDENTIFIER)* ')' ';')
   // clang-format on
   bool function_decl(AstFunctionDecl*& f)
   {
@@ -1308,18 +1308,30 @@ class Parser : public IParser
       flush();
       match('(');
 
-      auto type =
-          ctx_.nm_cur()->find_type(match(TokenId::Identifier).name, false);
-      if (!type)
-        throw_error("Unknown exception type. The type specified in 'raises(...)' must be defined as an exception.");
+      for (;;) {
+        auto type =
+            ctx_.nm_cur()->find_type(match(TokenId::Identifier).name, false);
+        if (!type)
+          throw_error("Unknown exception type. The type specified in 'raises(...)' must be defined as an exception.");
 
-      if (type->id != FieldType::Struct && cflat(type)->is_exception()) {
-        throw_error("Type is not an exception. Use 'exception TypeName { ... }' to define an exception type.");
+        if (type->id != FieldType::Struct || !cflat(type)->is_exception()) {
+          throw_error("Type is not an exception. Use 'exception TypeName { ... }' to define an exception type.");
+        }
+
+        auto* ex = cflat(type);
+        if (std::find(f->exceptions.begin(), f->exceptions.end(), ex) ==
+            f->exceptions.end()) {
+          f->exceptions.push_back(ex);
+          if (!f->ex)
+            f->ex = ex;
+        }
+
+        if (check(&Parser::one, TokenId::RoundBracketClose))
+          break;
+
+        match(',');
       }
 
-      f->ex = cflat(type);
-
-      match(')');
       match(';');
     } else {
       throw_unexpected_token(tok);
@@ -1457,7 +1469,7 @@ class Parser : public IParser
                       "' can only be marked [unreliable] if declared "
                       "as 'async' or 'stream'");
 
-        if (f->ex && !f->is_reliable)
+        if (f->is_throwing() && !f->is_reliable)
           throw_error("Function' " + f->name +
                       "' cannot throw exceptions when marked [unreliable]");
 

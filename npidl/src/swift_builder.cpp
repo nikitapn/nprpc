@@ -1442,22 +1442,27 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
     }
 
     // Handle exception
-    if (fn->ex) {
-      const auto offset = size_of_header;
-      const auto initial_size = offset + fn->ex->size;
+    if (fn->is_throwing()) {
+      auto declared_exceptions = fn->exceptions;
+      if (declared_exceptions.empty() && fn->ex)
+        declared_exceptions.push_back(fn->ex);
 
+      const auto offset = size_of_header;
       out << eb();
-      out << bl() << "catch let e as " << fn->ex->name << " {\n" << bb(false);
-      out << bl() << "let obuf = buffer\n";
-      out << bl() << "obuf.consume(obuf.size)\n";
-      out << bl() << "obuf.prepare(" << initial_size << ")\n";
-      out << bl() << "obuf.commit(" << initial_size << ")\n";
-      out << bl() << "guard let exData = obuf.data else { return }\n";
-      out << bl() << "marshal_" << fn->ex->name << "(buffer: obuf, offset: " << offset << ", data: e)\n";
-      out << bl() << "exData.storeBytes(of: UInt32(obuf.size - 4), toByteOffset: 0, as: UInt32.self)\n";
-      out << bl() << "exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)\n";
-      out << bl() << "exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)\n";
-      out << eb();
+      for (auto* ex : declared_exceptions) {
+        const auto initial_size = offset + ex->size;
+        out << bl() << "catch let e as " << ex->name << " {\n" << bb(false);
+        out << bl() << "let obuf = buffer\n";
+        out << bl() << "obuf.consume(obuf.size)\n";
+        out << bl() << "obuf.prepare(" << initial_size << ")\n";
+        out << bl() << "obuf.commit(" << initial_size << ")\n";
+        out << bl() << "guard let exData = obuf.data else { return }\n";
+        out << bl() << "marshal_" << ex->name << "(buffer: obuf, offset: " << offset << ", data: e)\n";
+        out << bl() << "exData.storeBytes(of: UInt32(obuf.size - 4), toByteOffset: 0, as: UInt32.self)\n";
+        out << bl() << "exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)\n";
+        out << bl() << "exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)\n";
+        out << eb();
+      }
       out << bl() << "catch {\n" << bb(false);
       out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)\n";
       out << eb();

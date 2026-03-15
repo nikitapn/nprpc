@@ -74,6 +74,14 @@ public:
       throw nprpc::test::SimpleException{"This is a test exception", 123};
     }
 
+    void MultipleExceptions(uint32_t code) override {
+      if (code == 0) {
+        throw nprpc::test::SimpleException{"Simple exception branch", 456};
+      }
+
+      throw nprpc::test::AssertionFailed{"Assertion failed branch"};
+    }
+
     void OutScalarWithException(uint8_t dev_addr, uint16_t addr, uint8_t& value) override {
       // This tests the fix for flat output struct with exception handler
       // The output parameter 'value' must be declared before the try block

@@ -305,6 +305,14 @@ final class IntegrationTests: XCTestCase {
                 throw SimpleException(message: "This is a test exception", code: 42)
             }
 
+            override func multipleExceptions(code: UInt32) throws {
+                if code == 0 {
+                    throw SimpleException(message: "Simple exception branch", code: 456)
+                }
+
+                throw AssertionFailed(message: "Assertion failed branch")
+            }
+
             override func outScalarWithException(dev_addr: UInt8, addr: UInt16) throws -> UInt8   {
                 outScalarWithException_receivedDevAddr = dev_addr
                 outScalarWithException_receivedAddr = addr
@@ -380,6 +388,23 @@ final class IntegrationTests: XCTestCase {
             XCTAssertEqual(e.message, "This is a test exception")
         } catch {
             XCTFail("Expected SimpleException but got: \(error)")
+        }
+        do {
+            try client.multipleExceptions(code: 0)
+            XCTFail("Expected SimpleException to be thrown")
+        } catch let e as SimpleException {
+            XCTAssertEqual(e.code, 456)
+            XCTAssertEqual(e.message, "Simple exception branch")
+        } catch {
+            XCTFail("Expected SimpleException but got: \(error)")
+        }
+        do {
+            try client.multipleExceptions(code: 1)
+            XCTFail("Expected AssertionFailed to be thrown")
+        } catch let e as AssertionFailed {
+            XCTAssertEqual(e.message, "Assertion failed branch")
+        } catch {
+            XCTFail("Expected AssertionFailed but got: \(error)")
         }
         // Testing marshalling of output scalar with exception
         let result = try client.outScalarWithException(dev_addr: 10, addr: 783)

@@ -304,7 +304,7 @@ private final class ChatServiceImpl: ChatServiceServant, @unchecked Sendable {
 
     let joined = ChatServerEvent(
       message: ChatEnvelope(author: "system", body: "\(user_name) joined post #\(post_id).", created_at: "2026-03-09T09:00:00Z"),
-      presence: PresenceEvent(user_name: user_name, kind: .joined)
+      presence: PresenceEvent(user_name: user_name, kind: .Joined)
     )
     await stream.writer.write(joined)
 
@@ -316,7 +316,7 @@ private final class ChatServiceImpl: ChatServiceServant, @unchecked Sendable {
             body: incoming.body,
             created_at: incoming.created_at.isEmpty ? "2026-03-09T09:00:00Z" : incoming.created_at
           ),
-          presence: PresenceEvent(user_name: "", kind: .typing)
+          presence: PresenceEvent(user_name: "", kind: .Typing)
         )
         await chatHub.broadcast(postId: post_id, event: echoed)
       }
@@ -324,7 +324,7 @@ private final class ChatServiceImpl: ChatServiceServant, @unchecked Sendable {
       await stream.writer.write(
         ChatServerEvent(
           message: ChatEnvelope(author: "system", body: "\(user_name) left the room.", created_at: "2026-03-09T09:01:00Z"),
-          presence: PresenceEvent(user_name: user_name, kind: .left)
+          presence: PresenceEvent(user_name: user_name, kind: .Left)
         )
       )
       await chatHub.leave(postId: post_id, participantId: participantId)

@@ -127,6 +127,39 @@ TEST(ErrorRecovery, MultipleErrors)
       << "Should detect error in struct declaration";
 }
 
+TEST(NPIDL, MultipleRaisesSyntax)
+{
+  npidl::Context ctx;
+  std::vector<npidl::ParseError> errors;
+  std::string code = R"(
+    module sample;
+
+    exception FirstError {
+      message: string;
+    }
+
+    exception SecondError {
+      message: string;
+      code: u32;
+    }
+
+    interface Demo {
+      void DoThing() raises (FirstError, SecondError);
+    }
+  )";
+
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, code, errors));
+  ASSERT_TRUE(errors.empty());
+  ASSERT_EQ(ctx.interfaces.size(), 1u);
+  ASSERT_EQ(ctx.interfaces[0]->fns.size(), 1u);
+
+  auto* fn = ctx.interfaces[0]->fns[0];
+  ASSERT_TRUE(fn->is_throwing());
+  ASSERT_EQ(fn->exceptions.size(), 2u);
+  EXPECT_EQ(fn->exceptions[0]->name, "FirstError");
+  EXPECT_EQ(fn->exceptions[1]->name, "SecondError");
+}
+
 } // namespace npidltest
 
 int main(int argc, char** argv)

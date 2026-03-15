@@ -620,6 +620,7 @@ struct AstFunctionDecl : AstNodeWithPosition {
   AstStructDecl* in_s = nullptr;
   AstStructDecl* out_s = nullptr;
   AstStructDecl* ex = nullptr;
+  std::vector<AstStructDecl*> exceptions;
   std::vector<AstFunctionArgument*> args, in_args, out_args;
   bool is_async;
   // [unreliable] attribute maybe used for quic methods
@@ -630,7 +631,7 @@ struct AstFunctionDecl : AstNodeWithPosition {
   AstFunctionArgument* stream_arg = nullptr;
 
   bool is_void() const noexcept { return ret_value->id == FieldType::Void; }
-  bool is_throwing() const noexcept { return ex != nullptr; }
+  bool is_throwing() const noexcept { return !exceptions.empty(); }
 };
 
 template <typename IdType, typename T> class List

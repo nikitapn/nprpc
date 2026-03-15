@@ -543,8 +543,14 @@ LspServer::create_hover_content(const npidl::PositionIndex::Entry* entry)
 
     md << ")";
 
-    if (fn->ex) {
-      md << " raises(" << fn->ex->name << ")";
+    if (fn->is_throwing()) {
+      md << " raises(";
+      for (size_t i = 0; i < fn->exceptions.size(); ++i) {
+        if (i > 0)
+          md << ", ";
+        md << fn->exceptions[i]->name;
+      }
+      md << ")";
     }
 
     md << "\n```\n";

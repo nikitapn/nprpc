@@ -282,13 +282,8 @@ void TSBuilder::emit_type(AstTypeDecl* type, std::ostream& os)
   case FieldType::Array: {
     auto ut = cwt(type)->type;
     if (ut->id == FieldType::Fundamental) {
-      // Using typed arrays for direct fundamental types (e.g.,
-      // vector<u32>)
       os << get_typed_array_name(cft(ut)->token_id);
     } else {
-      // For aliases, enums, structs, etc. - preserve the type name
-      // (e.g., using DatabaseId = u32; vector<DatabaseId> →
-      // Array<DatabaseId>)
       os << "Array<" << emit_type(ut) << ">";
     }
     break;
@@ -1963,37 +1958,43 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
     */
 
-    if (fn->ex) {
-      const auto offset = size_of_header;
-      const auto initial_size = offset + fn->ex->size;
+    if (fn->is_throwing()) {
+      auto declared_exceptions = fn->exceptions;
+      if (declared_exceptions.empty() && fn->ex)
+        declared_exceptions.push_back(fn->ex);
 
-      always_full_namespace(true);
-      out << eb() << // try
-          bl() << "catch(e) {\n"
-          << bb(false) << bl() << "if (!(e instanceof " << emit_type(fn->ex)
-          << ")) throw e;\n"
-          << bl() << "const obuf = buf;\n"
-          << bl() << "obuf.consume(obuf.size);\n"
-          << bl() << "obuf.prepare(" << initial_size << ");\n"
-          << bl() << "obuf.commit(" << initial_size << ");\n"
-          << bl() << "const ex_data = {__ex_id: " << fn->ex->exception_id;
-      always_full_namespace(false);
-      for (size_t i = 1; i < fn->ex->fields.size(); ++i) {
-        auto mb = fn->ex->fields[i];
-        out << ", " << mb->name << ": e." << mb->name;
+      const auto offset = size_of_header;
+
+      out << eb() << bl() << "catch(e) {\n" << bb(false);
+      for (auto* ex : declared_exceptions) {
+        const auto initial_size = offset + ex->size;
+        always_full_namespace(true);
+        out << bl() << "if (e instanceof " << emit_type(ex) << ") {\n";
+        always_full_namespace(false);
+        out << bb(false)
+            << bl() << "const obuf = buf;\n"
+            << bl() << "obuf.consume(obuf.size);\n"
+            << bl() << "obuf.prepare(" << initial_size << ");\n"
+            << bl() << "obuf.commit(" << initial_size << ");\n"
+            << bl() << "const ex_data = {__ex_id: " << ex->exception_id;
+        for (size_t i = 1; i < ex->fields.size(); ++i) {
+          auto mb = ex->fields[i];
+          out << ", " << mb->name << ": e." << mb->name;
+        }
+        out << "};\n";
+        always_full_namespace(true);
+        out << bl() << ns(ex->nm) << "marshal_" << ex->name << "(obuf, "
+            << offset << ", ex_data);\n";
+        always_full_namespace(false);
+        out << bl() << "obuf.write_len(obuf.size - 4);\n"
+            << bl() << "obuf.write_msg_id(NPRPC.impl.MessageId.Exception);\n"
+            << bl() << "obuf.write_msg_type(NPRPC.impl.MessageType.Answer);\n"
+            << bl() << "(globalThis as any).__nprpc_debug?.call_end(__dbg_id,{status:'error',duration_ms:Date.now()-__dbg_t0,error:String(e)});\n"
+            << bl() << "return;\n"
+            << eb();
       }
-      out << "};\n";
-      always_full_namespace(true);
-      out << bl() << ns(fn->ex->nm) << "marshal_" << fn->ex->name << "(obuf, "
-          << offset << ", ex_data);\n";
-      always_full_namespace(false);
-      out << bl() << "obuf.write_len(obuf.size - 4);\n"
-          << bl() << "obuf.write_msg_id(NPRPC.impl.MessageId.Exception);\n"
-          << bl() << "obuf.write_msg_type(NPRPC.impl.MessageType.Answer);\n"
-          << bl() << "(globalThis as any).__nprpc_debug?.call_end(__dbg_id,{status:'error',duration_ms:Date.now()-__dbg_t0,error:String(e)});\n"
-          << bl() << "return;\n"
-          << eb() // catch
-          ;
+      out << bl() << "throw e;\n"
+          << eb();
     }
     // Debug hook: call_end for success path
     out << bl() << "(globalThis as any).__nprpc_debug?.call_end(__dbg_id,{status:'success',duration_ms:Date.now()-__dbg_t0});\n";

@@ -109,6 +109,21 @@ TEST_F(NprpcTest, TestException)
         EXPECT_EQ(ex.code, 123);
       }
 
+      try {
+        obj->MultipleExceptions(0);
+        FAIL() << "Expected MultipleExceptions(0) to throw SimpleException";
+      } catch (const nprpc::test::SimpleException& ex) {
+        EXPECT_EQ(std::string_view(ex.message), "Simple exception branch"sv);
+        EXPECT_EQ(ex.code, 456);
+      }
+
+      try {
+        obj->MultipleExceptions(1);
+        FAIL() << "Expected MultipleExceptions(1) to throw AssertionFailed";
+      } catch (const nprpc::test::AssertionFailed& ex) {
+        EXPECT_EQ(std::string_view(ex.message), "Assertion failed branch"sv);
+      }
+
       // OutScalarWithException test - tests flat output struct with
       // exception handler This verifies the fix where output parameters
       // must be declared before try block

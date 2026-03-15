@@ -1521,38 +1521,44 @@ void CppBuilder::emit_declared_exception_reply(AstFunctionDecl* fn,
                                                std::ostream& os,
                                                const std::string& indent)
 {
-  if (!fn->ex)
+  auto declared_exceptions = fn->exceptions;
+  if (declared_exceptions.empty() && fn->ex)
+    declared_exceptions.push_back(fn->ex);
+
+  if (declared_exceptions.empty())
     return;
 
   const auto offset = size_of_header;
-  const auto initial_size = offset + fn->ex->size;
+  os << indent << "}\n";
+  for (auto* ex : declared_exceptions) {
+    const auto initial_size = offset + ex->size;
 
-  always_full_namespace(true);
-  os << indent << "}\n"
-     << indent << "catch(" << ns(fn->ex->nm) << fn->ex->name << "& e) {\n"
-     << indent << "  assert(ctx.tx_buffer != nullptr);\n"
-     << indent << "  auto& obuf = *ctx.tx_buffer;\n"
-     << indent << "  obuf.consume(obuf.size());\n"
-     << indent << "  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, "
-     << initial_size << "))\n"
-     << indent << "    obuf.prepare(" << initial_size << ");\n"
-     << indent << "  obuf.commit(" << initial_size << ");\n"
-     << indent << "  " << ns(fn->ex->nm) << "flat::" << fn->ex->name << "_Direct oa(obuf,"
-     << offset << ");\n"
-     << indent << "  oa.__ex_id() = " << fn->ex->exception_id << ";\n";
-  always_full_namespace(false);
+    always_full_namespace(true);
+    os << indent << "catch(" << ns(ex->nm) << ex->name << "& e) {\n"
+       << indent << "  assert(ctx.tx_buffer != nullptr);\n"
+       << indent << "  auto& obuf = *ctx.tx_buffer;\n"
+       << indent << "  obuf.consume(obuf.size());\n"
+       << indent << "  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, "
+       << initial_size << "))\n"
+       << indent << "    obuf.prepare(" << initial_size << ");\n"
+       << indent << "  obuf.commit(" << initial_size << ");\n"
+       << indent << "  " << ns(ex->nm) << "flat::" << ex->name << "_Direct oa(obuf,"
+       << offset << ");\n"
+       << indent << "  oa.__ex_id() = " << ex->exception_id << ";\n";
+    always_full_namespace(false);
 
-  for (size_t i = 1; i < fn->ex->fields.size(); ++i) {
-    auto mb = fn->ex->fields[i];
-    assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name, os);
+    for (size_t i = 1; i < ex->fields.size(); ++i) {
+      auto mb = ex->fields[i];
+      assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name, os);
+    }
+
+    os << indent << "  auto* out_header = static_cast<::nprpc::impl::Header*>(obuf.data().data());\n"
+       << indent << "  out_header->size = static_cast<uint32_t>(obuf.size() - 4);\n"
+       << indent << "  out_header->msg_id = ::nprpc::impl::MessageId::Exception;\n"
+       << indent << "  out_header->msg_type = ::nprpc::impl::MessageType::Answer;\n"
+       << indent << "  out_header->request_id = static_cast<const ::nprpc::impl::Header*>(ctx.rx_buffer->cdata().data())->request_id;\n"
+       << indent << "}\n";
   }
-
-  os << indent << "  auto* out_header = static_cast<::nprpc::impl::Header*>(obuf.data().data());\n"
-     << indent << "  out_header->size = static_cast<uint32_t>(obuf.size() - 4);\n"
-     << indent << "  out_header->msg_id = ::nprpc::impl::MessageId::Exception;\n"
-     << indent << "  out_header->msg_type = ::nprpc::impl::MessageType::Answer;\n"
-     << indent << "  out_header->request_id = static_cast<const ::nprpc::impl::Header*>(ctx.rx_buffer->cdata().data())->request_id;\n"
-     << indent << "}\n";
 }
 
 void CppBuilder::emit_stream_proxy_reply_handling(AstFunctionDecl* fn)
@@ -2738,42 +2744,47 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
     */
 
-    if (fn->ex) {
-      const auto offset = size_of_header;
-      const auto initial_size = offset + fn->ex->size;
+     if (fn->is_throwing()) {
+      auto declared_exceptions = fn->exceptions;
+      if (declared_exceptions.empty() && fn->ex)
+        declared_exceptions.push_back(fn->ex);
 
-      always_full_namespace(true);
-      oc << "      }\n"
-            "      catch("
-         << ns(fn->ex->nm) << fn->ex->name
-         << "& e) {\n"
+      const auto offset = size_of_header;
+        oc << "      }\n";
+      for (auto* ex : declared_exceptions) {
+        const auto initial_size = offset + ex->size;
+
+        always_full_namespace(true);
+          oc << "      catch("
+          << ns(ex->nm) << ex->name
+          << "& e) {\n"
             "        assert(ctx.tx_buffer != nullptr);\n"
             "        auto& obuf = *ctx.tx_buffer;\n"
             "        obuf.consume(obuf.size());\n"
             "        if "
             "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
             "obuf, "
-         << initial_size
-         << "))\n"
+          << initial_size
+          << "))\n"
             "          obuf.prepare("
-         << initial_size
-         << ");\n"
+          << initial_size
+          << ");\n"
             "        obuf.commit("
-         << initial_size
-         << ");\n"
+          << initial_size
+          << ");\n"
             "        "
-         << ns(fn->ex->nm) << "flat::" << fn->ex->name << "_Direct oa(obuf," << offset
-         << ");\n"
+          << ns(ex->nm) << "flat::" << ex->name << "_Direct oa(obuf," << offset
+          << ");\n"
             "        oa.__ex_id() = "
-         << fn->ex->exception_id << ";\n";
-      always_full_namespace(false);
+          << ex->exception_id << ";\n";
+        always_full_namespace(false);
 
-      for (size_t i = 1; i < fn->ex->fields.size(); ++i) {
-        auto mb = fn->ex->fields[i];
-        assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name, oc);
-      }
+        for (size_t i = 1; i < ex->fields.size(); ++i) {
+         auto mb = ex->fields[i];
+         assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name, oc);
+        }
 
-      oc << "        "
+        oc << "        "
             "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
             "size = "
             "static_cast<uint32_t>(obuf.size() - 4);\n"
@@ -2787,6 +2798,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
             "= ::nprpc::impl::MessageType::Answer;\n"
             "        return;\n"
             "      }\n";
+      }
     }
 
     if (!fn->out_s) {
