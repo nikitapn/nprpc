@@ -1,13 +1,27 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import type { RpcEvent } from '../types';
   import JsonTree from './JsonTree.svelte';
 
-  export let event: RpcEvent | null = null;
+  let {
+    event = null
+  }: {
+    event?: RpcEvent | null;
+  } = $props();
 
   type Tab = 'general' | 'request' | 'response';
-  let active_tab: Tab = 'general';
+  let active_tab = $state<Tab>('general');
 
-  $: if (event) active_tab = 'general';
+  let previousEventId = $state<number | null>(null);
+
+  $effect(() => {
+    const eventId = event?.id ?? null;
+    if (eventId !== previousEventId) {
+      active_tab = 'general';
+      previousEventId = eventId;
+    }
+  });
 
   // ── Formatting ──────────────────────────────────────────────────
 
@@ -53,7 +67,7 @@
   }
 
   // Has error tab?
-  $: has_error = event?.status === 'error' && !!event.error;
+  const has_error = $derived(event?.status === 'error' && !!event?.error);
 </script>
 
 {#if !event}
@@ -64,31 +78,31 @@
   <div class="detail">
     <!-- ── Tabs ─────────────────────────────────────────────── -->
     <div class="tabs" role="tablist">
-      <!-- svelte-ignore a11y-click-events-have-key-events -->
-      <span
+      <button
+        type="button"
         class="tab"
         class:active={active_tab === 'general'}
         role="tab"
         tabindex="0"
-        on:click={() => active_tab = 'general'}
-      >General</span>
-      <!-- svelte-ignore a11y-click-events-have-key-events -->
-      <span
+        onclick={() => active_tab = 'general'}
+      >General</button>
+      <button
+        type="button"
         class="tab"
         class:active={active_tab === 'request'}
         role="tab"
         tabindex="0"
-        on:click={() => active_tab = 'request'}
-      >Request</span>
-      <!-- svelte-ignore a11y-click-events-have-key-events -->
-      <span
+        onclick={() => active_tab = 'request'}
+      >Request</button>
+      <button
+        type="button"
         class="tab"
         class:active={active_tab === 'response'}
         class:tab-error={has_error}
         role="tab"
         tabindex="0"
-        on:click={() => active_tab = 'response'}
-      >{has_error ? 'Error' : 'Response'}</span>
+        onclick={() => active_tab = 'response'}
+      >{has_error ? 'Error' : 'Response'}</button>
     </div>
 
     <!-- ── Tab bodies ─────────────────────────────────────── -->
@@ -188,7 +202,7 @@
         <div class="payload-header">
           <span class="payload-label">Request arguments</span>
           {#if event.request_args !== undefined}
-            <button class="copy-btn" on:click={() => copy_json(event!.request_args)}>
+            <button class="copy-btn" type="button" onclick={() => copy_json(event.request_args)}>
               Copy JSON
             </button>
           {/if}
@@ -213,7 +227,7 @@
           <div class="payload-header">
             <span class="payload-label">Response / return value</span>
             {#if event.response_args !== undefined}
-              <button class="copy-btn" on:click={() => copy_json(event!.response_args)}>
+              <button class="copy-btn" type="button" onclick={() => copy_json(event.response_args)}>
                 Copy JSON
               </button>
             {/if}
@@ -260,6 +274,8 @@
     flex-shrink: 0;
   }
   .tab {
+    background: transparent;
+    border: 0;
     padding: 4px 12px;
     font-size: 11px;
     color: #9aa0a6;

@@ -1,19 +1,22 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { afterUpdate } from 'svelte';
   import type { RpcEvent } from '../types';
-  import { createEventDispatcher } from 'svelte';
 
-  export let events  : RpcEvent[] = [];
-  export let selected: RpcEvent | null = null;
+  let {
+    events = [],
+    selected = $bindable<RpcEvent | null>(null)
+  }: {
+    events?: RpcEvent[];
+    selected?: RpcEvent | null;
+  } = $props();
 
-  const dispatch = createEventDispatcher<{ select: RpcEvent }>();
-
-  let tbody: HTMLElement;
-  let userScrolled = false;
-  let prevLen = 0;
+  let tbody: HTMLElement | undefined = $state();
+  let userScrolled = $state(false);
+  let prevLen = $state(0);
 
   // Auto-scroll to newest row unless the user has scrolled up manually.
-  afterUpdate(() => {
+  $effect(() => {
     if (!tbody) return;
     if (events.length === prevLen) return;
     prevLen = events.length;
@@ -29,20 +32,28 @@
   }
 
   function select(ev: RpcEvent) {
-    dispatch('select', ev);
+    selected = ev;
   }
 
   // Keyboard navigation
   function onKeyDown(e: KeyboardEvent) {
     if (!events.length) return;
-    const idx = selected ? events.findIndex(x => x.id === selected.id) : -1;
+    const selectedId = selected?.id;
+    const idx = selectedId === undefined ? -1 : events.findIndex(x => x.id === selectedId);
     if (e.key === 'ArrowDown') {
       const next = events[Math.min(idx + 1, events.length - 1)];
-      if (next) dispatch('select', next);
+      if (next) selected = next;
       e.preventDefault();
     } else if (e.key === 'ArrowUp') {
       const prev = events[Math.max(idx - 1, 0)];
-      if (prev) dispatch('select', prev);
+      if (prev) selected = prev;
+      e.preventDefault();
+    }
+  }
+
+  function onRowKeyDown(e: KeyboardEvent, ev: RpcEvent) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      selected = ev;
       e.preventDefault();
     }
   }
@@ -89,7 +100,7 @@
   class="list-wrap"
   role="grid"
   tabindex="0"
-  on:keydown={onKeyDown}
+  onkeydown={onKeyDown}
 >
   <div class="thead">
     <span class="col-seq">#</span>
@@ -103,15 +114,15 @@
   <div
     class="tbody"
     bind:this={tbody}
-    on:scroll={onScroll}
+    onscroll={onScroll}
   >
     {#each events as ev (ev.id)}
-      <!-- svelte-ignore a11y-click-events-have-key-events -->
       <div
         class={row_class(ev)}
         role="row"
         tabindex="-1"
-        on:click={() => select(ev)}
+        onclick={() => select(ev)}
+        onkeydown={(e) => onRowKeyDown(e, ev)}
       >
         <span class="col-seq mono">{ev.seq}</span>
 

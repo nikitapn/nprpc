@@ -1,20 +1,36 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
+  import JsonTree from './JsonTree.svelte';
+
   // Recursive JSON tree renderer.
   // Props:
   //   value      – any JSON-serialisable value
   //   key        – optional property name shown to the left
   //   depth      – current nesting depth (root = 0)
   //   expand_depth – auto-expand nodes up to this depth (default 2)
-  import { onMount } from 'svelte';
+  let {
+    value = undefined,
+    key = undefined,
+    depth = 0,
+    expand_depth = 2,
+  }: {
+    value?: unknown;
+    key?: string;
+    depth?: number;
+    expand_depth?: number;
+  } = $props();
 
-  export let value       : unknown = undefined;
-  export let key         : string  | undefined = undefined;
-  export let depth       : number  = 0;
-  export let expand_depth: number  = 2;
-
-  let expanded = depth < expand_depth;
+  let expanded = $state(false);
+  let expandedInitialized = false;
 
   function toggle() { expanded = !expanded; }
+
+  $effect(() => {
+    if (expandedInitialized) return;
+    expanded = depth < expand_depth;
+    expandedInitialized = true;
+  });
 
   const isObj    = (v: unknown): v is Record<string, unknown> =>
     v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -39,15 +55,17 @@
     return undefined;
   }
 
-  $: keys  = childKeys(value);
-  $: isContainer = (isArr(value) || isObj(value)) && !isBigInt(value);
-  $: previewBracket = isArr(value) ? '[' : '{';
-  $: closeBracket   = isArr(value) ? ']' : '}';
-  $: previewItems   = isContainer && keys.length > 0
-    ? (keys.length > 3
-        ? keys.slice(0, 3).join(', ') + ', …'
-        : keys.join(', '))
-    : '';
+  const keys = $derived(childKeys(value));
+  const isContainer = $derived((isArr(value) || isObj(value)) && !isBigInt(value));
+  const previewBracket = $derived(isArr(value) ? '[' : '{');
+  const closeBracket = $derived(isArr(value) ? ']' : '}');
+  const previewItems = $derived(
+    isContainer && keys.length > 0
+      ? (keys.length > 3
+          ? keys.slice(0, 3).join(', ') + ', …'
+          : keys.join(', '))
+      : ''
+  );
 </script>
 
 <span class="node">
@@ -59,18 +77,16 @@
   <!-- container types (object / array) -->
   {#if isContainer}
     <!-- collapse/expand triangle -->
-    <!-- svelte-ignore a11y-click-events-have-key-events -->
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
-    <span class="toggle" on:click={toggle}>
+    <button type="button" class="toggle" onclick={toggle}>
       {expanded ? '▾' : '▸'}
-    </span>
+    </button>
 
     {#if expanded}
       <span class="bracket">{previewBracket}</span>
       <span class="children">
         {#each keys as k}
           <div class="child">
-            <svelte:self
+            <JsonTree
               key={isArr(value) ? undefined : k}
               value={childAt(value, k)}
               depth={depth + 1}
@@ -84,13 +100,13 @@
       </span>
       <span class="bracket">{closeBracket}</span>
     {:else}
-      <span class="collapsed">
+      <button type="button" class="collapsed" onclick={toggle}>
         {previewBracket}
         {#if keys.length > 0}
           <span class="preview">{previewItems}</span>
         {/if}
         {closeBracket}
-      </span>
+      </button>
     {/if}
 
   <!-- primitive types -->
@@ -131,16 +147,22 @@
   .preview{ color: #888; font-style: italic; }
 
   .toggle {
+    background: transparent;
+    border: 0;
     cursor: pointer;
     color: #888;
     user-select: none;
     margin-right: 2px;
+    padding: 0;
   }
   .toggle:hover { color: #e8eaed; }
 
   .collapsed {
+    background: transparent;
+    border: 0;
     color: #888;
     cursor: pointer;
+    padding: 0;
   }
   .collapsed:hover { color: #e8eaed; }
 

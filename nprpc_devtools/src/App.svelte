@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { RpcEvent, DebugMsg } from './types';
@@ -5,19 +7,19 @@
   import EventDetail from './lib/EventDetail.svelte';
 
   // ── State ────────────────────────────────────────────────────────
-  let events   : RpcEvent[]   = [];
-  let selected : RpcEvent | null = null;
-  let filter   : string = '';
-  let recording: boolean = true;
-  let nextId   : number = 0;
-  let seq      : number = 0; // 1-based display sequence number (reset on Clear)
+  let events = $state<RpcEvent[]>([]);
+  let selected = $state<RpcEvent | null>(null);
+  let filter = $state('');
+  let recording = $state(true);
+  let nextId = $state(0);
+  let seq = $state(0); // 1-based display sequence number (reset on Clear)
 
-  // Pending events keyed by id (status=pending, awaiting call_end).
-  const pending = new Map<number, RpcEvent>();
+  // Pending events keyed by id -> index in the reactive events array.
+  const pending = new Map<number, number>();
 
   // ── Direct connection to content script (no background SW) ─────────
   onMount(() => {
-    let port: chrome.runtime.Port;
+    let port: chrome.runtime.Port | undefined;
     const tabId = chrome.devtools.inspectedWindow.tabId;
 
     const onMessage = (msg: DebugMsg) => {
@@ -25,17 +27,18 @@
 
       if (msg.type === 'nprpc_call_start') {
         const ev: RpcEvent = { ...msg.data, seq: ++seq };
-        pending.set(ev.id, ev);
+        const index = events.length;
         events = [...events, ev];
+        pending.set(ev.id, index);
         nextId = nextId + 1;
       } else if (msg.type === 'nprpc_call_end') {
-        const ev = pending.get(msg.data.id);
-        if (ev) {
-          Object.assign(ev, msg.data);
-          pending.delete(ev.id);
-          events = [...events]; // trigger reactivity
-          if (selected && selected.id === ev.id)
-            selected = ev;
+        const index = pending.get(msg.data.id);
+        if (index !== undefined) {
+          const updated = { ...events[index], ...msg.data };
+          events[index] = updated;
+          pending.delete(msg.data.id);
+          if (selected && selected.id === updated.id)
+            selected = updated;
         }
       }
     };
@@ -67,21 +70,23 @@
   function toggleRecording() { recording = !recording; }
 
   // ── Stats ────────────────────────────────────────────────────────
-  $: total    = events.length;
-  $: errors   = events.filter(e => e.status === 'error').length;
-  $: filtered = filter
-    ? events.filter(ev => {
-        const q = filter.toLowerCase();
-        return (ev.method_name ?? '').toLowerCase().includes(q)
-          || ev.class_id.toLowerCase().includes(q)
-          || `${ev.endpoint.hostname}:${ev.endpoint.port}`.includes(q);
-      })
-    : events;
+  const total = $derived(events.length);
+  const errors = $derived(events.filter((e) => e.status === 'error').length);
+  const filtered = $derived.by(() => {
+    if (!filter) return events;
+
+    const q = filter.toLowerCase();
+    return events.filter((ev) => {
+      return (ev.method_name ?? '').toLowerCase().includes(q)
+        || ev.class_id.toLowerCase().includes(q)
+        || `${ev.endpoint.hostname}:${ev.endpoint.port}`.includes(q);
+    });
+  });
 
   // ── Resizable split ──────────────────────────────────────────────
-  let container  : HTMLElement;
-  let splitFrac   = 0.5;   // fraction of container height for list pane
-  let dragging    = false;
+  let container = $state<HTMLElement | undefined>();
+  let splitFrac = $state(0.5);   // fraction of container height for list pane
+  let dragging = $state(false);
 
   function onDividerDown(e: MouseEvent) {
     dragging = true;
@@ -99,7 +104,7 @@
   function onMouseUp() { dragging = false; }
 </script>
 
-<svelte:window on:mousemove={onMouseMove} on:mouseup={onMouseUp} />
+<svelte:window onmousemove={onMouseMove} onmouseup={onMouseUp} />
 
 <div class="shell">
   <!-- ── Toolbar ───────────────────────────────────────────────── -->
@@ -108,13 +113,13 @@
       class="rec-btn"
       class:recording
       title={recording ? 'Pause recording' : 'Resume recording'}
-      on:click={toggleRecording}
+      onclick={toggleRecording}
     >
       <span class="rec-dot">●</span>
       {recording ? 'Recording' : 'Paused'}
     </button>
 
-    <button class="icon-btn" title="Clear all calls" on:click={clear}>
+    <button class="icon-btn" title="Clear all calls" onclick={clear}>
       🗑 Clear
     </button>
 
@@ -126,9 +131,7 @@
         bind:value={filter}
       />
       {#if filter}
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <!-- svelte-ignore a11y-no-static-element-interactions -->
-        <span class="clear-filter" on:click={() => filter = ''}>✕</span>
+        <button class="clear-filter" type="button" onclick={() => filter = ''}>✕</button>
       {/if}
     </div>
 
@@ -150,14 +153,13 @@
     <div class="pane-top" style:height="{(splitFrac * 100).toFixed(1)}%">
       <EventList
         events={filtered}
-        {selected}
-        on:select={e => selected = e.detail}
+        bind:selected
       />
     </div>
 
     <!-- Drag handle -->
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
-    <div class="divider" on:mousedown={onDividerDown}>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="divider" onmousedown={onDividerDown}>
       <span class="divider-grip">⋯</span>
     </div>
 
