@@ -342,7 +342,7 @@ private final class MediaServiceImpl: MediaServiceServant, @unchecked Sendable {
   private let mediaDir: String
   // Stream chunks of 256 KB — large enough to keep throughput high,
   // small enough that the SourceBuffer drain loop stays responsive.
-  private static let chunkSize = 4 * 1024 * 1024
+  private static let chunkSize = 256 * 1024
 
   init(mediaDir: String) {
     self.mediaDir = mediaDir

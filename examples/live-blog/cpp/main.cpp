@@ -458,8 +458,8 @@ class MediaServiceImpl final : public live_blog::IMediaService_Servant {
   // manifests (post-<id>.mpd).  See Swift counterpart for generation notes.
   std::string media_dir_;
 
-  // Stream in 4 MB chunks — same as the Swift implementation.
-  static constexpr std::size_t kChunkSize = 4 * 1024 * 1024;
+  // Stream in 256 KB chunks — same as the Swift implementation.
+  static constexpr std::size_t kChunkSize = 256 * 1024;
 
   // Resolves the actual DASH media file named by the MPD's <BaseURL> element.
   // Falls back to the raw fmp4 if the MPD is absent or has no <BaseURL>.
