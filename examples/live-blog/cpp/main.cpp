@@ -1,13 +1,12 @@
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -24,6 +23,10 @@
 
 #ifndef NPRPC_LIVE_BLOG_RUNTIME_ROOT
 #  define NPRPC_LIVE_BLOG_RUNTIME_ROOT ""
+#endif
+
+#ifndef NPRPC_LIVE_BLOG_MEDIA_ROOT
+#  define NPRPC_LIVE_BLOG_MEDIA_ROOT ""
 #endif
 
 #ifndef NPRPC_LIVE_BLOG_CERT_FILE
@@ -45,6 +48,7 @@ using live_blog::PostPage;
 using live_blog::PostPreview;
 using live_blog::PresenceEvent;
 using live_blog::PresenceEventKind;
+using live_blog::binary;
 
 std::string_view to_string_view(nprpc::flat::Span<char> value)
 {
@@ -247,6 +251,8 @@ public:
     return it->second;
   }
 
+  std::size_t post_count() const noexcept { return posts_.size(); }
+
 private:
   std::unordered_map<std::string, AuthorPreview> authors_;
   std::vector<PostRecord> posts_;
@@ -412,8 +418,7 @@ private:
 
 class ChatServiceImpl final : public live_blog::IChatService_Servant {
   ChatHub chat_hub_;
-public:
-  nprpc::Task<> JoinPostChat(uint64_t post_id,
+public:  nprpc::Task<> JoinPostChat(uint64_t post_id,
                              std::string user_name,
                              nprpc::BidiStream<ChatEnvelope, ChatServerEvent> stream) override
   {
@@ -448,6 +453,94 @@ public:
   }
 };
 
+class MediaServiceImpl final : public live_blog::IMediaService_Servant {
+  // Directory holding fragmented MP4 files (post-<id>.fmp4) and DASH
+  // manifests (post-<id>.mpd).  See Swift counterpart for generation notes.
+  std::string media_dir_;
+
+  // Stream in 4 MB chunks — same as the Swift implementation.
+  static constexpr std::size_t kChunkSize = 4 * 1024 * 1024;
+
+  // Resolves the actual DASH media file named by the MPD's <BaseURL> element.
+  // Falls back to the raw fmp4 if the MPD is absent or has no <BaseURL>.
+  std::string dash_media_path(uint64_t post_id) const
+  {
+    const auto mpd_path = media_dir_ + "/post-" + std::to_string(post_id) + ".mpd";
+    std::ifstream mpd_file(mpd_path);
+    if (mpd_file) {
+      const std::string mpd((std::istreambuf_iterator<char>(mpd_file)),
+                             std::istreambuf_iterator<char>());
+      const auto tag_start = mpd.find("<BaseURL>");
+      if (tag_start != std::string::npos) {
+        const auto content_start = tag_start + 9; // len("<BaseURL>")
+        const auto tag_end = mpd.find("</BaseURL>", content_start);
+        if (tag_end != std::string::npos) {
+          std::string filename = mpd.substr(content_start, tag_end - content_start);
+          // Trim whitespace
+          filename.erase(0, filename.find_first_not_of(" \t\r\n"));
+          filename.erase(filename.find_last_not_of(" \t\r\n") + 1);
+          if (!filename.empty() && filename.rfind("http", 0) != 0) {
+            return media_dir_ + "/" + filename;
+          }
+        }
+      }
+    }
+    return media_dir_ + "/post-" + std::to_string(post_id) + ".fmp4";
+  }
+
+public:
+  explicit MediaServiceImpl(std::string media_dir)
+      : media_dir_(std::move(media_dir))
+  {
+  }
+
+  // Streams the raw fmp4 file in kChunkSize chunks.
+  nprpc::StreamWriter<binary> OpenPostVideo(uint64_t post_id) override
+  {
+    const auto path = media_dir_ + "/post-" + std::to_string(post_id) + ".fmp4";
+    std::ifstream file(path, std::ios::binary);
+    if (!file) co_return;
+    std::vector<uint8_t> buf(kChunkSize);
+    while (file) {
+      file.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(kChunkSize));
+      const auto n = static_cast<std::size_t>(file.gcount());
+      if (n == 0) break;
+      co_yield binary(buf.data(), buf.data() + n);
+    }
+  }
+
+  std::string GetVideoDashManifest(uint64_t post_id) override
+  {
+    const auto path = media_dir_ + "/post-" + std::to_string(post_id) + ".mpd";
+    std::ifstream file(path);
+    if (!file) return {};
+    return std::string((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+  }
+
+  // Streams a byte range from the single-file DASH media.
+  // Shaka Player issues these for each segment after reading the sidx box.
+  nprpc::StreamWriter<binary> GetVideoDashSegmentRange(
+      uint64_t post_id, uint64_t byte_offset, uint64_t byte_length) override
+  {
+    const auto path = dash_media_path(post_id);
+    std::ifstream file(path, std::ios::binary);
+    if (!file) co_return;
+    file.seekg(static_cast<std::streamoff>(byte_offset));
+    if (!file) co_return;
+    std::vector<uint8_t> buf(kChunkSize);
+    uint64_t remaining = byte_length;
+    while (remaining > 0 && file) {
+      const auto to_read = static_cast<std::streamsize>(std::min(remaining, static_cast<uint64_t>(kChunkSize)));
+      file.read(reinterpret_cast<char*>(buf.data()), to_read);
+      const auto n = static_cast<std::size_t>(file.gcount());
+      if (n == 0) break;
+      co_yield binary(buf.data(), buf.data() + n);
+      remaining -= n;
+    }
+  }
+};
+
 } // namespace
 
 int main()
@@ -455,6 +548,11 @@ int main()
   try {
     const std::filesystem::path static_root = NPRPC_LIVE_BLOG_STATIC_ROOT;
     const std::filesystem::path runtime_root = NPRPC_LIVE_BLOG_RUNTIME_ROOT;
+    const std::string media_dir = NPRPC_LIVE_BLOG_MEDIA_ROOT;
+
+    std::filesystem::create_directories(runtime_root);
+    std::filesystem::create_directories(static_root);
+    std::filesystem::create_directories(media_dir);
 
     auto rpc = nprpc::RpcBuilder()
                    .set_log_level(nprpc::LogLevel::trace)
@@ -471,21 +569,26 @@ int main()
     auto* poa = rpc->create_poa().with_max_objects(32).with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent).build();
     const auto browser_flags = nprpc::ObjectActivationFlags::https | nprpc::ObjectActivationFlags::wss;
 
-    auto blog_id = poa->activate_object(new BlogServiceImpl(repository), browser_flags);
-    auto chat_id = poa->activate_object(new ChatServiceImpl(), browser_flags);
+    auto blog_id  = poa->activate_object(new BlogServiceImpl(repository), browser_flags);
+    auto chat_id  = poa->activate_object(new ChatServiceImpl(), browser_flags);
+    auto media_id = poa->activate_object(new MediaServiceImpl(media_dir), browser_flags);
 
     rpc->clear_host_json();
-    rpc->add_to_host_json("blog", blog_id);
-    rpc->add_to_host_json("chat", chat_id);
+    rpc->add_to_host_json("blog",  blog_id);
+    rpc->add_to_host_json("chat",  chat_id);
+    rpc->add_to_host_json("media", media_id);
     const auto host_json_path = rpc->produce_host_json();
 
     boost::asio::signal_set signals(rpc->ioc(), SIGINT, SIGTERM);
     signals.async_wait([&](const boost::system::error_code&, int) { rpc->ioc().stop(); });
 
     std::cout << "Starting live-blog C++ server on https://localhost:8443\n";
-    std::cout << "Static root: " << static_root << "\n";
+    std::cout << "Static root:      " << static_root << "\n";
     std::cout << "SSR handler root: " << runtime_root << "\n";
-    std::cout << "host.json: " << host_json_path << std::endl;
+    std::cout << "Media dir:        " << media_dir << "  (place post-<id>.fmp4 files here)\n";
+    std::cout << "host.json:        " << host_json_path << "\n";
+    std::cout << "Objects:          blog, chat, media\n";
+    std::cout << "Mock post count:  " << repository.post_count() << std::endl;
 
     rpc->run();
     rpc->destroy();
