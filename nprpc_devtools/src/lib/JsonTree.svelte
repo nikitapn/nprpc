@@ -16,14 +16,17 @@
 
   function toggle() { expanded = !expanded; }
 
-  const isObj   = (v: unknown): v is Record<string, unknown> =>
+  const isObj    = (v: unknown): v is Record<string, unknown> =>
     v !== null && typeof v === 'object' && !Array.isArray(v);
-  const isArr   = (v: unknown): v is unknown[] => Array.isArray(v);
-  const isStr   = (v: unknown): v is string  => typeof v === 'string';
-  const isNum   = (v: unknown): v is number  => typeof v === 'number';
-  const isBool  = (v: unknown): v is boolean => typeof v === 'boolean';
-  const isNull  = (v: unknown)               => v === null;
-  const isUndef = (v: unknown)               => v === undefined;
+  const isArr    = (v: unknown): v is unknown[] => Array.isArray(v);
+  const isStr    = (v: unknown): v is string  => typeof v === 'string';
+  const isNum    = (v: unknown): v is number  => typeof v === 'number';
+  const isBool   = (v: unknown): v is boolean => typeof v === 'boolean';
+  const isNull   = (v: unknown)               => v === null;
+  const isUndef  = (v: unknown)               => v === undefined;
+  // Tagged sentinel produced by inject.js sanitize() for BigInt values.
+  const isBigInt = (v: unknown): v is { __bigint__: string } =>
+    isObj(v) && '__bigint__' in (v as object) && Object.keys(v as object).length === 1;
 
   function childKeys(v: unknown): string[] {
     if (isArr(v))  return v.map((_, i) => String(i));
@@ -37,7 +40,7 @@
   }
 
   $: keys  = childKeys(value);
-  $: isContainer = isArr(value) || isObj(value);
+  $: isContainer = (isArr(value) || isObj(value)) && !isBigInt(value);
   $: previewBracket = isArr(value) ? '[' : '{';
   $: closeBracket   = isArr(value) ? ']' : '}';
   $: previewItems   = isContainer && keys.length > 0
@@ -91,6 +94,8 @@
     {/if}
 
   <!-- primitive types -->
+  {:else if isBigInt(value)}
+    <span class="bigint">{(value as { __bigint__: string }).__bigint__}n</span>
   {:else if isStr(value)}
     <span class="string">"{value}"</span>
   {:else if isNum(value)}
@@ -117,6 +122,7 @@
   .key    { color: #9cdcfe; }
   .string { color: #ce9178; }
   .number { color: #b5cea8; }
+  .bigint { color: #b5cea8; font-style: italic; }
   .boolean{ color: #569cd6; }
   .null   { color: #808080; font-style: italic; }
   .other  { color: #e8eaed; }

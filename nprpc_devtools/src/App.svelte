@@ -1,18 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { RpcEventWithKey, DebugMsg } from './types';
+  import type { RpcEvent, DebugMsg } from './types';
   import EventList   from './lib/EventList.svelte';
   import EventDetail from './lib/EventDetail.svelte';
 
   // ── State ────────────────────────────────────────────────────────
-  let events   : RpcEventWithKey[]   = [];
-  let selected : RpcEventWithKey | null = null;
+  let events   : RpcEvent[]   = [];
+  let selected : RpcEvent | null = null;
   let filter   : string = '';
   let recording: boolean = true;
-  let seq      : number = 0;
+  let nextId   : number = 0;
+  let seq      : number = 0; // 1-based display sequence number (reset on Clear)
 
   // Pending events keyed by id (status=pending, awaiting call_end).
-  const pending = new Map<number, RpcEventWithKey>();
+  const pending = new Map<number, RpcEvent>();
 
   // ── Direct connection to content script (no background SW) ─────────
   onMount(() => {
@@ -23,16 +24,18 @@
       if (!recording) return;
 
       if (msg.type === 'nprpc_call_start') {
-        const ev: RpcEventWithKey = { ...msg.data, seq: ++seq, key: (msg.data.id | (seq << 16)) };
-        pending.set(ev.key, ev);
+        const ev: RpcEvent = { ...msg.data, seq: ++seq };
+        pending.set(ev.id, ev);
         events = [...events, ev];
+        nextId = nextId + 1;
       } else if (msg.type === 'nprpc_call_end') {
-        const ev = pending.get(msg.data.id | (seq << 16));
+        const ev = pending.get(msg.data.id);
         if (ev) {
           Object.assign(ev, msg.data);
-          pending.delete(ev.key);
+          pending.delete(ev.id);
           events = [...events]; // trigger reactivity
-          if (selected?.key === ev.key) selected = ev;
+          if (selected && selected.id === ev.id)
+            selected = ev;
         }
       }
     };
@@ -46,6 +49,7 @@
         pending.clear();   // drop any calls that were in-flight before reload
         setTimeout(connect, 500);
       });
+      port.postMessage({ type: 'nprpc_devtools_setup', nextId });
     };
 
     connect();

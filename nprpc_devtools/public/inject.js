@@ -19,9 +19,23 @@
 
   let nextId = 1;
 
+  // Structured-clone (used by postMessage) rejects BigInt values.
+  // Tag them as { __bigint__: "<value>" } so the DevTools panel can
+  // reconstruct the correct type and display them as  101n.
+  function sanitize(v) {
+    if (typeof v === 'bigint') return { __bigint__: String(v) };
+    if (Array.isArray(v)) return v.map(sanitize);
+    if (v !== null && typeof v === 'object') {
+      const out = {};
+      for (const k of Object.keys(v)) out[k] = sanitize(v[k]);
+      return out;
+    }
+    return v;
+  }
+
   function dispatch(type, data) {
     window.dispatchEvent(
-      new CustomEvent('__nprpc_debug_event__', { detail: { type, data } })
+      new CustomEvent('__nprpc_debug_event__', { detail: { type, data: sanitize(data) } })
     );
   }
 
