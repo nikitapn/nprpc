@@ -563,7 +563,7 @@ export class Rpc {
     if (info.webtransport == undefined) info.webtransport = false;
 
     host_info.secured = info.secured;
-    host_info.webtransport = false; //info.webtransport;
+    host_info.webtransport = info.webtransport;
     host_info.webtransport_options = info.webtransport_options;
 
     for (let key of Object.keys(info.objects)) {

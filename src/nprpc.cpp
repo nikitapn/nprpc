@@ -3,19 +3,41 @@
 
 #include <boost/uuid/uuid_io.hpp>
 #include <iomanip>
+#include <mutex>
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/uuid.hpp>
 #include <sstream>
 
+#include <nprpc/impl/build_info.hpp>
 #include "logging.hpp"
 
 using namespace nprpc;
 
 namespace nprpc {
 
+namespace {
+
+void log_build_info_once()
+{
+  static std::once_flag once;
+  std::call_once(once, [] {
+    NPRPC_LOG_INFO("nprpc version {} commit {}", impl::build_info::project_version,
+                   impl::build_info::project_commit);
+
+    for (const auto& dependency : impl::build_info::third_party_dependencies) {
+      NPRPC_LOG_INFO("third-party {} commit {}", dependency.name,
+                     dependency.commit);
+    }
+  });
+}
+
+} // namespace
+
 NPRPC_API RpcBuilder::RpcBuilder()
     : impl::RpcBuilderBase(cfg_)
 {
+  log_build_info_once();
+
   auto& uuid = impl::SharedUUID::instance().get();
   memcpy(cfg_.uuid.data(), &uuid, 16);
 

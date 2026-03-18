@@ -90,6 +90,7 @@ endif()
 # Find dependencies
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(Git QUIET)
 
 # Find liburing via pkg-config (required for io_uring support in Boost.Asio)
 find_package(PkgConfig REQUIRED)
@@ -157,6 +158,30 @@ endif()
 if(NPRPC_BUILD_TOOLS)
   add_subdirectory(npidl)
 endif()
+
+file(GLOB NPRPC_THIRD_PARTY_CHILDREN RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/third_party ${CMAKE_CURRENT_SOURCE_DIR}/third_party/*)
+set(NPRPC_THIRD_PARTY_DIRS)
+foreach(child IN LISTS NPRPC_THIRD_PARTY_CHILDREN)
+  if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/third_party/${child}")
+    list(APPEND NPRPC_THIRD_PARTY_DIRS "${child}")
+  endif()
+endforeach()
+list(SORT NPRPC_THIRD_PARTY_DIRS)
+
+set(NPRPC_BUILD_INFO_HEADER ${CMAKE_CURRENT_BINARY_DIR}/include/nprpc/impl/build_info.hpp)
+
+add_custom_target(nprpc_build_info_gen
+  COMMAND ${CMAKE_COMMAND}
+    "-DROOT_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+    "-DOUTPUT_FILE=${NPRPC_BUILD_INFO_HEADER}"
+    "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+    "-DPROJECT_VERSION=${PROJECT_VERSION}"
+    "-DTHIRD_PARTY_DIRS=${NPRPC_THIRD_PARTY_DIRS}"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_build_info.cmake
+  BYPRODUCTS ${NPRPC_BUILD_INFO_HEADER}
+  COMMENT "Generating NPRPC build info header"
+  VERBATIM
+)
 
 # Include IDL generation functions
 include(cmake/npidl.cmake)
@@ -256,6 +281,7 @@ add_library(nprpc
   include/nprpc/impl/session.hpp
   include/nprpc/impl/quic_transport.hpp
   include/nprpc/impl/http3_server.hpp
+  ${NPRPC_BUILD_INFO_HEADER}
   include/nprpc/impl/uuid.hpp
   include/nprpc/impl/websocket_session.hpp
   include/nprpc/impl/stream_manager.hpp
@@ -277,6 +303,8 @@ endif()
 
 # Add alias for namespaced target (modern CMake practice)
 add_library(nprpc::nprpc ALIAS nprpc)
+
+add_dependencies(nprpc nprpc_build_info_gen)
 
 # Set target properties
 set_target_properties(nprpc PROPERTIES

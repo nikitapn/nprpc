@@ -7,12 +7,6 @@ cd "$(dirname "$0")"
 echo "NPRPC JavaScript Test Runner"
 echo "============================"
 
-# Install dependencies if needed
-if [ ! -d "node_modules" ]; then
-    echo "Installing dependencies..."
-    npm install
-fi
-
 # Build the TypeScript code
 echo "Building TypeScript code..."
 npm run build
