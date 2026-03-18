@@ -184,13 +184,13 @@ export interface PresenceEvent {
 
 export function marshal_PresenceEvent(buf: NPRPC.FlatBuffer, offset: number, data: PresenceEvent): void {
 NPRPC.marshal_string(buf, offset + 0, data.user_name);
-buf.dv.setInt32(offset + 8, data.kind, true);
+buf.dv.setUint32(offset + 8, data.kind, true);
 }
 
 export function unmarshal_PresenceEvent(buf: NPRPC.FlatBuffer, offset: number): PresenceEvent {
 const result = {} as PresenceEvent;
 result.user_name = NPRPC.unmarshal_string(buf, offset + 0);
-result.kind = buf.dv.getInt32(offset + 8, true);
+result.kind = buf.dv.getUint32(offset + 8, true);
 return result;
 }
 

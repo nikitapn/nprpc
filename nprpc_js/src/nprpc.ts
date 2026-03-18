@@ -35,6 +35,7 @@ export let rpc: Rpc;
 let host_info: HostInfo = {secured: false, webtransport: false, objects: {}};
 
 let gLogLevel: LogLevel = LogLevel.error;
+const isBrowser = typeof window !== "undefined";
 
 export class EndPoint {
   constructor(
@@ -568,7 +569,7 @@ export class Rpc {
     for (let key of Object.keys(info.objects)) {
       try {
         const obj = info.objects[key] = new ObjectProxy(info.objects[key]);
-        obj.select_endpoint();
+        obj.select_endpoint(isBrowser ? { hostname: window.location.hostname } : undefined);
       } catch (e) {
         console.error("Error creating ObjectProxy for key: " + key, e);
         delete info.objects[key];
@@ -721,7 +722,7 @@ export class ObjectProxy {
     if (this.endpoint_ !== undefined)
       return this.endpoint_;
 
-    this.select_endpoint();
+    this.select_endpoint(isBrowser ? { hostname: window.location.hostname } : undefined);
     return this.endpoint_;
   }
 
@@ -769,7 +770,7 @@ export class ObjectProxy {
     return 0;
   }
 
-  public select_endpoint(remote_endpoint?: EndPoint): void {
+  public select_endpoint(remote_endpoint?: {hostname: string}): void {
     const oid = this.data;
     const urls = oid.urls.split(";");
 
@@ -797,7 +798,7 @@ export class ObjectProxy {
       return;
 
     // if remote_endpoint is provided, use it to override the hostname
-    if (this.endpoint_.hostname === "localhost" || 
+    if (this.endpoint_.hostname === "localhost" ||
       this.endpoint_.hostname === "127.0.0.1")
     {
       this.endpoint_.hostname = remote_endpoint.hostname;

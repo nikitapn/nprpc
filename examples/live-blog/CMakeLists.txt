@@ -15,6 +15,7 @@ set(LIVE_BLOG_GEN_SCRIPT ${LIVE_BLOG_ROOT}/scripts/gen_stubs.py)
 set(LIVE_BLOG_BUILD_SCRIPT ${LIVE_BLOG_ROOT}/scripts/build-swift-server.sh)
 set(LIVE_BLOG_RUN_SCRIPT ${LIVE_BLOG_ROOT}/scripts/run-swift-server.sh)
 set(LIVE_BLOG_CLIENT_ROOT ${LIVE_BLOG_ROOT}/client)
+set(LIVE_BLOG_CLIENT_WORKSPACE examples/live-blog/client)
 set(LIVE_BLOG_CPP_ROOT ${LIVE_BLOG_ROOT}/cpp)
 set(LIVE_BLOG_CPP_STATIC_ROOT ${LIVE_BLOG_CLIENT_ROOT}/build/client)
 set(LIVE_BLOG_CPP_RUNTIME_ROOT ${LIVE_BLOG_CLIENT_ROOT}/build)
@@ -38,7 +39,7 @@ add_custom_target(live_blog_stubs
 )
 
 add_custom_target(live_blog_client_deps
-  COMMAND ${NPM_EXECUTABLE} ls --workspace live-blog-client --depth=0 vite @sveltejs/kit @nprpc/vite-plugin @nprpc/adapter-sveltekit
+  COMMAND ${NPM_EXECUTABLE} ls --workspace ${LIVE_BLOG_CLIENT_WORKSPACE} --depth=0 vite @sveltejs/kit @tailwindcss/vite @nprpc/vite-plugin @nprpc/adapter-sveltekit
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   DEPENDS
     ${CMAKE_SOURCE_DIR}/package.json
@@ -53,8 +54,8 @@ add_custom_target(live_blog_client_deps
 )
 
 add_custom_target(live_blog_client
-  COMMAND ${NPM_EXECUTABLE} run build
-  WORKING_DIRECTORY ${LIVE_BLOG_CLIENT_ROOT}
+  COMMAND ${NPM_EXECUTABLE} run build --workspace ${LIVE_BLOG_CLIENT_WORKSPACE}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   DEPENDS
     live_blog_client_deps
     live_blog_stubs

@@ -225,8 +225,7 @@ static std::string_view fundamental_to_ts(TokenId id)
   case TokenId::UInt64:
     return "bigint"sv;
   default:
-    assert(false);
-    return ""sv;
+    throw std::runtime_error("Unknown fundamental type");
   }
 }
 
@@ -257,7 +256,7 @@ static std::string_view fundamental_kind_literal(TokenId id)
   case TokenId::Float64:
     return "'f64'"sv;
   default:
-    assert(false);
+    throw std::runtime_error("Unknown fundamental type");
   }
 }
 
@@ -2386,10 +2385,46 @@ void TSBuilder::emit_field_marshal(AstFieldDecl* f,
     break;
   }
   case FieldType::Enum: {
-    const int size = get_fundamental_size(cft(f->type)->token_id);
+    const auto token = cenum(f->type)->token_id;
+    const int size = get_fundamental_size(token);
     const int field_offset = align_offset(size, offset, size);
-    out << bl() << "buf.dv.setInt32(offset + " << field_offset << ", "
-        << field_access << ", true);\n";
+
+    switch (token) {
+    case TokenId::Int8:
+      out << bl() << "buf.dv.setInt8(offset + " << field_offset << ", "
+          << field_access << ");\n";
+      break;
+    case TokenId::UInt8:
+      out << bl() << "buf.dv.setUint8(offset + " << field_offset << ", "
+          << field_access << ");\n";
+      break;
+    case TokenId::Int16:
+      out << bl() << "buf.dv.setInt16(offset + " << field_offset << ", "
+          << field_access << ", true);\n";
+      break;
+    case TokenId::UInt16:
+      out << bl() << "buf.dv.setUint16(offset + " << field_offset << ", "
+          << field_access << ", true);\n";
+      break;
+    case TokenId::Int32:
+      out << bl() << "buf.dv.setInt32(offset + " << field_offset << ", "
+          << field_access << ", true);\n";
+      break;
+    case TokenId::UInt32:
+      out << bl() << "buf.dv.setUint32(offset + " << field_offset << ", "
+          << field_access << ", true);\n";
+      break;
+    case TokenId::Int64:
+      out << bl() << "buf.dv.setBigInt64(offset + " << field_offset << ", "
+          << field_access << ", true);\n";
+      break;
+    case TokenId::UInt64:
+      out << bl() << "buf.dv.setBigUint64(offset + " << field_offset << ", "
+          << field_access << ", true);\n";
+      break;
+    default:
+      assert(false);
+    }
     break;
   }
   case FieldType::String: {
@@ -2650,10 +2685,46 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
     break;
   }
   case FieldType::Enum: {
-    const int size = get_fundamental_size(cft(f->type)->token_id);
+    const auto token = cenum(f->type)->token_id;
+    const int size = get_fundamental_size(token);
     const int field_offset = align_offset(size, offset, size);
-    out << bl() << field_name << " = buf.dv.getInt32(offset + " << field_offset
-        << ", true);\n";
+
+    switch (token) {
+    case TokenId::Int8:
+      out << bl() << field_name << " = buf.dv.getInt8(offset + " << field_offset
+          << ");\n";
+      break;
+    case TokenId::UInt8:
+      out << bl() << field_name << " = buf.dv.getUint8(offset + " << field_offset
+          << ");\n";
+      break;
+    case TokenId::Int16:
+      out << bl() << field_name << " = buf.dv.getInt16(offset + " << field_offset
+          << ", true);\n";
+      break;
+    case TokenId::UInt16:
+      out << bl() << field_name << " = buf.dv.getUint16(offset + " << field_offset
+          << ", true);\n";
+      break;
+    case TokenId::Int32:
+      out << bl() << field_name << " = buf.dv.getInt32(offset + " << field_offset
+          << ", true);\n";
+      break;
+    case TokenId::UInt32:
+      out << bl() << field_name << " = buf.dv.getUint32(offset + " << field_offset
+          << ", true);\n";
+      break;
+    case TokenId::Int64:
+      out << bl() << field_name << " = buf.dv.getBigInt64(offset + " << field_offset
+          << ", true);\n";
+      break;
+    case TokenId::UInt64:
+      out << bl() << field_name << " = buf.dv.getBigUint64(offset + " << field_offset
+          << ", true);\n";
+      break;
+    default:
+      assert(false);
+    }
     break;
   }
   case FieldType::String: {
