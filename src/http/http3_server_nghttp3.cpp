@@ -210,6 +210,7 @@ public:
   int on_write();
   int handle_expiry();
   void schedule_timer();
+  void enqueue_packet(std::vector<uint8_t>&& data, ngtcp2_pkt_info pi);
 
   const ngtcp2_cid& scid() const { return scid_; }
   const boost::asio::ip::udp::endpoint& remote_endpoint() const
@@ -450,6 +451,7 @@ private:
   boost::asio::ip::udp::socket& socket_;
   boost::asio::ip::udp::endpoint local_ep_;
   boost::asio::ip::udp::endpoint remote_ep_;
+  boost::asio::strand<boost::asio::io_context::executor_type> strand_;
   boost::asio::steady_timer timer_;
 
   ngtcp2_conn* conn_ = nullptr;
@@ -715,6 +717,7 @@ Http3Connection::Http3Connection(
     , socket_(socket)
     , local_ep_(local_ep)
     , remote_ep_(remote_ep)
+    , strand_(boost::asio::make_strand(server->io_context()))
     , timer_(server->io_context())
     , ssl_ctx_(ssl_ctx)
     , version_(version)
@@ -1039,7 +1042,6 @@ int Http3Connection::on_write()
 
   NPRPC_HTTP3_TRACE("on_write called");
 
-  auto ts = timestamp_ns();
   ngtcp2_path_storage ps;
   ngtcp2_pkt_info pi;
 
@@ -1094,6 +1096,7 @@ int Http3Connection::on_write()
                       "stream_id={}, sveccnt={}",
                       stream_id, sveccnt);
 
+    auto ts = timestamp_ns();
     auto nwrite = ngtcp2_conn_writev_stream(
         conn_, &ps.path, &pi, send_buf_.data(), MAX_UDP_PAYLOAD_SIZE, &ndatalen,
       flags, stream_id,
@@ -1215,10 +1218,25 @@ int Http3Connection::on_write()
                          static_cast<size_t>(nwrite));
   }
 
-  ngtcp2_conn_update_pkt_tx_time(conn_, ts);
+  ngtcp2_conn_update_pkt_tx_time(conn_, timestamp_ns());
   schedule_timer();
 
   return 0;
+}
+
+void Http3Connection::enqueue_packet(std::vector<uint8_t>&& data,
+                                     ngtcp2_pkt_info pi)
+{
+  boost::asio::post(
+      strand_, [self = shared_from_this(), packet = std::move(data), pi]() {
+        if (self->closed_) {
+          return;
+        }
+
+        if (self->on_read(packet.data(), packet.size(), &pi) == 0) {
+          self->on_write();
+        }
+      });
 }
 
 int Http3Connection::handle_expiry()
@@ -1241,7 +1259,7 @@ void Http3Connection::schedule_timer()
 
   if (expiry <= now) {
     // Already expired, handle immediately
-    boost::asio::post(server_->io_context(), [self = shared_from_this()]() {
+    boost::asio::post(strand_, [self = shared_from_this()]() {
       if (!self->closed_) {
         self->handle_expiry();
         self->on_write();
@@ -1252,18 +1270,19 @@ void Http3Connection::schedule_timer()
 
   auto timeout = std::chrono::nanoseconds(expiry - now);
   timer_.expires_after(timeout);
-  timer_.async_wait([self = shared_from_this()](boost::system::error_code ec) {
-    if (ec || self->closed_) {
-      return;
-    }
-    self->handle_expiry();
-    self->on_write();
-  });
+  timer_.async_wait(boost::asio::bind_executor(
+      strand_, [self = shared_from_this()](boost::system::error_code ec) {
+        if (ec || self->closed_) {
+          return;
+        }
+        self->handle_expiry();
+        self->on_write();
+      }));
 }
 
 void Http3Connection::signal_write()
 {
-  boost::asio::post(server_->io_context(), [self = shared_from_this()]() {
+  boost::asio::post(strand_, [self = shared_from_this()]() {
     if (!self->closed_) {
       self->on_write();
     }
@@ -2114,17 +2133,20 @@ int Http3Connection::handle_webtransport_stream_data(Http3Stream* stream,
 void Http3Connection::queue_raw_stream_write(int64_t stream_id,
                                              std::vector<uint8_t>&& data)
 {
-  auto* stream = find_stream(stream_id);
-  if (!stream) {
-    stream = create_stream(stream_id);
-  }
+  boost::asio::post(
+      strand_, [self = shared_from_this(), stream_id, data = std::move(data)]() mutable {
+        auto* stream = self->find_stream(stream_id);
+        if (!stream) {
+          stream = self->create_stream(stream_id);
+        }
 
-  // std::cerr << "[HTTP/3][WT] queue_raw_stream_write stream_id=" << stream_id
-  //           << " bytes=" << data.size()
-  //           << " queued_before=" << stream->raw_write_queue.size() << std::endl;
+        // std::cerr << "[HTTP/3][WT] queue_raw_stream_write stream_id=" << stream_id
+        //           << " bytes=" << data.size()
+        //           << " queued_before=" << stream->raw_write_queue.size() << std::endl;
 
-  stream->raw_write_queue.emplace_back(std::move(data));
-  signal_write();
+        stream->raw_write_queue.emplace_back(std::move(data));
+        self->signal_write();
+      });
 }
 
 int Http3Connection::send_dynamic_response(Http3Stream* stream,
@@ -2903,9 +2925,7 @@ void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
   if (conn) {
     // Existing connection - feed data
     ngtcp2_pkt_info pi{};
-    if (conn->on_read(data, len, &pi) == 0) {
-      conn->on_write();
-    }
+    conn->enqueue_packet(std::vector<uint8_t>(data, data + len), pi);
     return;
   }
 
@@ -2959,9 +2979,7 @@ void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
 
   // Feed the initial packet
   ngtcp2_pkt_info pi{};
-  if (conn->on_read(data, len, &pi) == 0) {
-    conn->on_write();
-  }
+  conn->enqueue_packet(std::vector<uint8_t>(data, data + len), pi);
 }
 
 int Http3Server::send_version_negotiation(

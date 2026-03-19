@@ -157,7 +157,7 @@ COPY . .
 RUN swift build -c release
 
 # Runtime stage - minimal image
-FROM swift:6.2.3-slim
+FROM swift:6.2.4-slim
 
 # Copy only runtime dependencies
 COPY --from=builder /opt/nprpc/lib/libnprpc.so* /usr/local/lib/

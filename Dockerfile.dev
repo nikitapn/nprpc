@@ -4,7 +4,7 @@
 # ============================================================================
 # Stage 1: Build Boost
 # ============================================================================
-FROM swift:6.2.3 AS boost-builder
+FROM swift:6.2.4 AS boost-builder
 
 RUN apt-get update && apt-get install -y \
     wget \
@@ -44,7 +44,7 @@ RUN ./b2 --user-config=user-config.jam \
 # ============================================================================
 # Stage 2: Build OpenSSL 3.6.1 with QUIC support (SSL_set_quic_tls_cbs)
 # ============================================================================
-FROM swift:6.2.3 AS openssl-builder
+FROM swift:6.2.4 AS openssl-builder
 
 RUN apt-get update && apt-get install -y \
     wget \
@@ -70,12 +70,13 @@ RUN cd openssl-3.6.1 && \
 # ============================================================================
 # Stage 2: Build NPRPC C++
 # ============================================================================
-FROM swift:6.2.3 AS nprpc-builder
+FROM swift:6.2.4 AS nprpc-builder
 
 RUN apt-get update && apt-get install -y \
     cmake \
     ninja-build \
     build-essential \
+    git \
     liburing-dev \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
@@ -140,7 +141,7 @@ RUN ar rcs /opt/nprpc/lib/libCNprpc.a \
 # ============================================================================
 # Stage 4: Final runtime image with all artifacts
 # ============================================================================
-FROM swift:6.2.3
+FROM swift:6.2.4
 
 LABEL org.opencontainers.image.title="NPRPC Development Image"
 LABEL org.opencontainers.image.description="Swift 6.2.3 with NPRPC C++ and Swift bindings"
@@ -199,7 +200,7 @@ Libs: -L/opt/nprpc/lib -L/opt/boost/lib -L/opt/openssl/lib -lCNprpc -lnprpc -lss
 EOF
 
 # ---------------------------------------------------------------------------
-# swift:6.2.3 already ships an 'ubuntu' user at UID/GID 1000.
+# swift:6.2.4 already ships an 'ubuntu' user at UID/GID 1000.
 # Make /opt trees group-readable and give ubuntu ownership of /project so
 # `docker run --user $(id -u):$(id -g)` writes .build/ files as the host user.
 # ---------------------------------------------------------------------------

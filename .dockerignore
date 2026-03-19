@@ -13,7 +13,6 @@ build/
 .DS_Store
 
 # Git
-.git/
 .gitignore
 
 # Test outputs

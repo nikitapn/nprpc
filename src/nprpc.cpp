@@ -262,6 +262,7 @@ bool ReferenceList::remove_ref(poa_idx_t poa_idx, oid_t oid)
 
 Poa* PoaBuilder::build()
 {
+  log_build_info_once();
   return static_cast<impl::RpcImpl*>(rpc_)->create_poa_impl(
       objects_max_, lifespan_policy_, object_id_policy_);
 }
