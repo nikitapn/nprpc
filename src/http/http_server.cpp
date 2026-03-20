@@ -14,7 +14,6 @@
 
 #include <format>
 #include <queue>
-#include <sstream>
 #include <vector>
 
 #include "../logging.hpp"

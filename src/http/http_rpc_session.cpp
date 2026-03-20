@@ -13,26 +13,43 @@ bool HttpRpcSession::process_rpc_request(const std::string& request_data,
                                          std::string_view cookies,
                                          std::vector<std::string>* out_set_cookies)
 {
+  flat_buffer request_buffer(request_data.empty() ? flat_buffer::default_initial_size()
+                                                  : request_data.size());
+  if (!request_data.empty()) {
+    auto writable = request_buffer.prepare(request_data.size());
+    std::memcpy(writable.data(), request_data.data(), request_data.size());
+    request_buffer.commit(request_data.size());
+  }
+
+  flat_buffer response_buffer;
+  if (!process_rpc_request(std::move(request_buffer), response_buffer, cookies,
+                           out_set_cookies)) {
+    return false;
+  }
+
+  auto response_span = response_buffer.cdata();
+  response_data.assign(static_cast<const char*>(response_span.data()),
+                       response_span.size());
+  return true;
+}
+
+bool HttpRpcSession::process_rpc_request(flat_buffer&& request_data,
+                                         flat_buffer& response_data,
+                                         std::string_view cookies,
+                                         std::vector<std::string>* out_set_cookies)
+{
   try {
     // Populate incoming cookies so servants can call nprpc::http::get_cookie()
     ctx_.cookies = cookies;
+    ctx_.set_cookies.clear();
 
-    // FIXME: Avoid copy
-    // Clear previous buffer
-    rx_buffer_.consume(rx_buffer_.size());
-
-    // Copy request data into rx_buffer
-    auto mb = rx_buffer_.prepare(request_data.size());
-    std::memcpy(mb.data(), request_data.data(), request_data.size());
-    rx_buffer_.commit(request_data.size());
+    rx_buffer_ = std::move(request_data);
+    tx_buffer_.clear();
 
     // Dispatch the RPC call
     handle_request(rx_buffer_, tx_buffer_);
 
-    // Extract response
-    auto response_span = tx_buffer_.cdata();
-    response_data.assign(static_cast<const char*>(response_span.data()),
-                         response_span.size());
+    response_data = std::move(tx_buffer_);
 
     // Forward any Set-Cookie headers queued by the servant
     if (out_set_cookies && !ctx_.set_cookies.empty())

@@ -54,6 +54,10 @@ public:
                            std::string& response_data,
                            std::string_view cookies = {},
                            std::vector<std::string>* out_set_cookies = nullptr);
+  bool process_rpc_request(flat_buffer&& request_data,
+                           flat_buffer& response_data,
+                           std::string_view cookies = {},
+                           std::vector<std::string>* out_set_cookies = nullptr);
 
   // HTTP sessions don't support async operations - these should never be
   // called
@@ -97,6 +101,17 @@ inline bool process_http_rpc(boost::asio::io_context& ioc,
 {
   auto session = std::make_shared<HttpRpcSession>(ioc);
   return session->process_rpc_request(request_body, response_body, cookies, out_set_cookies);
+}
+
+inline bool process_http_rpc(boost::asio::io_context& ioc,
+                             flat_buffer&& request_body,
+                             flat_buffer& response_body,
+                             std::string_view cookies = {},
+                             std::vector<std::string>* out_set_cookies = nullptr)
+{
+  auto session = std::make_shared<HttpRpcSession>(ioc);
+  return session->process_rpc_request(std::move(request_body), response_body,
+                                      cookies, out_set_cookies);
 }
 
 } // namespace nprpc::impl
