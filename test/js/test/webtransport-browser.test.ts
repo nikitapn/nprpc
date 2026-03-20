@@ -119,6 +119,7 @@ describe('WebTransport Browser Transport', function() {
         // you'll need to pass in --ignore-certificate-errors-spki-list=.. with the
         // certificate's SPKI to allow Chrome/Chromium to accept your custom certificate as valid.
         // https://www.chromium.org/quic/playing-with-quic/
+        '--ignore-certificate-errors',
         `--ignore-certificate-errors-spki-list=${certificateSpki}`,
         '--origin-to-force-quic-on=localhost:22223',
       ],
