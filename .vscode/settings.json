@@ -113,6 +113,7 @@
     "/^cmake --build \\.build_relwith_debinfo --target nprpc_test -j\\$\\(nproc\\)$/": {
       "approve": true,
       "matchCommandLine": true
-    }
+    },
+    "npx mocha": true
   },
 }

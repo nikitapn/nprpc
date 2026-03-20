@@ -2,6 +2,7 @@ import fs from 'fs';
 import https from 'https';
 import path from 'path';
 import { createHash, X509Certificate } from 'crypto';
+import { execFileSync } from 'child_process';
 
 import { Browser, chromium } from 'playwright-core';
 import { describe, it, before, after } from 'mocha';
@@ -25,6 +26,32 @@ function getServerCertificateSpki(certPath: string): string {
   return createHash('sha256').update(spki).digest('base64');
 }
 
+function ensureValidServerCertificate(certPath: string, keyPath: string): void {
+  const certDir = path.resolve(path.dirname(certPath), '..');
+
+  const needsRefresh = (() => {
+    if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
+      return true;
+    }
+
+    try {
+      const certificate = new X509Certificate(fs.readFileSync(certPath));
+      return Date.parse(certificate.validTo) <= Date.now();
+    } catch {
+      return true;
+    }
+  })();
+
+  if (!needsRefresh) {
+    return;
+  }
+
+  execFileSync('bash', ['create.sh'], {
+    cwd: certDir,
+    stdio: 'inherit',
+  });
+}
+
 describe('WebTransport Browser Transport', function() {
   this.timeout(60000);
 
@@ -44,6 +71,8 @@ describe('WebTransport Browser Transport', function() {
     if (!fs.existsSync(chromiumExecutable)) {
       this.skip();
     }
+
+    ensureValidServerCertificate(certificatePath, certificateKeyPath);
 
     if (!fs.existsSync(browserBundlePath)) {
       throw new Error(`Browser test bundle not found: ${browserBundlePath}`);

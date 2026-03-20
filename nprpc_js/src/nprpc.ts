@@ -24,6 +24,8 @@ import { Exception } from "./base";
 const header_size = 16;
 const invalid_object_id = 0xFFFFFFFFFFFFFFFFn;
 const localhost_ip4 = 0x7F000001;
+const webtransport_bind_control = 0;
+const webtransport_bind_native_stream = 1;
 
 const u8enc = new TextEncoder();
 const u8dec = new TextDecoder();
@@ -122,6 +124,11 @@ interface PendingRequest {
   promise: MyPromise<void, Error>;
 }
 
+interface WebTransportStreamState {
+  writer: any;
+  receive_buffer: Uint8Array<ArrayBufferLike>;
+}
+
 function get_object(buffer: FlatBuffer, poa_idx: poa_idx_t, object_id: bigint) {
   do {
     let poa = rpc.get_poa(poa_idx);
@@ -151,7 +158,9 @@ export class Connection {
   next_request_id: number;
   stream_manager: StreamManager;
   ready_: Promise<void>;
-  private wt_receive_buffer = new Uint8Array(0);
+  private wt_receive_buffer: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+  private wt_native_streams = new Map<bigint, WebTransportStreamState>();
+  private wt_native_stream_opens = new Map<bigint, Promise<void>>();
 
   private async perform_request(request_id: number, buffer: FlatBuffer) {
     // Inject request ID into the message header
@@ -168,6 +177,24 @@ export class Connection {
     }
 
     this.ws.send(payload);
+  }
+
+  private async send_native_stream_payload(stream_id: bigint,
+                                           payload: ArrayBufferView) {
+    await this.ready_;
+
+    if (this.endpoint.type !== EndPointType.WebTransport) {
+      this.ws.send(payload);
+      return;
+    }
+
+    await this.ensure_native_stream(stream_id);
+    const state = this.wt_native_streams.get(stream_id);
+    if (!state) {
+      throw new Error(`Missing WebTransport stream for ${stream_id}`);
+    }
+
+    await state.writer.write(payload);
   }
 
   private on_open() {
@@ -220,7 +247,8 @@ export class Connection {
         }
         case impl.MessageId.StreamCompletion: {
           const msg = impl.unmarshal_StreamComplete(buf, header_size);
-          this.stream_manager.on_stream_complete(msg.stream_id);
+          this.stream_manager.on_stream_complete(msg.stream_id,
+                                                 msg.final_sequence);
           return;
         }
         case impl.MessageId.StreamError: {
@@ -331,46 +359,129 @@ export class Connection {
     this.handle_message(ev.data as ArrayBuffer);
   }
 
-  private append_webtransport_bytes(chunk: Uint8Array) {
-    const merged = new Uint8Array(this.wt_receive_buffer.length + chunk.length);
-    merged.set(this.wt_receive_buffer, 0);
-    merged.set(chunk, this.wt_receive_buffer.length);
-    this.wt_receive_buffer = merged;
+  private append_webtransport_bytes(
+    receive_buffer: Uint8Array<ArrayBufferLike>,
+    chunk: Uint8Array<ArrayBufferLike>,
+    on_packet: (packet: ArrayBuffer) => void,
+  ): Uint8Array<ArrayBufferLike> {
+    const merged = new Uint8Array(receive_buffer.length + chunk.length);
+    merged.set(receive_buffer, 0);
+    merged.set(chunk, receive_buffer.length);
+    receive_buffer = merged;
 
-    while (this.wt_receive_buffer.length >= 4) {
+    while (receive_buffer.length >= 4) {
       const dv = new DataView(
-        this.wt_receive_buffer.buffer,
-        this.wt_receive_buffer.byteOffset,
-        this.wt_receive_buffer.byteLength,
+        receive_buffer.buffer,
+        receive_buffer.byteOffset,
+        receive_buffer.byteLength,
       );
       const payload_len = dv.getUint32(0, true);
       const total_len = payload_len + 4;
-      if (this.wt_receive_buffer.length < total_len) {
+      if (receive_buffer.length < total_len) {
         break;
       }
 
-      const packet = this.wt_receive_buffer.slice(0, total_len);
-      this.handle_message(packet.buffer.slice(packet.byteOffset, packet.byteOffset + packet.byteLength));
-      this.wt_receive_buffer = this.wt_receive_buffer.slice(total_len);
+      const packet = receive_buffer.slice(0, total_len);
+      on_packet(packet.buffer.slice(packet.byteOffset,
+                                    packet.byteOffset + packet.byteLength));
+      receive_buffer = receive_buffer.slice(total_len);
+    }
+
+    return receive_buffer;
+  }
+
+  private async write_webtransport_bind_prefix(
+    writer: any,
+    kind: number,
+    stream_id?: bigint,
+  ) {
+    const prefix = new Uint8Array(kind === webtransport_bind_control ? 1 : 9);
+    prefix[0] = kind;
+    if (kind === webtransport_bind_native_stream) {
+      new DataView(prefix.buffer).setBigUint64(1, stream_id!, true);
+    }
+    await writer.write(prefix);
+  }
+
+  public async ensure_native_stream(stream_id: bigint): Promise<void> {
+    if (this.endpoint.type !== EndPointType.WebTransport) {
+      return;
+    }
+
+    if (this.wt_native_streams.has(stream_id)) {
+      return;
+    }
+
+    const pending = this.wt_native_stream_opens.get(stream_id);
+    if (pending) {
+      await pending;
+      return;
+    }
+
+    const opening = (async () => {
+      await this.ready_;
+
+      const bidi = await this.wt.createBidirectionalStream();
+      const writer = bidi.writable.getWriter();
+      this.wt_native_streams.set(stream_id, {
+        writer,
+        receive_buffer: new Uint8Array(0),
+      });
+
+      await this.write_webtransport_bind_prefix(writer,
+                                                webtransport_bind_native_stream,
+                                                stream_id);
+      void this.read_webtransport_stream(bidi.readable, stream_id);
+    })();
+
+    this.wt_native_stream_opens.set(stream_id, opening);
+    try {
+      await opening;
+    } finally {
+      this.wt_native_stream_opens.delete(stream_id);
     }
   }
 
-  private async read_webtransport_stream(readable: any) {
+  private async read_webtransport_stream(readable: any, stream_id?: bigint) {
     const reader = readable.getReader();
 
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-          this.on_close();
+          if (stream_id === undefined) {
+            this.on_close();
+          } else {
+            this.wt_native_streams.delete(stream_id);
+          }
           break;
         }
         if (value) {
-          this.append_webtransport_bytes(value);
+          if (stream_id === undefined) {
+            this.wt_receive_buffer = this.append_webtransport_bytes(
+              this.wt_receive_buffer,
+              value,
+              packet => this.handle_message(packet),
+            );
+          } else {
+            const state = this.wt_native_streams.get(stream_id);
+            if (!state) {
+              continue;
+            }
+            state.receive_buffer = this.append_webtransport_bytes(
+              state.receive_buffer,
+              value,
+              packet => this.handle_message(packet),
+            );
+          }
         }
       }
     } catch (_error) {
-      this.on_error(new Event("error"));
+      if (stream_id === undefined) {
+        this.on_error(new Event("error"));
+      } else {
+        this.wt_native_streams.delete(stream_id);
+      }
     } finally {
       reader.releaseLock?.();
     }
@@ -415,6 +526,8 @@ export class Connection {
     await this.wt.ready;
     const bidi = await this.wt.createBidirectionalStream();
     this.wt_writer = bidi.writable.getWriter();
+    await this.write_webtransport_bind_prefix(this.wt_writer,
+                                              webtransport_bind_control);
     void this.read_webtransport_stream(bidi.readable);
   }
 
@@ -424,6 +537,8 @@ export class Connection {
       pending_request.promise.set_exception(new Error("Connection closed") as any);
     }
     this.pending_requests.clear();
+    this.wt_native_streams.clear();
+    this.wt_native_stream_opens.clear();
     this.stream_manager.cancel_all();
   }
 
@@ -433,6 +548,8 @@ export class Connection {
       pending_request.promise.set_exception(new Error("Connection error") as any);
     }
     this.pending_requests.clear();
+    this.wt_native_streams.clear();
+    this.wt_native_stream_opens.clear();
     this.stream_manager.cancel_all();
   }
 
@@ -446,6 +563,8 @@ export class Connection {
       : this.init_websocket();
     this.stream_manager = new StreamManager(payload => {
       void this.send_payload(payload);
+    }, (stream_id, payload) => {
+      void this.send_native_stream_payload(stream_id, payload);
     });
   }
 }
@@ -499,6 +618,7 @@ export class Rpc {
       if (handle_standart_reply(buf) !== 0) {
         throw new Exception("Unexpected stream initialization reply");
       }
+      await conn.ensure_native_stream(stream_id);
       return reader;
     } catch (error) {
       reader.cancel();
@@ -519,6 +639,7 @@ export class Rpc {
     if (handle_standart_reply(buf) !== 0) {
       throw new Exception("Unexpected stream initialization reply");
     }
+    await conn.ensure_native_stream(stream_id);
     return writer;
   }
 
@@ -537,6 +658,7 @@ export class Rpc {
       if (handle_standart_reply(buf) !== 0) {
         throw new Exception("Unexpected stream initialization reply");
       }
+      await conn.ensure_native_stream(stream_id);
       return stream;
     } catch (error) {
       stream.reader.cancel();

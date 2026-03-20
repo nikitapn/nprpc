@@ -5,6 +5,7 @@ import { FlatBuffer } from './flat_buffer';
 import { impl } from './gen/nprpc_base';
 
 const header_size = 16;
+const empty_stream_final_sequence = 0xFFFFFFFFFFFFFFFFn;
 
 function describe_stream_payload(value: unknown): { payload?: unknown; payload_summary?: string } {
   if (value instanceof Uint8Array) {
@@ -25,8 +26,8 @@ function emit_stream_debug_event(stream_id: bigint, event: Record<string, unknow
 }
 
 abstract class StreamReaderBase {
-  abstract push_chunk(data: Uint8Array, sequence: bigint): void;
-  abstract complete(): void;
+  abstract push_chunk(data: Uint8Array, sequence: bigint): boolean;
+  abstract complete(final_sequence?: bigint): boolean;
   abstract fail(error_code: number): void;
 }
 
@@ -36,6 +37,7 @@ export class StreamReader<T> extends StreamReaderBase {
   private done_ = false;
   private error_: Error | null = null;
   private next_expected_seq = 0n;
+  private final_sequence?: bigint;
   private out_of_order = new Map<bigint, T>();
 
   constructor(
@@ -46,7 +48,7 @@ export class StreamReader<T> extends StreamReaderBase {
     super();
   }
 
-  push_chunk(data: Uint8Array, sequence: bigint): void {
+  push_chunk(data: Uint8Array, sequence: bigint): boolean {
     const value = this.deserialize(data);
     if (this.stream_id !== undefined) {
       emit_stream_debug_event(this.stream_id, {
@@ -69,17 +71,25 @@ export class StreamReader<T> extends StreamReaderBase {
       this.out_of_order.set(sequence, value);
     }
     this.signal();
+    return this.try_complete();
   }
 
-  complete(): void {
+  complete(final_sequence?: bigint): boolean {
     if (this.stream_id !== undefined) {
       emit_stream_debug_event(this.stream_id, {
         kind: 'complete',
         direction: 'incoming',
+        ...(final_sequence !== undefined ? { sequence: String(final_sequence) } : {}),
       });
     }
-    this.done_ = true;
-    this.signal();
+    if (final_sequence === undefined) {
+      this.done_ = true;
+      this.signal();
+      return true;
+    }
+
+    this.final_sequence = final_sequence;
+    return this.try_complete();
   }
 
   fail(error_code: number): void {
@@ -110,6 +120,21 @@ export class StreamReader<T> extends StreamReaderBase {
       this.resolve_fn = null;
       fn();
     }
+  }
+
+  private try_complete(): boolean {
+    if (this.done_ || this.final_sequence === undefined) {
+      return this.done_;
+    }
+
+    if (this.final_sequence === empty_stream_final_sequence ||
+        this.next_expected_seq > this.final_sequence) {
+      this.done_ = true;
+      this.signal();
+      return true;
+    }
+
+    return false;
   }
 
   async *[Symbol.asyncIterator](): AsyncGenerator<T> {
@@ -210,6 +235,7 @@ export class StreamManager {
 
   constructor(
     private readonly send_message: (payload: ArrayBufferView) => void,
+    private readonly send_native_stream?: (stream_id: bigint, payload: ArrayBufferView) => void,
   ) {}
 
   generate_stream_id(): bigint {
@@ -259,17 +285,20 @@ export class StreamManager {
       console.warn(`StreamManager: chunk for unknown stream ${stream_id}`);
       return;
     }
-    reader.push_chunk(data, sequence);
+    if (reader.push_chunk(data, sequence)) {
+      this.readers.delete(stream_id);
+    }
   }
 
-  on_stream_complete(stream_id: bigint): void {
+  on_stream_complete(stream_id: bigint, final_sequence: bigint): void {
     const reader = this.readers.get(stream_id);
     if (!reader) {
       console.warn(`StreamManager: completion for unknown stream ${stream_id}`);
       return;
     }
-    reader.complete();
-    this.readers.delete(stream_id);
+    if (reader.complete(final_sequence)) {
+      this.readers.delete(stream_id);
+    }
   }
 
   on_stream_error(stream_id: bigint, error_code: number): void {
@@ -303,7 +332,11 @@ export class StreamManager {
       window_size: 0,
     });
     buf.write_len(buf.size - 4);
-    this.send_message(buf.writable_view);
+    if (this.send_native_stream) {
+      this.send_native_stream(stream_id, buf.writable_view);
+    } else {
+      this.send_message(buf.writable_view);
+    }
   }
 
   send_complete(stream_id: bigint, final_sequence: bigint): void {
