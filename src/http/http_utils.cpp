@@ -8,6 +8,7 @@
 #include <boost/beast/core/string.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <filesystem>
 
 namespace nprpc::impl {
@@ -149,6 +150,24 @@ resolve_http_doc_root_path(std::string_view doc_root,
 bool is_rpc_http_target(std::string_view path) noexcept
 {
   return path == "/rpc" || path.starts_with("/rpc/");
+}
+
+std::optional<std::size_t>
+parse_http_content_length(std::string_view value) noexcept
+{
+  if (value.empty()) {
+    return std::nullopt;
+  }
+
+  std::size_t parsed = 0;
+  const auto* begin = value.data();
+  const auto* end = begin + value.size();
+  const auto [ptr, ec] = std::from_chars(begin, end, parsed);
+  if (ec != std::errc{} || ptr != end) {
+    return std::nullopt;
+  }
+
+  return parsed;
 }
 
 std::optional<std::string_view>

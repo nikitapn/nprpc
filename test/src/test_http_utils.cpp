@@ -83,6 +83,31 @@ TEST(HttpUtils, RejectsTraversalAfterNormalization)
   EXPECT_FALSE(resolved.has_value());
 }
 
+TEST(HttpUtils, ParsesValidContentLength)
+{
+  const auto parsed = nprpc::impl::parse_http_content_length("12345");
+
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(*parsed, 12345u);
+}
+
+TEST(HttpUtils, RejectsEmptyContentLength)
+{
+  EXPECT_FALSE(nprpc::impl::parse_http_content_length("").has_value());
+}
+
+TEST(HttpUtils, RejectsNonNumericContentLength)
+{
+  EXPECT_FALSE(nprpc::impl::parse_http_content_length("abc").has_value());
+  EXPECT_FALSE(nprpc::impl::parse_http_content_length("12x").has_value());
+}
+
+TEST(HttpUtils, RejectsOutOfRangeContentLength)
+{
+  EXPECT_FALSE(nprpc::impl::parse_http_content_length(
+      "184467440737095516160").has_value());
+}
+
 #ifndef _WIN32
 TEST(HttpUtils, RejectsSymlinkEscape)
 {

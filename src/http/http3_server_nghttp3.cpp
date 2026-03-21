@@ -216,6 +216,7 @@ struct Http3Stream {
   std::string accept;                         // Accept header for SSR detection
   std::map<std::string, std::string> headers; // All headers for SSR
   size_t content_length = 0;
+  bool malformed_content_length = false;
   flat_buffer request_body;
   bool request_body_too_large = false;
 
@@ -1791,9 +1792,19 @@ void Http3Connection::http_recv_header(Http3Stream* stream,
   case NGHTTP3_QPACK_TOKEN_CONTENT_TYPE:
     stream->content_type = std::move(header_value);
     break;
-  case NGHTTP3_QPACK_TOKEN_CONTENT_LENGTH:
-    stream->content_length = std::stoull(header_value);
+  case NGHTTP3_QPACK_TOKEN_CONTENT_LENGTH: {
+    const auto parsed = parse_http_content_length(header_value);
+    if (!parsed) {
+      stream->malformed_content_length = true;
+      NPRPC_HTTP3_ERROR(
+          "Rejecting malformed Content-Length stream_id={} path='{}' value='{}'",
+          stream->stream_id, stream->path, header_value);
+      break;
+    }
+
+    stream->content_length = *parsed;
     break;
+  }
   case NGHTTP3_QPACK_TOKEN_ACCEPT:
     stream->accept = std::move(header_value);
     break;
@@ -1803,6 +1814,11 @@ void Http3Connection::http_recv_header(Http3Stream* stream,
 int Http3Connection::http_end_headers(Http3Stream* stream)
 {
   NPRPC_HTTP3_TRACE("Request: {} {}", stream->method, stream->path);
+
+  if (stream->malformed_content_length) {
+    return send_static_response(stream, 400, "text/plain",
+                                "Malformed Content-Length header");
+  }
 
   if (stream->request_body_too_large ||
       stream->content_length > g_cfg.http_max_request_body_size) {
@@ -3028,8 +3044,16 @@ int Http3Connection::http_recv_header_cb(nghttp3_conn* conn,
   auto h = static_cast<Http3Connection*>(user_data);
   auto stream = static_cast<Http3Stream*>(stream_user_data);
 
-  if (stream) {
-    h->http_recv_header(stream, token, name, value);
+  try {
+    if (stream) {
+      h->http_recv_header(stream, token, name, value);
+    }
+  } catch (const std::exception& e) {
+    NPRPC_HTTP3_ERROR("Exception in http_recv_header_cb: {}", e.what());
+    return NGHTTP3_ERR_CALLBACK_FAILURE;
+  } catch (...) {
+    NPRPC_HTTP3_ERROR("Unknown exception in http_recv_header_cb");
+    return NGHTTP3_ERR_CALLBACK_FAILURE;
   }
 
   return 0;
@@ -3044,7 +3068,15 @@ int Http3Connection::http_end_headers_cb(nghttp3_conn* conn,
   auto h = static_cast<Http3Connection*>(user_data);
   auto stream = static_cast<Http3Stream*>(stream_user_data);
 
-  if (stream && h->http_end_headers(stream) != 0) {
+  try {
+    if (stream && h->http_end_headers(stream) != 0) {
+      return NGHTTP3_ERR_CALLBACK_FAILURE;
+    }
+  } catch (const std::exception& e) {
+    NPRPC_HTTP3_ERROR("Exception in http_end_headers_cb: {}", e.what());
+    return NGHTTP3_ERR_CALLBACK_FAILURE;
+  } catch (...) {
+    NPRPC_HTTP3_ERROR("Unknown exception in http_end_headers_cb");
     return NGHTTP3_ERR_CALLBACK_FAILURE;
   }
 

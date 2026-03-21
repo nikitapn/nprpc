@@ -26,6 +26,11 @@ resolve_http_doc_root_path(std::string_view doc_root,
 /// Returns true when the request target addresses the HTTP RPC endpoint.
 bool is_rpc_http_target(std::string_view path) noexcept;
 
+/// Parses a decimal Content-Length header value without throwing.
+/// Returns std::nullopt for empty, non-numeric, or out-of-range values.
+std::optional<std::size_t>
+parse_http_content_length(std::string_view value) noexcept;
+
 /// Returns the request origin if it is allowed by the configured HTTP CORS
 /// allowlist. Empty result means CORS should not be granted.
 std::optional<std::string_view>
