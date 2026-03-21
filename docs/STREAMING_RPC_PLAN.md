@@ -46,6 +46,30 @@ WebTransport should be treated as a browser transport on top of an HTTPS origin,
 
 This keeps the existing `urls` model intact and avoids a second capability round-trip in the browser.
 
+### Browser transport decision note
+
+For the browser-facing stack, the current transport split is intentionally:
+
+- HTTP/1.1 for baseline request/response and Alt-Svc discovery
+- WebSocket for broad full-duplex fallback
+- HTTP/3 for the preferred request/response path
+- WebTransport for browser-native stream transport over HTTP/3
+
+Adding an HTTP/2 server remains a possible future optimization, but it is not currently a required architectural piece.
+
+Rationale:
+
+- HTTP/2 does not replace WebTransport.
+- HTTP/2 does not remove the need for WebSocket fallback.
+- It adds another protocol surface, ALPN path, test matrix, and failure mode set.
+- The existing stack already provides a compatibility ladder from conservative fallback to modern transport.
+
+HTTP/2 should only be revisited if one of these becomes a concrete problem:
+
+- HTTP/1.1 fallback is measurably hurting multi-resource page loads.
+- Deployments frequently block or degrade HTTP/3, making the non-QUIC path performance-critical.
+- A multiplexed non-QUIC request/response transport becomes necessary for browser RPC beyond what HTTP/1.1 and WebSocket already provide.
+
 Suggested rule for setting the flag server-side:
 
 - Set `WebTransport` only if the object is advertised with a secured HTTP endpoint and the server is actually configured to accept WebTransport sessions on that HTTPS authority.
@@ -70,6 +94,7 @@ This gets browser HTTP/3 transport support with low generator churn.
 - Map `client_stream<T>` to a client-opened unidirectional WebTransport stream.
 - Map `bidi_stream<TIn, TOut>` to a dedicated bidirectional WebTransport stream.
 - Prefix each native WebTransport stream with the NPRPC `stream_id` so it can be routed into the existing stream manager.
+- When multiple native child streams are writable at once, schedule server writes per connection using round-robin service, with control streams ahead of native data streams.
 
 This is the version that really exploits WebTransport rather than tunneling NPRPC over a single reliable stream.
 
@@ -818,6 +843,9 @@ void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event) {
 - `include/nprpc/impl/quic_transport.hpp` - stream maps and callbacks
 
 ### 3.4 Browser Streaming: WebSocket vs WebTransport
+
+Note:
+The browser transport strategy above is still the intended shape of the system. HTTP/2 may be added later if fallback-path performance justifies the extra complexity, but it is intentionally not part of the current design baseline.
 
 **Current browser solution: WebSocket**
 - Full-duplex communication over single TCP connection

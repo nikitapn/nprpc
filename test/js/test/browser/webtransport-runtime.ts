@@ -155,6 +155,158 @@ export async function echoBidiByteStream() {
   };
 }
 
+export async function stressConcurrentServerStreams(streamCount: number, chunksPerStream: number) {
+  const testBasic = await resolveProxy<TestBasic>('nprpc_test_basic', TestBasic);
+
+  const previousDebug = (globalThis as any).__nprpc_debug;
+  const previousStreamEvent = previousDebug?.stream_event;
+  const incomingOrder: string[] = [];
+
+  (globalThis as any).__nprpc_debug = {
+    ...previousDebug,
+    stream_start: previousDebug?.stream_start ?? (() => undefined),
+    call_start: previousDebug?.call_start ?? (() => undefined),
+    call_end: previousDebug?.call_end ?? (() => undefined),
+    stream_event(streamId: string, event: { kind?: string; direction?: string }) {
+      previousStreamEvent?.(streamId, event);
+      if (event.direction === 'incoming' && event.kind === 'chunk') {
+        incomingOrder.push(streamId);
+      }
+    },
+  };
+
+  try {
+    const testServerStreams = await resolveProxy<TestStreams>('streams_test', TestStreams);
+    const readers = await Promise.all(
+      Array.from({ length: streamCount }, () => testServerStreams.GetStringStream(chunksPerStream)),
+    );
+    const streamIds = readers.map(reader => String((reader as any).stream_id));
+    const expected = Array.from({ length: streamCount }, () =>
+      Array.from({ length: chunksPerStream }, (_, index) => `item_${index}`),
+    );
+    const outputPromises = readers.map(reader => collectStream(reader));
+
+    const controlPromise = testBasic.ReturnU32();
+
+    const controlResult = await controlPromise;
+
+    const outputs = await Promise.all(outputPromises);
+
+    const perStreamCounts = new Map<string, number>();
+    for (const streamId of incomingOrder) {
+      if (!streamIds.includes(streamId)) {
+        continue;
+      }
+      perStreamCounts.set(streamId, (perStreamCounts.get(streamId) ?? 0) + 1);
+    }
+
+    const firstWindow = incomingOrder.filter(streamId => streamIds.includes(streamId)).slice(0, streamCount * 4);
+
+    return {
+      controlResult,
+      endpointType: testServerStreams.endpoint.type,
+      streamIds,
+      expected,
+      received: outputs,
+      firstWindow,
+      firstWindowUnique: new Set(firstWindow).size,
+      perStreamCounts: streamIds.map(streamId => perStreamCounts.get(streamId) ?? 0),
+    };
+  } finally {
+    if (previousDebug === undefined) {
+      delete (globalThis as any).__nprpc_debug;
+    } else {
+      (globalThis as any).__nprpc_debug = previousDebug;
+    }
+  }
+}
+
+export async function stressConcurrentBidiStreams(streamCount: number, chunksPerStream: number) {
+  const testBasic = await resolveProxy<TestBasic>('nprpc_test_basic', TestBasic);
+
+  const previousDebug = (globalThis as any).__nprpc_debug;
+  const previousStreamEvent = previousDebug?.stream_event;
+  const incomingOrder: string[] = [];
+
+  (globalThis as any).__nprpc_debug = {
+    ...previousDebug,
+    stream_start: previousDebug?.stream_start ?? (() => undefined),
+    call_start: previousDebug?.call_start ?? (() => undefined),
+    call_end: previousDebug?.call_end ?? (() => undefined),
+    stream_event(streamId: string, event: { kind?: string; direction?: string }) {
+      previousStreamEvent?.(streamId, event);
+      if (event.direction === 'incoming' && event.kind === 'chunk') {
+        incomingOrder.push(streamId);
+      }
+    },
+  };
+
+  try {
+    const testBidiStreams = await resolveProxy<TestStreams>('bidi_stream_test', TestStreams);
+    const streams = await Promise.all(
+      Array.from({ length: streamCount }, (_, index) => testBidiStreams.EchoByteStream(0x10 + index)),
+    );
+    const streamIds = streams.map(stream => String((stream.writer as any).stream_id));
+    const sent = Array.from({ length: streamCount }, () => [] as number[]);
+    const outputPromises = streams.map(stream => collectStream(stream.reader));
+
+    const firstHalf = Math.floor(chunksPerStream / 2);
+    for (let round = 0; round < firstHalf; ++round) {
+      for (let streamIndex = 0; streamIndex < streamCount; ++streamIndex) {
+        const value = (streamIndex * 53 + round) & 0xff;
+        sent[streamIndex].push(value);
+        streams[streamIndex].writer.write(Uint8Array.of(value));
+      }
+    }
+
+    const controlPromise = testBasic.ReturnU32();
+
+    for (let round = firstHalf; round < chunksPerStream; ++round) {
+      for (let streamIndex = 0; streamIndex < streamCount; ++streamIndex) {
+        const value = (streamIndex * 53 + round) & 0xff;
+        sent[streamIndex].push(value);
+        streams[streamIndex].writer.write(Uint8Array.of(value));
+      }
+    }
+
+    const controlResult = await controlPromise;
+
+    for (const stream of streams) {
+      stream.writer.close();
+    }
+
+    const outputs = await Promise.all(outputPromises);
+    const received = outputs.map(chunks => chunks.map(chunk => chunk[0]));
+
+    const perStreamCounts = new Map<string, number>();
+    for (const streamId of incomingOrder) {
+      if (!streamIds.includes(streamId)) {
+        continue;
+      }
+      perStreamCounts.set(streamId, (perStreamCounts.get(streamId) ?? 0) + 1);
+    }
+
+    const firstWindow = incomingOrder.filter(streamId => streamIds.includes(streamId)).slice(0, streamCount * 4);
+
+    return {
+      controlResult,
+      endpointType: testBidiStreams.endpoint.type,
+      streamIds,
+      sent,
+      received,
+      firstWindow,
+      firstWindowUnique: new Set(firstWindow).size,
+      perStreamCounts: streamIds.map(streamId => perStreamCounts.get(streamId) ?? 0),
+    };
+  } finally {
+    if (previousDebug === undefined) {
+      delete (globalThis as any).__nprpc_debug;
+    } else {
+      (globalThis as any).__nprpc_debug = previousDebug;
+    }
+  }
+}
+
 export async function callTestBasicHttp() {
   const testBasic = await resolveProxy<TestBasic>('nprpc_test_basic', TestBasic);
   const booleanResult = await testBasic.http.ReturnBoolean();

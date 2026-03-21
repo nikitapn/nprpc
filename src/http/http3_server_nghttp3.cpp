@@ -191,6 +191,12 @@ enum class WebTransportChildBinding : uint8_t {
   Native,
 };
 
+enum class RawWritePriority : uint8_t {
+  Control = 0,
+  Native = 1,
+  Default = 2,
+};
+
 struct PreparedResponseHeaders {
   std::vector<nghttp3_nv> headers;
   std::string status;
@@ -222,6 +228,7 @@ struct Http3Stream {
   uint64_t webtransport_native_stream_id = 0;
   flat_buffer webtransport_probe_buffer;
   std::deque<flat_buffer> raw_write_queue;
+  bool raw_write_scheduled = false;
 
   // Response data - kept alive for async sending
   // For cached files: cached_file keeps the data alive (zero-copy)
@@ -314,6 +321,8 @@ private:
   Http3Stream* create_stream(int64_t stream_id);
   void remove_stream(int64_t stream_id);
   Http3Stream* next_raw_writable_stream();
+  void schedule_raw_writable_stream(Http3Stream* stream);
+  static RawWritePriority raw_write_priority(const Http3Stream* stream);
 
   // HTTP/3 handling
   int setup_httpconn();
@@ -546,6 +555,7 @@ private:
   uint32_t version_;
 
   std::unordered_map<int64_t, std::unique_ptr<Http3Stream>> streams_;
+  std::array<std::deque<int64_t>, 3> raw_writable_streams_;
   std::unordered_set<int64_t> webtransport_session_ids_;
   std::unordered_map<int64_t, std::shared_ptr<WebTransportControlSession>>
       webtransport_control_sessions_;
@@ -1276,6 +1286,9 @@ int Http3Connection::on_write()
       case NGTCP2_ERR_STREAM_DATA_BLOCKED:
         if (using_http_stream && httpconn_) {
           nghttp3_conn_block_stream(httpconn_, stream_id);
+        } else if (raw_stream) {
+          schedule_raw_writable_stream(raw_stream);
+          break;
         }
         continue;
       case NGTCP2_ERR_STREAM_SHUT_WR:
@@ -1297,13 +1310,19 @@ int Http3Connection::on_write()
                 nullptr, 0);
             return handle_error();
           }
-        } else if (!using_http_stream && ndatalen > 0 && raw_stream) {
-          raw_stream->raw_write_queue.front().consume(
-              static_cast<size_t>(ndatalen));
+        } else if (!using_http_stream && raw_stream) {
+          if (ndatalen > 0) {
+            raw_stream->raw_write_queue.front().consume(
+                static_cast<size_t>(ndatalen));
 
-          while (!raw_stream->raw_write_queue.empty() &&
-                 raw_stream->raw_write_queue.front().size() == 0) {
-            raw_stream->raw_write_queue.pop_front();
+            while (!raw_stream->raw_write_queue.empty() &&
+                   raw_stream->raw_write_queue.front().size() == 0) {
+              raw_stream->raw_write_queue.pop_front();
+            }
+          }
+
+          if (!raw_stream->raw_write_queue.empty()) {
+            schedule_raw_writable_stream(raw_stream);
           }
         }
         continue;
@@ -1327,12 +1346,18 @@ int Http3Connection::on_write()
             0);
         return handle_error();
       }
-    } else if (!using_http_stream && ndatalen > 0 && raw_stream) {
-      raw_stream->raw_write_queue.front().consume(static_cast<size_t>(ndatalen));
+    } else if (!using_http_stream && raw_stream) {
+      if (ndatalen > 0) {
+        raw_stream->raw_write_queue.front().consume(static_cast<size_t>(ndatalen));
 
-      while (!raw_stream->raw_write_queue.empty() &&
-             raw_stream->raw_write_queue.front().size() == 0) {
-        raw_stream->raw_write_queue.pop_front();
+        while (!raw_stream->raw_write_queue.empty() &&
+               raw_stream->raw_write_queue.front().size() == 0) {
+          raw_stream->raw_write_queue.pop_front();
+        }
+      }
+
+      if (!raw_stream->raw_write_queue.empty()) {
+        schedule_raw_writable_stream(raw_stream);
       }
     }
 
@@ -1553,11 +1578,52 @@ void Http3Connection::remove_stream(int64_t stream_id)
   streams_.erase(stream_id);
 }
 
+void Http3Connection::schedule_raw_writable_stream(Http3Stream* stream)
+{
+  if (!stream || stream->raw_write_queue.empty() || stream->raw_write_scheduled) {
+    return;
+  }
+
+  const auto priority = static_cast<size_t>(raw_write_priority(stream));
+  raw_writable_streams_[priority].push_back(stream->stream_id);
+  stream->raw_write_scheduled = true;
+}
+
+RawWritePriority Http3Connection::raw_write_priority(const Http3Stream* stream)
+{
+  if (!stream) {
+    return RawWritePriority::Default;
+  }
+
+  switch (stream->webtransport_child_binding) {
+  case WebTransportChildBinding::Control:
+    return RawWritePriority::Control;
+  case WebTransportChildBinding::Native:
+    return RawWritePriority::Native;
+  case WebTransportChildBinding::Unbound:
+  default:
+    return RawWritePriority::Default;
+  }
+}
+
 Http3Stream* Http3Connection::next_raw_writable_stream()
 {
-  for (auto& [stream_id, stream] : streams_) {
-    if (!stream->raw_write_queue.empty()) {
-      return stream.get();
+  for (auto& queue : raw_writable_streams_) {
+    while (!queue.empty()) {
+      const auto stream_id = queue.front();
+      queue.pop_front();
+
+      auto* stream = find_stream(stream_id);
+      if (!stream) {
+        continue;
+      }
+
+      stream->raw_write_scheduled = false;
+      if (stream->raw_write_queue.empty()) {
+        continue;
+      }
+
+      return stream;
     }
   }
 
@@ -2373,7 +2439,11 @@ void Http3Connection::queue_raw_stream_write(int64_t stream_id,
         if (!stream) {
           stream = self->create_stream(stream_id);
         }
+        const bool was_empty = stream->raw_write_queue.empty();
         stream->raw_write_queue.emplace_back(std::move(data));
+        if (was_empty) {
+          self->schedule_raw_writable_stream(stream);
+        }
         self->signal_write();
       });
 }

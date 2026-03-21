@@ -296,6 +296,61 @@ describe('WebTransport Browser Transport', function() {
     }
   });
 
+  it('should keep concurrent WebTransport native streams fair while prioritizing control RPC', async function() {
+    if (!browser) {
+      this.skip();
+    }
+
+    const { context, page, initResult } = await createBrowserPage();
+
+    try {
+      if ((initResult as any).unsupported) {
+        this.skip();
+      }
+
+      const result = await page.evaluate(async () => {
+        return await (globalThis as any).nprpc_test_runtime.stressConcurrentServerStreams(3, 48);
+      });
+
+      expect((result as any).endpointType).to.equal(EndPointType.WebTransport);
+      expect((result as any).controlResult).to.equal(42);
+      expect((result as any).received).to.deep.equal((result as any).expected);
+      expect((result as any).perStreamCounts).to.deep.equal([48, 48, 48]);
+      expect((result as any).firstWindowUnique).to.be.greaterThan(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('should keep concurrent WebTransport bidi native streams fair while prioritizing control RPC', async function() {
+    if (!browser) {
+      this.skip();
+    }
+
+    const { context, page, initResult } = await createBrowserPage();
+
+    try {
+      if ((initResult as any).unsupported) {
+        this.skip();
+      }
+
+      const result = await page.evaluate(async () => {
+        return await (globalThis as any).nprpc_test_runtime.stressConcurrentBidiStreams(3, 48);
+      });
+
+      expect((result as any).endpointType).to.equal(EndPointType.WebTransport);
+      expect((result as any).controlResult).to.equal(42);
+      expect((result as any).received).to.deep.equal(
+        (result as any).sent.map((values: number[], streamIndex: number) =>
+          values.map((value: number) => value ^ (0x10 + streamIndex))),
+      );
+      expect((result as any).perStreamCounts).to.deep.equal([48, 48, 48]);
+      expect((result as any).firstWindowUnique).to.be.greaterThan(1);
+    } finally {
+      await context.close();
+    }
+  });
+
   it('should keep HTTP RPC working from a cross-origin secure page', async function() {
     if (!browser) {
       this.skip();
