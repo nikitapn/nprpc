@@ -156,6 +156,8 @@ RUN apt-get update && apt-get install -y \
     vim \
     nodejs \
     liburing-dev \
+    ffmpeg \
+    gpac \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Boost runtime libraries
