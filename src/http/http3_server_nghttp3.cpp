@@ -1087,7 +1087,7 @@ bool Http3Connection::init()
   // Set app data AFTER configuring for QUIC (reference order)
   SSL_set_app_data(ssl, &conn_ref_);
   SSL_set_accept_state(ssl);
-  SSL_set_quic_tls_early_data_enabled(ssl, 1);
+  SSL_set_quic_tls_early_data_enabled(ssl, 0);
 
   ngtcp2_conn_set_tls_native_handle(conn_, ossl_ctx_);
 
@@ -3080,14 +3080,14 @@ bool Http3Server::start()
   SSL_CTX_set_min_proto_version(ssl_ctx_, TLS1_3_VERSION);
   SSL_CTX_set_max_proto_version(ssl_ctx_, TLS1_3_VERSION);
 
-  // Enable early data
-  SSL_CTX_set_max_early_data(ssl_ctx_, UINT32_MAX);
+  // Disable 0-RTT. NPRPC serves mutable RPC and upgrade endpoints where
+  // replayable early data is not an acceptable tradeoff.
+  SSL_CTX_set_max_early_data(ssl_ctx_, 0);
 
   // SSL options
   SSL_CTX_set_options(
       ssl_ctx_, (SSL_OP_ALL & ~SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS) |
-                    SSL_OP_SINGLE_ECDH_USE | SSL_OP_CIPHER_SERVER_PREFERENCE |
-                    SSL_OP_NO_ANTI_REPLAY);
+            SSL_OP_SINGLE_ECDH_USE | SSL_OP_CIPHER_SERVER_PREFERENCE);
 
   // Set ciphersuites for TLS 1.3
   if (SSL_CTX_set_ciphersuites(ssl_ctx_, crypto_default_ciphers()) != 1) {
