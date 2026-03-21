@@ -9,7 +9,6 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 
 import { EndPointType } from 'nprpc';
-import { ServerManager } from './server-manager';
 
 function getServerCertificateHash(certPath: string): number[] {
   const certificate = new X509Certificate(fs.readFileSync(certPath));
@@ -55,7 +54,6 @@ function ensureValidServerCertificate(certPath: string, keyPath: string): void {
 describe('WebTransport Browser Transport', function() {
   this.timeout(60000);
 
-  const serverManager = new ServerManager();
   const chromiumExecutable = process.env.CHROMIUM_BIN || '/usr/bin/chromium';
   const browserBundlePath = path.resolve(process.cwd(), 'dist/browser/webtransport-test-runtime.js');
   const certificatePath = path.resolve(process.cwd(), '../../certs/out/localhost.crt');
@@ -84,11 +82,6 @@ describe('WebTransport Browser Transport', function() {
 
     if (!fs.existsSync(certificateKeyPath)) {
       throw new Error(`Server certificate key not found: ${certificateKeyPath}`);
-    }
-
-    const started = await serverManager.startAll();
-    if (!started) {
-      throw new Error('Failed to start NPRPC integration server');
     }
 
     fixtureServer = https.createServer(
@@ -129,7 +122,6 @@ describe('WebTransport Browser Transport', function() {
   after(async function() {
     await browser?.close();
     await new Promise<void>((resolve) => fixtureServer?.close(() => resolve()));
-    serverManager.killServer();
   });
 
   async function createBrowserPage(pageUrl: string = fixturePageUrl) {

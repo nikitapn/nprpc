@@ -12,6 +12,16 @@
 #include <atomic>
 #include <random>
 
+#define NPRPC_ENABLE_STREAM_MANAGER_TRACE 0
+
+#if NPRPC_ENABLE_STREAM_MANAGER_TRACE
+# define NPRPC_STREAM_MANAGER_LOG_TRACE(format, ...)              \
+  NPRPC_LOG_TRACE(                                                \
+    "[StreamManager] {:p} {} " #format __VA_OPT__(, )__VA_ARGS__)
+#else
+# define NPRPC_STREAM_MANAGER_LOG_TRACE(format, ...) do {} while(0)
+#endif
+
 namespace nprpc::impl {
 
 uint64_t StreamManager::generate_stream_id()
@@ -235,7 +245,7 @@ void StreamManager::register_stream(uint64_t stream_id,
     writers_[stream_id] = StreamInfo{std::move(writer), unreliable};
   }
 
-  NPRPC_LOG_INFO("Stream registered: {} (unreliable={})", stream_id, unreliable);
+  NPRPC_STREAM_MANAGER_LOG_TRACE("Stream registered: {} (unreliable={})", stream_id, unreliable);
 }
 
 bool StreamManager::is_stream_unreliable(uint64_t stream_id) const
@@ -404,8 +414,8 @@ void StreamManager::send_chunk(uint64_t stream_id,
     std::lock_guard<std::mutex> lock(mutex_);
     unreliable = is_stream_unreliable(stream_id);
   }
-  
-  NPRPC_LOG_INFO("StreamManager::send_chunk called: stream_id={}, data.size()={}, sequence={}, unreliable={}",
+
+  NPRPC_STREAM_MANAGER_LOG_TRACE("StreamManager::send_chunk called: stream_id={}, data.size()={}, sequence={}, unreliable={}",
                   stream_id, data.size(), sequence, unreliable);
 
   // TODO: Shared Memory Optimization - write directly to shared ring buffer
@@ -596,7 +606,7 @@ void StreamManager::send_window_update(uint64_t stream_id, uint32_t credits)
 
 void StreamManager::on_window_update(uint64_t stream_id, uint32_t credits)
 {
-  NPRPC_LOG_INFO("StreamManager::on_window_update stream_id={} credits={}", stream_id, credits);
+  NPRPC_STREAM_MANAGER_LOG_TRACE("StreamManager::on_window_update stream_id={} credits={}", stream_id, credits);
 
   boost::asio::steady_timer* timer = nullptr;
   std::vector<std::pair<flat_buffer, std::function<void()>>> to_dispatch;

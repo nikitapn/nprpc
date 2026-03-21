@@ -84,7 +84,6 @@ protected:
 
 public:
   void start_read_loop();
-  void start_write_loop();
 
   virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
 

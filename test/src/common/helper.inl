@@ -1,4 +1,5 @@
 #include "nprpc_base_ext.hpp"
+#include <fcntl.h>
 using namespace std::string_literals;
 using namespace std::string_view_literals;
 
@@ -50,6 +51,23 @@ public:
             std::cerr << "Failed to fork nameserver process" << std::endl;
             return false;
         } else if (nameserver_pid == 0) {
+            int stdout_fd = open("/tmp/npnameserver_stdout.log",
+                                 O_WRONLY | O_CREAT | O_TRUNC,
+                                 0644);
+            int stderr_fd = open("/tmp/npnameserver_stderr.log",
+                                 O_WRONLY | O_CREAT | O_TRUNC,
+                                 0644);
+
+            if (stdout_fd != -1) {
+                dup2(stdout_fd, STDOUT_FILENO);
+                close(stdout_fd);
+            }
+
+            if (stderr_fd != -1) {
+                dup2(stderr_fd, STDERR_FILENO);
+                close(stderr_fd);
+            }
+
             // Child process - run the nameserver
             // Use the build directory configured by CMake
 #ifdef NPRPC_BUILD_DIR
@@ -119,7 +137,7 @@ public:
         try {
             // Use the new RpcBuilder API
             rpc = nprpc::RpcBuilder()
-                .set_log_level(nprpc::LogLevel::warn)
+                .set_log_level(nprpc::LogLevel::trace)
                 .with_hostname("localhost")
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
                 .with_tcp(22222)//.with_uring()

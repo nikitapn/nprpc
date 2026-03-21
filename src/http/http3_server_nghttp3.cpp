@@ -42,7 +42,20 @@
 #include <unordered_set>
 #include <vector>
 
-#include "debug.hpp"
+#define NPRPC_ENABLE_HTTP3_TRACE 0
+
+#if NPRPC_ENABLE_HTTP3_TRACE
+# include <format>
+# define NPRPC_HTTP3_TRACE(format_string, ...)               \
+  NPRPC_LOG_TRACE(                                           \
+    "[HTTP/3] " format_string __VA_OPT__(, ) __VA_ARGS__);
+#else
+# define NPRPC_HTTP3_TRACE(format_string, ...) do {} while (0)
+#endif
+
+#define NPRPC_HTTP3_ERROR(format_string, ...)                \
+  NPRPC_LOG_ERROR(                                           \
+    "[HTTP/3] " format_string __VA_OPT__(, ) __VA_ARGS__);
 
 #define NPRPC_NGTCP2_ENABLE_LOGGING 0
 
@@ -151,8 +164,7 @@ void log_printf(void* user_data, const char* fmt, ...)
     n = buf.size() - 1;
   }
 
-  // Use NPRPC_LOG_INFO instead of stderr
-  NPRPC_LOG_INFO("{}", std::string_view(buf.data(), n));
+  NPRPC_HTTP3_TRACE("{}", std::string_view(buf.data(), n));
 }
 #endif
 } // anonymous namespace
@@ -1055,8 +1067,11 @@ int Http3Connection::on_read(const uint8_t* data,
   // If we're closing, just send connection close
   if (ngtcp2_conn_in_closing_period(conn_)) {
     NPRPC_HTTP3_TRACE(
-        "Connection is in closing period, ignoring received packet");
-    // TODO: Send connection close
+        "Connection is in closing period, resend cached CONNECTION_CLOSE");
+    if (!conn_close_buf_.empty()) {
+      server_->send_packet(remote_ep_, conn_close_buf_.data(),
+                           conn_close_buf_.size());
+    }
     return 0;
   }
 
@@ -1240,8 +1255,8 @@ int Http3Connection::on_write()
           auto rv = nghttp3_conn_add_write_offset(
               httpconn_, stream_id, static_cast<size_t>(ndatalen));
           if (rv != 0) {
-            std::cerr << "[HTTP/3][E] nghttp3_conn_add_write_offset: "
-                      << nghttp3_strerror(rv) << std::endl;
+            NPRPC_HTTP3_TRACE("nghttp3_conn_add_write_offset: {}",
+                              nghttp3_strerror(rv));
             ngtcp2_ccerr_set_application_error(
                 &last_error_, nghttp3_err_infer_quic_app_error_code(rv),
                 nullptr, 0);
@@ -1259,8 +1274,8 @@ int Http3Connection::on_write()
         continue;
       }
 
-      std::cerr << "[HTTP/3][E] ngtcp2_conn_writev_stream: "
-                << ngtcp2_strerror(static_cast<int>(nwrite)) << std::endl;
+      NPRPC_HTTP3_ERROR("ngtcp2_conn_writev_stream: {}",
+                        ngtcp2_strerror(static_cast<int>(nwrite)));
       ngtcp2_ccerr_set_liberr(&last_error_, static_cast<int>(nwrite), nullptr,
                               0);
       return handle_error();
@@ -1270,8 +1285,8 @@ int Http3Connection::on_write()
       auto rv = nghttp3_conn_add_write_offset(httpconn_, stream_id,
                                               static_cast<size_t>(ndatalen));
       if (rv != 0) {
-        std::cerr << "[HTTP/3][E] nghttp3_conn_add_write_offset: "
-                  << nghttp3_strerror(rv) << std::endl;
+        NPRPC_HTTP3_ERROR("nghttp3_conn_add_write_offset: {}",
+                          nghttp3_strerror(rv));
         ngtcp2_ccerr_set_application_error(
             &last_error_, nghttp3_err_infer_quic_app_error_code(rv), nullptr,
             0);
@@ -1347,8 +1362,7 @@ int Http3Connection::handle_expiry()
   auto now = timestamp_ns();
   int rv = ngtcp2_conn_handle_expiry(conn_, now);
   if (rv != 0) {
-    std::cerr << "[HTTP/3][E] ngtcp2_conn_handle_expiry: "
-              << ngtcp2_strerror(rv) << std::endl;
+    NPRPC_HTTP3_ERROR("ngtcp2_conn_handle_expiry: {}", ngtcp2_strerror(rv));
     ngtcp2_ccerr_set_liberr(&last_error_, rv, nullptr, 0);
     return handle_error();
   }
@@ -1400,8 +1414,7 @@ int Http3Connection::setup_httpconn()
 
   // Need at least 3 unidirectional streams for HTTP/3
   if (ngtcp2_conn_get_streams_uni_left(conn_) < 3) {
-    std::cerr << "[HTTP/3][E] Peer does not allow 3 unidirectional streams"
-              << std::endl;
+    NPRPC_HTTP3_ERROR("Peer does not allow 3 unidirectional streams");
     return -1;
   }
 
@@ -1423,16 +1436,14 @@ int Http3Connection::setup_httpconn()
   settings.enable_connect_protocol = 1;
   settings.h3_datagram = 1;
 
-  // std::cerr << "[HTTP/3] Advertising SETTINGS: extended_connect=1 h3_datagram=1 wt_enabled=1"
-  //           << std::endl;
+  NPRPC_HTTP3_TRACE("[HTTP/3] Advertising SETTINGS: extended_connect=1 h3_datagram=1 wt_enabled=1");
 
   auto mem = nghttp3_mem_default();
 
   int rv =
       nghttp3_conn_server_new(&httpconn_, &callbacks, &settings, mem, this);
   if (rv != 0) {
-    std::cerr << "[HTTP/3][E] nghttp3_conn_server_new: " << nghttp3_strerror(rv)
-              << std::endl;
+    NPRPC_HTTP3_ERROR("nghttp3_conn_server_new: {}", nghttp3_strerror(rv));
     return -1;
   }
 
@@ -1444,15 +1455,13 @@ int Http3Connection::setup_httpconn()
   int64_t ctrl_stream_id;
   rv = ngtcp2_conn_open_uni_stream(conn_, &ctrl_stream_id, nullptr);
   if (rv != 0) {
-    std::cerr << "[HTTP/3][E] Failed to open control stream: "
-              << ngtcp2_strerror(rv) << std::endl;
+    NPRPC_HTTP3_ERROR("Failed to open control stream: {}", ngtcp2_strerror(rv));
     return -1;
   }
 
   rv = nghttp3_conn_bind_control_stream(httpconn_, ctrl_stream_id);
   if (rv != 0) {
-    std::cerr << "[HTTP/3][E] nghttp3_conn_bind_control_stream: "
-              << nghttp3_strerror(rv) << std::endl;
+    NPRPC_HTTP3_ERROR("nghttp3_conn_bind_control_stream: {}", nghttp3_strerror(rv));
     return -1;
   }
 
@@ -1461,23 +1470,20 @@ int Http3Connection::setup_httpconn()
 
   rv = ngtcp2_conn_open_uni_stream(conn_, &qpack_enc_stream_id, nullptr);
   if (rv != 0) {
-    std::cerr << "[HTTP/3][E] Failed to open QPACK encoder stream: "
-              << ngtcp2_strerror(rv) << std::endl;
+    NPRPC_HTTP3_ERROR("Failed to open QPACK encoder stream: {}", ngtcp2_strerror(rv));
     return -1;
   }
 
   rv = ngtcp2_conn_open_uni_stream(conn_, &qpack_dec_stream_id, nullptr);
   if (rv != 0) {
-    std::cerr << "[HTTP/3][E] Failed to open QPACK decoder stream: "
-              << ngtcp2_strerror(rv) << std::endl;
+    NPRPC_HTTP3_ERROR("Failed to open QPACK decoder stream: {}", ngtcp2_strerror(rv));
     return -1;
   }
 
   rv = nghttp3_conn_bind_qpack_streams(httpconn_, qpack_enc_stream_id,
                                        qpack_dec_stream_id);
   if (rv != 0) {
-    std::cerr << "[HTTP/3][E] nghttp3_conn_bind_qpack_streams: "
-              << nghttp3_strerror(rv) << std::endl;
+    NPRPC_HTTP3_ERROR("nghttp3_conn_bind_qpack_streams: {}", nghttp3_strerror(rv));
     return -1;
   }
 
@@ -1585,8 +1591,7 @@ int Http3Connection::acked_stream_data_offset(int64_t stream_id,
 
   int rv = nghttp3_conn_add_ack_offset(httpconn_, stream_id, datalen);
   if (rv != 0) {
-    std::cerr << "[HTTP/3][E] nghttp3_conn_add_ack_offset: "
-              << nghttp3_strerror(rv) << std::endl;
+    NPRPC_HTTP3_ERROR("nghttp3_conn_add_ack_offset: {}", nghttp3_strerror(rv));
     return -1;
   }
 
@@ -1719,10 +1724,8 @@ int Http3Connection::start_response(Http3Stream* stream)
   if (stream->method == "CONNECT" && stream->path == k_webtransport_path &&
       (stream->protocol == "webtransport-h3" ||
        stream->protocol == "webtransport")) {
-    // std::cerr << "[HTTP/3] Received WebTransport CONNECT stream_id="
-    //           << stream->stream_id << " authority='" << stream->authority
-    //           << "' scheme='" << stream->scheme << "' origin='"
-    //           << stream->headers["origin"] << "'" << std::endl;
+    NPRPC_HTTP3_TRACE("Received WebTransport CONNECT stream_id={} authority='{}' scheme='{}' origin='{}'",
+                      stream->stream_id, stream->authority, stream->scheme, stream->headers["origin"]);
     return handle_webtransport_connect(stream);
   }
 
@@ -1771,7 +1774,7 @@ int Http3Connection::start_response(Http3Stream* stream)
                                      content_type,
                                      std::move(ssr_response->body));
       } else {
-        NPRPC_HTTP3_TRACE("SSR failed, falling back to static file");
+        NPRPC_HTTP3_ERROR("SSR failed, falling back to static file");
         // Fall through to static file serving
       }
     }
@@ -1794,8 +1797,7 @@ int Http3Connection::start_response(Http3Stream* stream)
     auto cached_file = get_file_cache().get(file_path);
     if (!cached_file) {
       // 404 Not Found
-      std::cerr << "[HTTP/3][E] File not found: " << file_path
-                << " (path=" << request_path << ")" << std::endl;
+      NPRPC_HTTP3_ERROR("File not found: {} (path={})", file_path, request_path);
       return send_static_response(stream, 404, "text/html",
                                   "<!DOCTYPE html><html><body><h1>404 "
                                   "Not Found</h1></body></html>");
@@ -1938,8 +1940,7 @@ int Http3Connection::send_cached_response(Http3Stream* stream,
   int rv = nghttp3_conn_submit_response(httpconn_, stream->stream_id,
                                         nva.data(), nva.size(), &dr);
   if (rv != 0) {
-    std::cerr << "[HTTP/3][E] nghttp3_conn_submit_response: "
-              << nghttp3_strerror(rv) << std::endl;
+    NPRPC_HTTP3_ERROR("nghttp3_conn_submit_response: {}", nghttp3_strerror(rv));
     return -1;
   }
 
@@ -2057,8 +2058,7 @@ int Http3Connection::send_cors_preflight(Http3Stream* stream)
   int rv = nghttp3_conn_submit_response(httpconn_, stream->stream_id,
                                         headers.data(), headers.size(), &dr);
   if (rv != 0) {
-    std::cerr << "[HTTP/3][E] nghttp3_conn_submit_response(OPTIONS): "
-              << nghttp3_strerror(rv) << std::endl;
+    NPRPC_HTTP3_ERROR("nghttp3_conn_submit_response(OPTIONS): {}", nghttp3_strerror(rv));
     return -1;
   }
 
@@ -2070,9 +2070,8 @@ int Http3Connection::send_static_response(Http3Stream* stream,
                                           std::string_view content_type,
                                           std::string_view body)
 {
-  // std::cerr << "[HTTP/3][E] Sending response: " << status_code
-  //           << " Content-Type: " << content_type
-  //           << " Body length: " << body.size() << std::endl;
+  NPRPC_HTTP3_TRACE("Sending response: {} Content-Type: {} Body length: {}",
+                    status_code, content_type, body.size());
 
   // Store response data in stream to keep it alive
   stream->response_data = reinterpret_cast<const uint8_t*>(body.data());
@@ -2091,8 +2090,7 @@ int Http3Connection::send_static_response(Http3Stream* stream,
   int rv = nghttp3_conn_submit_response(httpconn_, stream->stream_id,
                       headers.data(), headers.size(), &dr);
   if (rv != 0) {
-    std::cerr << "[HTTP/3][E] nghttp3_conn_submit_response: "
-              << nghttp3_strerror(rv) << std::endl;
+    NPRPC_HTTP3_ERROR("nghttp3_conn_submit_response: {}", nghttp3_strerror(rv));
     return -1;
   }
 
@@ -2101,8 +2099,7 @@ int Http3Connection::send_static_response(Http3Stream* stream,
 
 int Http3Connection::send_webtransport_connect_response(Http3Stream* stream)
 {
-  // std::cerr << "[HTTP/3] Accepting WebTransport CONNECT stream_id="
-  //           << stream->stream_id << std::endl;
+  NPRPC_HTTP3_TRACE("Accepting WebTransport CONNECT stream_id={}", stream->stream_id);
 
   std::string status_str = "200";
   std::array<nghttp3_nv, 2> nva;
@@ -2123,8 +2120,7 @@ int Http3Connection::send_webtransport_connect_response(Http3Stream* stream)
   int rv = nghttp3_conn_submit_response(httpconn_, stream->stream_id,
                                         nva.data(), nva.size(), &dr);
   if (rv != 0) {
-    std::cerr << "[HTTP/3][E] nghttp3_conn_submit_response(CONNECT): "
-              << nghttp3_strerror(rv) << std::endl;
+    NPRPC_HTTP3_ERROR("nghttp3_conn_submit_response(CONNECT): {}", nghttp3_strerror(rv));
     return -1;
   }
 
@@ -2134,9 +2130,8 @@ int Http3Connection::send_webtransport_connect_response(Http3Stream* stream)
 int Http3Connection::handle_webtransport_connect(Http3Stream* stream)
 {
   if (stream->scheme != "https" || stream->authority.empty()) {
-    // std::cerr << "[HTTP/3][E] Rejecting WebTransport CONNECT stream_id="
-    //           << stream->stream_id << " scheme='" << stream->scheme
-    //           << "' authority='" << stream->authority << "'" << std::endl;
+    NPRPC_HTTP3_ERROR("Rejecting WebTransport CONNECT stream_id={} scheme='{}' authority='{}'",
+                      stream->stream_id, stream->scheme, stream->authority);
     return send_static_response(stream, 400, "text/plain",
                                 "Invalid WebTransport CONNECT request");
   }
@@ -2145,8 +2140,7 @@ int Http3Connection::handle_webtransport_connect(Http3Stream* stream)
   stream->webtransport_session_id = stream->stream_id;
   webtransport_session_ids_.insert(stream->stream_id);
 
-  // std::cerr << "[HTTP/3] WebTransport session established stream_id="
-  //           << stream->stream_id << std::endl;
+  NPRPC_HTTP3_TRACE("WebTransport session established stream_id={}", stream->stream_id);
 
   return send_webtransport_connect_response(stream);
 }
@@ -2407,8 +2401,8 @@ int Http3Connection::start_closing_period()
       &last_error_, timestamp_ns());
 
   if (n < 0) {
-    std::cerr << "[HTTP/3][E] ngtcp2_conn_write_connection_close: "
-              << ngtcp2_strerror(static_cast<int>(n)) << std::endl;
+    NPRPC_LOG_ERROR("[HTTP/3][E] ngtcp2_conn_write_connection_close: {}", 
+                    ngtcp2_strerror(static_cast<int>(n)));
     return -1;
   }
 
@@ -2439,6 +2433,7 @@ int Http3Connection::start_closing_period()
 //==============================================================================
 void Http3Connection::print_ssl_state(std::string_view prefix)
 {
+#if NPRPC_NGTCP2_ENABLE_LOGGING 
   // Check SSL state
   auto ssl = ngtcp2_crypto_ossl_ctx_get_ssl(ossl_ctx_);
   if (ssl) {
@@ -2456,6 +2451,7 @@ void Http3Connection::print_ssl_state(std::string_view prefix)
                         ERR_error_string(err, nullptr));
     }
   }
+#endif
 }
 
 //==============================================================================
@@ -2534,8 +2530,7 @@ int Http3Connection::on_stream_close(ngtcp2_conn* conn,
   if (h->httpconn_ && (!stream || !stream->webtransport_child_stream)) {
     int rv = nghttp3_conn_close_stream(h->httpconn_, stream_id, app_error_code);
     if (rv != 0 && rv != NGHTTP3_ERR_STREAM_NOT_FOUND) {
-      std::cerr << "[HTTP/3][E] nghttp3_conn_close_stream: "
-                << nghttp3_strerror(rv) << std::endl;
+      NPRPC_HTTP3_ERROR("nghttp3_conn_close_stream: {}", nghttp3_strerror(rv));
       ngtcp2_ccerr_set_application_error(
           &h->last_error_, nghttp3_err_infer_quic_app_error_code(rv), nullptr,
           0);
@@ -2726,8 +2721,7 @@ int Http3Connection::http_end_stream_cb(nghttp3_conn* conn,
       return NGHTTP3_ERR_CALLBACK_FAILURE;
     }
   } catch (const std::exception& e) {
-    std::cerr << "[HTTP/3][E] Exception in http_end_stream_cb: " << e.what()
-              << std::endl;
+    NPRPC_HTTP3_ERROR("Exception in http_end_stream_cb: {}", e.what());
     return NGHTTP3_ERR_CALLBACK_FAILURE;
   }
 
@@ -2818,15 +2812,14 @@ bool Http3Server::start()
 
   // Initialize ngtcp2 crypto
   if (ngtcp2_crypto_ossl_init() != 0) {
-    std::cerr << "[HTTP/3][E] Failed to initialize ngtcp2 crypto" << std::endl;
+    NPRPC_HTTP3_ERROR("Failed to initialize ngtcp2 crypto");
     return false;
   }
 
   // Create SSL context
   ssl_ctx_ = SSL_CTX_new(TLS_server_method());
   if (!ssl_ctx_) {
-    std::cerr << "[HTTP/3][E] Failed to create SSL context: "
-              << ERR_error_string(ERR_get_error(), nullptr) << std::endl;
+    NPRPC_HTTP3_ERROR("Failed to create SSL context: {}", ERR_error_string(ERR_get_error(), nullptr));
     return false;
   }
 
@@ -2845,7 +2838,7 @@ bool Http3Server::start()
 
   // Set ciphersuites for TLS 1.3
   if (SSL_CTX_set_ciphersuites(ssl_ctx_, crypto_default_ciphers()) != 1) {
-    std::cerr << "[HTTP/3][E] Failed to set ciphersuites" << std::endl;
+    NPRPC_HTTP3_TRACE("Failed to set ciphersuites");
     SSL_CTX_free(ssl_ctx_);
     ssl_ctx_ = nullptr;
     return false;
@@ -2853,7 +2846,7 @@ bool Http3Server::start()
 
   // Set groups for key exchange
   if (SSL_CTX_set1_groups_list(ssl_ctx_, crypto_default_groups()) != 1) {
-    std::cerr << "[HTTP/3][E] Failed to set groups" << std::endl;
+    NPRPC_HTTP3_TRACE("Failed to set groups");
     SSL_CTX_free(ssl_ctx_);
     ssl_ctx_ = nullptr;
     return false;
@@ -2894,16 +2887,15 @@ bool Http3Server::start()
           }
           i += 1 + len;
         }
-        std::cerr << "[HTTP/3][ERR] ALPN selection failed - no h3 found"
-                  << std::endl;
+        NPRPC_HTTP3_TRACE("ALPN selection failed - no h3 found");
         return SSL_TLSEXT_ERR_ALERT_FATAL;
       },
       nullptr);
 
   // Load certificate and key
   if (SSL_CTX_use_certificate_chain_file(ssl_ctx_, cert_file_.c_str()) != 1) {
-    std::cerr << "[HTTP/3][ERR] Failed to load certificate: "
-              << ERR_error_string(ERR_get_error(), nullptr) << std::endl;
+    NPRPC_HTTP3_ERROR("Failed to load certificate: {}",
+                      ERR_error_string(ERR_get_error(), nullptr));
     SSL_CTX_free(ssl_ctx_);
     ssl_ctx_ = nullptr;
     return false;
@@ -2911,16 +2903,15 @@ bool Http3Server::start()
 
   if (SSL_CTX_use_PrivateKey_file(ssl_ctx_, key_file_.c_str(),
                                   SSL_FILETYPE_PEM) != 1) {
-    std::cerr << "[HTTP/3][ERR] Failed to load private key: "
-              << ERR_error_string(ERR_get_error(), nullptr) << std::endl;
+    NPRPC_HTTP3_ERROR("Failed to load private key: {}",
+                      ERR_error_string(ERR_get_error(), nullptr));
     SSL_CTX_free(ssl_ctx_);
     ssl_ctx_ = nullptr;
     return false;
   }
 
   if (SSL_CTX_check_private_key(ssl_ctx_) != 1) {
-    std::cerr << "[HTTP/3][ERR] Certificate and private key mismatch"
-              << std::endl;
+    NPRPC_HTTP3_ERROR("Certificate and private key mismatch");
     SSL_CTX_free(ssl_ctx_);
     ssl_ctx_ = nullptr;
     return false;
@@ -2934,8 +2925,7 @@ bool Http3Server::start()
   boost::system::error_code ec;
   socket_.open(boost::asio::ip::udp::v6(), ec);
   if (ec) {
-    std::cerr << "[HTTP/3][E] Failed to open socket: " << ec.message()
-              << std::endl;
+    NPRPC_HTTP3_ERROR("Failed to open socket: {}", ec.message());
     SSL_CTX_free(ssl_ctx_);
     ssl_ctx_ = nullptr;
     return false;
@@ -2954,8 +2944,7 @@ bool Http3Server::start()
   socket_.bind(
       boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v6(), port_), ec);
   if (ec) {
-    std::cerr << "[HTTP/3][E] Failed to bind socket: " << ec.message()
-              << std::endl;
+    NPRPC_LOG_ERROR("Failed to bind socket: {}", ec.message());
     SSL_CTX_free(ssl_ctx_);
     ssl_ctx_ = nullptr;
     return false;
@@ -3000,7 +2989,7 @@ int Http3Server::send_packet(const boost::asio::ip::udp::endpoint& remote_ep,
   boost::system::error_code ec;
   socket_.send_to(boost::asio::buffer(data, len), remote_ep, 0, ec);
   if (ec) {
-    std::cerr << "[HTTP/3][E] send_to failed: " << ec.message() << std::endl;
+    NPRPC_HTTP3_TRACE("send_to failed: {}", ec.message());
     return -1;
   }
   return 0;
@@ -3119,7 +3108,7 @@ void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
       hd.token, hd.tokenlen, hd.version, ssl_ctx_);
 
   if (!conn->init()) {
-    std::cerr << "[HTTP/3][E] Failed to initialize connection" << std::endl;
+    NPRPC_HTTP3_ERROR("Failed to initialize connection");
     return;
   }
 
@@ -3150,8 +3139,8 @@ int Http3Server::send_version_negotiation(
       vc.dcidlen, sv.data(), sv.size());
 
   if (nwrite < 0) {
-    std::cerr << "[HTTP/3][E] ngtcp2_pkt_write_version_negotiation: "
-              << ngtcp2_strerror(static_cast<int>(nwrite)) << std::endl;
+    NPRPC_HTTP3_TRACE("ngtcp2_pkt_write_version_negotiation: {}",
+                      ngtcp2_strerror(static_cast<int>(nwrite)));
     return -1;
   }
 
@@ -3219,7 +3208,7 @@ NPRPC_API void init_http3_server(boost::asio::io_context& ioc)
       ioc, g_cfg.http_cert_file, g_cfg.http_key_file, g_cfg.listen_http_port);
 
   if (!g_http3_server->start()) {
-    std::cerr << "[HTTP/3][E] Failed to start server" << std::endl;
+    NPRPC_HTTP3_ERROR("Failed to start server");
     g_http3_server.reset();
   }
 }

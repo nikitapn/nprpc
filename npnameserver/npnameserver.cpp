@@ -70,18 +70,11 @@ int main()
 
     auto poa = nprpc::PoaBuilder(rpc)
                    .with_max_objects(1)
-                   .with_object_id_policy(
-                       nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied)
-                   .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                   .with_object_id_policy( nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied) .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
                    .build();
 
     auto oid = poa->activate_object_with_id(
-        0, &server,
-        nprpc::ObjectActivationFlags::tcp |
-        nprpc::ObjectActivationFlags::ws |
-        nprpc::ObjectActivationFlags::wss |
-        nprpc::ObjectActivationFlags::http |
-        nprpc::ObjectActivationFlags::https);
+        0, &server, nprpc::ObjectActivationFlags::all);
 
     boost::asio::signal_set signals(rpc->ioc(), SIGINT, SIGTERM);
     signals.async_wait(

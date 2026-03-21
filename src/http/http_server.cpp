@@ -172,9 +172,6 @@ handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req)
       return rpc_error("Failed to process RPC request");
     }
 
-    NPRPC_LOG_INFO("HTTP RPC: Processed request, response size: {} bytes",
-                   response_body.size());
-
     return rpc_response(std::move(response_body), set_cookies);
 
   } catch (const std::exception& e) {

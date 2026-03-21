@@ -47,7 +47,7 @@ NPRPC_API RpcBuilder::RpcBuilder()
         reinterpret_cast<const boost::uuids::uuid&>(uuid), buf.data(),
         buf.data() + buf.size());
     assert(ret);
-    NPRPC_LOG_INFO("nprpc UUID: {}", buf);
+    NPRPC_LOG_INFO("UUID: {}", buf);
   }
 }
 

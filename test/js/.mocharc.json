@@ -1,4 +1,5 @@
 {
+  "require": ["dist/test/mocha-global.js"],
   "spec": ["dist/test/**/*.js"],
   "timeout": 30000,
   "reporter": "spec",

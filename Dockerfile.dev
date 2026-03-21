@@ -144,7 +144,7 @@ RUN ar rcs /opt/nprpc/lib/libCNprpc.a \
 FROM swift:6.2.4
 
 LABEL org.opencontainers.image.title="NPRPC Development Image"
-LABEL org.opencontainers.image.description="Swift 6.2.3 with NPRPC C++ and Swift bindings"
+LABEL org.opencontainers.image.description="Swift 6.2.4 with NPRPC C++ and Swift bindings"
 LABEL org.opencontainers.image.version="1.0.0"
 
 # Install runtime dependencies

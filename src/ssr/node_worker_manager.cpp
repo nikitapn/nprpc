@@ -10,7 +10,6 @@
 #include <nprpc_node.hpp>
 
 #include <filesystem>
-#include <fstream>
 #include <unordered_map>
 
 #if !defined(_WIN32)

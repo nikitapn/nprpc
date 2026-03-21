@@ -11,6 +11,22 @@
 
 #include "logging.hpp"
 
+#define NPRPC_ENABLE_SESSION_TRACE 0
+
+#if NPRPC_ENABLE_SESSION_TRACE
+# define NPRPC_SESSION_LOG_TRACE(format, ...)                \
+  NPRPC_LOG_TRACE(                                           \
+    "[SESSION] {:p} {} " #format, (void*)this,               \
+    remote_endpoint().to_string() __VA_OPT__(, )__VA_ARGS__)
+#else
+# define NPRPC_SESSION_LOG_TRACE(format, ...) do {} while(0)
+#endif
+
+#define NPRPC_SESSION_LOG_ERROR(format, ...)                  \
+  NPRPC_LOG_ERROR(                                            \
+    "[SESSION] {:p} {} " #format, (void*)this,                \
+    remote_endpoint().to_string() __VA_OPT__(, )__VA_ARGS__)
+
 namespace nprpc {
 extern void set_context(impl::Session& session);
 extern void reset_context();
@@ -62,14 +78,12 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     if (obj.validate_session(this->ctx_))
       return true;
 
-    NPRPC_LOG_ERROR("[SESSION] {:p} {} is trying to access secured object: {}",
-      (void*)this, remote_endpoint().to_string(), obj.get_class());
+    NPRPC_SESSION_LOG_ERROR("is trying to access secured object: {}", obj.get_class());
     make_simple_answer(ctx_, nprpc::impl::MessageId::Error_BadAccess);
     return false;
   };
 
-  NPRPC_LOG_INFO("[SESSION] {:p} {} Received message of size {} bytes",
-    (void*)this, remote_endpoint().to_string(), rx_buffer.size());
+  NPRPC_SESSION_LOG_TRACE("Received message of size {} bytes", rx_buffer.size());
 
   // Set context buffers
   ctx_.rx_buffer = &rx_buffer;
@@ -79,8 +93,7 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
 
   // Validate message contains at least a header before accessing it
   if (cb.size() < sizeof(impl::flat::Header)) {
-    NPRPC_LOG_ERROR("[SESSION] {:p} {} Message too small for header: {} bytes",
-      (void*)this, remote_endpoint().to_string(), cb.size());
+    NPRPC_SESSION_LOG_ERROR("Message too small for header: {} bytes", cb.size());
     make_simple_answer(ctx_, nprpc::impl::MessageId::Error_BadInput);
     return needs_reply;
   }
@@ -91,9 +104,9 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     impl::flat::StreamInit_Direct msg(rx_buffer, sizeof(impl::Header));
     const auto request_id = header->request_id;
 
-    NPRPC_LOG_INFO("[SESSION] {:p} {} StreamInit. stream_id: {}, "
-                   "interface_idx: {}, fn_idx: {}, poa_idx: {}, oid: {}",
-                   (void*)this, remote_endpoint().to_string(), msg.stream_id(), (uint32_t)msg.interface_idx(),
+    NPRPC_SESSION_LOG_TRACE("Got Msg: StreamInit [stream_id: {}, "
+                   "interface_idx: {}, fn_idx: {}, poa_idx: {}, oid: {}]",
+                   msg.stream_id(), (uint32_t)msg.interface_idx(),
                    (uint32_t)msg.func_idx(), msg.poa_idx(), msg.object_id());
 
     bool not_found = true;
@@ -109,8 +122,7 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
           if (tx_buffer.size() < sizeof(impl::flat::Header))
             make_simple_answer(ctx_, MessageId::Success);
         } catch (const std::exception& e) {
-          NPRPC_LOG_ERROR( "[SESSION] {:p} {}: Exception during stream dispatch: {}",
-              (void*)this, remote_endpoint().to_string(), e.what());
+          NPRPC_SESSION_LOG_ERROR("Exception during stream dispatch: {}", e.what());
           if (tx_buffer.size() < sizeof(impl::flat::Header)) {
             make_simple_answer(ctx_, MessageId::Error_BadInput);
           }
@@ -125,8 +137,7 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
 
     if (not_found) {
       if (tx_buffer.size() < sizeof(impl::flat::Header)) {
-        NPRPC_LOG_ERROR("[SESSION] {:p} {} Object not found for stream. {}",
-                        (void*)this, remote_endpoint().to_string(), msg.object_id());
+        NPRPC_SESSION_LOG_ERROR("Object not found for stream. {}", msg.object_id());
         ctx_.stream_manager->send_error(msg.stream_id(), 1,
                                         {}); // TODO: proper error code
       }
@@ -134,20 +145,20 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     break;
   }
   case MessageId::StreamDataChunk: {
-    NPRPC_LOG_INFO("[SESSION] {:p} {} StreamDataChunk.", (void*)this, remote_endpoint().to_string());
+    NPRPC_SESSION_LOG_TRACE("Got Msg: StreamDataChunk");
     ctx_.stream_manager->on_chunk_received(std::move(rx_buffer));
     needs_reply = false;  // Fire-and-forget, no reply needed
     break;
   }
   case MessageId::StreamCompletion: {
-    NPRPC_LOG_INFO("[SESSION] {:p} {} StreamCompletion.", (void*)this, remote_endpoint().to_string());
+    NPRPC_SESSION_LOG_TRACE("Got Msg: StreamCompletion");
     impl::flat::StreamComplete_Direct msg(rx_buffer, sizeof(impl::Header));
     ctx_.stream_manager->on_stream_complete(msg.stream_id(), msg.final_sequence());
     needs_reply = false;  // Fire-and-forget
     break;
   }
   case MessageId::StreamError: {
-    NPRPC_LOG_INFO("[SESSION] {:p} {} StreamError.", (void*)this, remote_endpoint().to_string());
+    NPRPC_SESSION_LOG_TRACE("Got Msg: StreamError");
     impl::flat::StreamError_Direct msg(rx_buffer, sizeof(impl::Header));
     // Copy error data from the message
     flat_buffer error_fb;
@@ -162,14 +173,14 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     break;
   }
   case MessageId::StreamCancellation: {
-    NPRPC_LOG_INFO("[SESSION] {:p} {} StreamCancellation.", (void*)this, remote_endpoint().to_string());
+    NPRPC_SESSION_LOG_TRACE("Got Msg: StreamCancellation");
     impl::flat::StreamCancel_Direct msg(rx_buffer, sizeof(impl::Header));
     ctx_.stream_manager->on_stream_cancel(msg.stream_id());
     needs_reply = false;  // Fire-and-forget
     break;
   }
   case MessageId::StreamWindowUpdate: {
-    NPRPC_LOG_INFO("[SESSION] {:p} {} StreamWindowUpdate.", (void*)this, remote_endpoint().to_string());
+    NPRPC_SESSION_LOG_TRACE("Got Msg: StreamWindowUpdate");
     impl::flat::StreamWindowUpdate_Direct msg(rx_buffer, sizeof(impl::Header));
     ctx_.stream_manager->on_window_update(msg.stream_id(), msg.credits());
     needs_reply = false;  // Fire-and-forget
@@ -178,9 +189,9 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
   case MessageId::FunctionCall: {
     impl::flat::CallHeader_Direct ch(rx_buffer, sizeof(impl::Header));
 
-    NPRPC_LOG_INFO("[SESSION] {:p} {} FunctionCall. request_id: {}, "
-                   "interface_idx: {}, fn_idx: {}, poa_idx: {}, oid: {}",
-                   (void*)this, remote_endpoint().to_string(), header->request_id, (uint32_t)ch.interface_idx(),
+    NPRPC_SESSION_LOG_TRACE("Got Msg: FunctionCall. [request_id: {}, "
+                   "interface_idx: {}, fn_idx: {}, poa_idx: {}, oid: {}]",
+                   header->request_id, (uint32_t)ch.interface_idx(),
                    (uint32_t)ch.function_idx(), ch.poa_idx(), ch.object_id());
 
     bool not_found = true;
@@ -194,8 +205,7 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
         try {
           real_obj->dispatch(ctx_, false);
         } catch (const std::exception& e) {
-          NPRPC_LOG_ERROR("[SESSION] {:p} {} Exception during dispatch: {}",
-                          (void*)this, remote_endpoint().to_string(), e.what());
+          NPRPC_SESSION_LOG_ERROR("Exception during dispatch: {}", e.what());
           // TODO: find out why Web client does not handle
           // Error_BadInput properly
           make_simple_answer(ctx_, MessageId::Error_BadInput, request_id);
@@ -213,8 +223,7 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     }
 
     if (not_found) {
-      NPRPC_LOG_ERROR("[SESSION] {:p} {} Object not found. {}",
-                      (void*)this, remote_endpoint().to_string(), ch.object_id());
+      NPRPC_SESSION_LOG_ERROR("Object not found {}", ch.object_id());
     }
 
     break;
@@ -223,8 +232,8 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     detail::flat::ObjectIdLocal_Direct msg(rx_buffer, sizeof(impl::Header));
     detail::ObjectIdLocal oid{msg.poa_idx(), msg.object_id()};
 
-    NPRPC_LOG_INFO("[SESSION] {:p} {} AddReference. poa_idx: {}, oid: {}",
-                   (void*)this, remote_endpoint().to_string(), oid.poa_idx, oid.object_id);
+    NPRPC_SESSION_LOG_TRACE("AddReference [poa_idx: {}, oid: {}]",
+                            oid.poa_idx, oid.object_id);
 
     bool success = false;
     if (auto obj = get_object(ctx_, msg.poa_idx(), msg.object_id()); obj) {
@@ -237,10 +246,10 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     }
 
     if (success) {
-      NPRPC_LOG_INFO("[SESSION] {:p} {} Reference added.", (void*)this, remote_endpoint().to_string());
+      NPRPC_SESSION_LOG_TRACE("Reference added");
       make_simple_answer(ctx_, nprpc::impl::MessageId::Success);
     } else {
-      NPRPC_LOG_INFO("[SESSION] {:p} {} Object not found.", (void*)this, remote_endpoint().to_string());
+      NPRPC_SESSION_LOG_TRACE("Object not found");
       make_simple_answer(ctx_, nprpc::impl::MessageId::Error_ObjectNotExist);
     }
 
@@ -250,8 +259,8 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     detail::flat::ObjectIdLocal_Direct msg(rx_buffer, sizeof(impl::Header));
     detail::ObjectIdLocal oid{msg.poa_idx(), msg.object_id()};
 
-    NPRPC_LOG_INFO( "[SESSION] {:p} {} ReleaseObject. poa_idx: {}, oid: {}",
-      (void*)this, remote_endpoint().to_string(), oid.poa_idx, oid.object_id);
+    NPRPC_SESSION_LOG_TRACE("ReleaseObject [poa_idx: {}, oid: {}]",
+                            oid.poa_idx, oid.object_id);
 
     if (ctx_.ref_list.remove_ref(msg.poa_idx(), msg.object_id())) {
       make_simple_answer(ctx_, nprpc::impl::MessageId::Success);
@@ -262,14 +271,13 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     break;
   }
   default:
-    NPRPC_LOG_ERROR("[SESSION] {:p} {} Unknown message ID: {}",
-                    (void*)this, remote_endpoint().to_string(), static_cast<uint32_t>(header->msg_id));
+    NPRPC_SESSION_LOG_ERROR("Unknown message ID: {}", static_cast<uint32_t>(header->msg_id));
     make_simple_answer(ctx_, nprpc::impl::MessageId::Error_UnknownMessageId);
     break;
   }
 
   if (needs_reply) {
-    NPRPC_LOG_INFO("[SESSION] {:p} {} sending reply:", (void*)this, remote_endpoint().to_string());
+    NPRPC_SESSION_LOG_TRACE("Sending reply");
     // dump_message(tx_buffer, true);
     if (ctx_.stream_manager) {
       ctx_.stream_manager->on_reply_sent();

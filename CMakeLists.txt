@@ -257,7 +257,6 @@ add_library(nprpc
   src/helper.cpp
   src/flat_buffer.cpp
   src/uuid.cpp
-  src/framework.h
   # Public headers
   include/nprpc_base_ext.hpp
   include/nprpc_nameserver.hpp

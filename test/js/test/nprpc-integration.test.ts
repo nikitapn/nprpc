@@ -9,7 +9,6 @@ import { installHttp3Fetch, http3Fetch } from './http3-fetch-polyfill';
 import * as NPRPC from 'nprpc';
 import { EndPointType } from 'nprpc';
 import * as test from '../src/gen/nprpc_test';
-import { ServerManager } from './server-manager';
 
 // Test data constants (matching C++ tests)
 const nested_test_str1 = "34k535n3jknjknfdjgndfgnj4kjn545kr3k4n3k45j n34k kgfdg334r34rnkfndkgn[34l5k32;45l324lk;5j324k5j32lk4;5j34lknmt3l2k4ng54;nt295t0-2jt2ithnjkgnsfdgmndf;gkj3m450934j5234k5n345n345lkjn643kj6n4kljnkbvnvcb456456456gfhfgh56y";
@@ -18,7 +17,6 @@ const nested_test_str2 = "d34234k24j1;lk24j12lk341234n45n345n3kj45n2345jn34lk5jn
 describe('NPRPC Integration Tests', function() {
     this.timeout(30000); // 30 second timeout for all tests
     
-    const serverManager = new ServerManager();
     let rpc: NPRPC.Rpc;
     let poa: NPRPC.Poa;
     let nameserver: NPRPC.Nameserver;
@@ -27,12 +25,6 @@ describe('NPRPC Integration Tests', function() {
         this.timeout(60000); // 60 seconds for setup
         
         console.log('Setting up NPRPC test environment...');
-        
-        // Start nameserver and test server
-        const serversStarted = await serverManager.startAll();
-        if (!serversStarted) {
-            throw new Error('Failed to start servers');
-        }
 
         // Initialize RPC connection
         try {
@@ -40,7 +32,6 @@ describe('NPRPC Integration Tests', function() {
             poa = rpc.create_poa(128);
             console.log('RPC initialized successfully');
         } catch (error) {
-            serverManager.killServer();
             throw new Error(`Failed to initialize RPC: ${error}`);
         }
 
@@ -52,7 +43,6 @@ describe('NPRPC Integration Tests', function() {
             // Wait a bit more for test server to register objects
             await new Promise(resolve => setTimeout(resolve, 3000));
         } catch (error) {
-            serverManager.killServer();
             throw new Error(`Failed to get nameserver: ${error}`);
         }
 
@@ -61,14 +51,7 @@ describe('NPRPC Integration Tests', function() {
 
     after(async function() {
         console.log('Cleaning up NPRPC test environment...');
-        try {
-            const serverControl = await resolveTestObject('nprpc_test_server_control', test.ServerControl);
-            await serverControl.Shutdown();
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            // Server shutdown should also stop nameserver
-        } catch (error) {
-            serverManager.killServer();
-        }
+        await new Promise(resolve => setTimeout(resolve, 100));
     });
 
     async function resolveTestObject<T extends NPRPC.ObjectProxy>(objectName: string, obj: new() => T): Promise<any> {

@@ -61,8 +61,6 @@ chrome.runtime.onConnect.addListener((port) => {
 window.addEventListener('__nprpc_debug_event__', (e: Event) => {
   const detail = (e as CustomEvent<Record<string, unknown>>).detail;
 
-  console.log('Content script received event', detail);
-
   if (panelPort && earlyEvents.length === 0) {
     try {
       panelPort.postMessage({ source: 'nprpc_content', ...withOffset(detail) });

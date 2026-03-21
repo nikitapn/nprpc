@@ -73,6 +73,10 @@ export class ServerManager {
     }
 
     async startAll(): Promise<boolean> {
+        if (this.serverProcess && ServerManager.isProcessRunning(this.serverProcess)) {
+            return true;
+        }
+
         // Start test server
         const testServerStarted = await this.startTestServer();
         if (!testServerStarted)
@@ -82,7 +86,7 @@ export class ServerManager {
     }
 
     killServer() {
-        if (ServerManager.isProcessRunning(this.serverProcess!)) {
+        if (this.serverProcess && ServerManager.isProcessRunning(this.serverProcess)) {
             console.log('Stopping test server...');
             this.serverProcess.kill('SIGTERM');
         }
@@ -92,4 +96,10 @@ export class ServerManager {
 
         this.serverProcess = null;
     }
+}
+
+const sharedServerManager = new ServerManager();
+
+export function getSharedServerManager(): ServerManager {
+    return sharedServerManager;
 }

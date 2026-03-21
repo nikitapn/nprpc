@@ -5,6 +5,28 @@
 #include <nprpc/impl/websocket_session.hpp>
 #include "../logging.hpp"
 
+#define NPRPC_ENABLE_WEBSOCKET_SESSION_TRACE 0
+
+#if NPRPC_ENABLE_WEBSOCKET_SESSION_TRACE
+# define NPRPC_WEBSOCKET_SESSION_LOG_TRACE(format, ...)       \
+  NPRPC_LOG_TRACE(                                            \
+    "[WS] {:p} {} " #format, (void*)this,       \
+    remote_endpoint().to_string() __VA_OPT__(, )__VA_ARGS__)
+#else
+# define NPRPC_WEBSOCKET_SESSION_LOG_TRACE(format, ...) do {} while(0)
+#endif
+
+
+#define NPRPC_WEBSOCKET_SESSION_LOG_WARN(format, ...)        \
+  NPRPC_LOG_WARN(                                            \
+    "[WS] {:p} {} " #format, (void*)this,                    \
+    remote_endpoint().to_string() __VA_OPT__(, )__VA_ARGS__)
+
+#define NPRPC_WEBSOCKET_SESSION_LOG_ERROR(format, ...)        \
+  NPRPC_LOG_ERROR(                                            \
+    "[WS] {:p} {} " #format, (void*)this,                     \
+    remote_endpoint().to_string() __VA_OPT__(, )__VA_ARGS__)
+
 namespace nprpc::impl {
 
 void fail(beast::error_code ec, char const* what)
@@ -33,7 +55,9 @@ void fail(beast::error_code ec, char const* what)
   if (ec == beast::error::timeout)
     return;
 
-  NPRPC_LOG_INFO("WebSocketSession: {}: {}", what, ec.message());
+#if NPRPC_ENABLE_WEBSOCKET_SESSION_TRACE
+  NPRPC_LOG_TRACE("[WS] fail: {}: {}", what, ec.message());
+#endif
 }
 
 template <class Derived> void WebSocketSession<Derived>::do_read()
@@ -73,7 +97,7 @@ void WebSocketSession<Derived>::on_read(
 
   // Additional safety check: verify message size
   if (rx_buffer_.size() > max_message_size) {
-    NPRPC_LOG_WARN("WebSocketSession::on_read: Rejected oversized WebSocket message: {} bytes (max: {} bytes)",
+    NPRPC_WEBSOCKET_SESSION_LOG_WARN("on_read: Rejected oversized WebSocket message: {} bytes (max: {} bytes)",
       rx_buffer_.size(), max_message_size);
     close();
     return;
@@ -82,7 +106,7 @@ void WebSocketSession<Derived>::on_read(
   nprpc::impl::flat::Header_Direct header(rx_buffer_, 0);
   const uint32_t request_id = header.request_id();
 
-  NPRPC_LOG_TRACE("WebSocketSession::on_read: size={}, msg_id={}, msg_type={}, request_id={}",
+  NPRPC_WEBSOCKET_SESSION_LOG_TRACE("on_read: size={}, msg_id={}, msg_type={}, request_id={}",
     rx_buffer_.size(), static_cast<uint32_t>(header.msg_id()), static_cast<uint32_t>(header.msg_type()), request_id);
 
   if (header.msg_type() == nprpc::impl::MessageType::Request) {
@@ -116,7 +140,7 @@ void WebSocketSession<Derived>::on_read(
       pending_requests_.erase(it);
     } else {
       // Received response for unknown request - possible attack or bug
-      NPRPC_LOG_WARN("WebSocketSession: Received response for unknown request ID: {}", request_id);
+      NPRPC_WEBSOCKET_SESSION_LOG_WARN("Received response for unknown request ID: {}", request_id);
     }
   }
 
@@ -228,7 +252,7 @@ template <class Derived> void WebSocketSession<Derived>::timeout_action()
       flat_buffer empty_response{};
       it->second.completion_handler(boost::asio::error::timed_out,
                                     empty_response);
-      NPRPC_LOG_WARN("WebSocketSession: Timing out request ID: {}", it->first);
+      NPRPC_WEBSOCKET_SESSION_LOG_WARN("Timing out request ID: {}", it->first);
       it = pending_requests_.erase(it);
     } else {
       ++it;
@@ -283,12 +307,6 @@ void WebSocketSession<Derived>::send_receive_async(
   // Inject request ID into message header
   inject_request_id(buffer, request_id);
 
-  // nprpc::impl::flat::Header_Direct header(buffer, 0);
-  // std::cout << "[nprpc] WebSocketSession: send_receive_async called. size: "
-  //           << buffer.size()
-  //           << ", msg_id: " << static_cast<uint32_t>(header.msg_id())
-  //           << ", request_id: " << header.request_id() << std::endl;
-
   // Queue the request for sending
   boost::asio::post(
       derived().ws().get_executor(),
@@ -331,7 +349,7 @@ void WebSocketSession<Derived>::send_stream_message(flat_buffer&& buffer)
   boost::asio::post(
       derived().ws().get_executor(),
       [this, buffer = std::move(buffer)]() mutable {
-        NPRPC_LOG_INFO("WebSocketSession::send_stream_message posted: buffer.size()={}", buffer.size());
+        NPRPC_WEBSOCKET_SESSION_LOG_TRACE("send_stream_message posted: buffer.size()={}", buffer.size());
         // Queue with no completion handler (fire and forget)
         write_queue_.emplace_back(std::move(buffer), nullptr);
         do_write();
@@ -341,11 +359,6 @@ void WebSocketSession<Derived>::send_stream_message(flat_buffer&& buffer)
 template <class Derived> void WebSocketSession<Derived>::start_read_loop()
 {
   do_read();
-}
-
-template <class Derived> void WebSocketSession<Derived>::start_write_loop()
-{
-  // Write loop is driven by incoming requests, no need for separate start
 }
 
 template <class Derived>

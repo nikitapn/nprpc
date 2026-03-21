@@ -8,7 +8,7 @@ namespace nprpc::impl {
 NPRPC_API std::shared_ptr<SimpleLogger>& get_logger()
 {
   static std::shared_ptr<SimpleLogger> logger =
-      std::make_shared<SimpleLogger>("nprpc", LogLevel::info);
+      std::make_shared<SimpleLogger>("NPRPC", LogLevel::info);
   return logger;
 }
 
