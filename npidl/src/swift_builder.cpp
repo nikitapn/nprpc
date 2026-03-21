@@ -1775,7 +1775,7 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
     const int size = get_fundamental_size(token);
     const int field_offset = align_offset(size, offset, size);
 
-    out << bl() << "buf.storeBytes(of: " << field_access << ", toByteOffset: offset + " << field_offset << ", as: ";
+    out << bl() << "buffer.storeBytes(of: " << field_access << ", toByteOffset: offset + " << field_offset << ", as: ";
     emit_fundamental_type(token, out);
     out << ".self)\n";
     break;
@@ -1783,7 +1783,7 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
   case FieldType::Enum: {
     const int size = get_fundamental_size(cenum(f->type)->token_id);
     const int field_offset = align_offset(size, offset, size);
-    out << bl() << "buf.storeBytes(of: " << field_access << ".rawValue, toByteOffset: offset + " << field_offset << ", as: ";
+    out << bl() << "buffer.storeBytes(of: " << field_access << ".rawValue, toByteOffset: offset + " << field_offset << ", as: ";
     emit_fundamental_type(cenum(f->type)->token_id, out);
     out << ".self)\n";
     break;
@@ -1896,7 +1896,7 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
       out << bl() << "// TODO: Optional of type " << static_cast<int>(wt->id) << "\n";
     }
     out << eb(false) << bl() << "} else {\n" << bb(false);
-    out << bl() << "buf.storeBytes(of: UInt32(0), toByteOffset: offset + " << field_offset << ", as: UInt32.self)\n";
+    out << bl() << "buffer.storeBytes(of: UInt32(0), toByteOffset: offset + " << field_offset << ", as: UInt32.self)\n";
     out << eb();
     break;
   }
@@ -1909,21 +1909,6 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
   }
   default:
     out << bb() << "// TODO: marshal field " << f->name << " (type " << static_cast<int>(f->type->id) << ")\n";
-  }
-}
-
-// Helper to check if a field type requires direct buffer access (buf variable)
-bool needs_buf_for_marshal(AstTypeDecl* type) {
-  switch (type->id) {
-  case FieldType::Fundamental:
-  case FieldType::Enum:
-    return true; // Direct storeBytes
-  case FieldType::Optional:
-    return true; // Writes 0 for nil case
-  case FieldType::Alias:
-    return needs_buf_for_marshal(calias(type)->get_real_type());
-  default:
-    return false; // Delegates to other functions
   }
 }
 
@@ -1943,24 +1928,11 @@ void SwiftBuilder::emit_marshal_function(AstStructDecl* s)
   out << bl() << visibility << (in_namespace ? "static " : "") << "func marshal_" << s->name << "(buffer: FlatBuffer, offset: Int, data: " << data_type << ") ";
   out << bb();
 
-  // Only emit buf variable if any field needs direct byte access
-  bool needs_buf = false;
-  for (auto field : s->fields) {
-    if (needs_buf_for_marshal(field->type)) {
-      needs_buf = true;
-      break;
-    }
-  }
-
-  if (needs_buf) {
-    out << bl() << "guard let buf = buffer.data else { return }\n";
-  }
-
   int current_offset = 0;
   for (auto field : s->fields) {
     if (s->is_exception() && field->name == "__ex_id") {
       // Special handling for exception ID field - write the exception ID instead of marshaling from data
-      out << bl() << "buf.storeBytes(of: UInt32(" << s->exception_id << "), toByteOffset: offset + " << current_offset << ", as: UInt32.self)\n";
+      out << bl() << "buffer.storeBytes(of: UInt32(" << s->exception_id << "), toByteOffset: offset + " << current_offset << ", as: UInt32.self)\n";
       current_offset += 4; // __ex_id is always a UInt32
       continue;
     }

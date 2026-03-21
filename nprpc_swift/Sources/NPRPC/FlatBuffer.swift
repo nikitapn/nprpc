@@ -45,6 +45,12 @@ public class FlatBuffer: @unchecked Sendable {
     public var size: Int {
         return nprpc_flatbuffer_size(handle)
     }
+
+    /// Store a scalar using a freshly fetched data pointer so callers remain safe across reallocations.
+    public func storeBytes<T>(of value: T, toByteOffset offset: Int, as type: T.Type) {
+        guard let data = self.data else { return }
+        data.storeBytes(of: value, toByteOffset: offset, as: type)
+    }
     
     /// Prepare space for writing
     public func prepare(_ n: Int) {
