@@ -183,6 +183,25 @@ target_link_libraries(test_shared_memory_listener
 
 add_test(NAME SharedMemoryListener COMMAND test_shared_memory_listener)
 
+# Test executable for HTTP utility helpers
+add_executable(test_http_utils
+  src/test_http_utils.cpp
+  ../src/http/http_utils.cpp
+)
+
+target_include_directories(test_http_utils
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+target_link_libraries(test_http_utils
+  PRIVATE
+    nprpc::nprpc
+    GTest::gtest
+)
+
+add_test(NAME HttpUtils COMMAND test_http_utils)
+
 # HTTP/3 Shell Script Tests (requires server to be started manually or via wrapper)
 if(NPRPC_ENABLE_HTTP3)
   # Create a wrapper script that starts the server, runs tests, and stops it
@@ -233,16 +252,16 @@ exit \$RESULT
                 WORLD_READ WORLD_EXECUTE
   )
   
-  # add_test(
-  #   NAME HTTP3Transport
-  #   COMMAND ${CMAKE_CURRENT_BINARY_DIR}/run_http3_tests.sh
-  #   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-  # )
+  add_test(
+    NAME HTTP3Transport
+    COMMAND ${CMAKE_CURRENT_BINARY_DIR}/run_http3_tests.sh
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
   
-  # set_tests_properties(HTTP3Transport PROPERTIES
-  #   TIMEOUT 60
-  #   LABELS "http3;integration"
-  # )
+  set_tests_properties(HTTP3Transport PROPERTIES
+    TIMEOUT 60
+    LABELS "http3;integration"
+  )
   
   # Add dependency on the server test executable
   add_dependencies(nprpc_test nprpc_server_test)
@@ -254,4 +273,5 @@ add_dependencies(nprpc_test
   test_lock_free_ring_buffer
   test_shared_memory_endpoint
   test_shared_memory_listener
+  test_http_utils
 )

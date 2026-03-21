@@ -43,7 +43,10 @@ const std::string& get_test_message()
 // Basic write and read test
 TEST(LockFreeRingBuffer, WriteRead)
 {
-  auto buffer = LockFreeRingBuffer::create("test_ring_buffer", 40);
+  // Slot format now carries 8 bytes of per-message metadata plus a spare byte
+  // to distinguish full from empty, so keep the ring comfortably larger than
+  // the generated test messages.
+  auto buffer = LockFreeRingBuffer::create("test_ring_buffer", 64);
 
   ASSERT_NE(buffer, nullptr);
 
@@ -57,7 +60,7 @@ TEST(LockFreeRingBuffer, WriteRead)
     ASSERT_TRUE(write_result);
 
     // Read message
-    char read_buffer[40];
+    char read_buffer[64];
     size_t bytes_read = buffer->try_read(read_buffer, sizeof(read_buffer));
     ASSERT_EQ(bytes_read, message_size);
     ASSERT_EQ(std::string_view(read_buffer, bytes_read),

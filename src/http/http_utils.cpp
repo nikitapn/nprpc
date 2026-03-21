@@ -8,8 +8,30 @@
 #include <boost/beast/core/string.hpp>
 
 #include <algorithm>
+#include <filesystem>
 
 namespace nprpc::impl {
+
+namespace {
+
+bool path_is_within_root(const std::filesystem::path& root,
+                        const std::filesystem::path& candidate) noexcept
+{
+  const auto relative = candidate.lexically_relative(root);
+  if (relative.empty()) {
+    return candidate == root;
+  }
+
+  for (const auto& component : relative) {
+    if (component == "..") {
+      return false;
+    }
+  }
+
+  return !relative.is_absolute();
+}
+
+} // namespace
 
 std::string_view mime_type(std::string_view path)
 {
@@ -72,34 +94,56 @@ std::string_view mime_type(std::string_view path)
   return "application/octet-stream";
 }
 
-std::string path_cat(std::string_view base, std::string_view path)
+std::optional<std::filesystem::path>
+resolve_http_doc_root_path(std::string_view doc_root,
+                           std::string_view request_target) noexcept
 {
-  if (base.empty()) {
-    return std::string(path);
+  namespace fs = std::filesystem;
+
+  if (doc_root.empty() || request_target.empty() || request_target[0] != '/') {
+    return std::nullopt;
   }
 
-  std::string result(base);
-
-#ifdef _WIN32
-  char constexpr path_separator = '\\';
-  if (result.back() == path_separator) {
-    result.resize(result.size() - 1);
+  const auto target_end = request_target.find_first_of("?#");
+  const auto target_path = request_target.substr(0, target_end);
+  if (target_path.empty() || target_path[0] != '/') {
+    return std::nullopt;
   }
-  result.append(path);
-  for (auto& c : result) {
-    if (c == '/') {
-      c = path_separator;
+
+  std::error_code ec;
+  const fs::path canonical_root = fs::weakly_canonical(fs::path(doc_root), ec);
+  if (ec || canonical_root.empty()) {
+    return std::nullopt;
+  }
+
+  const fs::path raw_target_path(target_path);
+  for (const auto& component : raw_target_path) {
+    if (component == "..") {
+      return std::nullopt;
     }
   }
-#else
-  char constexpr path_separator = '/';
-  if (result.back() == path_separator) {
-    result.resize(result.size() - 1);
-  }
-  result.append(path);
-#endif
 
-  return result;
+  fs::path relative_path;
+  for (const auto& component : raw_target_path.lexically_normal()) {
+    if (component.empty() || component == "/" || component == ".") {
+      continue;
+    }
+
+    if (component == "..") {
+      return std::nullopt;
+    }
+
+    relative_path /= component;
+  }
+
+  const fs::path resolved_path =
+      fs::weakly_canonical(canonical_root / relative_path, ec);
+  if (ec || resolved_path.empty() ||
+      !path_is_within_root(canonical_root, resolved_path)) {
+    return std::nullopt;
+  }
+
+  return resolved_path;
 }
 
 bool is_rpc_http_target(std::string_view path) noexcept

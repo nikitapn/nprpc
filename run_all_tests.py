@@ -4,7 +4,7 @@ Unified build and test runner for NPRPC.
 
 Stages (all enabled by default, skip with --skip-<stage>):
   cmake   - cmake --build (C++ + TS/JS via nprpc_js_test target)
-  cpp     - run nprpc_test binary via ctest
+    cpp     - run C++ tests via ctest
   js      - build + run Mocha tests in test/js
   swift   - gen stubs + docker-build + docker test
 
@@ -18,7 +18,7 @@ Options:
   --skip-js              Skip JavaScript/TypeScript tests
   --skip-swift           Skip Swift tests
   --cmake-target TARGET  CMake build target (default: all)
-  --cpp-filter FILTER    gtest filter passed to nprpc_test (e.g. '*Basic*')
+    --cpp-filter FILTER    CTest regex filter for C++ tests (e.g. 'HTTP3Transport|HttpUtils')
   --color                Force coloured output even when not a TTY
   -v, --verbose          Show full output from sub-commands (default: only on failure)
   -h, --help             Show this help message
@@ -148,21 +148,23 @@ class Runner:
         cmd = ["cmake", "--build", str(self.build_dir), "--target", target, f"-j{nproc}"]
         return self._stage("CMake build", cmd, timeout=600)
 
-    def stage_cpp(self, gtest_filter: Optional[str]) -> Result:
-        test_bin = self.build_dir / "test" / "nprpc_test"
-        if not test_bin.exists():
+    def stage_cpp(self, ctest_filter: Optional[str]) -> Result:
+        ctest_dir = self.build_dir / "test"
+        ctest_file = ctest_dir / "CTestTestfile.cmake"
+        if not ctest_file.exists():
             r = Result(stage="C++ tests", success=False, duration=0,
-                       output=f"Test binary not found: {test_bin}\n")
+                       output=f"CTest metadata not found: {ctest_file}\n")
             self.results.append(r)
-            print(c(C.RED, f"  Test binary not found: {test_bin}"))
+            print(c(C.RED, f"  CTest metadata not found: {ctest_file}"))
             return r
 
-        # Kill leftover nameserver from previous run
+        # Kill leftover helper processes from previous runs
         subprocess.run(["pkill", "-9", "npnameserver"], capture_output=True)
+        subprocess.run(["pkill", "-9", "nprpc_server_test"], capture_output=True)
 
-        cmd = [str(test_bin)]
-        if gtest_filter:
-            cmd.append(f"--gtest_filter={gtest_filter}")
+        cmd = ["ctest", "--test-dir", str(ctest_dir), "--output-on-failure"]
+        if ctest_filter:
+            cmd.extend(["-R", ctest_filter])
         return self._stage("C++ tests", cmd, timeout=120)
 
     def stage_js(self) -> Result:
@@ -274,7 +276,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cmake-target", default="all",
                    help="CMake target to build (default: all)")
     p.add_argument("--cpp-filter",  default=None,
-                   help="GTest filter for C++ tests (e.g. '*Basic*')")
+                   help="CTest regex filter for C++ tests (e.g. 'HTTP3Transport|HttpUtils')")
     p.add_argument("--color",       action="store_true", help="Force coloured output")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="Show full subprocess output even on success")

@@ -36,12 +36,16 @@ run_test() {
     local method="$3"
     local url="$4"
     local data="$5"
-    
+    local extra_flags="$6"
+
     echo -n "Testing $test_name... "
-    
+
     # Build curl command - use --http3-only for strict HTTP/3
     local cmd="curl -s -o /dev/null -w '%{http_code}' --http3-only --insecure"
-    
+    if [ -n "$extra_flags" ]; then
+        cmd="$cmd $extra_flags"
+    fi
+
     if [ "$method" = "POST" ]; then
         cmd="$cmd -X POST -H 'Content-Type: application/octet-stream'"
         if [ -n "$data" ]; then
@@ -50,9 +54,9 @@ run_test() {
     elif [ "$method" = "OPTIONS" ]; then
         cmd="$cmd -X OPTIONS -H 'Access-Control-Request-Method: POST'"
     fi
-    
+
     cmd="$cmd '$url'"
-    
+
     # Execute and capture response code
     local status_code
     status_code=$(eval "$cmd" 2>/dev/null) || {
@@ -60,7 +64,7 @@ run_test() {
         ((TESTS_FAILED++))
         return 1
     }
-    
+
     if [ "$status_code" = "$expected_status" ]; then
         echo -e "${GREEN}PASSED${NC} (HTTP $status_code)"
         ((TESTS_PASSED++))
@@ -79,26 +83,26 @@ run_test_with_body() {
     local method="$3"
     local url="$4"
     local expected_content="$5"
-    
+
     echo -n "Testing $test_name... "
-    
+
     local cmd="curl -s --http3-only --insecure"
     if [ "$method" = "POST" ]; then
         cmd="$cmd -X POST"
     fi
     cmd="$cmd -w '\n%{http_code}' '$url'"
-    
+
     local response
     response=$(eval "$cmd" 2>/dev/null) || {
         echo -e "${RED}FAILED${NC} (curl error)"
         ((TESTS_FAILED++))
         return 1
     }
-    
+
     # Get status (last line) and body
     local status_code=$(echo "$response" | tail -1)
     local body=$(echo "$response" | head -n -1)
-    
+
     if [ "$status_code" = "$expected_status" ]; then
         if [ -n "$expected_content" ] && ! echo "$body" | grep -q "$expected_content"; then
             echo -e "${RED}FAILED${NC} (content mismatch)"
@@ -124,23 +128,23 @@ main() {
     echo "========================================"
     echo "Target: https://$HOST:$HTTP3_PORT"
     echo ""
-    
+
     # Check curl HTTP/3 support
     if ! check_curl_http3; then
         echo ""
         echo -e "${RED}Cannot run HTTP/3 tests without HTTP/3 support in curl${NC}"
         exit 1
     fi
-    
+
     # First, verify the server is running
     echo ""
     echo "--- Pre-flight Check ---"
     echo -n "Checking if HTTP/3 server is running... "
-    
+
     # Use -o /dev/null to suppress output and just check status
     local http_code
     http_code=$(curl -s -o /dev/null -w '%{http_code}' --http3-only --insecure "https://$HOST:$HTTP3_PORT/" 2>/dev/null) || true
-    
+
     if [ -z "$http_code" ] || [ "$http_code" = "000" ]; then
         echo -e "${RED}FAILED${NC}"
         echo ""
@@ -151,41 +155,31 @@ main() {
         exit 1
     fi
     echo -e "${GREEN}OK${NC} (got HTTP $http_code)"
-    
-    # FIXME: First request always times out! Fix server http3 implementation.
-    echo "Note: First request may time out due to server HTTP/3 implementation issues."
 
-    # Test 1: CORS preflight
-    # echo ""
-    # echo "--- CORS Support ---"
-    # run_test "OPTIONS preflight" "204" "OPTIONS" "https://$HOST:$HTTP3_PORT/rpc"
-    
-    # Test 2: RPC endpoint (POST without valid data should return error)
-    # echo ""
-    # echo "--- RPC Endpoint ---"
-    # run_test "POST to /rpc (no data)" "200" "POST" "https://$HOST:$HTTP3_PORT/rpc" ""
-    # Skip RPC with data tests for now - msh3 seems to hang on small payloads
-    # run_test "POST to /rpc (invalid data)" "400" "POST" "https://$HOST:$HTTP3_PORT/rpc" "invalid"
-    
-    # Test 3: GET requests (should fail for /rpc as it only accepts POST)
-    # GET to /rpc path without POST is handled in static file routing
-    # run_test "GET /rpc (not allowed)" "400" "GET" "https://$HOST:$HTTP3_PORT/rpc"
-    
-    # Test 4: Static file requests
-    # echo ""
-    # echo "--- Static Files ---"
-    # Without http_root_dir configured, this should return 400
-    # run_test "GET / (root)" "200" "GET" "https://$HOST:$HTTP3_PORT/"
-    
+    echo ""
+    echo "--- CORS Support ---"
+    run_test "OPTIONS preflight allowed origin" "204" "OPTIONS" \
+        "https://$HOST:$HTTP3_PORT/rpc" "" \
+        "-H 'Origin: https://localhost:24443'"
+    run_test "OPTIONS preflight denied origin" "403" "OPTIONS" \
+        "https://$HOST:$HTTP3_PORT/rpc" "" \
+        "-H 'Origin: https://localhost:29999'"
+
+    echo ""
+    echo "--- Static Files ---"
+    run_test "GET / (root)" "200" "GET" "https://$HOST:$HTTP3_PORT/"
+    run_test "GET raw traversal outside root" "404" "GET" \
+        "https://$HOST:$HTTP3_PORT/../../README.md" "" "--path-as-is"
+
     echo ""
     echo "========================================"
     echo "Results: $TESTS_PASSED passed, $TESTS_FAILED failed"
     echo "========================================"
-    
+
     if [ $TESTS_FAILED -gt 0 ]; then
         exit 1
     fi
-    
+
     echo ""
     echo -e "${GREEN}All HTTP/3 tests passed!${NC}"
 }

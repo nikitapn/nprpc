@@ -38,6 +38,8 @@ TEST(SharedMemoryListener, AcceptAndCommunicate)
           // Echo back
           server_channel->send(data.data(), data.size());
         };
+
+        server_channel->start_reading();
       });
 
   listener.start();
@@ -61,6 +63,7 @@ TEST(SharedMemoryListener, AcceptAndCommunicate)
     client_received = true;
     ioc.stop();
   };
+  client_channel->start_reading();
 
   // Send message from client
   ASSERT_TRUE(client_channel->send(test_message.data(), test_message.size()));

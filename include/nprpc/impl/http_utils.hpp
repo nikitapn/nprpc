@@ -3,8 +3,8 @@
 
 #pragma once
 
+#include <filesystem>
 #include <optional>
-#include <string>
 #include <string_view>
 
 namespace nprpc::impl {
@@ -13,9 +13,12 @@ namespace nprpc::impl {
 /// The returned string_view points to static storage and is always valid.
 std::string_view mime_type(std::string_view path);
 
-/// Append an HTTP relative path to a local filesystem path.
-/// The returned path is normalized for the platform.
-std::string path_cat(std::string_view base, std::string_view path);
+/// Resolve a request target under the configured HTTP doc root.
+/// Returns std::nullopt when the target is malformed or escapes doc_root,
+/// including via symlink traversal.
+std::optional<std::filesystem::path>
+resolve_http_doc_root_path(std::string_view doc_root,
+						   std::string_view request_target) noexcept;
 
 /// Returns true when the request target addresses the HTTP RPC endpoint.
 bool is_rpc_http_target(std::string_view path) noexcept;

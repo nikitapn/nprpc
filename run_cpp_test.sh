@@ -1,12 +1,16 @@
 #!/bin/env bash
 
 set -e
-cmake --build .build_relwith_debinfo --target=nprpc_test -j$(nproc)
+cmake --build .build_relwith_debinfo \
+	--target nprpc_test nprpc_server_test test_http_utils \
+	-j$(nproc)
 set +e
 pkill -9 npnameserver 2>/dev/null
 
-timeout 10 ./.build_relwith_debinfo/test/nprpc_test $@
-# gdb --args ./.build_relwith_debinfo/test/nprpc_test --gtest_filter="*TestBasic*"
+timeout 60 ctest --test-dir .build_relwith_debinfo/test --output-on-failure "$@"
+# Examples:
+#   ./run_cpp_test.sh -R HTTP3Transport
+#   ./run_cpp_test.sh -R NprpcTest.TestBasic
 echo "Tests exited with code $?"
 
 

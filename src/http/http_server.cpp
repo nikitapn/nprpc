@@ -378,21 +378,21 @@ handle_request(beast::string_view doc_root,
   if (g_cfg.http_root_dir.empty())
     return bad_request("Illegal request: only Upgrade is allowed");
 
-  // Request path must be absolute and not contain "..".
-  if (req.target().empty() || req.target()[0] != '/' ||
-      req.target().find("..") != beast::string_view::npos)
+  if (req.target().empty() || req.target()[0] != '/')
     return bad_request("Illegal request-target");
 
-  std::string path;
-
+  auto request_target = std::string_view(req.target().data(), req.target().size());
   if (req.target().length() == 1 && req.target().back() == '/') {
-    path = path_cat(doc_root, "/index.html");
-  } else {
-    path = path_cat(doc_root, req.target());
+    request_target = "/index.html";
+  }
+
+  auto path = resolve_http_doc_root_path(doc_root, request_target);
+  if (!path) {
+    return not_found(req.target());
   }
 
   // Get file from cache (zero-copy)
-  auto cached_file = get_file_cache().get(path);
+  auto cached_file = get_file_cache().get(*path);
   if (!cached_file) {
     return not_found(req.target());
   }

@@ -1902,16 +1902,24 @@ int Http3Connection::start_response(Http3Stream* stream)
       request_path = "/index.html";
     }
 
-    auto file_path = path_cat(g_cfg.http_root_dir, request_path);
+    auto file_path = resolve_http_doc_root_path(g_cfg.http_root_dir,
+                                                request_path);
+    if (!file_path) {
+      NPRPC_HTTP3_ERROR("Rejected static path outside root: {} (root={})",
+                        request_path, g_cfg.http_root_dir);
+      return send_static_response(stream, 404, "text/html",
+                                  "<!DOCTYPE html><html><body><h1>404 "
+                                  "Not Found</h1></body></html>");
+    }
 
-    NPRPC_HTTP3_TRACE("Serving file: {} (root={}, path={})", file_path,
+    NPRPC_HTTP3_TRACE("Serving file: {} (root={}, path={})", file_path->string(),
                       g_cfg.http_root_dir, request_path);
 
     // Get file from cache (zero-copy)
-    auto cached_file = get_file_cache().get(file_path);
+    auto cached_file = get_file_cache().get(*file_path);
     if (!cached_file) {
       // 404 Not Found
-      NPRPC_HTTP3_ERROR("File not found: {} (path={})", file_path, request_path);
+      NPRPC_HTTP3_ERROR("File not found: {} (path={})", file_path->string(), request_path);
       return send_static_response(stream, 404, "text/html",
                                   "<!DOCTYPE html><html><body><h1>404 "
                                   "Not Found</h1></body></html>");
