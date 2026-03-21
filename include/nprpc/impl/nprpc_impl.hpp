@@ -49,6 +49,9 @@ struct Config {
   std::string quic_key_file;
   std::string http_root_dir;
   std::vector<std::string> http_allowed_origins;
+  size_t http_max_request_body_size = 10'000;
+  size_t http_websocket_max_message_size = 32 * 1024 * 1024;
+  size_t http_webtransport_max_message_size = 32 * 1024 * 1024;
   std::string ssr_handler_dir; // Path to SSR handler (index.js)
   bool watch_files = false;   // Enable inotify-based cache invalidation (dev mode)
   ssl::context ssl_context_server{ssl::context::tlsv13_server};

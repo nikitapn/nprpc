@@ -59,7 +59,7 @@ class websocket_session_with_acceptor : public Derived
         websocket::stream_base::timeout::suggested(beast::role_type::server));
 
     // Set maximum message size to prevent memory exhaustion attacks
-    this->ws().read_message_max(max_message_size);
+    this->ws().read_message_max(g_cfg.http_websocket_max_message_size);
 
     // Set a decorator to change the Server of the handshake
     this->ws().set_option(
@@ -67,13 +67,10 @@ class websocket_session_with_acceptor : public Derived
           res.set(http::field::server, std::string(BOOST_BEAST_VERSION_STRING));
         }));
 
-    // permessage_deflate is disabled: NPRPC sends binary flatbuffer data that
-    // does not benefit from compression, and zlib overhead (~200 MB/s) makes
-    // large-message latency 5-10x worse with no size win.
-    // websocket::permessage_deflate opt;
-    // opt.client_enable = true;
-    // opt.server_enable = true;
-    // this->ws().set_option(opt);
+    websocket::permessage_deflate opt;
+    opt.client_enable = true;
+    opt.server_enable = true;
+    this->ws().set_option(opt);
 
     // Instead of Beast's per-read/write timeouts (expensive under io_uring),
     // rely on session-level timers

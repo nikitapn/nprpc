@@ -217,10 +217,12 @@ struct Http3Stream {
   std::map<std::string, std::string> headers; // All headers for SSR
   size_t content_length = 0;
   flat_buffer request_body;
+  bool request_body_too_large = false;
 
   bool http_stream = false;
   bool webtransport_session = false;
   bool webtransport_child_stream = false;
+  bool webtransport_rejected = false;
   WebTransportChildBinding webtransport_child_binding =
       WebTransportChildBinding::Unbound;
   bool response_started = false;
@@ -343,6 +345,10 @@ private:
   int http_end_headers(Http3Stream* stream);
   int http_end_stream(Http3Stream* stream);
   void http_stream_close(int64_t stream_id, uint64_t app_error_code);
+  int reject_oversized_request_body(Http3Stream* stream);
+  void reject_webtransport_stream(Http3Stream* stream,
+                                  std::string_view reason,
+                                  size_t buffered_size);
 
   // Response handling
   int start_response(Http3Stream* stream);
@@ -592,13 +598,30 @@ public:
                                     remote_ep.port());
   }
 
-  void process_bytes(const uint8_t* data, size_t datalen)
+  bool process_bytes(const uint8_t* data, size_t datalen)
   {
+    if (receive_buffer_.size() > g_cfg.http_webtransport_max_message_size ||
+        datalen > g_cfg.http_webtransport_max_message_size -
+                      receive_buffer_.size()) {
+      NPRPC_LOG_ERROR(
+          "[HTTP/3][WT] Rejecting oversized control/native payload: buffered={} incoming={} limit={}",
+          receive_buffer_.size(), datalen,
+          g_cfg.http_webtransport_max_message_size);
+      return false;
+    }
+
     append_bytes(receive_buffer_, data, datalen);
 
     while (receive_buffer_.size() >= sizeof(std::uint32_t)) {
       std::uint32_t payload_len = 0;
       std::memcpy(&payload_len, receive_buffer_.data_ptr(), sizeof(payload_len));
+
+      if (payload_len > g_cfg.http_webtransport_max_message_size) {
+        NPRPC_LOG_ERROR(
+            "[HTTP/3][WT] Rejecting oversized framed message: payload={} limit={}",
+            payload_len, g_cfg.http_webtransport_max_message_size);
+        return false;
+      }
 
       const size_t frame_len = static_cast<size_t>(payload_len) + sizeof(std::uint32_t);
       if (receive_buffer_.size() < frame_len) {
@@ -619,13 +642,15 @@ public:
         inject_request_id(tx_buffer, request_id);
         if (control_stream_id_ < 0) {
           NPRPC_LOG_ERROR("[HTTP/3][WT] Cannot reply before control stream is bound");
-          return;
+          return false;
         }
         queue_buffer(control_stream_id_, std::move(tx_buffer));
       }
 
       receive_buffer_.consume(frame_len);
     }
+
+    return true;
   }
 
   void send_receive(flat_buffer&, uint32_t) override
@@ -1647,10 +1672,14 @@ int Http3Connection::recv_stream_data(uint32_t flags,
        !webtransport_session_ids_.empty());
 
   if (should_probe_webtransport) {
+    if (stream->webtransport_rejected) {
+      return 0;
+    }
+
     if (handle_webtransport_stream_data(stream, flags, data, datalen) != 0) {
       return -1;
     }
-    if (stream->webtransport_child_stream) {
+    if (stream->webtransport_child_stream && !stream->webtransport_rejected) {
       ngtcp2_conn_extend_max_stream_offset(conn_, stream_id,
                                            static_cast<uint64_t>(datalen));
       ngtcp2_conn_extend_max_offset(conn_, static_cast<uint64_t>(datalen));
@@ -1774,6 +1803,11 @@ void Http3Connection::http_recv_header(Http3Stream* stream,
 int Http3Connection::http_end_headers(Http3Stream* stream)
 {
   NPRPC_HTTP3_TRACE("Request: {} {}", stream->method, stream->path);
+
+  if (stream->request_body_too_large ||
+      stream->content_length > g_cfg.http_max_request_body_size) {
+    return reject_oversized_request_body(stream);
+  }
 
   // Extended CONNECT requests do not terminate the request stream with FIN.
   // WebTransport expects the 200 response immediately after headers.
@@ -2072,6 +2106,31 @@ int Http3Connection::handle_rpc_request(Http3Stream* stream)
   }
 }
 
+int Http3Connection::reject_oversized_request_body(Http3Stream* stream)
+{
+  if (!stream) {
+    return -1;
+  }
+
+  if (stream->response_started) {
+    return 0;
+  }
+
+  const auto buffered_size = stream->request_body.size();
+
+  stream->response_started = true;
+  stream->request_body_too_large = true;
+  stream->request_body.clear();
+
+  NPRPC_HTTP3_ERROR(
+      "Rejecting oversized request body stream_id={} path='{}' content_length={} buffered={} limit={}",
+      stream->stream_id, stream->path, stream->content_length,
+      buffered_size, g_cfg.http_max_request_body_size);
+
+  return send_static_response(stream, 413, "text/plain",
+                              "Request body too large");
+}
+
 PreparedResponseHeaders&
 Http3Connection::make_response_headers(Http3Stream* stream,
                                        unsigned int status_code,
@@ -2344,6 +2403,28 @@ Http3Connection::get_or_create_webtransport_control_session(int64_t session_stre
   return session;
 }
 
+void Http3Connection::reject_webtransport_stream(Http3Stream* stream,
+                                                 std::string_view reason,
+                                                 size_t buffered_size)
+{
+  if (!stream || stream->webtransport_rejected) {
+    return;
+  }
+
+  stream->webtransport_rejected = true;
+  stream->webtransport_probe_buffer.clear();
+
+  NPRPC_LOG_ERROR(
+      "[HTTP/3][WT] Rejecting stream {} session={} reason='{}' buffered={} limit={}",
+      stream->stream_id, stream->webtransport_session_id, reason, buffered_size,
+      g_cfg.http_webtransport_max_message_size);
+
+  ngtcp2_conn_shutdown_stream_read(conn_, 0, stream->stream_id,
+                                   NGHTTP3_H3_MESSAGE_ERROR);
+  ngtcp2_conn_shutdown_stream_write(conn_, 0, stream->stream_id,
+                                    NGHTTP3_H3_MESSAGE_ERROR);
+}
+
 int Http3Connection::handle_webtransport_stream_data(Http3Stream* stream,
                                                      uint32_t flags,
                                                      const uint8_t* data,
@@ -2364,6 +2445,16 @@ int Http3Connection::handle_webtransport_stream_data(Http3Stream* stream,
         debug_id(), stream->stream_id, datalen,
         (flags & NGTCP2_STREAM_DATA_FLAG_FIN) != 0,
         stream->webtransport_probe_buffer.size());
+
+    if (stream->webtransport_probe_buffer.size() >
+        g_cfg.http_webtransport_max_message_size ||
+      datalen > g_cfg.http_webtransport_max_message_size -
+              stream->webtransport_probe_buffer.size()) {
+      reject_webtransport_stream(stream, "probe buffer too large",
+                   stream->webtransport_probe_buffer.size() +
+                     datalen);
+      return 0;
+    }
 
     append_bytes(stream->webtransport_probe_buffer, data, datalen);
 
@@ -2428,6 +2519,17 @@ int Http3Connection::handle_webtransport_stream_data(Http3Stream* stream,
         debug_id(), stream->stream_id, datalen,
         (flags & NGTCP2_STREAM_DATA_FLAG_FIN) != 0,
         stream->webtransport_probe_buffer.size());
+
+    if (stream->webtransport_probe_buffer.size() >
+            g_cfg.http_webtransport_max_message_size ||
+        datalen > g_cfg.http_webtransport_max_message_size -
+                      stream->webtransport_probe_buffer.size()) {
+      reject_webtransport_stream(stream, "child binding probe too large",
+                                 stream->webtransport_probe_buffer.size() +
+                                     datalen);
+      return 0;
+    }
+
     append_bytes(stream->webtransport_probe_buffer, data, datalen);
   } else {
     NPRPC_HTTP3_DEBUG(
@@ -2437,7 +2539,9 @@ int Http3Connection::handle_webtransport_stream_data(Http3Stream* stream,
         (flags & NGTCP2_STREAM_DATA_FLAG_FIN) != 0);
     auto session =
         get_or_create_webtransport_control_session(stream->webtransport_session_id);
-    session->process_bytes(data, datalen);
+    if (!session->process_bytes(data, datalen)) {
+      reject_webtransport_stream(stream, "payload frame too large", datalen);
+    }
     return 0;
   }
 
@@ -2492,8 +2596,14 @@ int Http3Connection::handle_webtransport_stream_data(Http3Stream* stream,
     }
 
     if (stream->webtransport_probe_buffer.size() > binding_len) {
-      session->process_bytes(stream->webtransport_probe_buffer.data_ptr() + binding_len,
-                             stream->webtransport_probe_buffer.size() - binding_len);
+      if (!session->process_bytes(
+              stream->webtransport_probe_buffer.data_ptr() + binding_len,
+              stream->webtransport_probe_buffer.size() - binding_len)) {
+        reject_webtransport_stream(stream, "post-bind payload too large",
+                                   stream->webtransport_probe_buffer.size() -
+                                       binding_len);
+        return 0;
+      }
     }
     stream->webtransport_probe_buffer.clear();
   }
@@ -2867,6 +2977,13 @@ int Http3Connection::http_recv_data_cb(nghttp3_conn* conn,
   auto stream = static_cast<Http3Stream*>(stream_user_data);
 
   if (stream) {
+    const auto current_size = stream->request_body.size();
+    if (current_size > g_cfg.http_max_request_body_size ||
+        datalen > g_cfg.http_max_request_body_size - current_size) {
+      stream->request_body_too_large = true;
+      return h->reject_oversized_request_body(stream);
+    }
+
     append_bytes(stream->request_body, data, datalen);
   }
 

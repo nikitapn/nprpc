@@ -92,6 +92,9 @@ struct RpcBuildConfig {
     std::string http_dhparams_file;
     std::string http_root_dir;
     std::string http_allowed_origins;
+    size_t http_max_request_body_size = 10'000;
+    size_t http_websocket_max_message_size = 2 * 1024 * 1024;
+    size_t http_webtransport_max_message_size = 2 * 1024 * 1024;
     std::string ssr_handler_dir;
     bool watch_files = false;  // Enable inotify-based cache invalidation (dev mode)
 

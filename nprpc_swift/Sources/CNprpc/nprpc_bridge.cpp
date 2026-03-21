@@ -174,6 +174,9 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.http_root_dir = config->http_root_dir;
         decode_allowed_origins(config->http_allowed_origins,
                        cxxConfig.http_allowed_origins);
+        cxxConfig.http_max_request_body_size = config->http_max_request_body_size;
+        cxxConfig.http_websocket_max_message_size = config->http_websocket_max_message_size;
+        cxxConfig.http_webtransport_max_message_size = config->http_webtransport_max_message_size;
         cxxConfig.ssr_handler_dir = config->ssr_handler_dir;
         cxxConfig.watch_files = config->watch_files;
         cxxConfig.quic_port = config->quic_port;

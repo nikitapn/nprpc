@@ -140,8 +140,11 @@ public:
                 .set_log_level(nprpc::LogLevel::trace)
                 .with_hostname("localhost")
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
-                .with_tcp(22222)//.with_uring()
+                .with_tcp(22222)
                 .with_http(22223)
+                    .max_request_body_size(10'000)
+                    .max_websocket_message_size(24 * 1024 * 1024)
+                    .max_webtransport_message_size(24 * 1024 * 1024)
                     .root_dir("/home/nikita/projects/nprpc/test/http")
                     .allow_origins({"https://localhost:24443"})
                     .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",

@@ -3,6 +3,7 @@
 // LICENSING file in the topmost directory
 
 #include <nprpc/impl/async_connect.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/websocket_session.hpp>
 
 namespace nprpc::impl {
@@ -18,6 +19,7 @@ make_client_plain_websocket_session(const EndPoint& endpoint,
   auto ws = future.get();
   auto session = std::make_shared<ClientPlainWebSocketSession>(
       std::move(*ws.release()), endpoint);
+  session->ws().read_message_max(g_cfg.http_websocket_max_message_size);
   // Mirror the server-side performance settings.
   session->ws().auto_fragment(false);
   session->ws().write_buffer_bytes(4 * 1024 * 1024);
@@ -42,6 +44,7 @@ make_client_ssl_websocket_session(const EndPoint& endpoint,
   auto ws = future.get();
   auto session = std::make_shared<ClientSSLWebSocketSession>(
       std::move(*ws.release()), endpoint);
+  session->ws().read_message_max(g_cfg.http_websocket_max_message_size);
   // Mirror the server-side performance settings (SSL layer wraps TCP).
   session->ws().auto_fragment(false);
   session->ws().write_buffer_bytes(4 * 1024 * 1024);

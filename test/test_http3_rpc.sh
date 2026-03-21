@@ -76,6 +76,45 @@ run_test() {
     fi
 }
 
+run_test_with_file() {
+    local test_name="$1"
+    local expected_status="$2"
+    local method="$3"
+    local url="$4"
+    local data_file="$5"
+    local extra_flags="$6"
+
+    echo -n "Testing $test_name... "
+
+    local cmd="curl -s -o /dev/null -w '%{http_code}' --http3-only --insecure"
+    if [ -n "$extra_flags" ]; then
+        cmd="$cmd $extra_flags"
+    fi
+
+    if [ "$method" = "POST" ]; then
+        cmd="$cmd -X POST -H 'Content-Type: application/octet-stream' --data-binary '@$data_file'"
+    fi
+
+    cmd="$cmd '$url'"
+
+    local status_code
+    status_code=$(eval "$cmd" 2>/dev/null) || {
+        echo -e "${RED}FAILED${NC} (curl error - HTTP/3 connection failed)"
+        ((TESTS_FAILED++))
+        return 1
+    }
+
+    if [ "$status_code" = "$expected_status" ]; then
+        echo -e "${GREEN}PASSED${NC} (HTTP $status_code)"
+        ((TESTS_PASSED++))
+        return 0
+    else
+        echo -e "${RED}FAILED${NC} (expected HTTP $expected_status, got $status_code)"
+        ((TESTS_FAILED++))
+        return 1
+    fi
+}
+
 # Test that returns body and checks content
 run_test_with_body() {
     local test_name="$1"
@@ -123,6 +162,11 @@ run_test_with_body() {
 
 # Main test suite
 main() {
+    local oversized_body_file
+    oversized_body_file=$(mktemp)
+    trap 'rm -f "$oversized_body_file"' RETURN
+    head -c 10001 /dev/zero | tr '\0' 'a' > "$oversized_body_file"
+
     echo "========================================"
     echo "NPRPC HTTP/3 RPC Tests"
     echo "========================================"
@@ -164,6 +208,13 @@ main() {
     run_test "OPTIONS preflight denied origin" "403" "OPTIONS" \
         "https://$HOST:$HTTP3_PORT/rpc" "" \
         "-H 'Origin: https://localhost:29999'"
+
+    echo ""
+    echo "--- Request Bodies ---"
+    run_test "POST small body" "200" "POST" \
+        "https://$HOST:$HTTP3_PORT/oversized" "small-body"
+    run_test_with_file "POST oversized body" "413" "POST" \
+        "https://$HOST:$HTTP3_PORT/oversized" "$oversized_body_file"
 
     echo ""
     echo "--- Static Files ---"

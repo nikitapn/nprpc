@@ -327,6 +327,9 @@ struct BuildConfig {
   std::string http_dhparams_file;
   std::string http_root_dir;
   std::vector<std::string> http_allowed_origins;
+  size_t http_max_request_body_size = 10'000;
+  size_t http_websocket_max_message_size = 2 * 1024 * 1024;
+  size_t http_webtransport_max_message_size = 2 * 1024 * 1024;
   std::string ssr_handler_dir; // Path to SSR handler (index.js), defaults to
                                // http_root_dir
   bool watch_files = false; // Enable inotify-based cache invalidation (dev mode)
@@ -462,6 +465,24 @@ public:
   RpcBuilderHttp& root_dir(std::string_view root_dir) noexcept
   {
     cfg_.http_root_dir = root_dir;
+    return *this;
+  }
+
+  RpcBuilderHttp& max_request_body_size(size_t bytes) noexcept
+  {
+    cfg_.http_max_request_body_size = bytes;
+    return *this;
+  }
+
+  RpcBuilderHttp& max_websocket_message_size(size_t bytes) noexcept
+  {
+    cfg_.http_websocket_max_message_size = bytes;
+    return *this;
+  }
+
+  RpcBuilderHttp& max_webtransport_message_size(size_t bytes) noexcept
+  {
+    cfg_.http_webtransport_max_message_size = bytes;
     return *this;
   }
 

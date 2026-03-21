@@ -81,6 +81,10 @@ try rpc.run()  // Blocks until shutdown
 | `.enableHttp3()` | Enable HTTP/3 (QUIC) protocol |
 | `.enableSsr(handlerDir:)` | Enable server-side rendering |
 | `.rootDir(_:)` | Set HTTP document root directory |
+| `.allowOrigins(_:)` | Allow browser cross-origin requests from specific origins |
+| `.maxRequestBodySize(_:)` | Cap buffered HTTP request body size |
+| `.maxWebSocketMessageSize(_:)` | Cap inbound WebSocket message size |
+| `.maxWebTransportMessageSize(_:)` | Cap inbound WebTransport message size |
 
 ## Comparison with C++
 
@@ -92,6 +96,9 @@ auto rpc = nprpc::RpcBuilder()
     .with_http(3000)
     .ssl("cert.crt", "key.key")
     .enable_http3()
+    .max_request_body_size(10'000)
+    .max_websocket_message_size(24 * 1024 * 1024)
+    .max_webtransport_message_size(24 * 1024 * 1024)
     .root_dir("/path")
     .build(ioc);
 ```
@@ -104,6 +111,9 @@ let rpc = try RpcBuilder()
     .withHttp(3000)
         .ssl(certFile: "cert.crt", keyFile: "key.key")
         .enableHttp3()
+        .maxRequestBodySize(10_000)
+        .maxWebSocketMessageSize(24 * 1024 * 1024)
+        .maxWebTransportMessageSize(24 * 1024 * 1024)
         .rootDir("/path")
     .build()
 ```

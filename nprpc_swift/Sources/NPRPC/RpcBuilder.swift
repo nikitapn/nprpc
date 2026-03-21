@@ -24,6 +24,9 @@ class BuildConfig {
     var httpDhparamsFile: String = ""
     var httpRootDir: String = ""
     var httpAllowedOrigins: [String] = []
+    var httpMaxRequestBodySize: UInt = 10_000
+    var httpWebSocketMaxMessageSize: UInt = 2 * 1024 * 1024
+    var httpWebTransportMaxMessageSize: UInt = 2 * 1024 * 1024
     var ssrHandlerDir: String = ""
     var watchFiles: Bool = false
     
@@ -140,6 +143,9 @@ extension RpcBuilderInternal {
         cxxConfig.http_dhparams_file = std.string(config.httpDhparamsFile)
         cxxConfig.http_root_dir = std.string(config.httpRootDir)
         cxxConfig.http_allowed_origins = std.string(config.httpAllowedOrigins.joined(separator: "\n"))
+        cxxConfig.http_max_request_body_size = numericCast(config.httpMaxRequestBodySize)
+        cxxConfig.http_websocket_max_message_size = numericCast(config.httpWebSocketMaxMessageSize)
+        cxxConfig.http_webtransport_max_message_size = numericCast(config.httpWebTransportMaxMessageSize)
         cxxConfig.ssr_handler_dir = std.string(config.ssrHandlerDir)
         cxxConfig.watch_files = config.watchFiles
         
@@ -228,6 +234,27 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
     @discardableResult
     public func allowOrigins(_ origins: [String]) -> RpcBuilderHttp {
         config.httpAllowedOrigins = origins
+        return self
+    }
+
+    /// Cap buffered HTTP request bodies before dispatch.
+    @discardableResult
+    public func maxRequestBodySize(_ bytes: UInt) -> RpcBuilderHttp {
+        config.httpMaxRequestBodySize = bytes
+        return self
+    }
+
+    /// Cap inbound WebSocket message size.
+    @discardableResult
+    public func maxWebSocketMessageSize(_ bytes: UInt) -> RpcBuilderHttp {
+        config.httpWebSocketMaxMessageSize = bytes
+        return self
+    }
+
+    /// Cap inbound WebTransport control/native payload size.
+    @discardableResult
+    public func maxWebTransportMessageSize(_ bytes: UInt) -> RpcBuilderHttp {
+        config.httpWebTransportMaxMessageSize = bytes
         return self
     }
 

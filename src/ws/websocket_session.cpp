@@ -96,9 +96,9 @@ void WebSocketSession<Derived>::on_read(
   }
 
   // Additional safety check: verify message size
-  if (rx_buffer_.size() > max_message_size) {
+  if (rx_buffer_.size() > g_cfg.http_websocket_max_message_size) {
     NPRPC_WEBSOCKET_SESSION_LOG_WARN("on_read: Rejected oversized WebSocket message: {} bytes (max: {} bytes)",
-      rx_buffer_.size(), max_message_size);
+      rx_buffer_.size(), g_cfg.http_websocket_max_message_size);
     close();
     return;
   }

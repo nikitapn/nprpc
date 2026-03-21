@@ -5,7 +5,7 @@ cmake --build .build_relwith_debinfo \
 	--target nprpc_test nprpc_server_test test_http_utils \
 	-j$(nproc)
 set +e
-pkill -9 npnameserver 2>/dev/null
+pkill -9 npnameserver nprpc_server_test 2>/dev/null
 
 timeout 60 ctest --test-dir .build_relwith_debinfo/test --output-on-failure "$@"
 # Examples:

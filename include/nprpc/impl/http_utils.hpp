@@ -3,11 +3,14 @@
 
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string_view>
 
 namespace nprpc::impl {
+
+inline constexpr std::size_t k_max_http_request_body_size = 10'000;
 
 /// Return a reasonable MIME type based on the file extension.
 /// The returned string_view points to static storage and is always valid.

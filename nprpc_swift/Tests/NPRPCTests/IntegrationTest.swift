@@ -21,6 +21,9 @@ final class IntegrationTests: XCTestCase {
                 .withHttp(16001)
                     .ssl(certFile: "/workspace/certs/out/localhost.crt",
                          keyFile: "/workspace/certs/out/localhost.key")
+                    .maxRequestBodySize(10_000)
+                    .maxWebSocketMessageSize(24 * 1024 * 1024)
+                    .maxWebTransportMessageSize(24 * 1024 * 1024)
                 .withQuic(16002)
                     .ssl(certFile: "/workspace/certs/out/localhost.crt",
                          keyFile: "/workspace/certs/out/localhost.key")

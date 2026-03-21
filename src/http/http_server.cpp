@@ -463,7 +463,7 @@ public:
 
     // Apply a reasonable limit to the allowed size
     // of the body in bytes to prevent abuse.
-    parser_->body_limit(10000);
+    parser_->body_limit(g_cfg.http_max_request_body_size);
 
     // Set the timeout.
     beast::get_lowest_layer(derived().stream()).expires_after(timeout_sec);
