@@ -143,6 +143,7 @@ public:
                 .with_tcp(22222)//.with_uring()
                 .with_http(22223)
                     .root_dir("/home/nikita/projects/nprpc/test/http")
+                    .allow_origins({"https://localhost:24443"})
                     .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                          "/home/nikita/projects/nprpc/certs/out/localhost.key")
 #ifdef NPRPC_HTTP3_ENABLED

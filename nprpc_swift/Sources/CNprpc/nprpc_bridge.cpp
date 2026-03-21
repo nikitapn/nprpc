@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
+#include <string_view>
 
 // Forward declarations for nprpc impl internals
 // Avoids including nprpc_impl.hpp which has template issues with Swift's clang
@@ -60,6 +61,23 @@ const char* copy_string_to_c_heap(const std::string& value) {
     auto* buffer = new char[value.size() + 1];
     std::memcpy(buffer, value.c_str(), value.size() + 1);
     return buffer;
+}
+
+void decode_allowed_origins(std::string_view encoded,
+                            std::vector<std::string>& out) {
+    size_t start = 0;
+    while (start <= encoded.size()) {
+        const auto end = encoded.find('\n', start);
+        const auto len = end == std::string_view::npos ? encoded.size() - start
+                                                       : end - start;
+        if (len != 0) {
+            out.emplace_back(encoded.substr(start, len));
+        }
+        if (end == std::string_view::npos) {
+            break;
+        }
+        start = end + 1;
+    }
 }
 }
 
@@ -154,6 +172,8 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.http_key_file = config->http_key_file;
         cxxConfig.http_dhparams_file = config->http_dhparams_file;
         cxxConfig.http_root_dir = config->http_root_dir;
+        decode_allowed_origins(config->http_allowed_origins,
+                       cxxConfig.http_allowed_origins);
         cxxConfig.ssr_handler_dir = config->ssr_handler_dir;
         cxxConfig.watch_files = config->watch_files;
         cxxConfig.quic_port = config->quic_port;

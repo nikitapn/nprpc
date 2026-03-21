@@ -1928,10 +1928,15 @@ int Http3Connection::start_response(Http3Stream* stream)
     // Use zero-copy response
     return send_cached_response(stream, 200, std::move(cached_file));
   } else if (stream->method == "OPTIONS") {
-    return send_cors_preflight(stream);
+    if (is_rpc_http_target(stream->path)) {
+      return send_cors_preflight(stream);
+    }
+    return send_static_response(stream, 405, "text/html",
+                                "<!DOCTYPE html><html><body><h1>405 Method Not "
+                                "Allowed</h1></body></html>");
   } else if (stream->method == "POST") { // Handle POST request (e.g., RPC)
     // Handle RPC requests (POST to /rpc)
-    if (stream->path == "/rpc") {
+    if (is_rpc_http_target(stream->path)) {
       NPRPC_HTTP3_TRACE("Handling RPC request");
       return handle_rpc_request(stream);
     }
@@ -2112,25 +2117,32 @@ Http3Connection::make_response_headers(Http3Stream* stream,
 
   if (include_cors) {
     const auto origin_it = stream->headers.find("origin");
-    const bool credentialed =
-        origin_it != stream->headers.end() && !origin_it->second.empty();
-    prepared.allow_origin =
-        credentialed ? origin_it->second : std::string("*");
+    const auto allowed_origin =
+      origin_it != stream->headers.end()
+        ? get_allowed_http_origin(origin_it->second)
+        : std::optional<std::string_view>{};
 
-    add_sv("access-control-allow-origin", 27, prepared.allow_origin,
-           NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
-    if (credentialed) {
+    if (allowed_origin) {
+      prepared.allow_origin = std::string(*allowed_origin);
+      add_sv("access-control-allow-origin", 27, prepared.allow_origin,
+         NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
       add("access-control-allow-credentials", 32,
           reinterpret_cast<const uint8_t*>("true"), 4,
           NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
-    }
-    add("access-control-allow-methods", 28,
-        reinterpret_cast<const uint8_t*>("GET, POST, OPTIONS"), 18,
+      add("vary", 4, reinterpret_cast<const uint8_t*>("Origin"), 6,
         NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
-    add("access-control-allow-headers", 28,
+    }
+
+    if (allowed_origin || preflight) {
+      add("access-control-allow-methods", 28,
+        reinterpret_cast<const uint8_t*>("POST, OPTIONS"), 13,
+        NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
+      add("access-control-allow-headers", 28,
         reinterpret_cast<const uint8_t*>("Content-Type"), 12,
         NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
-    if (preflight) {
+    }
+
+    if (preflight && allowed_origin) {
       add("access-control-max-age", 22,
           reinterpret_cast<const uint8_t*>("86400"), 5,
           NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE);
@@ -2142,6 +2154,15 @@ Http3Connection::make_response_headers(Http3Stream* stream,
 
 int Http3Connection::send_cors_preflight(Http3Stream* stream)
 {
+  const auto origin_it = stream->headers.find("origin");
+  const auto allowed_origin =
+      origin_it != stream->headers.end()
+          ? get_allowed_http_origin(origin_it->second)
+          : std::optional<std::string_view>{};
+  if (!allowed_origin) {
+    return send_static_response(stream, 403, "text/plain", "CORS origin denied");
+  }
+
   auto& headers = make_response_headers(stream, 204, "", 0, true, true);
   nghttp3_data_reader dr{.read_data = http_read_data_cb};
   log_http3_response_submit("cors_preflight", stream, 204, "", 0);
@@ -2202,7 +2223,7 @@ int Http3Connection::send_webtransport_connect_response(Http3Stream* stream)
   headers.content_length.clear();
   headers.content_type.clear();
   headers.allow_origin.clear();
-  headers.headers.reserve(2);
+  headers.headers.reserve(5);
   headers.headers.push_back({
       .name = reinterpret_cast<uint8_t*>(const_cast<char*>(":status")),
       .value = reinterpret_cast<uint8_t*>(headers.status.data()),
@@ -2217,6 +2238,36 @@ int Http3Connection::send_webtransport_connect_response(Http3Stream* stream)
       .valuelen = 13,
       .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
   });
+
+      const auto origin_it = stream->headers.find("origin");
+      const auto allowed_origin =
+        origin_it != stream->headers.end()
+          ? get_allowed_http_origin(origin_it->second)
+          : std::optional<std::string_view>{};
+      if (allowed_origin) {
+      headers.allow_origin = std::string(*allowed_origin);
+      headers.headers.push_back({
+        .name = reinterpret_cast<uint8_t*>(const_cast<char*>("access-control-allow-origin")),
+        .value = reinterpret_cast<uint8_t*>(headers.allow_origin.data()),
+        .namelen = 27,
+        .valuelen = headers.allow_origin.size(),
+        .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
+      });
+      headers.headers.push_back({
+        .name = reinterpret_cast<uint8_t*>(const_cast<char*>("access-control-allow-credentials")),
+        .value = reinterpret_cast<uint8_t*>(const_cast<char*>("true")),
+        .namelen = 32,
+        .valuelen = 4,
+        .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
+      });
+      headers.headers.push_back({
+        .name = reinterpret_cast<uint8_t*>(const_cast<char*>("vary")),
+        .value = reinterpret_cast<uint8_t*>(const_cast<char*>("Origin")),
+        .namelen = 4,
+        .valuelen = 6,
+        .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
+      });
+      }
 
   nghttp3_data_reader dr{.read_data = http_read_data_cb};
   log_http3_response_submit("webtransport_connect", stream, 200, "", 0);
@@ -2238,6 +2289,18 @@ int Http3Connection::handle_webtransport_connect(Http3Stream* stream)
                       stream->stream_id, stream->scheme, stream->authority);
     return send_static_response(stream, 400, "text/plain",
                                 "Invalid WebTransport CONNECT request");
+  }
+
+  const auto origin_it = stream->headers.find("origin");
+  const auto origin =
+      origin_it != stream->headers.end() ? std::string_view{origin_it->second}
+                                         : std::string_view{};
+  if (!is_allowed_browser_origin(origin, stream->scheme, stream->authority)) {
+    NPRPC_HTTP3_ERROR(
+        "Rejecting WebTransport CONNECT stream_id={} origin='{}' authority='{}'",
+        stream->stream_id, origin, stream->authority);
+    return send_static_response(stream, 403, "text/plain",
+                                "WebTransport origin denied");
   }
 
   stream->webtransport_session = true;

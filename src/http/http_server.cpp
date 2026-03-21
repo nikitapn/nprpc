@@ -102,20 +102,14 @@ template <class Body, class Allocator>
 http::message_generator
 handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req)
 {
-  // --- CORS helpers -------------------------------------------------------
-  // When the browser sends credentials (cookies) it always includes an Origin
-  // header and requires the response to echo that exact origin back together
-  // with Access-Control-Allow-Credentials: true.  A wildcard "*" is rejected
-  // by the browser in that case.
   auto const origin = std::string(req[http::field::origin]);
-  bool const credentialed = !origin.empty();
+  auto const allowed_origin = get_allowed_http_origin(origin);
 
   auto const add_cors = [&](auto& res) {
-    if (credentialed) {
-      res.set(http::field::access_control_allow_origin, origin);
+    if (allowed_origin) {
+      res.set(http::field::access_control_allow_origin, *allowed_origin);
       res.set("Access-Control-Allow-Credentials", "true");
-    } else {
-      res.set(http::field::access_control_allow_origin, "*");
+      res.set(http::field::vary, "Origin");
     }
     res.set(http::field::access_control_allow_methods, "POST, OPTIONS");
     res.set(http::field::access_control_allow_headers, "Content-Type");
@@ -230,17 +224,31 @@ handle_request(beast::string_view doc_root,
 
   // Handle OPTIONS preflight for CORS
   if (req.method() == http::verb::options) {
+    if (!is_rpc_http_target(req.target())) {
+      return bad_request("Unknown HTTP-method");
+    }
+
+    auto const origin = std::string(req[http::field::origin]);
+    auto const allowed_origin = get_allowed_http_origin(origin);
+    if (!allowed_origin) {
+      http::response<http::string_body> res{http::status::forbidden,
+                                            req.version()};
+      res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+      res.set(http::field::content_type, "text/plain");
+      add_alt_svc_header(res);
+      res.keep_alive(req.keep_alive());
+      res.body() = "CORS origin denied";
+      res.prepare_payload();
+      return res;
+    }
+
     http::response<http::empty_body> res{http::status::no_content,
                                          req.version()};
     res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
-    auto const origin = std::string(req[http::field::origin]);
-    if (!origin.empty()) {
-      res.set(http::field::access_control_allow_origin, origin);
-      res.set("Access-Control-Allow-Credentials", "true");
-    } else {
-      res.set(http::field::access_control_allow_origin, "*");
-    }
-    res.set(http::field::access_control_allow_methods, "GET, POST, OPTIONS");
+    res.set(http::field::access_control_allow_origin, *allowed_origin);
+    res.set("Access-Control-Allow-Credentials", "true");
+    res.set(http::field::vary, "Origin");
+    res.set(http::field::access_control_allow_methods, "POST, OPTIONS");
     res.set(http::field::access_control_allow_headers, "Content-Type");
     res.set(http::field::access_control_max_age, "86400"); // 24 hours
     add_alt_svc_header(res);
@@ -254,8 +262,7 @@ handle_request(beast::string_view doc_root,
     return bad_request("Unknown HTTP-method");
 
   // Check if this is an RPC request (POST to /rpc or /rpc/*)
-  if (req.method() == http::verb::post &&
-      (req.target() == "/rpc" || req.target().starts_with("/rpc/"))) {
+  if (req.method() == http::verb::post && is_rpc_http_target(req.target())) {
     return handle_rpc_request(req);
   }
 
@@ -480,6 +487,24 @@ public:
 
     // See if it is a WebSocket Upgrade
     if (websocket::is_upgrade(parser_->get())) {
+      auto& req = parser_->get();
+      auto const origin = std::string(req[http::field::origin]);
+      auto const host = std::string(req[http::field::host]);
+      auto const scheme = derived().is_secure() ? std::string_view{"https"}
+                                                : std::string_view{"http"};
+      if (!is_allowed_browser_origin(origin, scheme, host)) {
+        http::response<http::string_body> res{http::status::forbidden,
+                                              req.version()};
+        res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(http::field::content_type, "text/plain");
+        add_alt_svc_header(res);
+        res.keep_alive(false);
+        res.body() = "WebSocket origin denied";
+        res.prepare_payload();
+        queue_write(std::move(res));
+        return;
+      }
+
       // Disable the timeout.
       // The websocket::stream uses its own timeout settings.
       beast::get_lowest_layer(derived().stream()).expires_never();
@@ -576,6 +601,8 @@ public:
   // Called by the base class
   beast_tcp_stream_strand& stream() { return stream_; }
 
+  bool is_secure() const noexcept { return false; }
+
   // Called by the base class
   beast_tcp_stream_strand release_stream() { return std::move(stream_); }
 
@@ -625,6 +652,8 @@ public:
 
   // Called by the base class
   beast::ssl_stream<beast_tcp_stream_strand>& stream() { return stream_; }
+
+  bool is_secure() const noexcept { return true; }
 
   // Called by the base class
   beast::ssl_stream<beast_tcp_stream_strand> release_stream()

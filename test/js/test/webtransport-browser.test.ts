@@ -168,6 +168,34 @@ describe('WebTransport Browser Transport', function() {
     }
   });
 
+  it('should establish a WebTransport session from a cross-origin secure page', async function() {
+    if (!browser) {
+      this.skip();
+    }
+
+    const { context, page, initResult } = await createBrowserPage(fixturePageUrl);
+
+    try {
+      if ((initResult as any).unsupported) {
+        this.skip();
+      }
+
+      const pageOrigin = new URL(page.url()).origin;
+      const serverOrigin = new URL(serverPageUrl).origin;
+      expect(pageOrigin).to.not.equal(serverOrigin);
+
+      const result = await page.evaluate(async () => {
+        return await (globalThis as any).nprpc_test_runtime.openExplicitConnection();
+      });
+
+      expect((initResult as any).secureContext).to.equal(true);
+      expect((result as any).endpointType).to.equal(EndPointType.WebTransport);
+      expect((result as any).closedState).to.equal('open');
+    } finally {
+      await context.close();
+    }
+  });
+
   it('should resolve browser-visible objects through the nameserver over WebTransport', async function() {
     if (!browser) {
       this.skip();

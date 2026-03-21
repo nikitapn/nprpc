@@ -91,6 +91,7 @@ struct RpcBuildConfig {
     std::string http_key_file;
     std::string http_dhparams_file;
     std::string http_root_dir;
+    std::string http_allowed_origins;
     std::string ssr_handler_dir;
     bool watch_files = false;  // Enable inotify-based cache invalidation (dev mode)
 

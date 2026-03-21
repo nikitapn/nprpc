@@ -64,6 +64,7 @@ int main()
                    .with_hostname("localhost")
                    .with_tcp(15000)
                    .with_http(15001)
+                      .allow_origins({"https://localhost:24443"})
                    .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                         "/home/nikita/projects/nprpc/certs/out/localhost.key")
                    .build();

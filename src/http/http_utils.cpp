@@ -3,7 +3,11 @@
 
 #include <nprpc/impl/http_utils.hpp>
 
+#include <nprpc/impl/nprpc_impl.hpp>
+
 #include <boost/beast/core/string.hpp>
+
+#include <algorithm>
 
 namespace nprpc::impl {
 
@@ -96,6 +100,49 @@ std::string path_cat(std::string_view base, std::string_view path)
 #endif
 
   return result;
+}
+
+bool is_rpc_http_target(std::string_view path) noexcept
+{
+  return path == "/rpc" || path.starts_with("/rpc/");
+}
+
+std::optional<std::string_view>
+get_allowed_http_origin(std::string_view origin) noexcept
+{
+  if (origin.empty() || g_cfg.http_allowed_origins.empty()) {
+    return std::nullopt;
+  }
+
+  const auto it = std::find(g_cfg.http_allowed_origins.begin(),
+                            g_cfg.http_allowed_origins.end(), origin);
+  if (it == g_cfg.http_allowed_origins.end()) {
+    return std::nullopt;
+  }
+
+  return origin;
+}
+
+bool is_allowed_browser_origin(std::string_view origin,
+                               std::string_view scheme,
+                               std::string_view authority) noexcept
+{
+  if (origin.empty()) {
+    return true;
+  }
+
+  if (!scheme.empty() && !authority.empty()) {
+    std::string same_origin;
+    same_origin.reserve(scheme.size() + authority.size() + 3);
+    same_origin.append(scheme);
+    same_origin.append("://");
+    same_origin.append(authority);
+    if (origin == same_origin) {
+      return true;
+    }
+  }
+
+  return get_allowed_http_origin(origin).has_value();
 }
 
 } // namespace nprpc::impl

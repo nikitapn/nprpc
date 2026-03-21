@@ -246,6 +246,7 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   g_cfg.http_cert_file = cfg_.http_cert_file;
   g_cfg.http_key_file = cfg_.http_key_file;
   g_cfg.http_root_dir = cfg_.http_root_dir;
+  g_cfg.http_allowed_origins = cfg_.http_allowed_origins;
   g_cfg.ssr_handler_dir =
       cfg_.ssr_handler_dir.empty() ? cfg_.http_root_dir : cfg_.ssr_handler_dir;
   g_cfg.watch_files = cfg_.watch_files;

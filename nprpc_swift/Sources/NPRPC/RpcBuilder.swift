@@ -4,6 +4,7 @@
 // Swift fluent builder for Rpc - matches C++ API pattern
 
 import CNprpc
+import CxxStdlib
 
 /// Internal configuration state shared across all builders
 class BuildConfig {
@@ -22,6 +23,7 @@ class BuildConfig {
     var httpKeyFile: String = ""
     var httpDhparamsFile: String = ""
     var httpRootDir: String = ""
+    var httpAllowedOrigins: [String] = []
     var ssrHandlerDir: String = ""
     var watchFiles: Bool = false
     
@@ -137,6 +139,7 @@ extension RpcBuilderInternal {
         cxxConfig.http_key_file = std.string(config.httpKeyFile)
         cxxConfig.http_dhparams_file = std.string(config.httpDhparamsFile)
         cxxConfig.http_root_dir = std.string(config.httpRootDir)
+        cxxConfig.http_allowed_origins = std.string(config.httpAllowedOrigins.joined(separator: "\n"))
         cxxConfig.ssr_handler_dir = std.string(config.ssrHandlerDir)
         cxxConfig.watch_files = config.watchFiles
         
@@ -218,6 +221,13 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
     @discardableResult
     public func rootDir(_ path: String) -> RpcBuilderHttp {
         config.httpRootDir = path
+        return self
+    }
+
+    /// Allow browser cross-origin requests from the provided HTTPS origins.
+    @discardableResult
+    public func allowOrigins(_ origins: [String]) -> RpcBuilderHttp {
+        config.httpAllowedOrigins = origins
         return self
     }
 

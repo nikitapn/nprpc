@@ -5,6 +5,7 @@
 
 #include "export.hpp"
 
+#include <initializer_list>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -325,6 +326,7 @@ struct BuildConfig {
   std::string http_key_file;
   std::string http_dhparams_file;
   std::string http_root_dir;
+  std::vector<std::string> http_allowed_origins;
   std::string ssr_handler_dir; // Path to SSR handler (index.js), defaults to
                                // http_root_dir
   bool watch_files = false; // Enable inotify-based cache invalidation (dev mode)
@@ -460,6 +462,19 @@ public:
   RpcBuilderHttp& root_dir(std::string_view root_dir) noexcept
   {
     cfg_.http_root_dir = root_dir;
+    return *this;
+  }
+
+  RpcBuilderHttp&
+  allow_origins(std::initializer_list<std::string_view> origins) noexcept
+  {
+    cfg_.http_allowed_origins.clear();
+    cfg_.http_allowed_origins.reserve(origins.size());
+
+    for (auto origin : origins) {
+      cfg_.http_allowed_origins.emplace_back(origin);
+    }
+
     return *this;
   }
 

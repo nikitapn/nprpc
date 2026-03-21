@@ -48,6 +48,7 @@ struct Config {
   std::string quic_cert_file;
   std::string quic_key_file;
   std::string http_root_dir;
+  std::vector<std::string> http_allowed_origins;
   std::string ssr_handler_dir; // Path to SSR handler (index.js)
   bool watch_files = false;   // Enable inotify-based cache invalidation (dev mode)
   ssl::context ssl_context_server{ssl::context::tlsv13_server};

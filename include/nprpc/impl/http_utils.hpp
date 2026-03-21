@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -15,5 +16,21 @@ std::string_view mime_type(std::string_view path);
 /// Append an HTTP relative path to a local filesystem path.
 /// The returned path is normalized for the platform.
 std::string path_cat(std::string_view base, std::string_view path);
+
+/// Returns true when the request target addresses the HTTP RPC endpoint.
+bool is_rpc_http_target(std::string_view path) noexcept;
+
+/// Returns the request origin if it is allowed by the configured HTTP CORS
+/// allowlist. Empty result means CORS should not be granted.
+std::optional<std::string_view>
+get_allowed_http_origin(std::string_view origin) noexcept;
+
+/// Returns true when a browser origin is acceptable for stateful upgrades.
+/// Empty origins are treated as non-browser clients and allowed.
+/// Same-origin requests are always allowed. Cross-origin requests must appear
+/// in the configured HTTP allowlist.
+bool is_allowed_browser_origin(std::string_view origin,
+							   std::string_view scheme,
+							   std::string_view authority) noexcept;
 
 } // namespace nprpc::impl
