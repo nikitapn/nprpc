@@ -7,7 +7,6 @@
 #include <cassert>
 #include <fstream>
 #include <mutex>
-#include <stdexcept>
 #include <thread>
 
 #ifdef _WIN32

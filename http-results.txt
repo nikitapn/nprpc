@@ -1,27 +1,12 @@
-file                        tool    req      rps        avg_ms  p50_ms  p95_ms  p99_ms   success_%
---------------------------  ------  -------  ---------  ------  ------  ------  -------  ---------
-caddy-http1-1kb.oha.json    oha     768797   51245.01   1.244   1.089   2.587   3.672    100.00   
-caddy-http1-1mb.oha.json    oha     48080    3201.55    19.980  17.559  42.040  59.902   100.00   
-nginx-http1-1kb.oha.json    oha     375543   25033.69   2.553   2.505   3.041   3.664    100.00   
-nginx-http1-1mb.oha.json    oha     10509    700.52     91.610  92.920  99.082  112.791  100.00   
-nprpc-http1-1kb.oha.json    oha     1891925  126099.96  0.503   0.364   1.294   2.293    100.00   
-nprpc-http1-1mb.oha.json    oha     24439    1629.09    39.314  43.013  44.533  50.205   100.00   
-caddy-http3-1kb.h2load.txt  h2load  669856   44657.13   -       -       -       -        100.00   
-caddy-http3-1mb.h2load.txt  h2load  1600     106.67     -       -       -       -        100.00   
-nprpc-http3-1kb.h2load.txt  h2load  1490171  99345.40   -       -       -       -        100.00   
-nprpc-http3-1mb.h2load.txt  h2load  8368     557.93     -       -       -       -        100.00   
-
-
-after config tunning and testing on system binaries (nginx, caddy):
-file                        tool    req      rps        avg_ms  p50_ms  p95_ms  p99_ms  success_%
---------------------------  ------  -------  ---------  ------  ------  ------  ------  ---------
-caddy-http1-1kb.oha.json    oha     1748175  116509.90  0.546   0.252   1.990   3.631   100.00   
-caddy-http1-1mb.oha.json    oha     1582019  105446.56  0.603   0.283   2.165   3.816   100.00   
-nginx-http1-1kb.oha.json    oha     3057480  203796.59  0.310   0.251   0.647   1.287   100.00   
-nginx-http1-1mb.oha.json    oha     57284    3817.79    16.753  15.742  28.016  36.548  100.00   
-nprpc-http1-1kb.oha.json    oha     1791947  119437.22  0.532   0.389   1.369   2.329   100.00   
-nprpc-http1-1mb.oha.json    oha     24494    1632.67    39.227  43.007  44.375  51.404  100.00   
-caddy-http3-1kb.h2load.txt  h2load  1319303  87953.53   -       -       -       -       100.00   
-caddy-http3-1mb.h2load.txt  h2load  1290325  86021.67   -       -       -       -       100.00   
-nprpc-http3-1kb.h2load.txt  h2load  1384793  92319.53   -       -       -       -       100.00   
-nprpc-http3-1mb.h2load.txt  h2load  7887     525.87     -       -       -       -       100.00   
+file                        tool    req      rps        avg_ms  p50_ms  p95_ms  p99_ms  success_%  note                 
+--------------------------  ------  -------  ---------  ------  ------  ------  ------  ---------  ---------------------
+caddy-http1-1kb.oha.json    oha     1159738  77293.37   0.823   0.487   2.634   4.830   100.00                          
+caddy-http1-1mb.oha.json    oha     276542   18430.61   3.463   0.558   16.169  23.797  100.00                          
+nginx-http1-1kb.oha.json    oha     2477747  165142.14  0.384   0.323   0.760   1.493   100.00                          
+nginx-http1-1mb.oha.json    oha     50096    3338.81    19.158  18.501  28.663  35.246  100.00                          
+nprpc-http1-1kb.oha.json    oha     1791473  119402.10  0.532   0.382   1.405   2.484   100.00                          
+nprpc-http1-1mb.oha.json    oha     24312    1620.52    39.520  43.017  44.119  45.986  100.00                          
+nginx-http3-1mb.h2load.txt  h2load  19310    1287.33    -       -       -       -       100.00                          
+nprpc-http3-1mb.h2load.txt  h2load  7811     520.73     -       -       -       -       100.00                          
+nginx-http3-1kb.h2load.txt  h2load  1627570  108504.67  -       -       -       -       100.00                          
+nprpc-http3-1kb.h2load.txt  h2load  1468119  97874.60   -       -       -       -       100.00                          

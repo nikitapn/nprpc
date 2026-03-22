@@ -59,12 +59,20 @@ Shared static assets are generated once and mounted into every server:
 - `1mb.bin`
 - `index.html`
 
+The binary fixtures are deterministic pseudo-random bytes, not repeated
+characters, so large-file comparisons are not accidentally dominated by
+compression-friendly input.
+
 The default suite currently runs:
 
 - HTTP/1.1 HTTPS on `1kb.bin`
 - HTTP/1.1 HTTPS on `1mb.bin`
 - HTTP/3 on `1kb.bin`
 - HTTP/3 on `1mb.bin`
+
+If the active host nginx binary is built with `--with-http_v3_module`, nginx is
+included in the HTTP/3 cases too. Docker fallback mode does not currently
+assume nginx QUIC support.
 
 The outputs are intentionally left in the native tool formats:
 
@@ -106,6 +114,8 @@ The vendored `h2load` in this repo uses HTTP/3 via:
 
 - nginx is tuned more aggressively than before and now runs directly from the
   system binary when available.
+- nginx HTTP/3 is only exercised when the active nginx binary exposes
+  `http_v3_module`.
 - Caddy is used for both HTTP/1.1 and HTTP/3 because it supports HTTP/3 out of
   the box and now also runs directly from the system binary when available.
 - NPRPC uses the benchmark server with `NPRPC_HTTP_ROOT_DIR` pointed at the

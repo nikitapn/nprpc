@@ -20,6 +20,17 @@ def fmt_float(value: float | None, digits: int = 2) -> str:
     return f"{value:.{digits}f}"
 
 
+def infer_expected_payload_bytes(path: Path) -> int | None:
+    name = path.name.lower()
+    if "1kb" in name:
+        return 1024
+    if "64kb" in name:
+        return 64 * 1024
+    if "1mb" in name:
+        return 1024 * 1024
+    return None
+
+
 def parse_oha(path: Path) -> dict[str, str]:
     data = json.loads(path.read_text())
     summary = data.get("summary", {})
@@ -59,6 +70,7 @@ def parse_h2load(path: Path) -> dict[str, str]:
         text,
     )
     status_match = re.search(r"status codes:\s+(\d+) 2xx,\s+(\d+) 3xx,\s+(\d+) 4xx,\s+(\d+) 5xx", text)
+    data_match = re.search(r"traffic:\s+.+?,\s+.+?,\s+([^\s]+)\s*\((\d+)\) data", text)
 
     avg_ms = float(latency_match.group(1)) if latency_match else None
     ok = int(status_match.group(1)) if status_match else 0
@@ -67,6 +79,17 @@ def parse_h2load(path: Path) -> dict[str, str]:
     server_err = int(status_match.group(4)) if status_match else 0
     total = ok + redirects + client_err + server_err
     success_pct = (ok / total * 100.0) if total else None
+    transferred_data = int(data_match.group(2)) if data_match else None
+    expected_payload = infer_expected_payload_bytes(path)
+
+    note = ""
+    if transferred_data is not None and expected_payload is not None and total:
+      expected_total = expected_payload * total
+      if transferred_data == 0:
+          note = "invalid: 0B body"
+      elif transferred_data < expected_total // 2:
+          ratio = transferred_data / expected_total
+          note = f"suspicious: {ratio:.1%} body"
 
     return {
         "tool": "h2load",
@@ -78,6 +101,7 @@ def parse_h2load(path: Path) -> dict[str, str]:
         "p99_ms": "-",
         "success": fmt_float(success_pct),
         "requests": str(total) if total else "-",
+        "note": note,
     }
 
 
@@ -86,7 +110,7 @@ def print_table(rows: list[dict[str, str]]) -> None:
         print("No result files found.")
         return
 
-    headers = ["file", "tool", "req", "rps", "avg_ms", "p50_ms", "p95_ms", "p99_ms", "success_%"]
+    headers = ["file", "tool", "req", "rps", "avg_ms", "p50_ms", "p95_ms", "p99_ms", "success_%", "note"]
     body = [
         [
             row["name"],
@@ -98,6 +122,7 @@ def print_table(rows: list[dict[str, str]]) -> None:
             row["p95_ms"],
             row["p99_ms"],
             row["success"],
+            row.get("note", ""),
         ]
         for row in rows
     ]

@@ -28,6 +28,7 @@ NGINX_PID=""
 CADDY_PID=""
 NGINX_CID=""
 CADDY_CID=""
+NGINX_HTTP3_ENABLED=0
 
 mkdir -p "$RESULTS_DIR" "$WWW_DIR" "$TMP_DIR"
 
@@ -88,18 +89,32 @@ EOF
 
   python3 - <<'PY' "$WWW_DIR"
 from pathlib import Path
+import random
 import sys
 
 root = Path(sys.argv[1])
-(root / "1kb.bin").write_bytes(b"A" * 1024)
-(root / "64kb.bin").write_bytes(b"B" * (64 * 1024))
-(root / "1mb.bin").write_bytes(b"C" * (1024 * 1024))
+rng = random.Random(0xC0FFEE)
+
+def write_fixture(name: str, size: int) -> None:
+    (root / name).write_bytes(rng.randbytes(size))
+
+write_fixture("1kb.bin", 1024)
+write_fixture("64kb.bin", 64 * 1024)
+write_fixture("1mb.bin", 1024 * 1024)
 PY
 }
 
 build_benchmark_server() {
   log "Building benchmark server"
   cmake --build "$BUILD_DIR" --target benchmark_server -j"$(nproc)"
+}
+
+nginx_supports_http3() {
+  if ! command -v nginx >/dev/null 2>&1; then
+    return 1
+  fi
+
+  nginx -V 2>&1 | grep -q -- '--with-http_v3_module'
 }
 
 start_nprpc() {
@@ -119,6 +134,12 @@ generate_nginx_conf() {
   mkdir -p "$TMP_DIR/nginx-client-body" "$TMP_DIR/nginx-proxy" \
            "$TMP_DIR/nginx-fastcgi" "$TMP_DIR/nginx-uwsgi" \
            "$TMP_DIR/nginx-scgi"
+  local nginx_quic_listen=""
+  local nginx_alt_svc=""
+  if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then
+    nginx_quic_listen="    listen 127.0.0.1:${NGINX_HTTPS_PORT} quic reuseport;"
+    nginx_alt_svc="    add_header Alt-Svc 'h3=\":${NGINX_HTTPS_PORT}\"; ma=86400' always;"
+  fi
   cat > "$TMP_DIR/nginx.conf" <<EOF
 worker_processes auto;
 worker_rlimit_nofile 65535;
@@ -153,10 +174,12 @@ http {
   server {
     listen 127.0.0.1:${NGINX_HTTP_PORT} reuseport;
     listen 127.0.0.1:${NGINX_HTTPS_PORT} ssl reuseport;
+${nginx_quic_listen}
     server_name localhost;
 
     ssl_certificate $ROOT_DIR/certs/out/localhost.crt;
     ssl_certificate_key $ROOT_DIR/certs/out/localhost.key;
+${nginx_alt_svc}
 
     root $WWW_DIR;
     location / {
@@ -192,9 +215,16 @@ start_nginx_system() {
 }
 
 start_nginx() {
-  generate_nginx_conf
   local mode
   mode="$(choose_mode "$NGINX_MODE" nginx)"
+  if [[ "$mode" == "system" ]] && nginx_supports_http3; then
+    NGINX_HTTP3_ENABLED=1
+  else
+    NGINX_HTTP3_ENABLED=0
+  fi
+
+  generate_nginx_conf
+
   if [[ "$mode" == "system" ]]; then
     start_nginx_system
     return
@@ -205,6 +235,7 @@ start_nginx() {
   NGINX_CID=$(docker run -d \
     -p "$NGINX_HTTP_PORT:$NGINX_HTTP_PORT" \
     -p "$NGINX_HTTPS_PORT:$NGINX_HTTPS_PORT" \
+    -p "$NGINX_HTTPS_PORT:$NGINX_HTTPS_PORT/udp" \
     -v "$WWW_DIR:$WWW_DIR:ro" \
     -v "$TMP_DIR/nginx.conf:$TMP_DIR/nginx.conf:ro" \
     -v "$ROOT_DIR:$ROOT_DIR:ro" \
@@ -219,12 +250,12 @@ generate_caddyfile() {
   auto_https off
 }
 
-http://127.0.0.1:${CADDY_HTTP_PORT} {
+http://${BENCH_HOST}:${CADDY_HTTP_PORT} {
   root * $WWW_DIR
   file_server
 }
 
-https://127.0.0.1:${CADDY_HTTPS_PORT} {
+https://${BENCH_HOST}:${CADDY_HTTPS_PORT} {
   tls $ROOT_DIR/certs/out/localhost.crt $ROOT_DIR/certs/out/localhost.key
   root * $WWW_DIR
   file_server
@@ -299,6 +330,7 @@ Files:
 - `nginx-http1-1kb.oha.json`
 - `caddy-http1-1kb.oha.json`
 - `nprpc-http3-1kb.h2load.txt`
+- `nginx-http3-1kb.h2load.txt` (when nginx exposes `http_v3_module`)
 - `caddy-http3-1kb.h2load.txt`
 
 Use `jq` for oha JSON and inspect the h2load text summaries for requests/sec,
@@ -322,9 +354,17 @@ run_suite() {
   run_oha "caddy-http1-1mb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1mb.bin"
 
   run_h2load "nprpc-http3-1kb" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/1kb.bin"
+  if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then
+    run_h2load "nginx-http3-1kb" "$BENCH_HOST" "$NGINX_HTTPS_PORT" "/1kb.bin"
+  else
+    log "Skipping nginx HTTP/3 benchmark (http_v3_module not available in current mode)"
+  fi
   run_h2load "caddy-http3-1kb" "$BENCH_HOST" "$CADDY_HTTPS_PORT" "/1kb.bin"
 
   run_h2load "nprpc-http3-1mb" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/1mb.bin"
+  if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then
+    run_h2load "nginx-http3-1mb" "$BENCH_HOST" "$NGINX_HTTPS_PORT" "/1mb.bin"
+  fi
   run_h2load "caddy-http3-1mb" "$BENCH_HOST" "$CADDY_HTTPS_PORT" "/1mb.bin"
 
   write_summary

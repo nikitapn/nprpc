@@ -106,6 +106,12 @@ static constexpr uint64_t k_webtransport_bidi_stream_type = 0x41;
 static constexpr uint8_t k_webtransport_bind_control = 0;
 static constexpr uint8_t k_webtransport_bind_native_stream = 1;
 
+namespace {
+
+constexpr std::size_t kHttp3ResponseChunkSize = 64 * 1024;
+
+} // namespace
+
 size_t default_http3_worker_count() noexcept
 {
   const auto hw = std::thread::hardware_concurrency();
@@ -253,6 +259,7 @@ struct Http3Stream {
   size_t content_length = 0;
   bool malformed_content_length = false;
   flat_buffer request_body;
+  bool request_body_preallocated = false;
   bool request_body_too_large = false;
 
   bool http_stream = false;
@@ -953,8 +960,14 @@ public:
   void remove_connection(std::shared_ptr<Http3Connection> conn);
 
 private:
+  struct PendingSendPacket {
+    boost::asio::ip::udp::endpoint remote_ep;
+    std::vector<uint8_t> payload;
+  };
+
   bool allow_new_connection(const boost::asio::ip::udp::endpoint& remote_ep);
   void on_connection_accepted(const boost::asio::ip::udp::endpoint& remote_ep);
+  void do_send();
   void do_receive();
   void handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
                      const uint8_t* data,
@@ -990,6 +1003,10 @@ private:
   // Map from CID to connection (includes both SCID and additional CIDs)
   std::unordered_map<std::string, std::shared_ptr<Http3Connection>>
       connections_;
+
+  std::mutex send_mutex_;
+  std::deque<std::shared_ptr<PendingSendPacket>> send_queue_;
+  bool send_in_progress_ = false;
 
   bool running_ = false;
 };
@@ -1928,6 +1945,11 @@ int Http3Connection::http_end_headers(Http3Stream* stream)
   if (stream->request_body_too_large ||
       stream->content_length > g_cfg.http_max_request_body_size) {
     return reject_oversized_request_body(stream);
+  }
+
+  if (stream->content_length != 0 && !stream->request_body_preallocated) {
+    stream->request_body = flat_buffer(stream->content_length);
+    stream->request_body_preallocated = true;
   }
 
   // Extended CONNECT requests do not terminate the request stream with FIN.
@@ -3132,6 +3154,11 @@ int Http3Connection::http_recv_data_cb(nghttp3_conn* conn,
       return h->reject_oversized_request_body(stream);
     }
 
+    if (!stream->request_body_preallocated && stream->content_length != 0) {
+      stream->request_body = flat_buffer(stream->content_length);
+      stream->request_body_preallocated = true;
+    }
+
     append_bytes(stream->request_body, data, datalen);
   }
 
@@ -3306,17 +3333,20 @@ nghttp3_ssize Http3Connection::http_read_data_cb(nghttp3_conn* conn,
   }
 
   const auto current_offset = stream->response_offset;
+  const auto chunk_len = std::min(remaining, kHttp3ResponseChunkSize);
   vec[0].base =
       const_cast<uint8_t*>(stream->response_data + stream->response_offset);
-  vec[0].len = remaining;
-  stream->response_offset += remaining;
+  vec[0].len = chunk_len;
+  stream->response_offset += chunk_len;
 
   NPRPC_HTTP3_DEBUG(
       "read_data stream_id={} path='{}' chunk_len={} offset={} next_offset={} total={} eof=true",
-      stream_id, stream->path, remaining, current_offset,
+      stream_id, stream->path, chunk_len, current_offset,
       stream->response_offset, stream->response_len);
 
-  *pflags |= NGHTTP3_DATA_FLAG_EOF;
+  if (stream->response_offset == stream->response_len) {
+    *pflags |= NGHTTP3_DATA_FLAG_EOF;
+  }
 
   return 1;
 }
@@ -3533,6 +3563,12 @@ void Http3Server::stop()
     connections_.clear();
   }
 
+  {
+    std::lock_guard lock(send_mutex_);
+    send_queue_.clear();
+    send_in_progress_ = false;
+  }
+
   if (ssl_ctx_) {
     SSL_CTX_free(ssl_ctx_);
     ssl_ctx_ = nullptr;
@@ -3543,13 +3579,75 @@ int Http3Server::send_packet(const boost::asio::ip::udp::endpoint& remote_ep,
                              const uint8_t* data,
                              size_t len)
 {
-  boost::system::error_code ec;
-  socket_.send_to(boost::asio::buffer(data, len), remote_ep, 0, ec);
-  if (ec) {
-    NPRPC_HTTP3_TRACE("send_to failed: {}", ec.message());
+  if (!running_) {
     return -1;
   }
+
+  auto packet = std::make_shared<PendingSendPacket>();
+  packet->remote_ep = remote_ep;
+  packet->payload.assign(data, data + len);
+
+  bool should_start = false;
+  {
+    std::lock_guard lock(send_mutex_);
+    send_queue_.push_back(packet);
+    if (!send_in_progress_) {
+      send_in_progress_ = true;
+      should_start = true;
+    }
+  }
+
+  if (should_start) {
+    boost::asio::post(ioc_, [this]() { do_send(); });
+  }
+
   return 0;
+}
+
+void Http3Server::do_send()
+{
+  std::shared_ptr<PendingSendPacket> packet;
+  {
+    std::lock_guard lock(send_mutex_);
+    if (!running_ || send_queue_.empty()) {
+      send_in_progress_ = false;
+      return;
+    }
+    packet = send_queue_.front();
+  }
+
+  socket_.async_send_to(
+      boost::asio::buffer(packet->payload), packet->remote_ep,
+      [this, packet](boost::system::error_code ec, std::size_t) {
+        bool schedule_next = false;
+        {
+          std::lock_guard lock(send_mutex_);
+          if (!send_queue_.empty()) {
+            send_queue_.pop_front();
+          }
+
+          if (!running_ || ec == boost::asio::error::operation_aborted) {
+            send_queue_.clear();
+            send_in_progress_ = false;
+            return;
+          }
+
+          if (ec) {
+            NPRPC_HTTP3_TRACE("async_send_to failed: {}", ec.message());
+          }
+
+          if (send_queue_.empty()) {
+            send_in_progress_ = false;
+            return;
+          }
+
+          schedule_next = true;
+        }
+
+        if (schedule_next) {
+          do_send();
+        }
+      });
 }
 
 void Http3Server::associate_cid(const ngtcp2_cid* cid,

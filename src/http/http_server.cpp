@@ -21,6 +21,12 @@
 
 namespace nprpc::impl {
 
+namespace {
+
+constexpr std::size_t kHttpResponseChunkSize = 64 * 1024;
+
+} // namespace
+
 //==============================================================================
 // cached_file_body - A Beast body type for zero-copy cached file responses
 //==============================================================================
@@ -74,13 +80,15 @@ struct cached_file_body {
         return boost::none;
       }
 
-      // Return all remaining data in one buffer
+      // Bound each serializer step so large responses do not turn into a
+      // single oversized write on the underlying stream.
       auto remaining = body_.guard->size() - offset_;
+      auto chunk_size = std::min(remaining, kHttpResponseChunkSize);
       auto result = std::make_pair(
-          const_buffers_type(body_.guard->data() + offset_, remaining),
-          false // No more data after this
+          const_buffers_type(body_.guard->data() + offset_, chunk_size),
+          chunk_size < remaining
       );
-      offset_ += remaining;
+      offset_ += chunk_size;
       return result;
     }
   };
