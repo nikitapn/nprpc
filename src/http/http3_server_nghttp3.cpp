@@ -29,7 +29,12 @@
 #include <boost/asio/ip/udp.hpp>
 #include <boost/asio/steady_timer.hpp>
 
+#if !defined(_WIN32)
+# include <sys/socket.h>
+#endif
+
 #include "../logging.hpp"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
@@ -38,6 +43,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -99,6 +105,34 @@ static constexpr std::string_view k_webtransport_path = "/wt";
 static constexpr uint64_t k_webtransport_bidi_stream_type = 0x41;
 static constexpr uint8_t k_webtransport_bind_control = 0;
 static constexpr uint8_t k_webtransport_bind_native_stream = 1;
+
+size_t default_http3_worker_count() noexcept
+{
+  const auto hw = std::thread::hardware_concurrency();
+  if (hw == 0) {
+    return 1;
+  }
+
+  return std::min<size_t>(8, hw);
+}
+
+size_t effective_http3_worker_count() noexcept
+{
+  return g_cfg.http3_worker_count != 0 ? g_cfg.http3_worker_count
+                                       : default_http3_worker_count();
+}
+
+#if defined(SO_REUSEPORT)
+using reuse_port_socket_option =
+    boost::asio::detail::socket_option::boolean<SOL_SOCKET, SO_REUSEPORT>;
+
+bool enable_reuse_port(boost::asio::ip::udp::socket& socket,
+                       boost::system::error_code& ec)
+{
+  socket.set_option(reuse_port_socket_option(true), ec);
+  return !ec;
+}
+#endif
 
 } // anonymous namespace
 
@@ -3431,6 +3465,29 @@ bool Http3Server::start()
     return false;
   }
 
+  if (effective_http3_worker_count() > 1) {
+#if defined(SO_REUSEPORT)
+    if (!enable_reuse_port(socket_, ec)) {
+      NPRPC_HTTP3_ERROR("Failed to enable SO_REUSEPORT: {}",
+                        ec.message());
+      boost::system::error_code close_ec;
+      socket_.close(close_ec);
+      SSL_CTX_free(ssl_ctx_);
+      ssl_ctx_ = nullptr;
+      return false;
+    }
+#else
+    NPRPC_HTTP3_ERROR(
+        "HTTP/3 worker_count={} requires SO_REUSEPORT support on this platform",
+        effective_http3_worker_count());
+    boost::system::error_code close_ec;
+    socket_.close(close_ec);
+    SSL_CTX_free(ssl_ctx_);
+    ssl_ctx_ = nullptr;
+    return false;
+#endif
+  }
+
   // Allow IPv4 connections too (dual-stack)
   socket_.set_option(boost::asio::ip::v6_only(false), ec);
   socket_.set_option(boost::asio::socket_base::reuse_address(true), ec);
@@ -3733,24 +3790,96 @@ Http3Server::find_connection(const ngtcp2_cid* dcid)
   return it != connections_.end() ? it->second : nullptr;
 }
 
+class Http3ServerRuntime
+{
+public:
+  bool start(const std::string& cert_file,
+             const std::string& key_file,
+             uint16_t port)
+  {
+    const auto worker_count = effective_http3_worker_count();
+    workers_.reserve(worker_count);
+
+    for (size_t index = 0; index < worker_count; ++index) {
+      auto worker = std::make_unique<Worker>(cert_file, key_file, port);
+      if (!worker->server->start()) {
+        NPRPC_HTTP3_ERROR("Failed to start HTTP/3 worker {}/{}", index + 1,
+                          worker_count);
+        stop();
+        return false;
+      }
+
+      worker->thread = std::thread([ioc = &worker->ioc] { ioc->run(); });
+      workers_.push_back(std::move(worker));
+    }
+
+    NPRPC_LOG_INFO("[HTTP/3] Started {} dedicated worker(s) on UDP port {}",
+                   worker_count, port);
+    return true;
+  }
+
+  void stop() noexcept
+  {
+    for (auto& worker : workers_) {
+      if (worker->server) {
+        worker->server->stop();
+      }
+    }
+
+    for (auto& worker : workers_) {
+      worker->work_guard.reset();
+      worker->ioc.stop();
+    }
+
+    for (auto& worker : workers_) {
+      if (worker->thread.joinable()) {
+        worker->thread.join();
+      }
+    }
+
+    workers_.clear();
+  }
+
+private:
+  struct Worker {
+    explicit Worker(const std::string& cert_file,
+                    const std::string& key_file,
+                    uint16_t port)
+        : work_guard(boost::asio::make_work_guard(ioc))
+        , server(std::make_unique<Http3Server>(ioc, cert_file, key_file, port))
+    {
+    }
+
+    boost::asio::io_context ioc;
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type>
+        work_guard;
+    std::unique_ptr<Http3Server> server;
+    std::thread thread;
+  };
+
+  std::vector<std::unique_ptr<Worker>> workers_;
+};
+
 //==============================================================================
 // Global HTTP/3 Server Instance
 //==============================================================================
 
-static std::unique_ptr<Http3Server> g_http3_server;
+static std::unique_ptr<Http3ServerRuntime> g_http3_server;
 
 NPRPC_API void init_http3_server(boost::asio::io_context& ioc)
 {
+  (void)ioc;
+
   if (!g_cfg.http3_enabled)
     return;
 
   NPRPC_HTTP3_TRACE("Initializing on port {} (nghttp3 backend)",
                     g_cfg.listen_http_port);
 
-  g_http3_server = std::make_unique<Http3Server>(
-      ioc, g_cfg.http_cert_file, g_cfg.http_key_file, g_cfg.listen_http_port);
+  g_http3_server = std::make_unique<Http3ServerRuntime>();
 
-  if (!g_http3_server->start()) {
+  if (!g_http3_server->start(g_cfg.http_cert_file, g_cfg.http_key_file,
+                             g_cfg.listen_http_port)) {
     NPRPC_HTTP3_ERROR("Failed to start server");
     g_http3_server.reset();
   }

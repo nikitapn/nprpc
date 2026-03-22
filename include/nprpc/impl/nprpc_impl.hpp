@@ -27,12 +27,13 @@
 #include <nprpc/impl/id_to_ptr.hpp>
 #include <nprpc/impl/session.hpp>
 #include <nprpc/impl/websocket_session.hpp>
+#include <nprpc/config_default.hpp>
 #include <nprpc/nprpc.hpp>
 
 namespace nprpc::impl {
 
 struct Config {
-  LogLevel log_level = ::nprpc::LogLevel::warn;
+  LogLevel log_level = NPRPC_DEFAULT_LOG_LEVEL;
   uuid_t uuid;
   std::string hostname;
   std::string listen_address = "0.0.0.0";
@@ -49,27 +50,28 @@ struct Config {
   std::string quic_key_file;
   std::string http_root_dir;
   std::vector<std::string> http_allowed_origins;
-  size_t http_max_request_body_size = 10'000;
-  size_t http_websocket_max_message_size = 32 * 1024 * 1024;
-  size_t http_webtransport_max_message_size = 32 * 1024 * 1024;
-  size_t http_websocket_max_active_sessions_per_ip = 0;
-  size_t http_websocket_upgrades_per_ip_per_second = 0;
-  size_t http_websocket_upgrades_burst = 0;
-  size_t http_websocket_requests_per_session_per_second = 0;
-  size_t http_websocket_requests_burst = 0;
-  size_t http3_max_active_connections_per_ip = 0;
-  size_t http3_max_new_connections_per_ip_per_second = 0;
-  size_t http3_max_new_connections_burst = 0;
-  size_t http_rpc_max_requests_per_ip_per_second = 0;
-  size_t http_rpc_max_requests_burst = 0;
-  size_t http_webtransport_connects_per_ip_per_second = 0;
-  size_t http_webtransport_connects_burst = 0;
-  size_t http_webtransport_requests_per_session_per_second = 0;
-  size_t http_webtransport_requests_burst = 0;
-  size_t http_webtransport_stream_opens_per_session_per_second = 0;
-  size_t http_webtransport_stream_opens_burst = 0;
+  size_t http_max_request_body_size = NPRPC_DEFAULT_HTTP_MAX_REQUEST_BODY_SIZE;
+  size_t http_websocket_max_message_size = NPRPC_DEFAULT_HTTP_WEBSOCKET_MAX_MESSAGE_SIZE;
+  size_t http_webtransport_max_message_size = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_MAX_MESSAGE_SIZE;
+  size_t http_websocket_max_active_sessions_per_ip = NPRPC_DEFAULT_HTTP_WEBSOCKET_MAX_ACTIVE_SESSIONS_PER_IP;
+  size_t http_websocket_upgrades_per_ip_per_second = NPRPC_DEFAULT_HTTP_WEBSOCKET_UPGRADES_PER_IP_PER_SECOND;
+  size_t http_websocket_upgrades_burst = NPRPC_DEFAULT_HTTP_WEBSOCKET_UPGRADES_BURST;
+  size_t http_websocket_requests_per_session_per_second = NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_PER_SESSION_PER_SECOND;
+  size_t http_websocket_requests_burst = NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_BURST;
+  size_t http3_worker_count = NPRPC_DEFAULT_HTTP3_WORKER_COUNT; // 0 = auto
+  size_t http3_max_active_connections_per_ip = NPRPC_DEFAULT_HTTP3_MAX_ACTIVE_CONNECTIONS_PER_IP;
+  size_t http3_max_new_connections_per_ip_per_second = NPRPC_DEFAULT_HTTP3_MAX_NEW_CONNECTIONS_PER_IP_PER_SECOND;
+  size_t http3_max_new_connections_burst = NPRPC_DEFAULT_HTTP3_MAX_NEW_CONNECTIONS_BURST;
+  size_t http_rpc_max_requests_per_ip_per_second = NPRPC_DEFAULT_HTTP_RPC_MAX_REQUESTS_PER_IP_PER_SECOND;
+  size_t http_rpc_max_requests_burst = NPRPC_DEFAULT_HTTP_RPC_MAX_REQUESTS_BURST;
+  size_t http_webtransport_connects_per_ip_per_second = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_CONNECTS_PER_IP_PER_SECOND;
+  size_t http_webtransport_connects_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_CONNECTS_BURST;
+  size_t http_webtransport_requests_per_session_per_second = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_REQUESTS_PER_SESSION_PER_SECOND;
+  size_t http_webtransport_requests_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_REQUESTS_BURST;
+  size_t http_webtransport_stream_opens_per_session_per_second = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_PER_SESSION_PER_SECOND;
+  size_t http_webtransport_stream_opens_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_BURST;
   std::string ssr_handler_dir; // Path to SSR handler (index.js)
-  bool watch_files = false;   // Enable inotify-based cache invalidation (dev mode)
+  bool watch_files = NPRPC_DEFAULT_WATCH_FILES;   // Enable inotify-based cache invalidation (dev mode)
   ssl::context ssl_context_server{ssl::context::tlsv13_server};
   ssl::context ssl_context_client{ssl::context::tlsv13_client};
 };

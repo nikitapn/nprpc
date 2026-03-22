@@ -261,6 +261,7 @@ NPRPC_API Rpc* RpcBuilderBase::build()
       cfg_.http_websocket_requests_per_session_per_second;
   g_cfg.http_websocket_requests_burst =
       cfg_.http_websocket_requests_burst;
+    g_cfg.http3_worker_count = cfg_.http3_worker_count;
   g_cfg.http3_max_active_connections_per_ip =
       cfg_.http3_max_active_connections_per_ip;
   g_cfg.http3_max_new_connections_per_ip_per_second =

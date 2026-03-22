@@ -23,6 +23,7 @@
 #include <nprpc/serialization/serialization.h>
 #include <nprpc/session_context.h>
 #include <nprpc/utils.hpp>
+#include <nprpc/config_default.hpp>
 #include <nprpc_base_ext.hpp>
 
 namespace nprpc {
@@ -310,7 +311,7 @@ public:
 
 namespace impl {
 struct BuildConfig {
-  LogLevel log_level = LogLevel::info;
+  LogLevel log_level = NPRPC_DEFAULT_LOG_LEVEL;
   uuid_t uuid;
 
   uint16_t tcp_port = 0;
@@ -327,28 +328,29 @@ struct BuildConfig {
   std::string http_dhparams_file;
   std::string http_root_dir;
   std::vector<std::string> http_allowed_origins;
-  size_t http_max_request_body_size = 10'000;
-  size_t http_websocket_max_message_size = 2 * 1024 * 1024;
-  size_t http_webtransport_max_message_size = 2 * 1024 * 1024;
-  size_t http_websocket_max_active_sessions_per_ip = 0;
-  size_t http_websocket_upgrades_per_ip_per_second = 0;
-  size_t http_websocket_upgrades_burst = 0;
-  size_t http_websocket_requests_per_session_per_second = 0;
-  size_t http_websocket_requests_burst = 0;
-  size_t http3_max_active_connections_per_ip = 0;
-  size_t http3_max_new_connections_per_ip_per_second = 0;
-  size_t http3_max_new_connections_burst = 0;
-  size_t http_rpc_max_requests_per_ip_per_second = 0;
-  size_t http_rpc_max_requests_burst = 0;
-  size_t http_webtransport_connects_per_ip_per_second = 0;
-  size_t http_webtransport_connects_burst = 0;
-  size_t http_webtransport_requests_per_session_per_second = 0;
-  size_t http_webtransport_requests_burst = 0;
-  size_t http_webtransport_stream_opens_per_session_per_second = 0;
-  size_t http_webtransport_stream_opens_burst = 0;
+  size_t http_max_request_body_size = NPRPC_DEFAULT_HTTP_MAX_REQUEST_BODY_SIZE;
+  size_t http_websocket_max_message_size = NPRPC_DEFAULT_HTTP_WEBSOCKET_MAX_MESSAGE_SIZE;
+  size_t http_webtransport_max_message_size = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_MAX_MESSAGE_SIZE;
+  size_t http_websocket_max_active_sessions_per_ip = NPRPC_DEFAULT_HTTP_WEBSOCKET_MAX_ACTIVE_SESSIONS_PER_IP;
+  size_t http_websocket_upgrades_per_ip_per_second = NPRPC_DEFAULT_HTTP_WEBSOCKET_UPGRADES_PER_IP_PER_SECOND;
+  size_t http_websocket_upgrades_burst = NPRPC_DEFAULT_HTTP_WEBSOCKET_UPGRADES_BURST;
+  size_t http_websocket_requests_per_session_per_second = NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_PER_SESSION_PER_SECOND;
+  size_t http_websocket_requests_burst = NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_BURST;
+  size_t http3_worker_count = NPRPC_DEFAULT_HTTP3_WORKER_COUNT;
+  size_t http3_max_active_connections_per_ip = NPRPC_DEFAULT_HTTP3_MAX_ACTIVE_CONNECTIONS_PER_IP;
+  size_t http3_max_new_connections_per_ip_per_second = NPRPC_DEFAULT_HTTP3_MAX_NEW_CONNECTIONS_PER_IP_PER_SECOND;
+  size_t http3_max_new_connections_burst = NPRPC_DEFAULT_HTTP3_MAX_NEW_CONNECTIONS_BURST;
+  size_t http_rpc_max_requests_per_ip_per_second = NPRPC_DEFAULT_HTTP_RPC_MAX_REQUESTS_PER_IP_PER_SECOND;
+  size_t http_rpc_max_requests_burst = NPRPC_DEFAULT_HTTP_RPC_MAX_REQUESTS_BURST;
+  size_t http_webtransport_connects_per_ip_per_second = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_CONNECTS_PER_IP_PER_SECOND;
+  size_t http_webtransport_connects_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_CONNECTS_BURST;
+  size_t http_webtransport_requests_per_session_per_second = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_REQUESTS_PER_SESSION_PER_SECOND;
+  size_t http_webtransport_requests_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_REQUESTS_BURST;
+  size_t http_webtransport_stream_opens_per_session_per_second = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_PER_SESSION_PER_SECOND;
+  size_t http_webtransport_stream_opens_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_BURST;
   std::string ssr_handler_dir; // Path to SSR handler (index.js), defaults to
                                // http_root_dir
-  bool watch_files = false; // Enable inotify-based cache invalidation (dev mode)
+  bool watch_files = NPRPC_DEFAULT_WATCH_FILES; // Enable inotify-based cache invalidation (dev mode)
 
   // QUIC settings
   uint16_t quic_port = 0;
@@ -523,6 +525,12 @@ public:
   {
     cfg_.http_websocket_requests_per_session_per_second = rate;
     cfg_.http_websocket_requests_burst = burst;
+    return *this;
+  }
+
+  RpcBuilderHttp& http3_workers(size_t count) noexcept
+  {
+    cfg_.http3_worker_count = count;
     return *this;
   }
 

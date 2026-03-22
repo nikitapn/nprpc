@@ -85,6 +85,16 @@ try rpc.run()  // Blocks until shutdown
 | `.maxRequestBodySize(_:)` | Cap buffered HTTP request body size |
 | `.maxWebSocketMessageSize(_:)` | Cap inbound WebSocket message size |
 | `.maxWebTransportMessageSize(_:)` | Cap inbound WebTransport message size |
+| `.http3Workers(_:)` | Set dedicated HTTP/3 REUSE_PORT worker count |
+| `.maxWebSocketSessionsPerIp(_:)` | Cap active WebSocket sessions per client IP |
+| `.maxWebSocketUpgradesPerIpPerSecond(_:burst:)` | Rate-limit WebSocket upgrades per client IP |
+| `.maxWebSocketRequestsPerSessionPerSecond(_:burst:)` | Rate-limit WebSocket request messages per session |
+| `.maxHttp3ConnectionsPerIp(_:)` | Cap active HTTP/3 connections per client IP |
+| `.maxHttp3NewConnectionsPerIpPerSecond(_:burst:)` | Rate-limit new HTTP/3 connections per client IP |
+| `.maxHttpRpcRequestsPerIpPerSecond(_:burst:)` | Rate-limit HTTP RPC requests per client IP |
+| `.maxWebTransportConnectsPerIpPerSecond(_:burst:)` | Rate-limit WebTransport CONNECT attempts per IP |
+| `.maxWebTransportRequestsPerSessionPerSecond(_:burst:)` | Rate-limit WebTransport requests per session |
+| `.maxWebTransportStreamOpensPerSessionPerSecond(_:burst:)` | Rate-limit WebTransport child stream opens per session |
 
 ## Comparison with C++
 
@@ -96,9 +106,19 @@ auto rpc = nprpc::RpcBuilder()
     .with_http(3000)
     .ssl("cert.crt", "key.key")
     .enable_http3()
+    .http3_workers(4)
     .max_request_body_size(10'000)
     .max_websocket_message_size(24 * 1024 * 1024)
     .max_webtransport_message_size(24 * 1024 * 1024)
+    .max_websocket_sessions_per_ip(32)
+    .max_websocket_upgrades_per_ip_per_second(16, 32)
+    .max_websocket_requests_per_session_per_second(120, 240)
+    .max_http3_connections_per_ip(32)
+    .max_http3_new_connections_per_ip_per_second(16, 32)
+    .max_http_rpc_requests_per_ip_per_second(120, 240)
+    .max_webtransport_connects_per_ip_per_second(16, 32)
+    .max_webtransport_requests_per_session_per_second(120, 240)
+    .max_webtransport_stream_opens_per_session_per_second(64, 128)
     .root_dir("/path")
     .build(ioc);
 ```
@@ -111,9 +131,19 @@ let rpc = try RpcBuilder()
     .withHttp(3000)
         .ssl(certFile: "cert.crt", keyFile: "key.key")
         .enableHttp3()
+        .http3Workers(4)
         .maxRequestBodySize(10_000)
         .maxWebSocketMessageSize(24 * 1024 * 1024)
         .maxWebTransportMessageSize(24 * 1024 * 1024)
+        .maxWebSocketSessionsPerIp(32)
+        .maxWebSocketUpgradesPerIpPerSecond(16, burst: 32)
+        .maxWebSocketRequestsPerSessionPerSecond(120, burst: 240)
+        .maxHttp3ConnectionsPerIp(32)
+        .maxHttp3NewConnectionsPerIpPerSecond(16, burst: 32)
+        .maxHttpRpcRequestsPerIpPerSecond(120, burst: 240)
+        .maxWebTransportConnectsPerIpPerSecond(16, burst: 32)
+        .maxWebTransportRequestsPerSessionPerSecond(120, burst: 240)
+        .maxWebTransportStreamOpensPerSessionPerSecond(64, burst: 128)
         .rootDir("/path")
     .build()
 ```

@@ -177,6 +177,39 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.http_max_request_body_size = config->http_max_request_body_size;
         cxxConfig.http_websocket_max_message_size = config->http_websocket_max_message_size;
         cxxConfig.http_webtransport_max_message_size = config->http_webtransport_max_message_size;
+        cxxConfig.http_websocket_max_active_sessions_per_ip =
+            config->http_websocket_max_active_sessions_per_ip;
+        cxxConfig.http_websocket_upgrades_per_ip_per_second =
+            config->http_websocket_upgrades_per_ip_per_second;
+        cxxConfig.http_websocket_upgrades_burst =
+            config->http_websocket_upgrades_burst;
+        cxxConfig.http_websocket_requests_per_session_per_second =
+            config->http_websocket_requests_per_session_per_second;
+        cxxConfig.http_websocket_requests_burst =
+            config->http_websocket_requests_burst;
+        cxxConfig.http3_worker_count = config->http3_worker_count;
+        cxxConfig.http3_max_active_connections_per_ip =
+            config->http3_max_active_connections_per_ip;
+        cxxConfig.http3_max_new_connections_per_ip_per_second =
+            config->http3_max_new_connections_per_ip_per_second;
+        cxxConfig.http3_max_new_connections_burst =
+            config->http3_max_new_connections_burst;
+        cxxConfig.http_rpc_max_requests_per_ip_per_second =
+            config->http_rpc_max_requests_per_ip_per_second;
+        cxxConfig.http_rpc_max_requests_burst =
+            config->http_rpc_max_requests_burst;
+        cxxConfig.http_webtransport_connects_per_ip_per_second =
+            config->http_webtransport_connects_per_ip_per_second;
+        cxxConfig.http_webtransport_connects_burst =
+            config->http_webtransport_connects_burst;
+        cxxConfig.http_webtransport_requests_per_session_per_second =
+            config->http_webtransport_requests_per_session_per_second;
+        cxxConfig.http_webtransport_requests_burst =
+            config->http_webtransport_requests_burst;
+        cxxConfig.http_webtransport_stream_opens_per_session_per_second =
+            config->http_webtransport_stream_opens_per_session_per_second;
+        cxxConfig.http_webtransport_stream_opens_burst =
+            config->http_webtransport_stream_opens_burst;
         cxxConfig.ssr_handler_dir = config->ssr_handler_dir;
         cxxConfig.watch_files = config->watch_files;
         cxxConfig.quic_port = config->quic_port;
