@@ -530,7 +530,7 @@ TEST_F(NprpcTest, TestBadInput)
       buf.commit(1024);
       // Set correct size in header
       static_cast<::nprpc::impl::Header*>(buf.data().data())->size =
-          static_cast<uint32_t>(buf.size() - 4);
+          static_cast<uint32_t>(buf.size());
       auto vec_begin = static_cast<std::byte*>(buf.data().data()) + 32;
       // Set size of the vector to be larger than the buffer size
       *reinterpret_cast<uint32_t*>(vec_begin) = 0xDEADBEEF;
@@ -576,7 +576,7 @@ TEST_F(NprpcTest, TestBadInput)
         vec_begin[1] = 1;
 
       static_cast<::nprpc::impl::Header*>(buf.data().data())->size =
-          static_cast<uint32_t>(buf.size() - 4);
+          static_cast<uint32_t>(buf.size());
 
       ::nprpc::impl::g_rpc->call(obj->get_endpoint(), buf, obj->get_timeout());
       auto std_reply = nprpc::impl::handle_standart_reply(buf);

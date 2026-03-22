@@ -169,7 +169,7 @@ enum MessageType: u32 {
 }
 
 message Header {
-  // Total message size including header
+  // Total message size, including this header
   size: u32;
   // Message identifier
   msg_id: MessageId;

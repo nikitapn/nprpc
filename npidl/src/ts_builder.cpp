@@ -1257,7 +1257,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
         out << "});\n";
       }
 
-      out << bl() << "buf.write_len(buf.size - 4);\n";
+      out << bl() << "buf.write_len(buf.size);\n";
 
       out << bl() << "(globalThis as any).__nprpc_debug?.stream_start({direction:'client',"
           << "class_id:_" << servant_iname << "._get_class(),"
@@ -1368,7 +1368,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       out << "});\n";
     }
 
-    out << bl() << "buf.write_len(buf.size - 4);\n";
+    out << bl() << "buf.write_len(buf.size);\n";
 
     // Debug hook: record call start
     out << bl() << "const __dbg_t0 = Date.now();\n";
@@ -1583,7 +1583,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       out << "});\n";
     }
 
-    out << bl() << "buf.write_len(buf.size - 4);\n\n";
+    out << bl() << "buf.write_len(buf.size);\n\n";
 
     // Debug hook: call_start before fetch
     out << bl() << "const __dbg_t0 = Date.now();\n";
@@ -2017,7 +2017,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
         out << bl() << ns(ex->nm) << "marshal_" << ex->name << "(obuf, "
             << offset << ", ex_data);\n";
         always_full_namespace(false);
-        out << bl() << "obuf.write_len(obuf.size - 4);\n"
+        out << bl() << "obuf.write_len(obuf.size);\n"
             << bl() << "obuf.write_msg_id(NPRPC.impl.MessageId.Exception);\n"
             << bl() << "obuf.write_msg_type(NPRPC.impl.MessageType.Answer);\n"
             << bl() << "(globalThis as any).__nprpc_debug?.call_end(__dbg_id,{status:'error',duration_ms:Date.now()-__dbg_t0,error:String(e)});\n"
@@ -2067,7 +2067,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
 
       out << bl() << "marshal_" << fn->out_s->name << "(obuf, "
           << size_of_header << ", out_data);\n"
-          << bl() << "obuf.write_len(obuf.size - 4);\n"
+          << bl() << "obuf.write_len(obuf.size);\n"
           << bl() << "obuf.write_msg_id(NPRPC.impl.MessageId.BlockResponse);\n"
           << bl() << "obuf.write_msg_type(NPRPC.impl.MessageType.Answer);\n";
     }

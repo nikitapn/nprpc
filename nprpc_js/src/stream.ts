@@ -331,7 +331,7 @@ export class StreamManager {
       data,
       window_size: 0,
     });
-    buf.write_len(buf.size - 4);
+    buf.write_len(buf.size);
     if (this.send_native_stream) {
       this.send_native_stream(stream_id, buf.writable_view);
     } else {
@@ -350,7 +350,7 @@ export class StreamManager {
     buf.write_msg_id(impl.MessageId.StreamCompletion);
     buf.write_msg_type(impl.MessageType.Request);
     impl.marshal_StreamComplete(buf, header_size, { stream_id, final_sequence });
-    buf.write_len(buf.size - 4);
+    buf.write_len(buf.size);
     this.send_message(buf.writable_view);
   }
 
@@ -366,7 +366,7 @@ export class StreamManager {
     buf.write_msg_id(impl.MessageId.StreamError);
     buf.write_msg_type(impl.MessageType.Request);
     impl.marshal_StreamError(buf, header_size, { stream_id, error_code, error_data });
-    buf.write_len(buf.size - 4);
+    buf.write_len(buf.size);
     this.send_message(buf.writable_view);
   }
 
@@ -380,7 +380,7 @@ export class StreamManager {
     buf.write_msg_id(impl.MessageId.StreamCancellation);
     buf.write_msg_type(impl.MessageType.Request);
     impl.marshal_StreamCancel(buf, header_size, { stream_id });
-    buf.write_len(buf.size - 4);
+    buf.write_len(buf.size);
     this.send_message(buf.writable_view);
   }
 
@@ -396,7 +396,7 @@ export class StreamManager {
     buf.write_msg_id(impl.MessageId.StreamWindowUpdate);
     buf.write_msg_type(impl.MessageType.Request);
     impl.marshal_StreamWindowUpdate(buf, header_size, { stream_id, credits });
-    buf.write_len(buf.size - 4);
+    buf.write_len(buf.size);
     this.send_message(buf.writable_view);
   }
 

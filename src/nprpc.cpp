@@ -88,7 +88,7 @@ NPRPC_API uint32_t Object::add_ref()
   auto mb = buf.prepare(msg_size);
   buf.commit(msg_size);
 
-  static_cast<impl::Header*>(mb.data())->size = msg_size - 4;
+  static_cast<impl::Header*>(mb.data())->size = msg_size;
   static_cast<impl::Header*>(mb.data())->msg_id = impl::MessageId::AddReference;
   static_cast<impl::Header*>(mb.data())->msg_type = impl::MessageType::Request;
 
@@ -126,7 +126,7 @@ NPRPC_API uint32_t Object::release()
       auto mb = buf.prepare(msg_size);
       buf.commit(msg_size);
 
-      static_cast<impl::Header*>(mb.data())->size = msg_size - 4;
+      static_cast<impl::Header*>(mb.data())->size = msg_size;
       static_cast<impl::Header*>(mb.data())->msg_id =
           impl::MessageId::ReleaseObject;
       static_cast<impl::Header*>(mb.data())->msg_type =

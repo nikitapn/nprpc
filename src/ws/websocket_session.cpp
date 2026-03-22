@@ -264,7 +264,7 @@ template <class Derived>
 void WebSocketSession<Derived>::send_receive(flat_buffer& buffer,
                                              uint32_t timeout_ms)
 {
-  assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
+  assert(*(uint32_t*)buffer.data().data() == buffer.size());
 
   // dump_message(buffer, false);
 
@@ -300,7 +300,7 @@ void WebSocketSession<Derived>::send_receive_async(
       >&& completion_handler,
     uint32_t timeout_ms)
 {
-  assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
+  assert(*(uint32_t*)buffer.data().data() == buffer.size());
 
   uint32_t request_id = generate_request_id();
 

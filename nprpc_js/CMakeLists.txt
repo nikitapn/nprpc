@@ -55,7 +55,7 @@ set(JS_OUTPUT_FILES
 # Build JavaScript library - only rebuild when source files or config changes
 add_custom_command(
   OUTPUT ${JS_OUTPUT_FILES}
-  COMMAND npm ci && npm run build-prd
+  COMMAND npm ci && npm run build
   # This command fixes issue when compiling generated .d.ts files from different projects
   # CMake always rebuilds the target if output modified time is older than input file modified time
   # but in this case the generated .d.ts files are identical and should not trigger rebuild

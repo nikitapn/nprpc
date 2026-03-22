@@ -986,8 +986,8 @@ final class IntegrationTests: XCTestCase {
             return
         }
 
-        // Set correct size in header (total size - 4 bytes for size field itself)
-        finalData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)
+        // Set correct size in header (total size of the buffer)
+        finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
 
         // Write malformed vector at offset 32 (where input struct begins)
         // Vector format: [relative_offset: u32, count: u32]

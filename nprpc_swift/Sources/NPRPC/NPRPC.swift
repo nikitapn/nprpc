@@ -49,11 +49,11 @@ public func makeSimpleAnswer(buffer: FlatBuffer, messageId: impl.MessageId) {
     guard let data = buffer.data else { return }
     
     // Write header:
-    // - size (4 bytes, set to 12 = 16 - 4)
+    // - size (4 bytes, set to 16)
     // - message_id (4 bytes)
     // - message_type (4 bytes, 1 = Answer)
     // - reserved (4 bytes)
-    data.storeBytes(of: UInt32(12), toByteOffset: 0, as: UInt32.self)
+    data.storeBytes(of: UInt32(16), toByteOffset: 0, as: UInt32.self)
     data.storeBytes(of: messageId.rawValue, toByteOffset: 4, as: UInt32.self)
     data.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
     data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved

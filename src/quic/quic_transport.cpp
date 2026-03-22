@@ -383,13 +383,11 @@ void QuicConnection::set_datagram_callback(DatagramCallback callback)
 void QuicConnection::process_receive_buffer()
 {
   // NPRPC message format: first 4 bytes = payload size (not including the
-  // 4-byte size field) Total message size = payload_size + 4
   // Header format (after size): msg_id(4) + msg_type(4) + request_id(4)
   // msg_type: 0 = Request, 1 = Answer
   while (receive_buffer_.size() >= 4) {
-    uint32_t payload_size =
+    uint32_t total_size =
         *reinterpret_cast<uint32_t*>(receive_buffer_.data());
-    uint32_t total_size = payload_size + 4;
     NPRPC_QUIC_TRACE(std::format("Client process_receive_buffer: payload_size={}, "
                                      "total_size={}, buffer_size={}",
                                      payload_size, total_size,
@@ -724,8 +722,7 @@ void QuicConnection::handle_data_stream_event(HQUIC stream, QUIC_STREAM_EVENT* e
 
 void QuicConnection::process_data_stream_buffer(HQUIC stream)
 {
-  // NPRPC message format: first 4 bytes = payload size
-  // Total message size = payload_size + 4
+  // NPRPC message format: first 4 bytes = message size
   // For data streams, each message has stream_id in the header
   
   // Collect complete messages under lock, dispatch outside
@@ -746,9 +743,8 @@ void QuicConnection::process_data_stream_buffer(HQUIC stream)
     auto& info = it->second;
     
     while (info.receive_buffer.size() >= 4) {
-      uint32_t payload_size = *reinterpret_cast<uint32_t*>(info.receive_buffer.data());
-      uint32_t total_size = payload_size + 4;
-      
+      uint32_t total_size = *reinterpret_cast<uint32_t*>(info.receive_buffer.data());
+
       NPRPC_QUIC_TRACE("Client data stream: payload_size={}, "
                                        "total_size={}, buffer_size={}",
                                        payload_size, total_size,
@@ -1223,12 +1219,10 @@ void QuicServerConnection::handle_stream_event(HQUIC stream,
 
 void QuicServerConnection::process_receive_buffer()
 {
-  // NPRPC message format: first 4 bytes = payload size (not including the
-  // 4-byte size field) Total message size = payload_size + 4
+  // NPRPC message format: first 4 bytes = message size
   while (receive_buffer_.size() >= 4) {
-    uint32_t payload_size =
+    uint32_t total_size =
         *reinterpret_cast<uint32_t*>(receive_buffer_.data());
-    uint32_t total_size = payload_size + 4;
     NPRPC_QUIC_TRACE(std::format("process_receive_buffer: payload_size={}, "
                                      "total_size={}, buffer_size={}",
                                      payload_size, total_size,

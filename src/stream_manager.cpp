@@ -457,7 +457,7 @@ void StreamManager::send_chunk(uint64_t stream_id,
 
   // Re-fetch header pointer after potential reallocation and update final size
   header = reinterpret_cast<flat::Header*>(fb.data().data());
-  header->size = static_cast<uint32_t>(fb.size() - 4);
+  header->size = static_cast<uint32_t>(fb.size());
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -481,7 +481,7 @@ void StreamManager::send_complete(uint64_t stream_id, uint64_t final_sequence)
   fb.commit(total_size);
 
   auto* header = reinterpret_cast<flat::Header*>(fb.data().data());
-  header->size = total_size - 4;
+  header->size = total_size;
   header->msg_id = MessageId::StreamCompletion;
   header->msg_type = MessageType::Request;
   header->request_id = 0;
@@ -533,7 +533,7 @@ void StreamManager::send_error(uint64_t stream_id,
 
   // Re-fetch header pointer after potential reallocation and update final size
   header = reinterpret_cast<flat::Header*>(fb.data().data());
-  header->size = static_cast<uint32_t>(fb.size() - 4);
+  header->size = static_cast<uint32_t>(fb.size());
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -557,7 +557,7 @@ void StreamManager::send_cancel(uint64_t stream_id)
   fb.commit(total_size);
 
   auto* header = reinterpret_cast<flat::Header*>(fb.data().data());
-  header->size = total_size - 4;
+  header->size = total_size;
   header->msg_id = MessageId::StreamCancellation;
   header->msg_type = MessageType::Request;
   header->request_id = 0;
@@ -590,7 +590,7 @@ void StreamManager::send_window_update(uint64_t stream_id, uint32_t credits)
   fb.commit(total_size);
 
   auto* header = reinterpret_cast<flat::Header*>(fb.data().data());
-  header->size = total_size - 4;
+  header->size = total_size;
   header->msg_id = MessageId::StreamWindowUpdate;
   header->msg_type = MessageType::Request;
   header->request_id = 0;
@@ -640,7 +640,7 @@ void StreamManager::on_window_update(uint64_t stream_id, uint32_t credits)
         std::memcpy(span.data(), pw.data.data(), pw.data.size());
       }
       header = reinterpret_cast<flat::Header*>(fb.data().data());
-      header->size = static_cast<uint32_t>(fb.size() - 4);
+      header->size = static_cast<uint32_t>(fb.size());
       to_dispatch.emplace_back(std::move(fb), std::move(pw.callback));
       it->second.pending_writes.pop_front();
       --it->second.credits;

@@ -862,7 +862,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
       out << "BufferError(message: \"Failed to get buffer data\")";
     }
     out << " }\n";
-    out << bl() << "finalData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n\n";
+    out << bl() << "finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)\n\n";
 
     // Send Request
     if (fn->is_async) {
@@ -1089,7 +1089,7 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
 
   // Set message size
   out << bl() << "guard let finalData = buffer.data else { throw BufferError(message: \"Failed to get buffer data\") }\n";
-  out << bl() << "finalData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n\n";
+  out << bl() << "finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)\n\n";
 
   out << bl() << "guard let session = nprpc_object_get_session(self.handle),\n";
   out << bl() << "      let streamManager = nprpc_session_get_stream_manager(session) else {\n";
@@ -1436,7 +1436,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
 
       out << bl() << ns(fn->out_s->nm) << "marshal_" << fn->out_s->name << "(buffer: buffer, offset: " << size_of_header << ", data: out_data)\n";
       out << bl() << "guard let outData = buffer.data else { return }\n";
-      out << bl() << "outData.storeBytes(of: UInt32(buffer.size - 4), toByteOffset: 0, as: UInt32.self)\n";
+      out << bl() << "outData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)\n";
       out << bl() << "outData.storeBytes(of: impl.MessageId.BlockResponse.rawValue, toByteOffset: 4, as: UInt32.self)\n";
       out << bl() << "outData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)\n";
     }
@@ -1458,7 +1458,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
         out << bl() << "obuf.commit(" << initial_size << ")\n";
         out << bl() << "guard let exData = obuf.data else { return }\n";
         out << bl() << "marshal_" << ex->name << "(buffer: obuf, offset: " << offset << ", data: e)\n";
-        out << bl() << "exData.storeBytes(of: UInt32(obuf.size - 4), toByteOffset: 0, as: UInt32.self)\n";
+        out << bl() << "exData.storeBytes(of: UInt32(obuf.size), toByteOffset: 0, as: UInt32.self)\n";
         out << bl() << "exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)\n";
         out << bl() << "exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)\n";
         out << eb();

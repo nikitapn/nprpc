@@ -1553,7 +1553,7 @@ void CppBuilder::emit_declared_exception_reply(AstFunctionDecl* fn,
     }
 
     os << indent << "  auto* out_header = static_cast<::nprpc::impl::Header*>(obuf.data().data());\n"
-       << indent << "  out_header->size = static_cast<uint32_t>(obuf.size() - 4);\n"
+       << indent << "  out_header->size = static_cast<uint32_t>(obuf.size());\n"
        << indent << "  out_header->msg_id = ::nprpc::impl::MessageId::Exception;\n"
        << indent << "  out_header->msg_type = ::nprpc::impl::MessageType::Answer;\n"
        << indent << "  out_header->request_id = static_cast<const ::nprpc::impl::Header*>(ctx.rx_buffer->cdata().data())->request_id;\n"
@@ -1688,7 +1688,7 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
     }
   }
 
-  oc << "  header->size = static_cast<uint32_t>(buf.size() - 4);\n";
+  oc << "  header->size = static_cast<uint32_t>(buf.size());\n";
 
   // Wait for the init ACK so stream initialization failures propagate to the caller.
   oc << "  session->send_receive(buf, this->get_timeout());\n";
@@ -1748,7 +1748,7 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
       }
     }
 
-    oc << "  header->size = static_cast<uint32_t>(buf.size() - 4);\n";
+    oc << "  header->size = static_cast<uint32_t>(buf.size());\n";
     oc << "  session->send_receive(buf, this->get_timeout());\n";
     oc << "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n";
     emit_stream_proxy_reply_handling(fn);
@@ -1807,7 +1807,7 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
       }
     }
 
-    oc << "  header->size = static_cast<uint32_t>(buf.size() - 4);\n";
+    oc << "  header->size = static_cast<uint32_t>(buf.size());\n";
     oc << "  session->send_receive(buf, this->get_timeout());\n";
     oc << "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n";
     emit_stream_proxy_reply_handling(fn);
@@ -2296,7 +2296,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 
     oc << "  static_cast<::nprpc::impl::Header*>(buf.data().data())->size "
           "= "
-          "static_cast<uint32_t>(buf.size() - 4);\n";
+          "static_cast<uint32_t>(buf.size());\n";
 
     // Choose the call method based on interface/function attributes
     if (!fn->is_reliable) {
@@ -2358,7 +2358,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       }
       oc << "  static_cast<::nprpc::impl::Header*>(buf.data().data())->size "
             "= "
-            "static_cast<uint32_t>(buf.size() - 4);\n";
+            "static_cast<uint32_t>(buf.size());\n";
       proxy_call_coro(fn);
       oc << "}\n\n";
     }
@@ -2787,7 +2787,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
         oc << "        "
             "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
             "size = "
-            "static_cast<uint32_t>(obuf.size() - 4);\n"
+            "static_cast<uint32_t>(obuf.size());\n"
             "        "
             "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
             "msg_id = "
@@ -2858,7 +2858,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       oc << "      "
             "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
             "size = "
-            "static_cast<uint32_t>(obuf.size() - 4);\n"
+            "static_cast<uint32_t>(obuf.size());\n"
             "      "
             "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
             "msg_id = "

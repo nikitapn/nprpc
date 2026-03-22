@@ -16,7 +16,7 @@
 ## Testing & Quality Gates
 - C++ tests live in `test/src`; building `nprpc_test` automatically triggers `ctest --output-on-failure` because of a POST_BUILD hook, so fix failures before re-running the build.
 - Handy targets: `run_nprpc_tests`, `run_nprpc_tests_verbose`, and the focused executables (`test_lock_free_ring_buffer`, `test_shared_memory_endpoint`, etc.) that ctest registers as separate suites.
-- JS parity tests run from `test/js` with `npm install && npm test`; ensure `nprpc_js` is built (`npm run build-prd`) and copy the generated `test.ts` from the build tree before running.
+- JS parity tests run from `test/js` with `npm install && npm test`; ensure `nprpc_js` is built (`npm run build`) and copy the generated `test.ts` from the build tree before running.
 - Benchmarks build via `cmake --build .build_release --target nprpc_benchmarks` or the convenience script `./run_benchmark.sh --benchmark_filter=LatencyFixture/LargeData1MB/0` (script auto-builds `.build_release`).
 - Swift tests are in `nprpc_swift/Tests`; build the test bundle with `./gen_stubs.sh && ./docker-build-boost.sh && ./docker-build-nprpc.sh && ./docker-build-swift.sh` and run with `./docker-build-swift.sh --test`.
 ## Contribution Conventions

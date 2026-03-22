@@ -47,7 +47,7 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(nprpc_js_test ALL
+add_custom_target(nprpc_js_test
   DEPENDS
     ${CMAKE_CURRENT_BINARY_DIR}/nprpc_js_test.stamp
   COMMENT 

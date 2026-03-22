@@ -29,10 +29,6 @@ void SharedMemoryConnection::add_work(std::shared_ptr<IOWork> w)
 void SharedMemoryConnection::send_receive(flat_buffer& buffer,
                                           uint32_t timeout_ms)
 {
-  assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
-
-  // dump_message(buffer, false);
-
   struct work_impl : IOWork {
     flat_buffer& buf;
     SharedMemoryConnection& this_;
@@ -132,7 +128,7 @@ void SharedMemoryConnection::send_receive_async(
                                      flat_buffer&)>>&& completion_handler,
     uint32_t timeout_ms)
 {
-  assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
+  assert(*(uint32_t*)buffer.data().data() == buffer.size());
 
   pending_requests_++;
 

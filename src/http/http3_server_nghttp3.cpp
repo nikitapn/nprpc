@@ -616,17 +616,24 @@ public:
     append_bytes(receive_buffer, data, datalen);
 
     while (receive_buffer.size() >= sizeof(std::uint32_t)) {
-      std::uint32_t payload_len = 0;
-      std::memcpy(&payload_len, receive_buffer.data_ptr(), sizeof(payload_len));
+      std::uint32_t message_len = 0;
+      std::memcpy(&message_len, receive_buffer.data_ptr(), sizeof(message_len));
 
-      if (payload_len > g_cfg.http_webtransport_max_message_size) {
+      if (message_len < sizeof(impl::flat::Header)) {
         NPRPC_LOG_ERROR(
-            "[HTTP/3][WT] Rejecting oversized framed message: transport_stream_id={} payload={} limit={}",
-            transport_stream_id, payload_len, g_cfg.http_webtransport_max_message_size);
+            "[HTTP/3][WT] Rejecting undersized framed message: transport_stream_id={} size={} min={}",
+            transport_stream_id, message_len, sizeof(impl::flat::Header));
         return false;
       }
 
-      const size_t frame_len = static_cast<size_t>(payload_len) + sizeof(std::uint32_t);
+      if (message_len > g_cfg.http_webtransport_max_message_size) {
+        NPRPC_LOG_ERROR(
+            "[HTTP/3][WT] Rejecting oversized framed message: transport_stream_id={} size={} limit={}",
+            transport_stream_id, message_len, g_cfg.http_webtransport_max_message_size);
+        return false;
+      }
+
+      const size_t frame_len = static_cast<size_t>(message_len);
       if (receive_buffer.size() < frame_len) {
         break;
       }

@@ -117,7 +117,7 @@ ReferenceError: self is not defined
 npm install
 
 # Ensure NPRPC JavaScript library is built
-cd ../../nprpc_js && npm run build-prd
+cd ../../nprpc_js && npm run build
 ```
 
 ### Test Commands

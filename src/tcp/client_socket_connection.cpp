@@ -14,10 +14,6 @@ namespace nprpc::impl {
 
 void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 {
-  assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
-
-  // dump_message(buffer, false);
-
   struct WorkImpl : IOWork {
     flat_buffer& buf;
     SocketConnection& this_;
@@ -102,7 +98,7 @@ void SocketConnection::send_receive_async(
                                      flat_buffer&)>>&& completion_handler,
     uint32_t timeout_ms)
 {
-  assert(*(uint32_t*)buffer.data().data() == buffer.size() - 4);
+  assert(*(uint32_t*)buffer.data().data() == buffer.size());
 
   struct WorkImpl : IOWork {
     flat_buffer buf;
@@ -226,9 +222,10 @@ void SocketConnection::on_read_size(const boost::system::error_code& ec,
   }
 
   auto& buf = current_rx_buffer();
-  auto body_len = *(uint32_t*)buf.data().data();
+  uint32_t message_len;
+  std::memcpy(&message_len, buf.data_ptr(), sizeof(uint32_t));
 
-  if (body_len > max_message_size) {
+  if (message_len > max_message_size) {
     fail(boost::asio::error::no_buffer_space, "rx_size_ > max_message_size");
     if (!wq_.empty()) {
       (*wq_.front()).on_failed(ec);
@@ -237,16 +234,9 @@ void SocketConnection::on_read_size(const boost::system::error_code& ec,
     return;
   }
 
-  if (body_len == len - 4) {
-    // No more data to read, process immediately
-    buf.commit(len);
-    rx_size_ = 0;
-    on_read_body(boost::system::error_code(), 0);
-  } else {
-    rx_size_ = body_len;
-    buf.commit(4);
-    on_read_body(boost::system::error_code(), len - 4);
-  }
+
+  rx_size_ = message_len;
+  on_read_body(boost::system::error_code(), len);
 }
 
 void SocketConnection::on_read_body(const boost::system::error_code& ec,

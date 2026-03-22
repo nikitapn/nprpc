@@ -8,8 +8,8 @@
   },
   "main": "dist/index.js",
   "scripts": {
-    "build-debug": "webpack --env production=false",
-    "build-prd": "webpack --env production=true",
+    "build": "webpack --env production=true",
+    "build:debug": "webpack --env production=false",
     "watch": "webpack --env production=false --env watch=true"
   },
   "author": "nikitapnn1@gmail.com",

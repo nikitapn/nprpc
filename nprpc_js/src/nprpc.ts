@@ -375,8 +375,7 @@ export class Connection {
         receive_buffer.byteOffset,
         receive_buffer.byteLength,
       );
-      const payload_len = dv.getUint32(0, true);
-      const total_len = payload_len + 4;
+      const total_len = dv.getUint32(0, true);
       if (receive_buffer.length < total_len) {
         break;
       }
@@ -856,7 +855,7 @@ export class ObjectProxy {
 
     const msg_size = header_size + 16;
     let buf = FlatBuffer.create(msg_size);
-    buf.write_len(msg_size - 4);
+    buf.write_len(msg_size);
     buf.write_msg_id(impl.MessageId.AddReference);
     buf.write_msg_type(impl.MessageType.Request);
     let msg: detail.ObjectIdLocal = {
@@ -877,7 +876,7 @@ export class ObjectProxy {
 
     const msg_size = header_size + 16;
     let buf = FlatBuffer.create(msg_size);
-    buf.write_len(msg_size - 4);
+    buf.write_len(msg_size);
     buf.write_msg_id(impl.MessageId.ReleaseObject);
     buf.write_msg_type(impl.MessageType.Request);
     let msg: detail.ObjectIdLocal = {
@@ -1077,7 +1076,7 @@ export abstract class ObjectServant {
 export const make_simple_answer = (buf: FlatBuffer, message_id: impl.MessageId): void => {
   buf.consume(buf.size);
   buf.prepare(header_size);
-  buf.write_len(header_size - 4);
+  buf.write_len(header_size);
   buf.write_msg_id(message_id);
   buf.write_msg_type(impl.MessageType.Answer);
   buf.commit(header_size);

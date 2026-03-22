@@ -508,7 +508,7 @@ public:
   void send_receive(flat_buffer& buffer, uint32_t /*timeout_ms*/) override
   {
     assert(*reinterpret_cast<const uint32_t*>(buffer.data().data()) ==
-           buffer.size() - 4);
+           buffer.size());
 
     const uint32_t rid =
         next_request_id_.fetch_add(1, std::memory_order_relaxed);
@@ -553,7 +553,7 @@ public:
                                    uint32_t /*timeout_ms*/) override
   {
     assert(*reinterpret_cast<const uint32_t*>(buffer.data().data()) ==
-           buffer.size() - 4);
+           buffer.size());
 
     const uint32_t rid =
         next_request_id_.fetch_add(1, std::memory_order_relaxed);

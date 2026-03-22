@@ -422,7 +422,7 @@ make_simple_answer(SessionContext& ctx, MessageId id, uint32_t request_id = 0)
 
   auto mb = bout.data();
   auto header = static_cast<impl::flat::Header*>(mb.data());
-  header->size = sizeof(impl::flat::Header) - 4;
+  header->size = sizeof(impl::flat::Header);
   header->msg_id = id;
   header->msg_type = impl::MessageType::Answer;
   header->request_id = request_id;
@@ -440,7 +440,7 @@ inline int handle_standart_reply(flat_buffer& buf)
   if (buf.size() < sizeof(impl::flat::Header))
     throw ExceptionBadInput();
   auto header = static_cast<const impl::flat::Header*>(buf.cdata().data());
-  assert(header->size == buf.size() - 4);
+  assert(header->size == buf.size());
   switch (header->msg_id) {
   case MessageId::Success:
     return 0;
