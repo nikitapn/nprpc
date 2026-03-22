@@ -30,7 +30,10 @@
 #include <boost/asio/steady_timer.hpp>
 
 #if !defined(_WIN32)
+# include <errno.h>
+# include <netinet/udp.h>
 # include <sys/socket.h>
+# include <sys/uio.h>
 #endif
 
 #include "../logging.hpp"
@@ -110,6 +113,10 @@ static constexpr uint8_t k_webtransport_bind_native_stream = 1;
 namespace {
 
 constexpr std::size_t kHttp3ResponseChunkSize = 64 * 1024;
+
+#if !defined(_WIN32) && defined(UDP_SEGMENT)
+constexpr std::size_t kMaxUdpGsoSegments = MAX_PKTS_BURST;
+#endif
 
 } // namespace
 
@@ -978,6 +985,7 @@ private:
   int send_packet(std::shared_ptr<PendingSendPacket> packet);
   std::shared_ptr<PendingSendPacket> acquire_send_packet();
   void recycle_send_packet(std::shared_ptr<PendingSendPacket> packet);
+  bool try_send_gso_batch();
   void on_connection_accepted(const boost::asio::ip::udp::endpoint& remote_ep);
   void do_send();
   void do_receive();
@@ -1020,6 +1028,9 @@ private:
   std::deque<std::shared_ptr<PendingSendPacket>> send_queue_;
   std::vector<std::shared_ptr<PendingSendPacket>> send_pool_;
   bool send_in_progress_ = false;
+#if !defined(_WIN32) && defined(UDP_SEGMENT)
+  bool udp_gso_supported_ = true;
+#endif
 
   bool running_ = false;
 };
@@ -1539,7 +1550,7 @@ int Http3Connection::on_write()
     // Send the packet
     // Check what type of packet we're sending
 #if NPRPC_ENABLE_HTTP3_TRACE
-  uint8_t first_byte = send_packet_->payload[0];
+    uint8_t first_byte = send_packet_->payload[0];
     const char* pkt_type = "unknown";
     if (first_byte & 0x80) { // Long header
       uint8_t type = (first_byte >> 4) & 0x03;
@@ -3671,8 +3682,118 @@ void Http3Server::recycle_send_packet(std::shared_ptr<PendingSendPacket> packet)
   }
 }
 
+bool Http3Server::try_send_gso_batch()
+{
+#if !defined(_WIN32) && defined(UDP_SEGMENT)
+  if (!udp_gso_supported_) {
+    return false;
+  }
+
+  std::array<std::shared_ptr<PendingSendPacket>, kMaxUdpGsoSegments> batch;
+  std::size_t batch_size = 0;
+  std::size_t segment_size = 0;
+
+  {
+    std::lock_guard lock(send_mutex_);
+    if (send_queue_.size() < 2) {
+      return false;
+    }
+
+    const auto& first = send_queue_.front();
+    if (!first || first->payload_len == 0) {
+      return false;
+    }
+
+    batch[batch_size++] = first;
+    segment_size = first->payload_len;
+
+    while (batch_size < kMaxUdpGsoSegments && batch_size < send_queue_.size()) {
+      const auto& candidate = send_queue_[batch_size];
+      if (!candidate || candidate->payload_len == 0 ||
+          candidate->payload_len != first->payload_len ||
+          candidate->remote_ep != first->remote_ep) {
+        break;
+      }
+      batch[batch_size++] = candidate;
+    }
+  }
+
+  if (batch_size < 2) {
+    return false;
+  }
+
+  std::array<iovec, kMaxUdpGsoSegments> iov{};
+  std::size_t total_bytes = 0;
+  for (std::size_t index = 0; index < batch_size; ++index) {
+    iov[index].iov_base = batch[index]->payload.data();
+    iov[index].iov_len = batch[index]->payload_len;
+    total_bytes += batch[index]->payload_len;
+  }
+
+  std::array<unsigned char, CMSG_SPACE(sizeof(std::uint16_t))> control{};
+  msghdr msg{};
+  msg.msg_name = batch[0]->remote_ep.data();
+  msg.msg_namelen = static_cast<socklen_t>(batch[0]->remote_ep.size());
+  msg.msg_iov = iov.data();
+  msg.msg_iovlen = batch_size;
+  msg.msg_control = control.data();
+  msg.msg_controllen = control.size();
+
+  auto* cmsg = CMSG_FIRSTHDR(&msg);
+  cmsg->cmsg_level = IPPROTO_UDP;
+  cmsg->cmsg_type = UDP_SEGMENT;
+  cmsg->cmsg_len = CMSG_LEN(sizeof(std::uint16_t));
+
+  const auto gso_segment_size = static_cast<std::uint16_t>(segment_size);
+  std::memcpy(CMSG_DATA(cmsg), &gso_segment_size, sizeof(gso_segment_size));
+
+  const auto sent = ::sendmsg(socket_.native_handle(), &msg, MSG_DONTWAIT);
+  if (sent < 0) {
+    const auto err = errno;
+    if (err == EAGAIN || err == EWOULDBLOCK || err == EINTR) {
+      return false;
+    }
+
+    if (err == EINVAL || err == EOPNOTSUPP || err == ENOPROTOOPT ||
+        err == ENOTSUP) {
+      udp_gso_supported_ = false;
+      NPRPC_HTTP3_TRACE("UDP GSO disabled after sendmsg failure: {}",
+                        std::strerror(err));
+      return false;
+    }
+
+    NPRPC_HTTP3_TRACE("UDP GSO sendmsg failed: {}", std::strerror(err));
+    return false;
+  }
+
+  if (static_cast<std::size_t>(sent) != total_bytes) {
+    NPRPC_HTTP3_TRACE("UDP GSO sendmsg short write: {} of {} bytes",
+                      sent, total_bytes);
+    return false;
+  }
+
+  {
+    std::lock_guard lock(send_mutex_);
+    for (std::size_t index = 0; index < batch_size && !send_queue_.empty(); ++index) {
+      send_queue_.pop_front();
+    }
+  }
+
+  for (std::size_t index = 0; index < batch_size; ++index) {
+    recycle_send_packet(std::move(batch[index]));
+  }
+
+  return true;
+#else
+  return false;
+#endif
+}
+
 void Http3Server::do_send()
 {
+  while (try_send_gso_batch()) {
+  }
+
   std::shared_ptr<PendingSendPacket> packet;
   {
     std::lock_guard lock(send_mutex_);
