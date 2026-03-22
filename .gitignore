@@ -16,6 +16,7 @@
 /certs/out/*
 /third_party/boost*
 /third_party/openssl*
+/third_party/nghttp2
 
 /node_modules
 /crash_reports

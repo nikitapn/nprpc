@@ -466,6 +466,12 @@ public:
     return *this;
   }
 
+  RpcBuilderHttp& enable_if_http3(bool condition) noexcept
+  {
+    if (condition) cfg_.http3_enabled = true;
+    return *this;
+  }
+
   RpcBuilderHttp& enable_http3() noexcept
   {
     cfg_.http3_enabled = true;

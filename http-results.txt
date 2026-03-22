@@ -1,0 +1,12 @@
+file                        tool    req      rps        avg_ms  p50_ms  p95_ms  p99_ms   success_%
+--------------------------  ------  -------  ---------  ------  ------  ------  -------  ---------
+caddy-http1-1kb.oha.json    oha     768797   51245.01   1.244   1.089   2.587   3.672    100.00   
+caddy-http1-1mb.oha.json    oha     48080    3201.55    19.980  17.559  42.040  59.902   100.00   
+nginx-http1-1kb.oha.json    oha     375543   25033.69   2.553   2.505   3.041   3.664    100.00   
+nginx-http1-1mb.oha.json    oha     10509    700.52     91.610  92.920  99.082  112.791  100.00   
+nprpc-http1-1kb.oha.json    oha     1891925  126099.96  0.503   0.364   1.294   2.293    100.00   
+nprpc-http1-1mb.oha.json    oha     24439    1629.09    39.314  43.013  44.533  50.205   100.00   
+caddy-http3-1kb.h2load.txt  h2load  669856   44657.13   -       -       -       -        100.00   
+caddy-http3-1mb.h2load.txt  h2load  1600     106.67     -       -       -       -        100.00   
+nprpc-http3-1kb.h2load.txt  h2load  1490171  99345.40   -       -       -       -        100.00   
+nprpc-http3-1mb.h2load.txt  h2load  8368     557.93     -       -       -       -        100.00   

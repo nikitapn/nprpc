@@ -96,13 +96,19 @@ public:
       // Use the new RpcBuilder API
       const bool use_epoll = ::getenv("NPRPC_EPOLL") != nullptr;
       const bool use_uring  = ::getenv("NPRPC_URING")  != nullptr;
+       const bool enable_http3 = ::getenv("NPRPC_BENCH_ENABLE_HTTP3") != nullptr;
+       const char* http_root_dir = ::getenv("NPRPC_HTTP_ROOT_DIR");
       rpc = nprpc::RpcBuilder()
                 .set_log_level(nprpc::LogLevel::error)
                 .with_hostname("localhost")
                 .with_tcp(22222).with_epoll_if(use_epoll).with_uring_if(use_uring)
                 .with_http(22223)
+           .root_dir(http_root_dir && *http_root_dir
+                ? http_root_dir
+                : "/home/nikita/projects/nprpc/test/http")
                 .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                      "/home/nikita/projects/nprpc/certs/out/localhost.key")
+           .enable_if_http3(enable_http3)
                 .with_quic(22225)
                 .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                      "/home/nikita/projects/nprpc/certs/out/localhost.key")

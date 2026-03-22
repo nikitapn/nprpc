@@ -1,0 +1,117 @@
+# HTTP Server Shootout
+
+This harness compares NPRPC's built-in HTTP stack against well-established
+servers under the same static-file workload.
+
+Current comparison set:
+
+- NPRPC
+- nginx
+- Caddy
+
+Protocols covered:
+
+- HTTP/1.1 over HTTPS via `oha`
+- HTTP/3 via `h2load`
+
+Why this exists:
+
+- The in-tree Google Benchmark suite measures NPRPC RPC overhead well.
+- It does not answer "how does our HTTP server compare to production web
+  servers for static file serving under load?"
+- This shootout gives a reproducible transport/server baseline using the same
+  files and roughly the same TLS setup.
+
+## Requirements
+
+- Docker
+- `oha`
+- `h2load`, or build the vendored copy with:
+
+```bash
+./benchmark/http_shootout/build_h2load.sh
+```
+
+- Built certs in [certs/out/localhost.crt](../../certs/out/localhost.crt) and
+  [certs/out/localhost.key](../../certs/out/localhost.key)
+
+## Run
+
+From the repository root:
+
+```bash
+./benchmark/http_shootout/build_h2load.sh
+./benchmark/http_shootout/run_server_shootout.sh run
+./benchmark/http_shootout/run_server_shootout.sh view
+```
+
+Results are written under:
+
+[benchmark/http_shootout/results](../http_shootout/results)
+
+## What it measures
+
+Shared static assets are generated once and mounted into every server:
+
+- `1kb.bin`
+- `64kb.bin`
+- `1mb.bin`
+- `index.html`
+
+The default suite currently runs:
+
+- HTTP/1.1 HTTPS on `1kb.bin`
+- HTTP/1.1 HTTPS on `1mb.bin`
+- HTTP/3 on `1kb.bin`
+- HTTP/3 on `1mb.bin`
+
+The outputs are intentionally left in the native tool formats:
+
+- `oha` JSON files
+- `h2load` text summaries
+
+That keeps the harness simple and avoids baking in a fragile parser.
+
+For a quick terminal summary of the generated result files, run:
+
+```bash
+./benchmark/http_shootout/run_server_shootout.sh view
+```
+
+By default, the runner looks for `h2load` at:
+
+- [third_party/nghttp2/build-h2load/src/h2load](../../third_party/nghttp2/build-h2load/src/h2load)
+
+You can override that with `H2LOAD_BIN=/path/to/h2load`.
+
+The vendored `h2load` in this repo uses HTTP/3 via:
+
+```bash
+--alpn-list=h3
+```
+
+not the unsupported `-3` shorthand.
+
+## Caveats
+
+- nginx is included as a strong HTTP/1.1 baseline. The official `nginx:alpine`
+  image is not used here as an HTTP/3 baseline.
+- Caddy is used for both HTTP/1.1 and HTTP/3 because it supports HTTP/3 out of
+  the box in a much simpler setup.
+- NPRPC uses the benchmark server with `NPRPC_HTTP_ROOT_DIR` pointed at the
+  shared asset directory and `NPRPC_BENCH_ENABLE_HTTP3=1`.
+- This is a transport/server benchmark, not an RPC framework benchmark.
+
+## Recommended interpretation
+
+Track at least:
+
+- throughput
+- p50 latency
+- p95 latency
+- p99 latency
+- error rate
+- CPU utilization
+
+For serious regression tracking, run each case multiple times on an otherwise
+idle machine and pin CPU frequency/governor if possible.
