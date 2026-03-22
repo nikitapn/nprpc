@@ -6,7 +6,6 @@
 // Shared default values for NPRPC configuration structures.
 // Keep these macros in sync across the core C++ API and the Swift bridge.
 
-#define NPRPC_DEFAULT_LOG_LEVEL ::nprpc::LogLevel::warn
 #define NPRPC_DEFAULT_LOG_LEVEL_U32 3
 #define NPRPC_DEFAULT_HTTP_MAX_REQUEST_BODY_SIZE 10'000
 #define NPRPC_DEFAULT_HTTP_WEBSOCKET_MAX_MESSAGE_SIZE (2 * 1024 * 1024)

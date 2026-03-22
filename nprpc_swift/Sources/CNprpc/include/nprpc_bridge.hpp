@@ -12,7 +12,7 @@
 #include <memory>
 #include <optional>
 
-#include <nprpc/config_default.hpp>
+#include "config_default.hpp"
 
 // Swift interop macros
 #ifndef SWIFT_RETURNS_INDEPENDENT_VALUE

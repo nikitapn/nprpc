@@ -33,7 +33,7 @@
 namespace nprpc::impl {
 
 struct Config {
-  LogLevel log_level = NPRPC_DEFAULT_LOG_LEVEL;
+  LogLevel log_level = static_cast<LogLevel>(NPRPC_DEFAULT_LOG_LEVEL_U32);
   uuid_t uuid;
   std::string hostname;
   std::string listen_address = "0.0.0.0";

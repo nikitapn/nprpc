@@ -311,7 +311,7 @@ public:
 
 namespace impl {
 struct BuildConfig {
-  LogLevel log_level = NPRPC_DEFAULT_LOG_LEVEL;
+  LogLevel log_level = static_cast<LogLevel>(NPRPC_DEFAULT_LOG_LEVEL_U32);
   uuid_t uuid;
 
   uint16_t tcp_port = 0;

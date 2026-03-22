@@ -1,6 +1,5 @@
 {
   "files.associations": {
-    ".args": "gn",
     "coroutine": "cpp",
     "future": "cpp",
     "array": "cpp",

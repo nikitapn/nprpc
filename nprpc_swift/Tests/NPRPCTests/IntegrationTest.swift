@@ -21,9 +21,21 @@ final class IntegrationTests: XCTestCase {
                 .withHttp(16001)
                     .ssl(certFile: "/workspace/certs/out/localhost.crt",
                          keyFile: "/workspace/certs/out/localhost.key")
+                    .enableHttp3()
+                    .rootDir("/workspace")
+                    .http3Workers(2)
                     .maxRequestBodySize(10_000)
                     .maxWebSocketMessageSize(24 * 1024 * 1024)
                     .maxWebTransportMessageSize(24 * 1024 * 1024)
+                    .maxWebSocketSessionsPerIp(32)
+                    .maxWebSocketUpgradesPerIpPerSecond(16, burst: 32)
+                    .maxWebSocketRequestsPerSessionPerSecond(120, burst: 240)
+                    .maxHttp3ConnectionsPerIp(48)
+                    .maxHttp3NewConnectionsPerIpPerSecond(24, burst: 48)
+                    .maxHttpRpcRequestsPerIpPerSecond(200, burst: 400)
+                    .maxWebTransportConnectsPerIpPerSecond(20, burst: 40)
+                    .maxWebTransportRequestsPerSessionPerSecond(150, burst: 300)
+                    .maxWebTransportStreamOpensPerSessionPerSecond(80, burst: 160)
                 .withQuic(16002)
                     .ssl(certFile: "/workspace/certs/out/localhost.crt",
                          keyFile: "/workspace/certs/out/localhost.key")
@@ -48,6 +60,10 @@ final class IntegrationTests: XCTestCase {
     func test1() throws {
         // Placeholder test to ensure test discovery works
         XCTAssertTrue(true)
+    }
+
+    func testHttpBuilderAdvancedLimitsInitializeRuntime() throws {
+        XCTAssertTrue(Self.rpc?.isInitialized == true)
     }
 
     func testProduceHostJson() throws {

@@ -145,6 +145,7 @@ public:
                     .max_request_body_size(10'000)
                     .max_websocket_message_size(24 * 1024 * 1024)
                     .max_webtransport_message_size(24 * 1024 * 1024)
+                    .max_http_rpc_requests_per_ip_per_second(64, 64)
                     .root_dir("/home/nikita/projects/nprpc/test/http")
                     .allow_origins({"https://localhost:24443"})
                     .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",

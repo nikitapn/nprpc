@@ -1039,7 +1039,7 @@ describe('NPRPC Integration Tests', function() {
         it('should return boolean via HTTP/3', async function() {
             if (!http3Available) this.skip();
             // FIXME: Something is broken in the HTTP/3 implementation that causes the first call to fail, but subsequent calls succeed. For now, just ignore the first failure.
-            try { const result = await testBasic.http.ReturnBoolean(); } catch (error) {}
+            try { await testBasic.http.ReturnBoolean(); } catch (error) {}
             const result = await testBasic.http.ReturnBoolean();
             expect(result).to.be.true;
         });
@@ -1166,4 +1166,32 @@ describe('NPRPC Integration Tests', function() {
             expect(result.y.y.y).to.deep.equal(new Uint8Array([1,2,3,4,5,6,7,8,9,10]));
         });
     }); // describe HTTP/3 Transport
+
+    describe('HTTP Request Throttling', function() {
+        let testBasic: test.TestBasic;
+
+        before(async function() {
+            testBasic = await resolveTestObject('nprpc_test_basic', test.TestBasic);
+        });
+
+        it('should reject abusive HTTP RPC bursts with 429', async function() {
+            this.timeout(30000);
+
+            // Let prior HTTP traffic settle so the limiter starts from a refilled state.
+            await new Promise(resolve => setTimeout(resolve, 1200));
+
+            const attempts = 160;
+            const results = await Promise.allSettled(
+                Array.from({ length: attempts }, () => testBasic.http.ReturnU32())
+            );
+
+            const successes = results.filter(result => result.status === 'fulfilled');
+            const throttled = results.filter(
+                result => result.status === 'rejected' && String(result.reason).includes('HTTP error: 429')
+            );
+
+            expect(successes.length).to.be.greaterThan(0);
+            expect(throttled.length).to.be.greaterThan(0);
+        });
+    }); // describe HTTP Request Throttling
 });
