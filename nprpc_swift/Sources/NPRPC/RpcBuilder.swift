@@ -25,6 +25,7 @@ class BuildConfig {
     var httpRootDir: String = ""
     var httpAllowedOrigins: [String] = []
     var httpMaxRequestBodySize: UInt = 10_000
+    var httpWebSocketCompressionEnabled: Bool = true
     var httpWebSocketMaxMessageSize: UInt = 2 * 1024 * 1024
     var httpWebTransportMaxMessageSize: UInt = 2 * 1024 * 1024
     var httpWebSocketMaxActiveSessionsPerIp: UInt = 0
@@ -161,6 +162,7 @@ extension RpcBuilderInternal {
         cxxConfig.http_root_dir = std.string(config.httpRootDir)
         cxxConfig.http_allowed_origins = std.string(config.httpAllowedOrigins.joined(separator: "\n"))
         cxxConfig.http_max_request_body_size = numericCast(config.httpMaxRequestBodySize)
+        cxxConfig.http_websocket_compression_enabled = config.httpWebSocketCompressionEnabled
         cxxConfig.http_websocket_max_message_size = numericCast(config.httpWebSocketMaxMessageSize)
         cxxConfig.http_webtransport_max_message_size = numericCast(config.httpWebTransportMaxMessageSize)
         cxxConfig.http_websocket_max_active_sessions_per_ip = numericCast(config.httpWebSocketMaxActiveSessionsPerIp)
@@ -275,6 +277,13 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
     @discardableResult
     public func maxRequestBodySize(_ bytes: UInt) -> RpcBuilderHttp {
         config.httpMaxRequestBodySize = bytes
+        return self
+    }
+
+    /// Enable or disable WebSocket permessage-deflate negotiation.
+    @discardableResult
+    public func enableWebSocketCompression(_ enabled: Bool = true) -> RpcBuilderHttp {
+        config.httpWebSocketCompressionEnabled = enabled
         return self
     }
 

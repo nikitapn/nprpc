@@ -83,6 +83,7 @@ try rpc.run()  // Blocks until shutdown
 | `.rootDir(_:)` | Set HTTP document root directory |
 | `.allowOrigins(_:)` | Allow browser cross-origin requests from specific origins |
 | `.maxRequestBodySize(_:)` | Cap buffered HTTP request body size |
+| `.enableWebSocketCompression(_:)` | Enable or disable WebSocket permessage-deflate |
 | `.maxWebSocketMessageSize(_:)` | Cap inbound WebSocket message size |
 | `.maxWebTransportMessageSize(_:)` | Cap inbound WebTransport message size |
 | `.http3Workers(_:)` | Set dedicated HTTP/3 REUSE_PORT worker count |
@@ -108,6 +109,7 @@ auto rpc = nprpc::RpcBuilder()
     .enable_http3()
     .http3_workers(4)
     .max_request_body_size(10'000)
+    .websocket_compression(false)
     .max_websocket_message_size(24 * 1024 * 1024)
     .max_webtransport_message_size(24 * 1024 * 1024)
     .max_websocket_sessions_per_ip(32)
@@ -133,6 +135,7 @@ let rpc = try RpcBuilder()
         .enableHttp3()
         .http3Workers(4)
         .maxRequestBodySize(10_000)
+        .enableWebSocketCompression(false)
         .maxWebSocketMessageSize(24 * 1024 * 1024)
         .maxWebTransportMessageSize(24 * 1024 * 1024)
         .maxWebSocketSessionsPerIp(32)

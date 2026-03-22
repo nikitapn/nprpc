@@ -175,6 +175,8 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         decode_allowed_origins(config->http_allowed_origins,
                        cxxConfig.http_allowed_origins);
         cxxConfig.http_max_request_body_size = config->http_max_request_body_size;
+        cxxConfig.http_websocket_compression_enabled =
+            config->http_websocket_compression_enabled;
         cxxConfig.http_websocket_max_message_size = config->http_websocket_max_message_size;
         cxxConfig.http_webtransport_max_message_size = config->http_webtransport_max_message_size;
         cxxConfig.http_websocket_max_active_sessions_per_ip =
