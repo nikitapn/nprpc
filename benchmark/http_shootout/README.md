@@ -24,7 +24,6 @@ Why this exists:
 
 ## Requirements
 
-- Docker
 - `oha`
 - `h2load`, or build the vendored copy with:
 
@@ -34,6 +33,8 @@ Why this exists:
 
 - Built certs in [certs/out/localhost.crt](../../certs/out/localhost.crt) and
   [certs/out/localhost.key](../../certs/out/localhost.key)
+- `nginx` and `caddy` are preferred when installed locally
+- Docker is only needed as a fallback when the system binaries are not present
 
 ## Run
 
@@ -84,20 +85,29 @@ By default, the runner looks for `h2load` at:
 
 You can override that with `H2LOAD_BIN=/path/to/h2load`.
 
+By default, the harness prefers host-installed `nginx` and `caddy` binaries for
+fairer comparisons. If either binary is missing, it falls back to Docker for
+that server only.
+
+You can force the execution mode with:
+
+```bash
+NGINX_MODE=system|docker
+CADDY_MODE=system|docker
+```
+
 The vendored `h2load` in this repo uses HTTP/3 via:
 
 ```bash
 --alpn-list=h3
 ```
 
-not the unsupported `-3` shorthand.
-
 ## Caveats
 
-- nginx is included as a strong HTTP/1.1 baseline. The official `nginx:alpine`
-  image is not used here as an HTTP/3 baseline.
+- nginx is tuned more aggressively than before and now runs directly from the
+  system binary when available.
 - Caddy is used for both HTTP/1.1 and HTTP/3 because it supports HTTP/3 out of
-  the box in a much simpler setup.
+  the box and now also runs directly from the system binary when available.
 - NPRPC uses the benchmark server with `NPRPC_HTTP_ROOT_DIR` pointed at the
   shared asset directory and `NPRPC_BENCH_ENABLE_HTTP3=1`.
 - This is a transport/server benchmark, not an RPC framework benchmark.

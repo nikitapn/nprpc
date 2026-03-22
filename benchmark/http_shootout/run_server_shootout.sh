@@ -16,11 +16,16 @@ NGINX_HTTP_PORT="${NGINX_HTTP_PORT:-28080}"
 NGINX_HTTPS_PORT="${NGINX_HTTPS_PORT:-28443}"
 CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-29080}"
 CADDY_HTTPS_PORT="${CADDY_HTTPS_PORT:-29443}"
+BENCH_HOST="${BENCH_HOST:-localhost}"
+NGINX_MODE="${NGINX_MODE:-auto}"
+CADDY_MODE="${CADDY_MODE:-auto}"
 
 OHA_BIN="${OHA_BIN:-oha}"
 H2LOAD_BIN="${H2LOAD_BIN:-$LOCAL_H2LOAD_BIN}"
 
 NPRPC_PID=""
+NGINX_PID=""
+CADDY_PID=""
 NGINX_CID=""
 CADDY_CID=""
 
@@ -45,6 +50,14 @@ cleanup() {
   if [[ -n "$NPRPC_PID" ]] && kill -0 "$NPRPC_PID" 2>/dev/null; then
     kill -INT "$NPRPC_PID" 2>/dev/null || true
     wait "$NPRPC_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$NGINX_PID" ]] && kill -0 "$NGINX_PID" 2>/dev/null; then
+    kill -TERM "$NGINX_PID" 2>/dev/null || true
+    wait "$NGINX_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$CADDY_PID" ]] && kill -0 "$CADDY_PID" 2>/dev/null; then
+    kill -TERM "$CADDY_PID" 2>/dev/null || true
+    wait "$CADDY_PID" 2>/dev/null || true
   fi
   if [[ -n "$NGINX_CID" ]]; then
     docker rm -f "$NGINX_CID" >/dev/null 2>&1 || true
@@ -103,22 +116,49 @@ start_nprpc() {
 }
 
 generate_nginx_conf() {
+  mkdir -p "$TMP_DIR/nginx-client-body" "$TMP_DIR/nginx-proxy" \
+           "$TMP_DIR/nginx-fastcgi" "$TMP_DIR/nginx-uwsgi" \
+           "$TMP_DIR/nginx-scgi"
   cat > "$TMP_DIR/nginx.conf" <<EOF
-events {}
+worker_processes auto;
+worker_rlimit_nofile 65535;
+pid $TMP_DIR/nginx.pid;
+
+events {
+  worker_connections 8192;
+  multi_accept on;
+}
+
 http {
+  access_log off;
+  error_log $TMP_DIR/nginx-error.log warn;
   sendfile on;
   tcp_nopush on;
   tcp_nodelay on;
+  keepalive_timeout 65;
+  keepalive_requests 100000;
+  open_file_cache max=2000 inactive=60s;
+  open_file_cache_valid 120s;
+  open_file_cache_min_uses 2;
+  open_file_cache_errors on;
+  ssl_session_cache shared:SSL:10m;
+  ssl_session_timeout 10m;
+  ssl_session_tickets off;
+  client_body_temp_path $TMP_DIR/nginx-client-body;
+  proxy_temp_path $TMP_DIR/nginx-proxy;
+  fastcgi_temp_path $TMP_DIR/nginx-fastcgi;
+  uwsgi_temp_path $TMP_DIR/nginx-uwsgi;
+  scgi_temp_path $TMP_DIR/nginx-scgi;
 
   server {
-    listen 80;
-    listen 443 ssl;
+    listen 127.0.0.1:${NGINX_HTTP_PORT} reuseport;
+    listen 127.0.0.1:${NGINX_HTTPS_PORT} ssl reuseport;
     server_name localhost;
 
-    ssl_certificate /certs/localhost.crt;
-    ssl_certificate_key /certs/localhost.key;
+    ssl_certificate $ROOT_DIR/certs/out/localhost.crt;
+    ssl_certificate_key $ROOT_DIR/certs/out/localhost.key;
 
-    root /usr/share/nginx/html;
+    root $WWW_DIR;
     location / {
       try_files \$uri \$uri/ =404;
     }
@@ -127,18 +167,49 @@ http {
 EOF
 }
 
+choose_mode() {
+  local requested="$1"
+  local binary="$2"
+  if [[ "$requested" == "system" || "$requested" == "docker" ]]; then
+    printf '%s\n' "$requested"
+    return
+  fi
+  if command -v "$binary" >/dev/null 2>&1; then
+    printf '%s\n' "system"
+  else
+    printf '%s\n' "docker"
+  fi
+}
+
+start_nginx_system() {
+  require_cmd nginx
+  mkdir -p "$TMP_DIR/nginx-prefix"
+  log "Starting nginx from system binary"
+  nginx -c "$TMP_DIR/nginx.conf" -p "$TMP_DIR/nginx-prefix" -g 'daemon off;' \
+    >"$TMP_DIR/nginx-stdout.log" 2>&1 &
+  NGINX_PID=$!
+  sleep 2
+}
+
 start_nginx() {
-  require_cmd docker
   generate_nginx_conf
+  local mode
+  mode="$(choose_mode "$NGINX_MODE" nginx)"
+  if [[ "$mode" == "system" ]]; then
+    start_nginx_system
+    return
+  fi
+
+  require_cmd docker
   log "Starting nginx container"
   NGINX_CID=$(docker run -d \
-    -p "$NGINX_HTTP_PORT:80" \
-    -p "$NGINX_HTTPS_PORT:443" \
-    -v "$WWW_DIR:/usr/share/nginx/html:ro" \
-    -v "$TMP_DIR/nginx.conf:/etc/nginx/nginx.conf:ro" \
-    -v "$ROOT_DIR/certs/out/localhost.crt:/certs/localhost.crt:ro" \
-    -v "$ROOT_DIR/certs/out/localhost.key:/certs/localhost.key:ro" \
-    nginx:alpine)
+    -p "$NGINX_HTTP_PORT:$NGINX_HTTP_PORT" \
+    -p "$NGINX_HTTPS_PORT:$NGINX_HTTPS_PORT" \
+    -v "$WWW_DIR:$WWW_DIR:ro" \
+    -v "$TMP_DIR/nginx.conf:$TMP_DIR/nginx.conf:ro" \
+    -v "$ROOT_DIR:$ROOT_DIR:ro" \
+    nginx:alpine \
+    nginx -c "$TMP_DIR/nginx.conf" -g 'daemon off;')
   sleep 2
 }
 
@@ -148,32 +219,48 @@ generate_caddyfile() {
   auto_https off
 }
 
-:80 {
-  root * /srv
+http://127.0.0.1:${CADDY_HTTP_PORT} {
+  root * $WWW_DIR
   file_server
 }
 
-:443 {
-  tls /certs/localhost.crt /certs/localhost.key
-  root * /srv
+https://127.0.0.1:${CADDY_HTTPS_PORT} {
+  tls $ROOT_DIR/certs/out/localhost.crt $ROOT_DIR/certs/out/localhost.key
+  root * $WWW_DIR
   file_server
 }
 EOF
 }
 
+start_caddy_system() {
+  require_cmd caddy
+  log "Starting Caddy from system binary"
+  caddy run --config "$TMP_DIR/Caddyfile" --adapter caddyfile \
+    >"$TMP_DIR/caddy-stdout.log" 2>&1 &
+  CADDY_PID=$!
+  sleep 2
+}
+
 start_caddy() {
-  require_cmd docker
   generate_caddyfile
+  local mode
+  mode="$(choose_mode "$CADDY_MODE" caddy)"
+  if [[ "$mode" == "system" ]]; then
+    start_caddy_system
+    return
+  fi
+
+  require_cmd docker
   log "Starting Caddy container"
   CADDY_CID=$(docker run -d \
-    -p "$CADDY_HTTP_PORT:80" \
-    -p "$CADDY_HTTPS_PORT:443/udp" \
-    -p "$CADDY_HTTPS_PORT:443/tcp" \
-    -v "$WWW_DIR:/srv:ro" \
-    -v "$TMP_DIR/Caddyfile:/etc/caddy/Caddyfile:ro" \
-    -v "$ROOT_DIR/certs/out/localhost.crt:/certs/localhost.crt:ro" \
-    -v "$ROOT_DIR/certs/out/localhost.key:/certs/localhost.key:ro" \
-    caddy:2-alpine)
+    -p "$CADDY_HTTP_PORT:$CADDY_HTTP_PORT" \
+    -p "$CADDY_HTTPS_PORT:$CADDY_HTTPS_PORT/udp" \
+    -p "$CADDY_HTTPS_PORT:$CADDY_HTTPS_PORT/tcp" \
+    -v "$WWW_DIR:$WWW_DIR:ro" \
+    -v "$TMP_DIR/Caddyfile:$TMP_DIR/Caddyfile:ro" \
+    -v "$ROOT_DIR:$ROOT_DIR:ro" \
+    caddy:2-alpine \
+    caddy run --config "$TMP_DIR/Caddyfile" --adapter caddyfile)
   sleep 2
 }
 
@@ -226,19 +313,19 @@ run_suite() {
   start_nginx
   start_caddy
 
-  run_oha "nprpc-http1-1kb" "https://127.0.0.1:$NPRPC_HTTP_PORT/1kb.bin"
-  run_oha "nginx-http1-1kb" "https://127.0.0.1:$NGINX_HTTPS_PORT/1kb.bin"
-  run_oha "caddy-http1-1kb" "https://127.0.0.1:$CADDY_HTTPS_PORT/1kb.bin"
+  run_oha "nprpc-http1-1kb" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/1kb.bin"
+  run_oha "nginx-http1-1kb" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/1kb.bin"
+  run_oha "caddy-http1-1kb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1kb.bin"
 
-  run_oha "nprpc-http1-1mb" "https://127.0.0.1:$NPRPC_HTTP_PORT/1mb.bin"
-  run_oha "nginx-http1-1mb" "https://127.0.0.1:$NGINX_HTTPS_PORT/1mb.bin"
-  run_oha "caddy-http1-1mb" "https://127.0.0.1:$CADDY_HTTPS_PORT/1mb.bin"
+  run_oha "nprpc-http1-1mb" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/1mb.bin"
+  run_oha "nginx-http1-1mb" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/1mb.bin"
+  run_oha "caddy-http1-1mb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1mb.bin"
 
-  run_h2load "nprpc-http3-1kb" "127.0.0.1" "$NPRPC_HTTP_PORT" "/1kb.bin"
-  run_h2load "caddy-http3-1kb" "127.0.0.1" "$CADDY_HTTPS_PORT" "/1kb.bin"
+  run_h2load "nprpc-http3-1kb" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/1kb.bin"
+  run_h2load "caddy-http3-1kb" "$BENCH_HOST" "$CADDY_HTTPS_PORT" "/1kb.bin"
 
-  run_h2load "nprpc-http3-1mb" "127.0.0.1" "$NPRPC_HTTP_PORT" "/1mb.bin"
-  run_h2load "caddy-http3-1mb" "127.0.0.1" "$CADDY_HTTPS_PORT" "/1mb.bin"
+  run_h2load "nprpc-http3-1mb" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/1mb.bin"
+  run_h2load "caddy-http3-1mb" "$BENCH_HOST" "$CADDY_HTTPS_PORT" "/1mb.bin"
 
   write_summary
   log "Results written to $RESULTS_DIR"
@@ -257,9 +344,14 @@ Commands:
   view            Summarize result files in benchmark/http_shootout/results.
 
 Requirements:
-  - docker (for nginx and Caddy)
+  - nginx and/or docker
+  - caddy and/or docker
   - oha (HTTP/1.1/HTTPS load)
   - h2load (HTTP/3 load), or run ./benchmark/http_shootout/build_h2load.sh
+Environment:
+  - NGINX_MODE=auto|system|docker (default: auto)
+  - CADDY_MODE=auto|system|docker (default: auto)
+  - BENCH_HOST=localhost|127.0.0.1 (default: localhost)
 EOF
 }
 
