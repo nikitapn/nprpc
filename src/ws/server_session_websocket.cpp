@@ -4,6 +4,7 @@
 // #define BOOST_ASIO_NO_DEPRECATED
 
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/http_request_throttler.hpp>
 #include <nprpc/impl/session.hpp>
 #include <nprpc/impl/websocket_session.hpp>
 #include <nprpc_base_ext.hpp>
@@ -102,7 +103,8 @@ class websocket_session_with_acceptor : public Derived
 public:
   // Start the asynchronous operation
   template <class Body, class Allocator>
-  void run(http::request<Body, http::basic_fields<Allocator>> req)
+  void run(http::request<Body, http::basic_fields<Allocator>> req,
+           boost::asio::ip::address throttle_ip = {})
   {
     // Capture cookies from the HTTP Upgrade request so servants can call
     // nprpc::http::get_cookie() on any call dispatched over this WS session.
@@ -110,6 +112,22 @@ public:
     if (cookie_it != req.end()) {
       upgrade_cookies_ = std::string(cookie_it->value());
       this->ctx_.cookies = upgrade_cookies_;
+    }
+
+    if (!throttle_ip.is_unspecified()) {
+      const auto session_key = http_request_throttler().allocate_session_key();
+      const auto throttle_ip_key =
+          HttpRequestThrottler::make_ip_key(throttle_ip);
+      this->set_request_throttle(
+          session_key,
+          g_cfg.http_websocket_requests_per_session_per_second,
+          g_cfg.http_websocket_requests_burst);
+      this->set_close_hook([
+          throttle_ip_key,
+          session_key]() mutable {
+        http_request_throttler().release_websocket_session(throttle_ip_key,
+                                                           session_key);
+      });
     }
 
     g_rpc->add_connection(this->shared_from_this());
@@ -127,24 +145,26 @@ template <>
 void make_accepting_websocket_session(
     plain_stream stream,
     http::request<http::string_body, http::basic_fields<std::allocator<char>>>
-        req)
+        req,
+  boost::asio::ip::address throttle_ip)
 {
   std::make_shared<
       websocket_session_with_acceptor<AcceptingPlainWebSocketSession>>(
       plain_ws(std::move(stream)))
-      ->run(std::move(req));
+      ->run(std::move(req), std::move(throttle_ip));
 }
 
 template <>
 void make_accepting_websocket_session(
     ssl_stream stream,
     http::request<http::string_body, http::basic_fields<std::allocator<char>>>
-        req)
+        req,
+  boost::asio::ip::address throttle_ip)
 {
   std::make_shared<
       websocket_session_with_acceptor<AcceptingSSLWebSocketSession>>(
       ssl_ws(std::move(stream)))
-      ->run(std::move(req));
+      ->run(std::move(req), std::move(throttle_ip));
 }
 
 } // namespace nprpc::impl

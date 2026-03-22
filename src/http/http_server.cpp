@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <nprpc/impl/http_file_cache.hpp>
+#include <nprpc/impl/http_request_throttler.hpp>
 #include <nprpc/impl/http_rpc_session.hpp>
 #include <nprpc/impl/http_utils.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
@@ -100,7 +101,8 @@ template <class Response> void add_alt_svc_header(Response& res)
 // Handle RPC request over HTTP POST
 template <class Body, class Allocator>
 http::message_generator
-handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req)
+handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req,
+                   const boost::asio::ip::address& remote_ip)
 {
   auto const origin = std::string(req[http::field::origin]);
   auto const allowed_origin = get_allowed_http_origin(origin);
@@ -145,6 +147,26 @@ handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req)
     return res;
   };
 
+  auto const too_many_requests = [&](beast::string_view what) {
+    http::response<http::string_body> res{http::status::too_many_requests,
+                                          req.version()};
+    res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+    res.set(http::field::content_type, "text/plain");
+    add_cors(res);
+    add_alt_svc_header(res);
+    res.keep_alive(req.keep_alive());
+    res.body() = std::string(what);
+    res.prepare_payload();
+    return res;
+  };
+
+  if (!http_request_throttler().allow_http_rpc_request(
+          remote_ip,
+          g_cfg.http_rpc_max_requests_per_ip_per_second,
+          g_cfg.http_rpc_max_requests_burst)) {
+    return too_many_requests("HTTP RPC rate limit exceeded");
+  }
+
   try {
     // Extract request body as string
     std::string request_body = req.body();
@@ -181,7 +203,8 @@ handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req)
 template <class Body, class Allocator>
 http::message_generator
 handle_request(beast::string_view doc_root,
-               http::request<Body, http::basic_fields<Allocator>>&& req)
+               http::request<Body, http::basic_fields<Allocator>>&& req,
+               const boost::asio::ip::address& remote_ip)
 {
   // Returns a bad request response
   auto const bad_request = [&req](beast::string_view why) {
@@ -263,7 +286,7 @@ handle_request(beast::string_view doc_root,
 
   // Check if this is an RPC request (POST to /rpc or /rpc/*)
   if (req.method() == http::verb::post && is_rpc_http_target(req.target())) {
-    return handle_rpc_request(req);
+    return handle_rpc_request(req, remote_ip);
   }
 
 #if defined(NPRPC_SSR_ENABLED)
@@ -485,6 +508,10 @@ public:
     if (ec)
       return fail(ec, "read");
 
+    const auto remote_ep =
+        beast::get_lowest_layer(derived().stream()).socket().remote_endpoint();
+    const auto remote_ip = remote_ep.address();
+
     // See if it is a WebSocket Upgrade
     if (websocket::is_upgrade(parser_->get())) {
       auto& req = parser_->get();
@@ -505,6 +532,37 @@ public:
         return;
       }
 
+      if (!http_request_throttler().allow_websocket_upgrade(
+              remote_ip,
+              g_cfg.http_websocket_upgrades_per_ip_per_second,
+              g_cfg.http_websocket_upgrades_burst)) {
+        http::response<http::string_body> res{http::status::too_many_requests,
+                                              req.version()};
+        res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(http::field::content_type, "text/plain");
+        add_alt_svc_header(res);
+        res.keep_alive(false);
+        res.body() = "WebSocket upgrade rate limit exceeded";
+        res.prepare_payload();
+        queue_write(std::move(res));
+        return;
+      }
+
+      if (!http_request_throttler().try_acquire_websocket_session(
+              remote_ip,
+              g_cfg.http_websocket_max_active_sessions_per_ip)) {
+        http::response<http::string_body> res{http::status::too_many_requests,
+                                              req.version()};
+        res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(http::field::content_type, "text/plain");
+        add_alt_svc_header(res);
+        res.keep_alive(false);
+        res.body() = "WebSocket session limit exceeded";
+        res.prepare_payload();
+        queue_write(std::move(res));
+        return;
+      }
+
       // Disable the timeout.
       // The websocket::stream uses its own timeout settings.
       beast::get_lowest_layer(derived().stream()).expires_never();
@@ -512,11 +570,12 @@ public:
       // Create a websocket session, transferring ownership
       // of both the socket and the HTTP request.
       return make_accepting_websocket_session(derived().release_stream(),
-                                              parser_->release());
+                                              parser_->release(),
+                                              remote_ip);
     }
 
     // Send the response
-    queue_write(handle_request(*doc_root_, parser_->release()));
+    queue_write(handle_request(*doc_root_, parser_->release(), remote_ip));
 
     // If we aren't at the queue limit, try to pipeline another request
     if (response_queue_.size() < queue_limit)

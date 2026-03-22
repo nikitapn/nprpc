@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/http_request_throttler.hpp>
 #include <nprpc/impl/websocket_session.hpp>
 #include "../logging.hpp"
 
@@ -110,6 +111,16 @@ void WebSocketSession<Derived>::on_read(
     rx_buffer_.size(), static_cast<uint32_t>(header.msg_id()), static_cast<uint32_t>(header.msg_type()), request_id);
 
   if (header.msg_type() == nprpc::impl::MessageType::Request) {
+    if (request_throttle_key_ != 0 &&
+        !http_request_throttler().allow_session_request(
+            request_throttle_key_, request_throttle_rate_, request_throttle_burst_)) {
+      NPRPC_WEBSOCKET_SESSION_LOG_WARN(
+          "on_read: Rejected throttled WebSocket request: rate={} burst={}",
+          request_throttle_rate_, request_throttle_burst_);
+      close();
+      return;
+    }
+
     // Handle incoming request.
     // Pre-size tx_buffer based on the last response we sent — after warm-up
     // this eliminates repeated doubling realloc/memcpy for large responses.
@@ -220,7 +231,9 @@ void WebSocketSession<Derived>::on_write(beast::error_code ec,
 
 template <class Derived> void WebSocketSession<Derived>::close()
 {
-  closed_.store(true);
+  if (closed_.exchange(true)) {
+    return;
+  }
 
   const boost::system::error_code ec{boost::asio::error::connection_aborted};
 
@@ -237,6 +250,11 @@ template <class Derived> void WebSocketSession<Derived>::close()
       msg.completion_handler(ec);
   }
   write_queue_.clear();
+
+  if (close_hook_) {
+    close_hook_();
+    close_hook_ = {};
+  }
 
   Session::close();
 }

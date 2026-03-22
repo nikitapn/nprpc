@@ -7,6 +7,7 @@
 #if defined(NPRPC_HTTP3_ENABLED) && defined(NPRPC_HTTP3_BACKEND_NGHTTP3)
 
 #include <nprpc/impl/http_file_cache.hpp>
+#include <nprpc/impl/http_request_throttler.hpp>
 #include <nprpc/impl/http_rpc_session.hpp>
 #include <nprpc/impl/http_utils.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
@@ -592,11 +593,17 @@ public:
       : Session(connection.get_executor())
       , connection_(connection)
       , session_stream_id_(session_stream_id)
+        , throttle_session_key_(http_request_throttler().allocate_session_key())
       , rx_buffer_(4 * 1024 * 1024)
   {
     ctx_.remote_endpoint = EndPoint(EndPointType::WebTransport,
                                     remote_ep.address().to_string(),
                                     remote_ep.port());
+  }
+
+  ~WebTransportControlSession() override
+  {
+    http_request_throttler().release_session(throttle_session_key_);
   }
 
   bool process_bytes(int64_t transport_stream_id, const uint8_t* data, size_t datalen)
@@ -642,6 +649,15 @@ public:
       auto mb = rx_buffer_.prepare(frame_len);
       std::memcpy(mb.data(), receive_buffer.data_ptr(), frame_len);
       rx_buffer_.commit(frame_len);
+
+      if (!allow_request()) {
+        NPRPC_LOG_ERROR(
+            "[HTTP/3][WT] Rejecting throttled session message: session_stream_id={} transport_stream_id={} size={} rate={} burst={}",
+            session_stream_id_, transport_stream_id, frame_len,
+            g_cfg.http_webtransport_requests_per_session_per_second,
+            g_cfg.http_webtransport_requests_burst);
+        return false;
+      }
 
       const auto request_id = extract_request_id(rx_buffer_);
       flat_buffer tx_buffer{std::max(last_tx_size_, flat_buffer::default_initial_size())};
@@ -744,7 +760,32 @@ public:
 
   int64_t session_stream_id() const noexcept { return session_stream_id_; }
 
+  bool allow_child_stream_open(uint8_t bind_kind)
+  {
+    if (http_request_throttler().allow_session_stream_open(
+            throttle_session_key_,
+            g_cfg.http_webtransport_stream_opens_per_session_per_second,
+            g_cfg.http_webtransport_stream_opens_burst)) {
+      return true;
+    }
+
+    NPRPC_LOG_ERROR(
+        "[HTTP/3][WT] Rejecting throttled child stream open: session_stream_id={} bind_kind={} rate={} burst={}",
+        session_stream_id_, static_cast<unsigned>(bind_kind),
+        g_cfg.http_webtransport_stream_opens_per_session_per_second,
+        g_cfg.http_webtransport_stream_opens_burst);
+    return false;
+  }
+
 private:
+  bool allow_request()
+  {
+    return http_request_throttler().allow_session_request(
+        throttle_session_key_,
+        g_cfg.http_webtransport_requests_per_session_per_second,
+        g_cfg.http_webtransport_requests_burst);
+  }
+
   flat_buffer& receive_buffer_for(int64_t transport_stream_id)
   {
     auto it = receive_buffers_.find(transport_stream_id);
@@ -811,6 +852,7 @@ private:
   Http3Connection& connection_;
   int64_t session_stream_id_;
   int64_t control_stream_id_{-1};
+  uint64_t throttle_session_key_;
   flat_buffer rx_buffer_;
   size_t last_tx_size_{flat_buffer::default_initial_size()};
   std::unordered_map<int64_t, flat_buffer> receive_buffers_;
@@ -867,6 +909,9 @@ public:
                   const uint8_t* data,
                   size_t len);
 
+  bool allow_rpc_request(const boost::asio::ip::udp::endpoint& remote_ep);
+  bool allow_webtransport_connect(const boost::asio::ip::udp::endpoint& remote_ep);
+
   // Connection management
   void associate_cid(const ngtcp2_cid* cid,
                      std::shared_ptr<Http3Connection> conn);
@@ -874,6 +919,8 @@ public:
   void remove_connection(std::shared_ptr<Http3Connection> conn);
 
 private:
+  bool allow_new_connection(const boost::asio::ip::udp::endpoint& remote_ep);
+  void on_connection_accepted(const boost::asio::ip::udp::endpoint& remote_ep);
   void do_receive();
   void handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
                      const uint8_t* data,
@@ -2126,6 +2173,13 @@ int Http3Connection::send_cached_response(Http3Stream* stream,
 //==============================================================================
 int Http3Connection::handle_rpc_request(Http3Stream* stream)
 {
+  if (!server_->allow_rpc_request(remote_ep_)) {
+    NPRPC_LOG_ERROR(
+        "[HTTP/3] Rejecting throttled RPC request from {} path='{}'",
+        remote_ep_.address().to_string(), stream ? stream->path : std::string{});
+    return send_static_response(stream, 429, "text/plain", "Too Many Requests");
+  }
+
   if (stream->request_body.size() == 0)
     return send_static_response(stream, 400, "text/plain",
                                 "Empty request body");
@@ -2391,6 +2445,15 @@ int Http3Connection::send_webtransport_connect_response(Http3Stream* stream)
 
 int Http3Connection::handle_webtransport_connect(Http3Stream* stream)
 {
+  if (!server_->allow_webtransport_connect(remote_ep_)) {
+    NPRPC_HTTP3_ERROR(
+        "Rejecting throttled WebTransport CONNECT stream_id={} origin='{}' authority='{}'",
+        stream->stream_id,
+        stream->headers.contains("origin") ? stream->headers.at("origin") : "",
+        stream->authority);
+    return send_static_response(stream, 429, "text/plain", "Too Many Requests");
+  }
+
   if (stream->scheme != "https" || stream->authority.empty()) {
     NPRPC_HTTP3_ERROR("Rejecting WebTransport CONNECT stream_id={} scheme='{}' authority='{}'",
                       stream->stream_id, stream->scheme, stream->authority);
@@ -2602,6 +2665,11 @@ int Http3Connection::handle_webtransport_stream_data(Http3Stream* stream,
 
     switch (bind_kind) {
     case k_webtransport_bind_control:
+      if (!session->allow_child_stream_open(bind_kind)) {
+        reject_webtransport_stream(stream, "child stream open throttled",
+                                   stream->webtransport_probe_buffer.size());
+        return 0;
+      }
       stream->webtransport_child_binding = WebTransportChildBinding::Control;
       session->bind_control_stream(stream->stream_id);
       binding_len = 1;
@@ -2615,6 +2683,11 @@ int Http3Connection::handle_webtransport_stream_data(Http3Stream* stream,
         if (flags & NGTCP2_STREAM_DATA_FLAG_FIN) {
           return -1;
         }
+        return 0;
+      }
+      if (!session->allow_child_stream_open(bind_kind)) {
+        reject_webtransport_stream(stream, "child stream open throttled",
+                                   stream->webtransport_probe_buffer.size());
         return 0;
       }
       std::memcpy(&stream->webtransport_native_stream_id, probe + 1,
@@ -3440,6 +3513,8 @@ void Http3Server::dissociate_cid(const ngtcp2_cid* cid)
 void Http3Server::remove_connection(std::shared_ptr<Http3Connection> conn)
 {
   std::lock_guard lock(mutex_);
+  http_request_throttler().on_http3_connection_closed(
+  conn->remote_endpoint().address());
   // Remove all CIDs associated with this connection
   for (auto it = connections_.begin(); it != connections_.end();) {
     if (it->second == conn) {
@@ -3526,6 +3601,12 @@ void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
   memcpy(scid.data, vc.scid, vc.scidlen);
 
   // Create new connection
+  if (!allow_new_connection(remote_ep)) {
+    NPRPC_HTTP3_ERROR("Dropping throttled QUIC connection attempt from {}",
+                      remote_ep.address().to_string());
+    return;
+  }
+
   // Note: client_scid is the client's Source CID (from hd.scid/vc.scid)
   //       client_dcid is what client sent as Destination CID (from
   //       hd.dcid/vc.dcid)
@@ -3542,12 +3623,47 @@ void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
   // Associate both DCID and SCID with the connection
   associate_cid(&dcid, conn);
   associate_cid(&conn->scid(), conn);
+  on_connection_accepted(remote_ep);
 
   NPRPC_HTTP3_TRACE("New connection from {}", remote_ep.address().to_string());
 
   // Feed the initial packet
   ngtcp2_pkt_info pi{};
   conn->enqueue_packet(copy_bytes_to_buffer(data, len), pi);
+}
+
+bool Http3Server::allow_new_connection(
+    const boost::asio::ip::udp::endpoint& remote_ep)
+{
+  return http_request_throttler().allow_http3_new_connection(
+    remote_ep.address(),
+      g_cfg.http3_max_active_connections_per_ip,
+      g_cfg.http3_max_new_connections_per_ip_per_second,
+      g_cfg.http3_max_new_connections_burst);
+}
+
+void Http3Server::on_connection_accepted(
+    const boost::asio::ip::udp::endpoint& remote_ep)
+{
+  http_request_throttler().on_http3_connection_accepted(
+      remote_ep.address());
+}
+
+bool Http3Server::allow_rpc_request(const boost::asio::ip::udp::endpoint& remote_ep)
+{
+  return http_request_throttler().allow_http_rpc_request(
+      remote_ep.address(),
+      g_cfg.http_rpc_max_requests_per_ip_per_second,
+      g_cfg.http_rpc_max_requests_burst);
+}
+
+bool Http3Server::allow_webtransport_connect(
+    const boost::asio::ip::udp::endpoint& remote_ep)
+{
+  return http_request_throttler().allow_webtransport_connect(
+    remote_ep.address(),
+      g_cfg.http_webtransport_connects_per_ip_per_second,
+      g_cfg.http_webtransport_connects_burst);
 }
 
 int Http3Server::send_version_negotiation(

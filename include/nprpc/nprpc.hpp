@@ -330,6 +330,22 @@ struct BuildConfig {
   size_t http_max_request_body_size = 10'000;
   size_t http_websocket_max_message_size = 2 * 1024 * 1024;
   size_t http_webtransport_max_message_size = 2 * 1024 * 1024;
+  size_t http_websocket_max_active_sessions_per_ip = 0;
+  size_t http_websocket_upgrades_per_ip_per_second = 0;
+  size_t http_websocket_upgrades_burst = 0;
+  size_t http_websocket_requests_per_session_per_second = 0;
+  size_t http_websocket_requests_burst = 0;
+  size_t http3_max_active_connections_per_ip = 0;
+  size_t http3_max_new_connections_per_ip_per_second = 0;
+  size_t http3_max_new_connections_burst = 0;
+  size_t http_rpc_max_requests_per_ip_per_second = 0;
+  size_t http_rpc_max_requests_burst = 0;
+  size_t http_webtransport_connects_per_ip_per_second = 0;
+  size_t http_webtransport_connects_burst = 0;
+  size_t http_webtransport_requests_per_session_per_second = 0;
+  size_t http_webtransport_requests_burst = 0;
+  size_t http_webtransport_stream_opens_per_session_per_second = 0;
+  size_t http_webtransport_stream_opens_burst = 0;
   std::string ssr_handler_dir; // Path to SSR handler (index.js), defaults to
                                // http_root_dir
   bool watch_files = false; // Enable inotify-based cache invalidation (dev mode)
@@ -483,6 +499,81 @@ public:
   RpcBuilderHttp& max_webtransport_message_size(size_t bytes) noexcept
   {
     cfg_.http_webtransport_max_message_size = bytes;
+    return *this;
+  }
+
+  RpcBuilderHttp& max_websocket_sessions_per_ip(size_t count) noexcept
+  {
+    cfg_.http_websocket_max_active_sessions_per_ip = count;
+    return *this;
+  }
+
+  RpcBuilderHttp& max_websocket_upgrades_per_ip_per_second(
+      size_t rate,
+      size_t burst = 0) noexcept
+  {
+    cfg_.http_websocket_upgrades_per_ip_per_second = rate;
+    cfg_.http_websocket_upgrades_burst = burst;
+    return *this;
+  }
+
+  RpcBuilderHttp& max_websocket_requests_per_session_per_second(
+      size_t rate,
+      size_t burst = 0) noexcept
+  {
+    cfg_.http_websocket_requests_per_session_per_second = rate;
+    cfg_.http_websocket_requests_burst = burst;
+    return *this;
+  }
+
+  RpcBuilderHttp& max_http3_connections_per_ip(size_t count) noexcept
+  {
+    cfg_.http3_max_active_connections_per_ip = count;
+    return *this;
+  }
+
+  RpcBuilderHttp& max_http3_new_connections_per_ip_per_second(
+      size_t rate,
+      size_t burst = 0) noexcept
+  {
+    cfg_.http3_max_new_connections_per_ip_per_second = rate;
+    cfg_.http3_max_new_connections_burst = burst;
+    return *this;
+  }
+
+  RpcBuilderHttp& max_http_rpc_requests_per_ip_per_second(
+      size_t rate,
+      size_t burst = 0) noexcept
+  {
+    cfg_.http_rpc_max_requests_per_ip_per_second = rate;
+    cfg_.http_rpc_max_requests_burst = burst;
+    return *this;
+  }
+
+  RpcBuilderHttp& max_webtransport_connects_per_ip_per_second(
+      size_t rate,
+      size_t burst = 0) noexcept
+  {
+    cfg_.http_webtransport_connects_per_ip_per_second = rate;
+    cfg_.http_webtransport_connects_burst = burst;
+    return *this;
+  }
+
+  RpcBuilderHttp& max_webtransport_requests_per_session_per_second(
+      size_t rate,
+      size_t burst = 0) noexcept
+  {
+    cfg_.http_webtransport_requests_per_session_per_second = rate;
+    cfg_.http_webtransport_requests_burst = burst;
+    return *this;
+  }
+
+  RpcBuilderHttp& max_webtransport_stream_opens_per_session_per_second(
+      size_t rate,
+      size_t burst = 0) noexcept
+  {
+    cfg_.http_webtransport_stream_opens_per_session_per_second = rate;
+    cfg_.http_webtransport_stream_opens_burst = burst;
     return *this;
   }
 

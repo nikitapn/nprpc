@@ -10,6 +10,8 @@
 #include <chrono>
 #include <deque>
 #include <functional>
+#include <boost/asio/ip/address.hpp>
+#include <string>
 #include <unordered_map>
 
 namespace nprpc::impl {
@@ -64,6 +66,10 @@ template <class Derived> class WebSocketSession : public Session
   // Tracks the last response size so the next tx_buffer is pre-sized,
   // eliminating repeated realloc/memcpy for large responses after warm-up.
   std::size_t last_tx_size_{flat_buffer::default_initial_size()};
+  std::function<void()> close_hook_;
+  uint64_t request_throttle_key_ = 0;
+  size_t request_throttle_rate_ = 0;
+  size_t request_throttle_burst_ = 0;
 
   Derived& derived() { return static_cast<Derived&>(*this); }
 
@@ -81,6 +87,16 @@ protected:
   void do_read();
   void close();
   virtual void timeout_action() override final;
+  void set_close_hook(std::function<void()> hook)
+  {
+    close_hook_ = std::move(hook);
+  }
+  void set_request_throttle(uint64_t key, size_t rate, size_t burst)
+  {
+    request_throttle_key_ = key;
+    request_throttle_rate_ = rate;
+    request_throttle_burst_ = burst;
+  }
 
 public:
   void start_read_loop();
@@ -179,11 +195,15 @@ public:
 
 template <class Body, class Allocator>
 void make_accepting_websocket_session(
-    plain_stream ws, http::request<Body, http::basic_fields<Allocator>> req);
+  plain_stream ws,
+  http::request<Body, http::basic_fields<Allocator>> req,
+  boost::asio::ip::address throttle_ip = {});
 
 template <class Body, class Allocator>
 void make_accepting_websocket_session(
-    ssl_stream stream, http::request<Body, http::basic_fields<Allocator>> req);
+  ssl_stream stream,
+  http::request<Body, http::basic_fields<Allocator>> req,
+  boost::asio::ip::address throttle_ip = {});
 
 class ClientPlainWebSocketSession
     : public PlainWebSocketSessionT<ClientPlainWebSocketSession>,

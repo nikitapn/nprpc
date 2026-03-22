@@ -248,9 +248,39 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   g_cfg.http_root_dir = cfg_.http_root_dir;
   g_cfg.http_allowed_origins = cfg_.http_allowed_origins;
   g_cfg.http_max_request_body_size = cfg_.http_max_request_body_size;
-    g_cfg.http_websocket_max_message_size = cfg_.http_websocket_max_message_size;
-    g_cfg.http_webtransport_max_message_size =
+  g_cfg.http_websocket_max_message_size = cfg_.http_websocket_max_message_size;
+  g_cfg.http_webtransport_max_message_size =
       cfg_.http_webtransport_max_message_size;
+  g_cfg.http_websocket_max_active_sessions_per_ip =
+      cfg_.http_websocket_max_active_sessions_per_ip;
+  g_cfg.http_websocket_upgrades_per_ip_per_second =
+      cfg_.http_websocket_upgrades_per_ip_per_second;
+  g_cfg.http_websocket_upgrades_burst =
+      cfg_.http_websocket_upgrades_burst;
+  g_cfg.http_websocket_requests_per_session_per_second =
+      cfg_.http_websocket_requests_per_session_per_second;
+  g_cfg.http_websocket_requests_burst =
+      cfg_.http_websocket_requests_burst;
+  g_cfg.http3_max_active_connections_per_ip =
+      cfg_.http3_max_active_connections_per_ip;
+  g_cfg.http3_max_new_connections_per_ip_per_second =
+      cfg_.http3_max_new_connections_per_ip_per_second;
+  g_cfg.http3_max_new_connections_burst = cfg_.http3_max_new_connections_burst;
+  g_cfg.http_rpc_max_requests_per_ip_per_second =
+      cfg_.http_rpc_max_requests_per_ip_per_second;
+    g_cfg.http_rpc_max_requests_burst = cfg_.http_rpc_max_requests_burst;
+    g_cfg.http_webtransport_connects_per_ip_per_second =
+      cfg_.http_webtransport_connects_per_ip_per_second;
+    g_cfg.http_webtransport_connects_burst =
+      cfg_.http_webtransport_connects_burst;
+    g_cfg.http_webtransport_requests_per_session_per_second =
+      cfg_.http_webtransport_requests_per_session_per_second;
+    g_cfg.http_webtransport_requests_burst =
+      cfg_.http_webtransport_requests_burst;
+    g_cfg.http_webtransport_stream_opens_per_session_per_second =
+      cfg_.http_webtransport_stream_opens_per_session_per_second;
+    g_cfg.http_webtransport_stream_opens_burst =
+      cfg_.http_webtransport_stream_opens_burst;
   g_cfg.ssr_handler_dir =
       cfg_.ssr_handler_dir.empty() ? cfg_.http_root_dir : cfg_.ssr_handler_dir;
   g_cfg.watch_files = cfg_.watch_files;

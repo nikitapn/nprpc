@@ -107,6 +107,9 @@ endif()
 # Find Boost (required for Asio and other header-only libraries)
 find_package(Boost REQUIRED)
 
+# Bundled dense hashmap used by request throttling and other hot-path state.
+add_subdirectory(third_party/unordered_dense EXCLUDE_FROM_ALL)
+
 # When using Swift's Clang 17, explicitly link libstdc++
 if(CMAKE_CXX_COMPILER MATCHES "swift.*clang")
   link_libraries(stdc++)
@@ -332,6 +335,8 @@ target_link_libraries(nprpc
     OpenSSL::Crypto
     Boost::headers
     PkgConfig::uring
+  PRIVATE
+    unordered_dense::unordered_dense
 )
 
 # MsQuic linking

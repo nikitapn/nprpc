@@ -52,6 +52,22 @@ struct Config {
   size_t http_max_request_body_size = 10'000;
   size_t http_websocket_max_message_size = 32 * 1024 * 1024;
   size_t http_webtransport_max_message_size = 32 * 1024 * 1024;
+  size_t http_websocket_max_active_sessions_per_ip = 0;
+  size_t http_websocket_upgrades_per_ip_per_second = 0;
+  size_t http_websocket_upgrades_burst = 0;
+  size_t http_websocket_requests_per_session_per_second = 0;
+  size_t http_websocket_requests_burst = 0;
+  size_t http3_max_active_connections_per_ip = 0;
+  size_t http3_max_new_connections_per_ip_per_second = 0;
+  size_t http3_max_new_connections_burst = 0;
+  size_t http_rpc_max_requests_per_ip_per_second = 0;
+  size_t http_rpc_max_requests_burst = 0;
+  size_t http_webtransport_connects_per_ip_per_second = 0;
+  size_t http_webtransport_connects_burst = 0;
+  size_t http_webtransport_requests_per_session_per_second = 0;
+  size_t http_webtransport_requests_burst = 0;
+  size_t http_webtransport_stream_opens_per_session_per_second = 0;
+  size_t http_webtransport_stream_opens_burst = 0;
   std::string ssr_handler_dir; // Path to SSR handler (index.js)
   bool watch_files = false;   // Enable inotify-based cache invalidation (dev mode)
   ssl::context ssl_context_server{ssl::context::tlsv13_server};
