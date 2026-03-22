@@ -43,6 +43,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <thread>
 #include <string_view>
 #include <unordered_map>
@@ -244,6 +245,17 @@ struct PreparedResponseHeaders {
   std::string content_length;
   std::string content_type;
   std::string allow_origin;
+};
+
+struct PendingSendPacket {
+  boost::asio::ip::udp::endpoint remote_ep;
+  std::array<uint8_t, MAX_UDP_PAYLOAD_SIZE> payload;
+  std::size_t payload_len = 0;
+
+  std::span<const uint8_t> bytes() const noexcept
+  {
+    return {payload.data(), payload_len};
+  }
 };
 
 struct Http3Stream {
@@ -609,8 +621,8 @@ private:
   std::unordered_map<int64_t, std::shared_ptr<WebTransportControlSession>>
       webtransport_control_sessions_;
 
-  // Send buffer
-  std::vector<uint8_t> send_buf_;
+  // Current scratch packet borrowed from the server packet pool.
+  std::shared_ptr<PendingSendPacket> send_packet_;
 
   // Connection close buffer
   std::vector<uint8_t> conn_close_buf_;
@@ -933,6 +945,8 @@ std::optional<std::pair<uint64_t, size_t>> decode_quic_varint(const uint8_t* dat
 class Http3Server
 {
 public:
+  friend class Http3Connection;
+
   Http3Server(boost::asio::io_context& ioc,
               const std::string& cert_file,
               const std::string& key_file,
@@ -960,12 +974,10 @@ public:
   void remove_connection(std::shared_ptr<Http3Connection> conn);
 
 private:
-  struct PendingSendPacket {
-    boost::asio::ip::udp::endpoint remote_ep;
-    std::vector<uint8_t> payload;
-  };
-
   bool allow_new_connection(const boost::asio::ip::udp::endpoint& remote_ep);
+  int send_packet(std::shared_ptr<PendingSendPacket> packet);
+  std::shared_ptr<PendingSendPacket> acquire_send_packet();
+  void recycle_send_packet(std::shared_ptr<PendingSendPacket> packet);
   void on_connection_accepted(const boost::asio::ip::udp::endpoint& remote_ep);
   void do_send();
   void do_receive();
@@ -1006,6 +1018,7 @@ private:
 
   std::mutex send_mutex_;
   std::deque<std::shared_ptr<PendingSendPacket>> send_queue_;
+  std::vector<std::shared_ptr<PendingSendPacket>> send_pool_;
   bool send_in_progress_ = false;
 
   bool running_ = false;
@@ -1059,7 +1072,7 @@ Http3Connection::Http3Connection(
   scid_.datalen = SCID_LEN;
   random_bytes(scid_.data, scid_.datalen);
 
-  send_buf_.resize(MAX_UDP_PAYLOAD_SIZE * MAX_PKTS_BURST);
+  send_packet_ = server_->acquire_send_packet();
 
   // Initialize the connection reference for crypto callbacks
   conn_ref_.get_conn = [](ngtcp2_crypto_conn_ref* ref) -> ngtcp2_conn* {
@@ -1073,6 +1086,10 @@ Http3Connection::Http3Connection(
 Http3Connection::~Http3Connection()
 {
   timer_.cancel();
+
+  if (send_packet_) {
+    server_->recycle_send_packet(std::move(send_packet_));
+  }
 
   if (httpconn_) {
     nghttp3_conn_del(httpconn_);
@@ -1370,6 +1387,10 @@ int Http3Connection::on_write()
 
   // Write loop
   for (;;) {
+    if (!send_packet_) {
+      send_packet_ = server_->acquire_send_packet();
+    }
+
     int64_t stream_id = -1;
     int fin = 0;
     std::array<nghttp3_vec, 16> vec;
@@ -1419,7 +1440,8 @@ int Http3Connection::on_write()
 
     auto ts = timestamp_ns();
     auto nwrite = ngtcp2_conn_writev_stream(
-        conn_, &ps.path, &pi, send_buf_.data(), MAX_UDP_PAYLOAD_SIZE, &ndatalen,
+        conn_, &ps.path, &pi, send_packet_->payload.data(),
+        send_packet_->payload.size(), &ndatalen,
       flags, stream_id,
       using_http_stream ? reinterpret_cast<const ngtcp2_vec*>(vec.data())
                 : &raw_vec,
@@ -1517,7 +1539,7 @@ int Http3Connection::on_write()
     // Send the packet
     // Check what type of packet we're sending
 #if NPRPC_ENABLE_HTTP3_TRACE
-    uint8_t first_byte = send_buf_[0];
+  uint8_t first_byte = send_packet_->payload[0];
     const char* pkt_type = "unknown";
     if (first_byte & 0x80) { // Long header
       uint8_t type = (first_byte >> 4) & 0x03;
@@ -1540,8 +1562,9 @@ int Http3Connection::on_write()
     }
     NPRPC_HTTP3_TRACE("on_write: sending {} bytes, type={}", nwrite, pkt_type);
 #endif
-    server_->send_packet(remote_ep_, send_buf_.data(),
-                         static_cast<size_t>(nwrite));
+    send_packet_->remote_ep = remote_ep_;
+    send_packet_->payload_len = static_cast<size_t>(nwrite);
+    server_->send_packet(std::move(send_packet_));
   }
 
   ngtcp2_conn_update_pkt_tx_time(conn_, timestamp_ns());
@@ -3583,9 +3606,27 @@ int Http3Server::send_packet(const boost::asio::ip::udp::endpoint& remote_ep,
     return -1;
   }
 
-  auto packet = std::make_shared<PendingSendPacket>();
+  if (len > MAX_UDP_PAYLOAD_SIZE) {
+    NPRPC_HTTP3_ERROR("send_packet payload exceeds MAX_UDP_PAYLOAD_SIZE: {} > {}",
+                      len, MAX_UDP_PAYLOAD_SIZE);
+    return -1;
+  }
+
+  auto packet = acquire_send_packet();
   packet->remote_ep = remote_ep;
-  packet->payload.assign(data, data + len);
+  packet->payload_len = len;
+  if (len != 0) {
+    std::memcpy(packet->payload.data(), data, len);
+  }
+
+  return send_packet(std::move(packet));
+}
+
+int Http3Server::send_packet(std::shared_ptr<PendingSendPacket> packet)
+{
+  if (!running_ || !packet) {
+    return -1;
+  }
 
   bool should_start = false;
   {
@@ -3604,6 +3645,32 @@ int Http3Server::send_packet(const boost::asio::ip::udp::endpoint& remote_ep,
   return 0;
 }
 
+std::shared_ptr<PendingSendPacket> Http3Server::acquire_send_packet()
+{
+  std::lock_guard lock(send_mutex_);
+  if (!send_pool_.empty()) {
+    auto packet = std::move(send_pool_.back());
+    send_pool_.pop_back();
+    return packet;
+  }
+
+  return std::make_shared<PendingSendPacket>();
+}
+
+void Http3Server::recycle_send_packet(std::shared_ptr<PendingSendPacket> packet)
+{
+  if (!packet) {
+    return;
+  }
+
+  packet->payload_len = 0;
+
+  std::lock_guard lock(send_mutex_);
+  if (send_pool_.size() < MAX_PKTS_BURST * 2) {
+    send_pool_.push_back(std::move(packet));
+  }
+}
+
 void Http3Server::do_send()
 {
   std::shared_ptr<PendingSendPacket> packet;
@@ -3617,7 +3684,8 @@ void Http3Server::do_send()
   }
 
   socket_.async_send_to(
-      boost::asio::buffer(packet->payload), packet->remote_ep,
+      boost::asio::buffer(packet->bytes().data(), packet->bytes().size()),
+      packet->remote_ep,
       [this, packet](boost::system::error_code ec, std::size_t) {
         bool schedule_next = false;
         {
@@ -3629,6 +3697,7 @@ void Http3Server::do_send()
           if (!running_ || ec == boost::asio::error::operation_aborted) {
             send_queue_.clear();
             send_in_progress_ = false;
+            send_pool_.clear();
             return;
           }
 
@@ -3643,6 +3712,8 @@ void Http3Server::do_send()
 
           schedule_next = true;
         }
+
+        recycle_send_packet(packet);
 
         if (schedule_next) {
           do_send();
