@@ -123,9 +123,8 @@ start_nprpc() {
     cd "$ROOT_DIR"
     NPRPC_HTTP_ROOT_DIR="$WWW_DIR" \
     NPRPC_BENCH_ENABLE_HTTP3=1 \
-    "$BUILD_DIR/benchmark/benchmark_server" \
-      >"$TMP_DIR/nprpc_server.log" 2>&1
-  ) &
+    exec "$BUILD_DIR/benchmark/benchmark_server"
+  ) >"$TMP_DIR/nprpc_server.log" 2>&1 &
   NPRPC_PID=$!
   sleep 2
 }

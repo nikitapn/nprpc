@@ -1397,6 +1397,11 @@ int Http3Connection::on_write()
   ngtcp2_path_storage_zero(&ps);
 
   // Write loop
+
+  // Use a single timestamp for all packets in this batch
+  // vDSO is also expensive, so we want to amortize it over the whole batch if possible
+  auto ts = timestamp_ns();
+
   for (;;) {
     if (!send_packet_) {
       send_packet_ = server_->acquire_send_packet();
@@ -1449,7 +1454,6 @@ int Http3Connection::on_write()
                       "stream_id={}, sveccnt={}",
                       stream_id, sveccnt);
 
-    auto ts = timestamp_ns();
     auto nwrite = ngtcp2_conn_writev_stream(
         conn_, &ps.path, &pi, send_packet_->payload.data(),
         send_packet_->payload.size(), &ndatalen,
