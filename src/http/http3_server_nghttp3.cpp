@@ -259,7 +259,9 @@ struct PendingSendPacket {
   boost::asio::ip::udp::endpoint remote_ep;
   std::array<uint8_t, MAX_UDP_PAYLOAD_SIZE> payload;
   std::size_t payload_len = 0;
+  std::uint16_t gso_segment_size = 0;
   PendingSendPacket* next_free = nullptr;
+  PendingSendPacket* next_send = nullptr;
 
   std::span<const uint8_t> bytes() const noexcept
   {
@@ -987,6 +989,7 @@ private:
   int send_packet(PendingSendPacket* packet);
   PendingSendPacket* acquire_send_packet();
   void recycle_send_packet(PendingSendPacket* packet);
+  void drain_send_inbox();
   bool try_send_gso_batch();
   void on_connection_accepted(const boost::asio::ip::udp::endpoint& remote_ep);
   void do_send();
@@ -1026,12 +1029,14 @@ private:
   std::unordered_map<std::string, std::shared_ptr<Http3Connection>>
       connections_;
 
-  std::mutex send_queue_mutex_;
   std::mutex send_storage_mutex_;
-  std::deque<PendingSendPacket*> send_queue_;
+  PendingSendPacket* send_ready_head_ = nullptr;
+  PendingSendPacket* send_ready_tail_ = nullptr;
+  std::size_t send_ready_size_ = 0;
   std::vector<std::unique_ptr<PendingSendPacket>> send_packet_storage_;
   std::atomic<PendingSendPacket*> send_pool_head_{nullptr};
-  bool send_in_progress_ = false;
+  std::atomic<PendingSendPacket*> send_inbox_head_{nullptr};
+  std::atomic<bool> send_in_progress_{false};
 #if !defined(_WIN32) && defined(UDP_SEGMENT)
   bool udp_gso_supported_ = true;
 #endif
@@ -1584,6 +1589,7 @@ int Http3Connection::on_write()
 #endif
     send_packet_->remote_ep = remote_ep_;
     send_packet_->payload_len = static_cast<size_t>(nwrite);
+    send_packet_->gso_segment_size = static_cast<std::uint16_t>(nwrite);
     server_->send_packet(send_packet_);
     send_packet_ = nullptr;
   }
@@ -3607,11 +3613,7 @@ void Http3Server::stop()
     connections_.clear();
   }
 
-  {
-    std::lock_guard lock(send_queue_mutex_);
-    send_queue_.clear();
-    send_in_progress_ = false;
-  }
+  send_in_progress_.store(false, std::memory_order_release);
 
   if (ssl_ctx_) {
     SSL_CTX_free(ssl_ctx_);
@@ -3636,6 +3638,7 @@ int Http3Server::send_packet(const boost::asio::ip::udp::endpoint& remote_ep,
   auto packet = acquire_send_packet();
   packet->remote_ep = remote_ep;
   packet->payload_len = len;
+  packet->gso_segment_size = static_cast<std::uint16_t>(len);
   if (len != 0) {
     std::memcpy(packet->payload.data(), data, len);
   }
@@ -3649,18 +3652,14 @@ int Http3Server::send_packet(PendingSendPacket* packet)
     return -1;
   }
 
-  bool should_start = false;
-  {
-    std::lock_guard lock(send_queue_mutex_);
-    send_queue_.push_back(packet);
-    if (!send_in_progress_) {
-      send_in_progress_ = true;
-      should_start = true;
-    }
+  packet->next_send = send_inbox_head_.load(std::memory_order_acquire);
+  while (!send_inbox_head_.compare_exchange_weak(packet->next_send, packet,
+                                                 std::memory_order_acq_rel,
+                                                 std::memory_order_acquire)) {
   }
 
-  if (should_start) {
-    boost::asio::post(ioc_, [this]() { do_send(); });
+  if (!send_in_progress_.exchange(true, std::memory_order_acq_rel)) {
+    boost::asio::dispatch(ioc_, [this]() { do_send(); });
   }
 
   return 0;
@@ -3675,6 +3674,7 @@ PendingSendPacket* Http3Server::acquire_send_packet()
                                               std::memory_order_acq_rel,
                                               std::memory_order_acquire)) {
       head->next_free = nullptr;
+        head->next_send = nullptr;
       return head;
     }
   }
@@ -3691,12 +3691,45 @@ void Http3Server::recycle_send_packet(PendingSendPacket* packet)
   }
 
   packet->payload_len = 0;
+  packet->gso_segment_size = 0;
+  packet->next_send = nullptr;
   auto* head = send_pool_head_.load(std::memory_order_acquire);
   do {
     packet->next_free = head;
   } while (!send_pool_head_.compare_exchange_weak(head, packet,
                                                   std::memory_order_acq_rel,
                                                   std::memory_order_acquire));
+}
+
+void Http3Server::drain_send_inbox()
+{
+  auto* list = send_inbox_head_.exchange(nullptr, std::memory_order_acq_rel);
+  if (!list) {
+    return;
+  }
+
+  PendingSendPacket* reversed = nullptr;
+  while (list) {
+    auto* next = list->next_send;
+    list->next_send = reversed;
+    reversed = list;
+    list = next;
+  }
+
+  auto* tail = reversed;
+  std::size_t drained = 1;
+  while (tail->next_send) {
+    tail = tail->next_send;
+    ++drained;
+  }
+
+  if (send_ready_tail_) {
+    send_ready_tail_->next_send = reversed;
+  } else {
+    send_ready_head_ = reversed;
+  }
+  send_ready_tail_ = tail;
+  send_ready_size_ += drained;
 }
 
 bool Http3Server::try_send_gso_batch()
@@ -3706,33 +3739,31 @@ bool Http3Server::try_send_gso_batch()
     return false;
   }
 
+  drain_send_inbox();
+
   std::array<PendingSendPacket*, kMaxUdpGsoSegments> batch{};
   std::size_t batch_size = 0;
-  std::size_t segment_size = 0;
+  if (send_ready_size_ < 2) {
+    return false;
+  }
 
-  {
-    std::lock_guard lock(send_queue_mutex_);
-    if (send_queue_.size() < 2) {
-      return false;
+  auto* first = send_ready_head_;
+  if (!first || first->payload_len == 0) {
+    return false;
+  }
+
+  batch[batch_size++] = first;
+  const auto segment_size = first->gso_segment_size;
+
+  auto* candidate = first->next_send;
+  while (batch_size < kMaxUdpGsoSegments && candidate) {
+    if (!candidate || candidate->payload_len == 0 ||
+        candidate->gso_segment_size != segment_size ||
+        candidate->remote_ep != first->remote_ep) {
+      break;
     }
-
-    auto* first = send_queue_.front();
-    if (!first || first->payload_len == 0) {
-      return false;
-    }
-
-    batch[batch_size++] = first;
-    segment_size = first->payload_len;
-
-    while (batch_size < kMaxUdpGsoSegments && batch_size < send_queue_.size()) {
-        auto* candidate = send_queue_[batch_size];
-      if (!candidate || candidate->payload_len == 0 ||
-          candidate->payload_len != first->payload_len ||
-          candidate->remote_ep != first->remote_ep) {
-        break;
-      }
-      batch[batch_size++] = candidate;
-    }
+    batch[batch_size++] = candidate;
+    candidate = candidate->next_send;
   }
 
   if (batch_size < 2) {
@@ -3761,8 +3792,7 @@ bool Http3Server::try_send_gso_batch()
   cmsg->cmsg_type = UDP_SEGMENT;
   cmsg->cmsg_len = CMSG_LEN(sizeof(std::uint16_t));
 
-  const auto gso_segment_size = static_cast<std::uint16_t>(segment_size);
-  std::memcpy(CMSG_DATA(cmsg), &gso_segment_size, sizeof(gso_segment_size));
+  std::memcpy(CMSG_DATA(cmsg), &segment_size, sizeof(segment_size));
 
   const auto sent = ::sendmsg(socket_.native_handle(), &msg, MSG_DONTWAIT);
   if (sent < 0) {
@@ -3789,11 +3819,11 @@ bool Http3Server::try_send_gso_batch()
     return false;
   }
 
-  {
-    std::lock_guard lock(send_queue_mutex_);
-    for (std::size_t index = 0; index < batch_size && !send_queue_.empty(); ++index) {
-      send_queue_.pop_front();
-    }
+  send_ready_head_ = batch[batch_size - 1]->next_send;
+  batch[batch_size - 1]->next_send = nullptr;
+  send_ready_size_ -= batch_size;
+  if (!send_ready_head_) {
+    send_ready_tail_ = nullptr;
   }
 
   for (std::size_t index = 0; index < batch_size; ++index) {
@@ -3808,53 +3838,73 @@ bool Http3Server::try_send_gso_batch()
 
 void Http3Server::do_send()
 {
+  drain_send_inbox();
   while (try_send_gso_batch()) {
+    drain_send_inbox();
   }
 
   PendingSendPacket* packet = nullptr;
-  {
-    std::lock_guard lock(send_queue_mutex_);
-    if (!running_ || send_queue_.empty()) {
-      send_in_progress_ = false;
+  if (!running_) {
+    send_ready_head_ = nullptr;
+    send_ready_tail_ = nullptr;
+    send_ready_size_ = 0;
+    send_inbox_head_.store(nullptr, std::memory_order_release);
+    send_in_progress_.store(false, std::memory_order_release);
+    return;
+  }
+
+  if (!send_ready_head_) {
+    send_in_progress_.store(false, std::memory_order_release);
+    drain_send_inbox();
+    if (!send_ready_head_ ||
+        send_in_progress_.exchange(true, std::memory_order_acq_rel)) {
       return;
     }
-    packet = send_queue_.front();
   }
+
+  packet = send_ready_head_;
 
   socket_.async_send_to(
       boost::asio::buffer(packet->bytes().data(), packet->bytes().size()),
       packet->remote_ep,
       [this, packet](boost::system::error_code ec, std::size_t) {
-        bool schedule_next = false;
-        {
-          std::lock_guard lock(send_queue_mutex_);
-          if (!send_queue_.empty()) {
-            send_queue_.pop_front();
+        if (send_ready_head_) {
+          send_ready_head_ = send_ready_head_->next_send;
+          if (!send_ready_head_) {
+            send_ready_tail_ = nullptr;
           }
-
-          if (!running_ || ec == boost::asio::error::operation_aborted) {
-            send_queue_.clear();
-            send_in_progress_ = false;
-            return;
+          if (send_ready_size_ != 0) {
+            --send_ready_size_;
           }
+        }
 
-          if (ec) {
-            NPRPC_HTTP3_TRACE("async_send_to failed: {}", ec.message());
-          }
+        if (!running_ || ec == boost::asio::error::operation_aborted) {
+          send_ready_head_ = nullptr;
+          send_ready_tail_ = nullptr;
+          send_ready_size_ = 0;
+          send_inbox_head_.store(nullptr, std::memory_order_release);
+          send_in_progress_.store(false, std::memory_order_release);
+          return;
+        }
 
-          if (send_queue_.empty()) {
-            send_in_progress_ = false;
-            return;
-          }
-
-          schedule_next = true;
+        if (ec) {
+          NPRPC_HTTP3_TRACE("async_send_to failed: {}", ec.message());
         }
 
         recycle_send_packet(packet);
 
-        if (schedule_next) {
-          do_send();
+        drain_send_inbox();
+
+        if (!send_ready_head_) {
+          send_in_progress_.store(false, std::memory_order_release);
+          drain_send_inbox();
+          if (!send_ready_head_ ||
+              send_in_progress_.exchange(true, std::memory_order_acq_rel)) {
+            return;
+          }
         }
+
+        do_send();
       });
 }
 
