@@ -629,7 +629,7 @@ private:
       webtransport_control_sessions_;
 
   // Current scratch packet borrowed from the server packet pool.
-  std::shared_ptr<PendingSendPacket> send_packet_;
+  PendingSendPacket* send_packet_ = nullptr;
 
   // Connection close buffer
   std::vector<uint8_t> conn_close_buf_;
@@ -982,9 +982,9 @@ public:
 
 private:
   bool allow_new_connection(const boost::asio::ip::udp::endpoint& remote_ep);
-  int send_packet(std::shared_ptr<PendingSendPacket> packet);
-  std::shared_ptr<PendingSendPacket> acquire_send_packet();
-  void recycle_send_packet(std::shared_ptr<PendingSendPacket> packet);
+  int send_packet(PendingSendPacket* packet);
+  PendingSendPacket* acquire_send_packet();
+  void recycle_send_packet(PendingSendPacket* packet);
   bool try_send_gso_batch();
   void on_connection_accepted(const boost::asio::ip::udp::endpoint& remote_ep);
   void do_send();
@@ -1025,8 +1025,9 @@ private:
       connections_;
 
   std::mutex send_mutex_;
-  std::deque<std::shared_ptr<PendingSendPacket>> send_queue_;
-  std::vector<std::shared_ptr<PendingSendPacket>> send_pool_;
+  std::deque<PendingSendPacket*> send_queue_;
+  std::vector<PendingSendPacket*> send_pool_;
+  std::vector<std::unique_ptr<PendingSendPacket>> send_packet_storage_;
   bool send_in_progress_ = false;
 #if !defined(_WIN32) && defined(UDP_SEGMENT)
   bool udp_gso_supported_ = true;
@@ -1099,7 +1100,8 @@ Http3Connection::~Http3Connection()
   timer_.cancel();
 
   if (send_packet_) {
-    server_->recycle_send_packet(std::move(send_packet_));
+    server_->recycle_send_packet(send_packet_);
+    send_packet_ = nullptr;
   }
 
   if (httpconn_) {
@@ -1579,7 +1581,8 @@ int Http3Connection::on_write()
 #endif
     send_packet_->remote_ep = remote_ep_;
     send_packet_->payload_len = static_cast<size_t>(nwrite);
-    server_->send_packet(std::move(send_packet_));
+    server_->send_packet(send_packet_);
+    send_packet_ = nullptr;
   }
 
   ngtcp2_conn_update_pkt_tx_time(conn_, timestamp_ns());
@@ -3637,7 +3640,7 @@ int Http3Server::send_packet(const boost::asio::ip::udp::endpoint& remote_ep,
   return send_packet(std::move(packet));
 }
 
-int Http3Server::send_packet(std::shared_ptr<PendingSendPacket> packet)
+int Http3Server::send_packet(PendingSendPacket* packet)
 {
   if (!running_ || !packet) {
     return -1;
@@ -3660,19 +3663,20 @@ int Http3Server::send_packet(std::shared_ptr<PendingSendPacket> packet)
   return 0;
 }
 
-std::shared_ptr<PendingSendPacket> Http3Server::acquire_send_packet()
+PendingSendPacket* Http3Server::acquire_send_packet()
 {
   std::lock_guard lock(send_mutex_);
   if (!send_pool_.empty()) {
-    auto packet = std::move(send_pool_.back());
+    auto* packet = send_pool_.back();
     send_pool_.pop_back();
     return packet;
   }
 
-  return std::make_shared<PendingSendPacket>();
+  send_packet_storage_.push_back(std::make_unique<PendingSendPacket>());
+  return send_packet_storage_.back().get();
 }
 
-void Http3Server::recycle_send_packet(std::shared_ptr<PendingSendPacket> packet)
+void Http3Server::recycle_send_packet(PendingSendPacket* packet)
 {
   if (!packet) {
     return;
@@ -3682,7 +3686,7 @@ void Http3Server::recycle_send_packet(std::shared_ptr<PendingSendPacket> packet)
 
   std::lock_guard lock(send_mutex_);
   if (send_pool_.size() < MAX_PKTS_BURST * 2) {
-    send_pool_.push_back(std::move(packet));
+    send_pool_.push_back(packet);
   }
 }
 
@@ -3693,7 +3697,7 @@ bool Http3Server::try_send_gso_batch()
     return false;
   }
 
-  std::array<std::shared_ptr<PendingSendPacket>, kMaxUdpGsoSegments> batch;
+  std::array<PendingSendPacket*, kMaxUdpGsoSegments> batch{};
   std::size_t batch_size = 0;
   std::size_t segment_size = 0;
 
@@ -3703,7 +3707,7 @@ bool Http3Server::try_send_gso_batch()
       return false;
     }
 
-    const auto& first = send_queue_.front();
+    auto* first = send_queue_.front();
     if (!first || first->payload_len == 0) {
       return false;
     }
@@ -3712,7 +3716,7 @@ bool Http3Server::try_send_gso_batch()
     segment_size = first->payload_len;
 
     while (batch_size < kMaxUdpGsoSegments && batch_size < send_queue_.size()) {
-      const auto& candidate = send_queue_[batch_size];
+        auto* candidate = send_queue_[batch_size];
       if (!candidate || candidate->payload_len == 0 ||
           candidate->payload_len != first->payload_len ||
           candidate->remote_ep != first->remote_ep) {
@@ -3781,10 +3785,18 @@ bool Http3Server::try_send_gso_batch()
     for (std::size_t index = 0; index < batch_size && !send_queue_.empty(); ++index) {
       send_queue_.pop_front();
     }
-  }
 
-  for (std::size_t index = 0; index < batch_size; ++index) {
-    recycle_send_packet(std::move(batch[index]));
+    const auto max_pool_size = MAX_PKTS_BURST * 2;
+    for (std::size_t index = 0; index < batch_size; ++index) {
+      auto* packet = batch[index];
+      if (!packet) {
+        continue;
+      }
+      packet->payload_len = 0;
+      if (send_pool_.size() < max_pool_size) {
+        send_pool_.push_back(packet);
+      }
+    }
   }
 
   return true;
@@ -3798,7 +3810,7 @@ void Http3Server::do_send()
   while (try_send_gso_batch()) {
   }
 
-  std::shared_ptr<PendingSendPacket> packet;
+  PendingSendPacket* packet = nullptr;
   {
     std::lock_guard lock(send_mutex_);
     if (!running_ || send_queue_.empty()) {
