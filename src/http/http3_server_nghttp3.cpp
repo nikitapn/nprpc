@@ -39,6 +39,7 @@
 #include "../logging.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <deque>
@@ -258,6 +259,7 @@ struct PendingSendPacket {
   boost::asio::ip::udp::endpoint remote_ep;
   std::array<uint8_t, MAX_UDP_PAYLOAD_SIZE> payload;
   std::size_t payload_len = 0;
+  PendingSendPacket* next_free = nullptr;
 
   std::span<const uint8_t> bytes() const noexcept
   {
@@ -1024,10 +1026,11 @@ private:
   std::unordered_map<std::string, std::shared_ptr<Http3Connection>>
       connections_;
 
-  std::mutex send_mutex_;
+  std::mutex send_queue_mutex_;
+  std::mutex send_storage_mutex_;
   std::deque<PendingSendPacket*> send_queue_;
-  std::vector<PendingSendPacket*> send_pool_;
   std::vector<std::unique_ptr<PendingSendPacket>> send_packet_storage_;
+  std::atomic<PendingSendPacket*> send_pool_head_{nullptr};
   bool send_in_progress_ = false;
 #if !defined(_WIN32) && defined(UDP_SEGMENT)
   bool udp_gso_supported_ = true;
@@ -3605,7 +3608,7 @@ void Http3Server::stop()
   }
 
   {
-    std::lock_guard lock(send_mutex_);
+    std::lock_guard lock(send_queue_mutex_);
     send_queue_.clear();
     send_in_progress_ = false;
   }
@@ -3648,7 +3651,7 @@ int Http3Server::send_packet(PendingSendPacket* packet)
 
   bool should_start = false;
   {
-    std::lock_guard lock(send_mutex_);
+    std::lock_guard lock(send_queue_mutex_);
     send_queue_.push_back(packet);
     if (!send_in_progress_) {
       send_in_progress_ = true;
@@ -3665,13 +3668,18 @@ int Http3Server::send_packet(PendingSendPacket* packet)
 
 PendingSendPacket* Http3Server::acquire_send_packet()
 {
-  std::lock_guard lock(send_mutex_);
-  if (!send_pool_.empty()) {
-    auto* packet = send_pool_.back();
-    send_pool_.pop_back();
-    return packet;
+  auto* head = send_pool_head_.load(std::memory_order_acquire);
+  while (head) {
+    auto* next = head->next_free;
+    if (send_pool_head_.compare_exchange_weak(head, next,
+                                              std::memory_order_acq_rel,
+                                              std::memory_order_acquire)) {
+      head->next_free = nullptr;
+      return head;
+    }
   }
 
+  std::lock_guard lock(send_storage_mutex_);
   send_packet_storage_.push_back(std::make_unique<PendingSendPacket>());
   return send_packet_storage_.back().get();
 }
@@ -3683,11 +3691,12 @@ void Http3Server::recycle_send_packet(PendingSendPacket* packet)
   }
 
   packet->payload_len = 0;
-
-  std::lock_guard lock(send_mutex_);
-  if (send_pool_.size() < MAX_PKTS_BURST * 2) {
-    send_pool_.push_back(packet);
-  }
+  auto* head = send_pool_head_.load(std::memory_order_acquire);
+  do {
+    packet->next_free = head;
+  } while (!send_pool_head_.compare_exchange_weak(head, packet,
+                                                  std::memory_order_acq_rel,
+                                                  std::memory_order_acquire));
 }
 
 bool Http3Server::try_send_gso_batch()
@@ -3702,7 +3711,7 @@ bool Http3Server::try_send_gso_batch()
   std::size_t segment_size = 0;
 
   {
-    std::lock_guard lock(send_mutex_);
+    std::lock_guard lock(send_queue_mutex_);
     if (send_queue_.size() < 2) {
       return false;
     }
@@ -3781,22 +3790,14 @@ bool Http3Server::try_send_gso_batch()
   }
 
   {
-    std::lock_guard lock(send_mutex_);
+    std::lock_guard lock(send_queue_mutex_);
     for (std::size_t index = 0; index < batch_size && !send_queue_.empty(); ++index) {
       send_queue_.pop_front();
     }
+  }
 
-    const auto max_pool_size = MAX_PKTS_BURST * 2;
-    for (std::size_t index = 0; index < batch_size; ++index) {
-      auto* packet = batch[index];
-      if (!packet) {
-        continue;
-      }
-      packet->payload_len = 0;
-      if (send_pool_.size() < max_pool_size) {
-        send_pool_.push_back(packet);
-      }
-    }
+  for (std::size_t index = 0; index < batch_size; ++index) {
+    recycle_send_packet(batch[index]);
   }
 
   return true;
@@ -3812,7 +3813,7 @@ void Http3Server::do_send()
 
   PendingSendPacket* packet = nullptr;
   {
-    std::lock_guard lock(send_mutex_);
+    std::lock_guard lock(send_queue_mutex_);
     if (!running_ || send_queue_.empty()) {
       send_in_progress_ = false;
       return;
@@ -3826,7 +3827,7 @@ void Http3Server::do_send()
       [this, packet](boost::system::error_code ec, std::size_t) {
         bool schedule_next = false;
         {
-          std::lock_guard lock(send_mutex_);
+          std::lock_guard lock(send_queue_mutex_);
           if (!send_queue_.empty()) {
             send_queue_.pop_front();
           }
@@ -3834,7 +3835,6 @@ void Http3Server::do_send()
           if (!running_ || ec == boost::asio::error::operation_aborted) {
             send_queue_.clear();
             send_in_progress_ = false;
-            send_pool_.clear();
             return;
           }
 

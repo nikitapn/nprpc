@@ -153,6 +153,7 @@ http {
   access_log off;
   error_log $TMP_DIR/nginx-error.log warn;
   sendfile on;
+  quic_gso on;
   tcp_nopush on;
   tcp_nodelay on;
   keepalive_timeout 65;
