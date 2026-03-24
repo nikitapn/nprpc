@@ -44,6 +44,7 @@
 #include <cstring>
 #include <deque>
 #include <format>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -53,6 +54,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include <ankerl/unordered_dense.h>
 
 #define NPRPC_ENABLE_HTTP3_TRACE 0
 
@@ -1036,9 +1039,8 @@ private:
 
   SSL_CTX* ssl_ctx_ = nullptr;
 
-  std::mutex mutex_;
   // Map from CID to connection (includes both SCID and additional CIDs)
-  std::unordered_map<std::string, std::shared_ptr<Http3Connection>>
+  ankerl::unordered_dense::map<std::string, std::shared_ptr<Http3Connection>>
       connections_;
 
   std::mutex send_storage_mutex_;
@@ -1055,7 +1057,7 @@ private:
   bool udp_gso_supported_ = true;
 #endif
 
-  bool running_ = false;
+  std::atomic<bool> running_{false};
 };
 
 //==============================================================================
@@ -3604,7 +3606,7 @@ bool Http3Server::start()
   // Get local endpoint
   local_ep_ = socket_.local_endpoint();
 
-  running_ = true;
+  running_.store(true, std::memory_order_release);
 
   NPRPC_HTTP3_TRACE("Server listening on port {} (nghttp3/ngtcp2 backend)",
                     port_);
@@ -3617,15 +3619,20 @@ bool Http3Server::start()
 
 void Http3Server::stop()
 {
-  running_ = false;
+  if (!running_.exchange(false, std::memory_order_acq_rel)) {
+    return;
+  }
 
   boost::system::error_code ec;
   socket_.close(ec);
 
-  {
-    std::lock_guard lock(mutex_);
+  std::promise<void> connections_cleared;
+  auto wait_for_clear = connections_cleared.get_future();
+  boost::asio::dispatch(ioc_, [this, &connections_cleared]() {
     connections_.clear();
-  }
+    connections_cleared.set_value();
+  });
+  wait_for_clear.wait();
 
   send_in_progress_.store(false, std::memory_order_release);
 
@@ -3639,7 +3646,7 @@ int Http3Server::send_packet(const boost::asio::ip::udp::endpoint& remote_ep,
                              const uint8_t* data,
                              size_t len)
 {
-  if (!running_) {
+  if (!running_.load(std::memory_order_acquire)) {
     return -1;
   }
 
@@ -3662,7 +3669,7 @@ int Http3Server::send_packet(const boost::asio::ip::udp::endpoint& remote_ep,
 
 int Http3Server::send_packet(PendingSendPacket* packet)
 {
-  if (!running_ || !packet) {
+  if (!running_.load(std::memory_order_acquire) || !packet) {
     return -1;
   }
 
@@ -3738,18 +3745,14 @@ void Http3Server::drain_send_inbox()
   }
 
   PendingSendPacket* reversed = nullptr;
-  while (list) {
+    auto* tail = list;
+    std::size_t drained = 0;
+    while (list) {
     auto* next = list->next_send;
     list->next_send = reversed;
     reversed = list;
     list = next;
-  }
-
-  auto* tail = reversed;
-  std::size_t drained = 1;
-  while (tail->next_send) {
-    tail = tail->next_send;
-    ++drained;
+      ++drained;
   }
 
   if (send_ready_tail_) {
@@ -3770,8 +3773,6 @@ bool Http3Server::try_send_gso_batch()
 
   drain_send_inbox();
 
-  std::array<PendingSendPacket*, kMaxUdpGsoSegments> batch{};
-  std::size_t batch_size = 0;
   if (send_ready_size_ < 2) {
     return false;
   }
@@ -3781,36 +3782,37 @@ bool Http3Server::try_send_gso_batch()
     return false;
   }
 
-  batch[batch_size++] = first;
   const auto segment_size = first->gso_segment_size;
 
-  auto* candidate = first->next_send;
-  while (batch_size < kMaxUdpGsoSegments && candidate) {
-    if (!candidate || candidate->payload_len == 0 ||
+  std::array<iovec, kMaxUdpGsoSegments> iov{};
+  std::size_t batch_size = 0;
+  std::size_t total_bytes = 0;
+  auto* batch_tail = first;
+
+  for (auto* candidate = first;
+       batch_size < kMaxUdpGsoSegments && candidate;
+       candidate = candidate->next_send) {
+    if (candidate->payload_len == 0 ||
         candidate->gso_segment_size != segment_size ||
         candidate->remote_ep != first->remote_ep) {
       break;
     }
-    batch[batch_size++] = candidate;
-    candidate = candidate->next_send;
+
+    iov[batch_size].iov_base = candidate->payload_data();
+    iov[batch_size].iov_len = candidate->payload_len;
+    total_bytes += candidate->payload_len;
+    batch_tail = candidate;
+    ++batch_size;
   }
 
   if (batch_size < 2) {
     return false;
   }
 
-  std::array<iovec, kMaxUdpGsoSegments> iov{};
-  std::size_t total_bytes = 0;
-  for (std::size_t index = 0; index < batch_size; ++index) {
-    iov[index].iov_base = batch[index]->payload_data();
-    iov[index].iov_len = batch[index]->payload_len;
-    total_bytes += batch[index]->payload_len;
-  }
-
   std::array<unsigned char, CMSG_SPACE(sizeof(std::uint16_t))> control{};
   msghdr msg{};
-  msg.msg_name = batch[0]->remote_ep.data();
-  msg.msg_namelen = static_cast<socklen_t>(batch[0]->remote_ep.size());
+  msg.msg_name = first->remote_ep.data();
+  msg.msg_namelen = static_cast<socklen_t>(first->remote_ep.size());
   msg.msg_iov = iov.data();
   msg.msg_iovlen = batch_size;
   msg.msg_control = control.data();
@@ -3848,15 +3850,18 @@ bool Http3Server::try_send_gso_batch()
     return false;
   }
 
-  send_ready_head_ = batch[batch_size - 1]->next_send;
-  batch[batch_size - 1]->next_send = nullptr;
+  send_ready_head_ = batch_tail->next_send;
+  batch_tail->next_send = nullptr;
   send_ready_size_ -= batch_size;
   if (!send_ready_head_) {
     send_ready_tail_ = nullptr;
   }
 
-  for (std::size_t index = 0; index < batch_size; ++index) {
-    recycle_send_packet(batch[index]);
+  auto* packet = first;
+  while (packet) {
+    auto* next = packet->next_send;
+    recycle_send_packet(packet);
+    packet = next;
   }
 
   return true;
@@ -3873,7 +3878,7 @@ void Http3Server::do_send()
   }
 
   PendingSendPacket* packet = nullptr;
-  if (!running_) {
+  if (!running_.load(std::memory_order_acquire)) {
     send_ready_head_ = nullptr;
     send_ready_tail_ = nullptr;
     send_ready_size_ = 0;
@@ -3907,7 +3912,8 @@ void Http3Server::do_send()
           }
         }
 
-        if (!running_ || ec == boost::asio::error::operation_aborted) {
+        if (!running_.load(std::memory_order_acquire) ||
+            ec == boost::asio::error::operation_aborted) {
           send_ready_head_ = nullptr;
           send_ready_tail_ = nullptr;
           send_ready_size_ = 0;
@@ -3941,20 +3947,18 @@ void Http3Server::associate_cid(const ngtcp2_cid* cid,
                                 std::shared_ptr<Http3Connection> conn)
 {
   std::string key = cid_to_string(cid);
-  std::lock_guard lock(mutex_);
   connections_[key] = conn;
 }
 
 void Http3Server::dissociate_cid(const ngtcp2_cid* cid)
 {
   std::string key = cid_to_string(cid);
-  std::lock_guard lock(mutex_);
   connections_.erase(key);
 }
 
 void Http3Server::remove_connection(std::shared_ptr<Http3Connection> conn)
 {
-  std::lock_guard lock(mutex_);
+  // std::lock_guard lock(mutex_);
   http_request_throttler().on_http3_connection_closed(
   conn->remote_endpoint().address());
   // Remove all CIDs associated with this connection
@@ -3969,7 +3973,7 @@ void Http3Server::remove_connection(std::shared_ptr<Http3Connection> conn)
 
 void Http3Server::do_receive()
 {
-  if (!running_) {
+  if (!running_.load(std::memory_order_acquire)) {
     return;
   }
 
@@ -3980,7 +3984,8 @@ void Http3Server::do_receive()
           handle_packet(remote_ep_, recv_buf_.data(), bytes_recvd);
         }
 
-        if (running_ && (!ec || ec == boost::asio::error::message_size)) {
+        if (running_.load(std::memory_order_acquire) &&
+            (!ec || ec == boost::asio::error::message_size)) {
           do_receive();
         }
       });
@@ -4170,7 +4175,6 @@ Http3Server::find_connection(const ngtcp2_cid* dcid)
 {
   std::string key = cid_to_string(dcid);
 
-  std::lock_guard lock(mutex_);
   auto it = connections_.find(key);
   return it != connections_.end() ? it->second : nullptr;
 }
