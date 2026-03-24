@@ -496,6 +496,14 @@ private:
                         bool include_cors,
                         bool preflight = false);
 
+  // Aggregate packet writing callback for ngtcp2_conn_write_aggregate_pkt2
+  ngtcp2_ssize write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi,
+                         uint8_t* dest, size_t destlen, ngtcp2_tstamp ts);
+  static ngtcp2_ssize write_pkt_cb(ngtcp2_conn* conn, ngtcp2_path* path,
+                                   ngtcp2_pkt_info* pi, uint8_t* dest,
+                                   size_t destlen, ngtcp2_tstamp ts,
+                                   void* user_data);
+
   // Error handling
   int handle_error();
   void start_draining_period();
@@ -672,6 +680,9 @@ private:
 
   // Current scratch packet borrowed from the server packet pool.
   PendingSendPacket* send_packet_ = nullptr;
+
+  // Contiguous TX buffer for ngtcp2_conn_write_aggregate_pkt2 (GSO)
+  std::array<uint8_t, 64 * 1024> txbuf_;
 
   // Connection close buffer
   std::vector<uint8_t> conn_close_buf_;
@@ -1055,6 +1066,8 @@ private:
   void drain_send_inbox();
   bool try_send_gso_batch();
   void send_batch(PendingSendPacket** packets, size_t count);
+  void send_aggregated(const boost::asio::ip::udp::endpoint& remote_ep,
+                       const uint8_t* data, size_t len, size_t gso_size);
   void on_connection_accepted(const boost::asio::ip::udp::endpoint& remote_ep);
   void do_send();
   void do_receive();
@@ -1164,8 +1177,6 @@ Http3Connection::Http3Connection(
   // Generate our own source CID
   generate_server_connection_id(&scid_, SCID_LEN, server_->worker_id());
 
-  send_packet_ = server_->acquire_send_packet();
-
   // Initialize the connection reference for crypto callbacks
   conn_ref_.get_conn = [](ngtcp2_crypto_conn_ref* ref) -> ngtcp2_conn* {
     auto h = static_cast<Http3Connection*>(ref->user_data);
@@ -1178,11 +1189,6 @@ Http3Connection::Http3Connection(
 Http3Connection::~Http3Connection()
 {
   timer_.cancel();
-
-  if (send_packet_) {
-    server_->recycle_send_packet(send_packet_);
-    send_packet_ = nullptr;
-  }
 
   if (httpconn_) {
     nghttp3_conn_del(httpconn_);
@@ -1460,46 +1466,29 @@ int Http3Connection::on_read(const uint8_t* data,
   return 0;
 }
 
-int Http3Connection::on_write()
+// Static trampoline for ngtcp2_conn_write_aggregate_pkt2
+ngtcp2_ssize Http3Connection::write_pkt_cb(
+    ngtcp2_conn* conn, ngtcp2_path* path, ngtcp2_pkt_info* pi,
+    uint8_t* dest, size_t destlen, ngtcp2_tstamp ts, void* user_data)
 {
-  if (closed_) {
-    return -1;
-  }
+  auto* self = static_cast<Http3Connection*>(user_data);
+  return self->write_pkt(path, pi, dest, destlen, ts);
+}
 
-  if (ngtcp2_conn_in_closing_period(conn_) ||
-      ngtcp2_conn_in_draining_period(conn_)) {
-    return 0;
-  }
+// Writes a single QUIC packet — called repeatedly by aggregate_pkt2
+ngtcp2_ssize Http3Connection::write_pkt(
+    ngtcp2_path* path, ngtcp2_pkt_info* pi,
+    uint8_t* dest, size_t destlen, ngtcp2_tstamp ts)
+{
+  std::array<nghttp3_vec, 16> vec;
+  ngtcp2_vec raw_vec{};
 
-  NPRPC_HTTP3_TRACE("on_write called");
-
-  ngtcp2_path_storage ps;
-  ngtcp2_pkt_info pi;
-
-  ngtcp2_path_storage_zero(&ps);
-
-  // Use a single timestamp for all packets in this batch
-  // vDSO is also expensive, so we want to amortize it over the whole batch if possible
-  auto ts = timestamp_ns();
-
-  // Local batch to coalesce packets for a single GSO sendmsg
-  std::array<PendingSendPacket*, MAX_PKTS_BURST> batch{};
-  size_t batch_count = 0;
-
-  // Write loop
   for (;;) {
-    if (!send_packet_) {
-      send_packet_ = server_->acquire_send_packet();
-    }
-
     int64_t stream_id = -1;
     int fin = 0;
-    std::array<nghttp3_vec, 16> vec;
-    ngtcp2_vec raw_vec{};
     nghttp3_ssize sveccnt = 0;
     bool using_http_stream = false;
 
-    // Get data from HTTP/3 layer if available
     if (httpconn_ && ngtcp2_conn_get_max_data_left(conn_)) {
       sveccnt = nghttp3_conn_writev_stream(httpconn_, &stream_id, &fin,
                                            vec.data(), vec.size());
@@ -1510,7 +1499,7 @@ int Http3Connection::on_write()
             &last_error_,
             nghttp3_err_infer_quic_app_error_code(static_cast<int>(sveccnt)),
             nullptr, 0);
-        return handle_error();
+        return NGTCP2_ERR_CALLBACK_FAILURE;
       }
 
       using_http_stream = sveccnt > 0 || stream_id != -1 || fin != 0;
@@ -1535,21 +1524,11 @@ int Http3Connection::on_write()
       flags |= NGTCP2_WRITE_STREAM_FLAG_FIN;
     }
 
-    NPRPC_HTTP3_TRACE("on_write: calling ngtcp2_conn_writev_stream, "
-                      "stream_id={}, sveccnt={}",
-                      stream_id, sveccnt);
-
     auto nwrite = ngtcp2_conn_writev_stream(
-        conn_, &ps.path, &pi, send_packet_->payload_data(),
-        send_packet_->payload_capacity(), &ndatalen,
-      flags, stream_id,
-      using_http_stream ? reinterpret_cast<const ngtcp2_vec*>(vec.data())
-                : &raw_vec,
+        conn_, path, pi, dest, destlen, &ndatalen, flags, stream_id,
+        using_http_stream ? reinterpret_cast<const ngtcp2_vec*>(vec.data())
+                          : &raw_vec,
         static_cast<size_t>(sveccnt), ts);
-
-    NPRPC_HTTP3_TRACE("on_write: ngtcp2_conn_writev_stream returned "
-                      "nwrite={}, ndatalen={}",
-                      nwrite, ndatalen);
 
     if (nwrite < 0) {
       switch (nwrite) {
@@ -1558,7 +1537,7 @@ int Http3Connection::on_write()
           nghttp3_conn_block_stream(httpconn_, stream_id);
         } else if (raw_stream) {
           schedule_raw_writable_stream(raw_stream);
-          break;
+          return 0;
         }
         continue;
       case NGTCP2_ERR_STREAM_SHUT_WR:
@@ -1573,24 +1552,20 @@ int Http3Connection::on_write()
           auto rv = nghttp3_conn_add_write_offset(
               httpconn_, stream_id, static_cast<size_t>(ndatalen));
           if (rv != 0) {
-            NPRPC_HTTP3_TRACE("nghttp3_conn_add_write_offset: {}",
-                              nghttp3_strerror(rv));
             ngtcp2_ccerr_set_application_error(
                 &last_error_, nghttp3_err_infer_quic_app_error_code(rv),
                 nullptr, 0);
-            return handle_error();
+            return NGTCP2_ERR_CALLBACK_FAILURE;
           }
         } else if (!using_http_stream && raw_stream) {
           if (ndatalen > 0) {
             raw_stream->raw_write_queue.front().consume(
                 static_cast<size_t>(ndatalen));
-
             while (!raw_stream->raw_write_queue.empty() &&
                    raw_stream->raw_write_queue.front().size() == 0) {
               raw_stream->raw_write_queue.pop_front();
             }
           }
-
           if (!raw_stream->raw_write_queue.empty()) {
             schedule_raw_writable_stream(raw_stream);
           }
@@ -1602,83 +1577,70 @@ int Http3Connection::on_write()
                         ngtcp2_strerror(static_cast<int>(nwrite)));
       ngtcp2_ccerr_set_liberr(&last_error_, static_cast<int>(nwrite), nullptr,
                               0);
-      return handle_error();
+      return NGTCP2_ERR_CALLBACK_FAILURE;
     }
 
     if (using_http_stream && ndatalen >= 0 && httpconn_) {
       auto rv = nghttp3_conn_add_write_offset(httpconn_, stream_id,
                                               static_cast<size_t>(ndatalen));
       if (rv != 0) {
-        NPRPC_HTTP3_ERROR("nghttp3_conn_add_write_offset: {}",
-                          nghttp3_strerror(rv));
         ngtcp2_ccerr_set_application_error(
             &last_error_, nghttp3_err_infer_quic_app_error_code(rv), nullptr,
             0);
-        return handle_error();
+        return NGTCP2_ERR_CALLBACK_FAILURE;
       }
     } else if (!using_http_stream && raw_stream) {
       if (ndatalen > 0) {
-        raw_stream->raw_write_queue.front().consume(static_cast<size_t>(ndatalen));
-
+        raw_stream->raw_write_queue.front().consume(
+            static_cast<size_t>(ndatalen));
         while (!raw_stream->raw_write_queue.empty() &&
                raw_stream->raw_write_queue.front().size() == 0) {
           raw_stream->raw_write_queue.pop_front();
         }
       }
-
       if (!raw_stream->raw_write_queue.empty()) {
         schedule_raw_writable_stream(raw_stream);
       }
     }
 
-    if (nwrite == 0) {
-      NPRPC_HTTP3_TRACE("on_write: no more packets to write");
-      break; // Nothing more to write
-    }
+    return nwrite;
+  }
+}
 
-    // Send the packet
-    // Check what type of packet we're sending
-#if NPRPC_ENABLE_HTTP3_TRACE
-  uint8_t first_byte = send_packet_->payload_data()[0];
-    const char* pkt_type = "unknown";
-    if (first_byte & 0x80) { // Long header
-      uint8_t type = (first_byte >> 4) & 0x03;
-      switch (type) {
-      case 0:
-        pkt_type = "Initial";
-        break;
-      case 1:
-        pkt_type = "0-RTT";
-        break;
-      case 2:
-        pkt_type = "Handshake";
-        break;
-      case 3:
-        pkt_type = "Retry";
-        break;
-      }
-    } else {
-      pkt_type = "Short (1-RTT)";
-    }
-    NPRPC_HTTP3_TRACE("on_write: sending {} bytes, type={}", nwrite, pkt_type);
-#endif
-    send_packet_->remote_ep = remote_ep_;
-    send_packet_->payload_len = static_cast<size_t>(nwrite);
-    send_packet_->gso_segment_size = static_cast<std::uint16_t>(nwrite);
-    batch[batch_count++] = send_packet_;
-    send_packet_ = nullptr;
-
-    if (batch_count >= MAX_PKTS_BURST) {
-      server_->send_batch(batch.data(), batch_count);
-      batch_count = 0;
-    }
+int Http3Connection::on_write()
+{
+  if (closed_) {
+    return -1;
   }
 
-  if (batch_count > 0) {
-    server_->send_batch(batch.data(), batch_count);
+  if (ngtcp2_conn_in_closing_period(conn_) ||
+      ngtcp2_conn_in_draining_period(conn_)) {
+    return 0;
+  }
+
+  NPRPC_HTTP3_TRACE("on_write called");
+
+  ngtcp2_path_storage ps;
+  ngtcp2_pkt_info pi;
+  size_t gso_size = 0;
+  auto ts = timestamp_ns();
+
+  ngtcp2_path_storage_zero(&ps);
+
+  auto nwrite = ngtcp2_conn_write_aggregate_pkt2(
+      conn_, &ps.path, &pi, txbuf_.data(), txbuf_.size(), &gso_size,
+      write_pkt_cb, MAX_PKTS_BURST, ts);
+  if (nwrite < 0) {
+    return handle_error();
   }
 
   ngtcp2_conn_update_pkt_tx_time(conn_, ts);
+
+  if (nwrite > 0) {
+    server_->send_aggregated(remote_ep_, txbuf_.data(),
+                             static_cast<size_t>(nwrite), gso_size);
+  }
+
   schedule_timer();
 
   return 0;
@@ -4076,8 +4038,13 @@ void Http3Server::send_batch(PendingSendPacket** packets, size_t count)
 
     bool gso_ok = true;
     for (size_t i = 1; i < count; ++i) {
-      if (packets[i]->gso_segment_size != segment_size ||
-          packets[i]->remote_ep != first->remote_ep) {
+      if (packets[i]->remote_ep != first->remote_ep) {
+        gso_ok = false;
+        break;
+      }
+      // All packets except the last must equal the segment size;
+      // the last packet may be shorter (runt).
+      if (i < count - 1 && packets[i]->payload_len != segment_size) {
         gso_ok = false;
         break;
       }
@@ -4148,6 +4115,86 @@ void Http3Server::send_batch(PendingSendPacket** packets, size_t count)
 #else
   for (size_t i = 0; i < count; ++i) {
     send_packet(packets[i]);
+  }
+#endif
+}
+
+void Http3Server::send_aggregated(
+    const boost::asio::ip::udp::endpoint& remote_ep,
+    const uint8_t* data, size_t len, size_t gso_size)
+{
+  if (!len || !running_.load(std::memory_order_acquire)) {
+    return;
+  }
+
+#if !defined(_WIN32)
+  iovec msg_iov{};
+  msg_iov.iov_base = const_cast<uint8_t*>(data);
+  msg_iov.iov_len = len;
+
+  msghdr msg{};
+  auto ep_data = remote_ep.data();
+  msg.msg_name = const_cast<void*>(static_cast<const void*>(ep_data));
+  msg.msg_namelen = static_cast<socklen_t>(remote_ep.size());
+  msg.msg_iov = &msg_iov;
+  msg.msg_iovlen = 1;
+
+#ifdef UDP_SEGMENT
+  alignas(cmsghdr) unsigned char control[CMSG_SPACE(sizeof(std::uint16_t))]{};
+  if (gso_size && len > gso_size) {
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+
+    auto* cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = IPPROTO_UDP;
+    cmsg->cmsg_type = UDP_SEGMENT;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(std::uint16_t));
+    auto seg = static_cast<std::uint16_t>(gso_size);
+    std::memcpy(CMSG_DATA(cmsg), &seg, sizeof(seg));
+  }
+#endif
+
+  const auto sent = ::sendmsg(socket_.native_handle(), &msg, MSG_DONTWAIT);
+  if (sent >= 0) {
+    return;
+  }
+
+  const auto err = errno;
+
+#ifdef UDP_SEGMENT
+  // GSO failed — fall back to per-packet sendto
+  if (len > gso_size && gso_size > 0 &&
+      (err == EINVAL || err == EIO || err == EOPNOTSUPP ||
+       err == ENOPROTOOPT || err == ENOTSUP)) {
+    NPRPC_HTTP3_TRACE("GSO sendmsg failed ({}), falling back to per-packet",
+                      std::strerror(err));
+    const uint8_t* p = data;
+    size_t remaining = len;
+    while (remaining > 0) {
+      auto chunk = std::min(gso_size, remaining);
+      ::sendto(socket_.native_handle(), p, chunk, MSG_DONTWAIT,
+               ep_data, static_cast<socklen_t>(remote_ep.size()));
+      p += chunk;
+      remaining -= chunk;
+    }
+    return;
+  }
+#endif
+
+  if (err != EAGAIN && err != EWOULDBLOCK) {
+    NPRPC_HTTP3_TRACE("send_aggregated failed: {}", std::strerror(err));
+  }
+#else
+  // Windows fallback: per-packet
+  const uint8_t* p = data;
+  size_t remaining = len;
+  while (remaining > 0 && gso_size > 0) {
+    auto chunk = std::min(gso_size, remaining);
+    boost::system::error_code ec;
+    socket_.send_to(boost::asio::buffer(p, chunk), remote_ep,
+                    boost::asio::socket_base::message_flags{}, ec);
+    p += chunk;
+    remaining -= chunk;
   }
 #endif
 }
