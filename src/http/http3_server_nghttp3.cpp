@@ -114,6 +114,7 @@ static constexpr uint8_t k_webtransport_bind_native_stream = 1;
 namespace {
 
 constexpr std::size_t kHttp3ResponseChunkSize = 64 * 1024;
+constexpr std::size_t SEND_PACKET_SLAB_SIZE = 64;
 
 #if !defined(_WIN32) && defined(UDP_SEGMENT)
 constexpr std::size_t kMaxUdpGsoSegments = MAX_PKTS_BURST;
@@ -255,17 +256,28 @@ struct PreparedResponseHeaders {
   std::string allow_origin;
 };
 
+struct PendingSendPacketPayload {
+  std::array<uint8_t, MAX_UDP_PAYLOAD_SIZE> bytes;
+};
+
 struct PendingSendPacket {
   boost::asio::ip::udp::endpoint remote_ep;
-  std::array<uint8_t, MAX_UDP_PAYLOAD_SIZE> payload;
+  uint8_t* payload = nullptr;
   std::size_t payload_len = 0;
   std::uint16_t gso_segment_size = 0;
   PendingSendPacket* next_free = nullptr;
   PendingSendPacket* next_send = nullptr;
 
+  uint8_t* payload_data() noexcept { return payload; }
+  const uint8_t* payload_data() const noexcept { return payload; }
+  static constexpr std::size_t payload_capacity() noexcept
+  {
+    return MAX_UDP_PAYLOAD_SIZE;
+  }
+
   std::span<const uint8_t> bytes() const noexcept
   {
-    return {payload.data(), payload_len};
+    return {payload, payload_len};
   }
 };
 
@@ -1033,7 +1045,9 @@ private:
   PendingSendPacket* send_ready_head_ = nullptr;
   PendingSendPacket* send_ready_tail_ = nullptr;
   std::size_t send_ready_size_ = 0;
-  std::vector<std::unique_ptr<PendingSendPacket>> send_packet_storage_;
+  std::vector<std::unique_ptr<PendingSendPacket[]>> send_packet_storage_;
+  std::vector<std::unique_ptr<PendingSendPacketPayload[]>>
+      send_packet_payload_storage_;
   std::atomic<PendingSendPacket*> send_pool_head_{nullptr};
   std::atomic<PendingSendPacket*> send_inbox_head_{nullptr};
   std::atomic<bool> send_in_progress_{false};
@@ -1465,8 +1479,8 @@ int Http3Connection::on_write()
                       stream_id, sveccnt);
 
     auto nwrite = ngtcp2_conn_writev_stream(
-        conn_, &ps.path, &pi, send_packet_->payload.data(),
-        send_packet_->payload.size(), &ndatalen,
+        conn_, &ps.path, &pi, send_packet_->payload_data(),
+        send_packet_->payload_capacity(), &ndatalen,
       flags, stream_id,
       using_http_stream ? reinterpret_cast<const ngtcp2_vec*>(vec.data())
                 : &raw_vec,
@@ -1564,7 +1578,7 @@ int Http3Connection::on_write()
     // Send the packet
     // Check what type of packet we're sending
 #if NPRPC_ENABLE_HTTP3_TRACE
-    uint8_t first_byte = send_packet_->payload[0];
+  uint8_t first_byte = send_packet_->payload_data()[0];
     const char* pkt_type = "unknown";
     if (first_byte & 0x80) { // Long header
       uint8_t type = (first_byte >> 4) & 0x03;
@@ -3640,7 +3654,7 @@ int Http3Server::send_packet(const boost::asio::ip::udp::endpoint& remote_ep,
   packet->payload_len = len;
   packet->gso_segment_size = static_cast<std::uint16_t>(len);
   if (len != 0) {
-    std::memcpy(packet->payload.data(), data, len);
+    std::memcpy(packet->payload_data(), data, len);
   }
 
   return send_packet(std::move(packet));
@@ -3680,8 +3694,23 @@ PendingSendPacket* Http3Server::acquire_send_packet()
   }
 
   std::lock_guard lock(send_storage_mutex_);
-  send_packet_storage_.push_back(std::make_unique<PendingSendPacket>());
-  return send_packet_storage_.back().get();
+  auto packet_slab = std::make_unique<PendingSendPacket[]>(SEND_PACKET_SLAB_SIZE);
+  auto payload_slab =
+      std::make_unique<PendingSendPacketPayload[]>(SEND_PACKET_SLAB_SIZE);
+
+  for (std::size_t index = 0; index < SEND_PACKET_SLAB_SIZE; ++index) {
+    packet_slab[index].payload = payload_slab[index].bytes.data();
+  }
+
+  send_packet_storage_.push_back(std::move(packet_slab));
+  send_packet_payload_storage_.push_back(std::move(payload_slab));
+
+  auto* slab = send_packet_storage_.back().get();
+  for (std::size_t index = 1; index < SEND_PACKET_SLAB_SIZE; ++index) {
+    recycle_send_packet(&slab[index]);
+  }
+
+  return &slab[0];
 }
 
 void Http3Server::recycle_send_packet(PendingSendPacket* packet)
@@ -3773,7 +3802,7 @@ bool Http3Server::try_send_gso_batch()
   std::array<iovec, kMaxUdpGsoSegments> iov{};
   std::size_t total_bytes = 0;
   for (std::size_t index = 0; index < batch_size; ++index) {
-    iov[index].iov_base = batch[index]->payload.data();
+    iov[index].iov_base = batch[index]->payload_data();
     iov[index].iov_len = batch[index]->payload_len;
     total_bytes += batch[index]->payload_len;
   }
