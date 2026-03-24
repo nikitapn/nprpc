@@ -24,7 +24,9 @@ SERVER_LOG="${SERVER_LOG:-$ROOT_DIR/benchmark/http_shootout/.work/tmp/profile-ht
 OUTPUT_PATH="${OUTPUT_PATH:-$ROOT_DIR/perf.txt}"
 
 SERVER_PID=""
+SERVER_LAUNCH_PID=""
 PERF_PID=""
+PERF_NEEDS_CHOWN=0
 
 log() {
   printf '[profile_http3_1mb] %s\n' "$*"
@@ -42,8 +44,22 @@ cleanup() {
   if [[ -n "$PERF_PID" ]] && kill -0 "$PERF_PID" 2>/dev/null; then
     wait "$PERF_PID" 2>/dev/null || true
   fi
+
   if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
-    kill -INT "$SERVER_PID" 2>/dev/null || true
+    local owner_uid=""
+    owner_uid="$(stat -c %u "/proc/$SERVER_PID" 2>/dev/null || true)"
+    if [[ -n "$owner_uid" && "$owner_uid" != "$(id -u)" ]]; then
+      sudo kill -INT "$SERVER_PID" 2>/dev/null || true
+    else
+      kill -INT "$SERVER_PID" 2>/dev/null || true
+    fi
+  fi
+
+  if [[ -n "$SERVER_LAUNCH_PID" ]] && kill -0 "$SERVER_LAUNCH_PID" 2>/dev/null; then
+    wait "$SERVER_LAUNCH_PID" 2>/dev/null || true
+  fi
+
+  if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
     wait "$SERVER_PID" 2>/dev/null || true
   fi
 }
@@ -126,30 +142,77 @@ wait_for_server() {
   return 1
 }
 
+restore_perf_output_ownership() {
+  local target_uid target_gid owner_uid
+  target_uid="$(id -u)"
+  target_gid="$(id -g)"
+
+  for path in "$PERF_DATA" "$PERF_DATA.old"; do
+    if [[ ! -e "$path" ]]; then
+      continue
+    fi
+
+    owner_uid="$(stat -c %u "$path" 2>/dev/null || true)"
+    if [[ -n "$owner_uid" && "$owner_uid" != "$target_uid" ]]; then
+      sudo chown "$target_uid:$target_gid" "$path"
+    fi
+  done
+}
+
 start_server() {
   mkdir -p "$(dirname "$SERVER_LOG")"
+  local -a server_cmd
 
   # Cleanup any existing server processes that might be using the port
   killall -9 benchmark_server npnameserver 2>/dev/null || true
 
+  server_cmd=(
+    env
+    "NPRPC_HTTP_ROOT_DIR=$WWW_DIR"
+    "NPRPC_BENCH_ENABLE_HTTP3=1"
+    "$BUILD_DIR/benchmark/benchmark_server"
+  )
+
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    # log "Refreshing sudo credentials for benchmark_server"
+    # sudo -v
+    server_cmd=(sudo "${server_cmd[@]}")
+  fi
+
   log "Starting benchmark_server"
   (
     cd "$ROOT_DIR"
-    NPRPC_HTTP_ROOT_DIR="$WWW_DIR" \
-    NPRPC_BENCH_ENABLE_HTTP3=1 \
-    exec "$BUILD_DIR/benchmark/benchmark_server"
+    exec "${server_cmd[@]}"
   ) >"$SERVER_LOG" 2>&1 &
-  SERVER_PID=$!
+  SERVER_LAUNCH_PID=$!
 
   wait_for_server
-  log "benchmark_server PID=$SERVER_PID"
+
+  SERVER_PID="$(pgrep -n -f "$BUILD_DIR/benchmark/benchmark_server" || true)"
+  if [[ -z "$SERVER_PID" ]]; then
+    log "Failed to resolve benchmark_server PID; see $SERVER_LOG"
+    return 1
+  fi
+
+  log "benchmark_server PID=$SERVER_PID (launcher PID=$SERVER_LAUNCH_PID)"
 }
 
 record_server() {
   require_cmd perf
 
+  local -a perf_cmd=(perf)
+  local owner_uid=""
+  owner_uid="$(stat -c %u "/proc/$SERVER_PID" 2>/dev/null || true)"
+
+  if [[ -n "$owner_uid" && "$owner_uid" != "$(id -u)" ]]; then
+    perf_cmd=(sudo perf)
+    PERF_NEEDS_CHOWN=1
+  else
+    PERF_NEEDS_CHOWN=0
+  fi
+
   log "Recording perf to $PERF_DATA (event=$PERF_EVENT, call-graph=$PERF_CALL_GRAPH)"
-  perf record \
+  "${perf_cmd[@]}" record \
     -e "$PERF_EVENT" \
     -o "$PERF_DATA" \
     -g \
@@ -183,6 +246,10 @@ profile_http3() {
   run_h2load
   wait "$PERF_PID"
   PERF_PID=""
+
+  if [[ "$PERF_NEEDS_CHOWN" -eq 1 ]]; then
+    restore_perf_output_ownership
+  fi
 
   log "Perf data written to $PERF_DATA"
   log "Inspect with: perf report -i $PERF_DATA --no-children -g graph,0.5,caller"

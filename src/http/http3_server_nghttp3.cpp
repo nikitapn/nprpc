@@ -31,6 +31,10 @@
 
 #if !defined(_WIN32)
 # include <errno.h>
+# if defined(NPRPC_HTTP3_REUSEPORT_BPF_ENABLED)
+#  include <bpf/bpf.h>
+#  include <bpf/libbpf.h>
+# endif
 # include <netinet/udp.h>
 # include <sys/socket.h>
 # include <sys/uio.h>
@@ -83,6 +87,7 @@
 #endif
 
 #define NPRPC_NGTCP2_ENABLE_LOGGING 0
+#define NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY 1
 
 namespace nprpc::impl {
 
@@ -98,6 +103,7 @@ static constexpr size_t H3_ALPN_LEN = sizeof(H3_ALPN) - 1;
 
 // Connection ID length
 static constexpr size_t SCID_LEN = 18;
+static constexpr uint8_t MAX_HTTP3_EMBEDDED_WORKER_ID = 160;
 
 // Maximum UDP payload size (conservative for QUIC)
 static constexpr size_t MAX_UDP_PAYLOAD_SIZE = 1350;
@@ -153,6 +159,11 @@ bool enable_reuse_port(boost::asio::ip::udp::socket& socket,
 }
 #endif
 
+bool can_embed_http3_worker_id(size_t worker_count) noexcept
+{
+  return worker_count > 0 && worker_count - 1 <= MAX_HTTP3_EMBEDDED_WORKER_ID;
+}
+
 } // anonymous namespace
 
 //==============================================================================
@@ -190,6 +201,18 @@ flat_buffer copy_bytes_to_buffer(const uint8_t* data, size_t len)
 void random_bytes(uint8_t* data, size_t len)
 {
   RAND_bytes(data, static_cast<int>(len));
+}
+
+void generate_server_connection_id(ngtcp2_cid* cid,
+                                   size_t cidlen,
+                                   uint8_t worker_id)
+{
+  cid->datalen = cidlen;
+  random_bytes(cid->data, cidlen);
+
+  if (cidlen != 0) {
+    cid->data[0] = worker_id;
+  }
 }
 
 void init_static_secret()
@@ -968,6 +991,16 @@ std::optional<std::pair<uint64_t, size_t>> decode_quic_varint(const uint8_t* dat
 // Http3Server - Main HTTP/3 server using ngtcp2 + nghttp3
 //==============================================================================
 
+#if NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY
+struct Http3ReusePortSanitySnapshot {
+  uint8_t worker_id = 0;
+  uint64_t receive_callbacks = 0;
+  uint64_t received_packets = 0;
+  uint64_t initial_packets = 0;
+  uint64_t established_packets = 0;
+};
+#endif
+
 class Http3Server
 {
 public:
@@ -976,7 +1009,8 @@ public:
   Http3Server(boost::asio::io_context& ioc,
               const std::string& cert_file,
               const std::string& key_file,
-              uint16_t port);
+              uint16_t port,
+              uint8_t worker_id);
   ~Http3Server();
 
   bool start();
@@ -984,6 +1018,7 @@ public:
 
   boost::asio::io_context& io_context() { return ioc_; }
   boost::asio::ip::udp::socket& socket() { return socket_; }
+  uint8_t worker_id() const noexcept { return worker_id_; }
 
   // Send packet to remote endpoint
   int send_packet(const boost::asio::ip::udp::endpoint& remote_ep,
@@ -998,6 +1033,19 @@ public:
                      std::shared_ptr<Http3Connection> conn);
   void dissociate_cid(const ngtcp2_cid* cid);
   void remove_connection(std::shared_ptr<Http3Connection> conn);
+
+#if NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY
+  Http3ReusePortSanitySnapshot reuseport_sanity_snapshot() const noexcept
+  {
+    return {
+        .worker_id = worker_id_,
+        .receive_callbacks = sanity_receive_callbacks_,
+        .received_packets = sanity_received_packets_,
+        .initial_packets = sanity_initial_packets_,
+        .established_packets = sanity_established_packets_,
+    };
+  }
+#endif
 
 private:
   bool allow_new_connection(const boost::asio::ip::udp::endpoint& remote_ep);
@@ -1032,6 +1080,7 @@ private:
   std::string cert_file_;
   std::string key_file_;
   uint16_t port_;
+  uint8_t worker_id_;
 
   boost::asio::ip::udp::socket socket_;
   boost::asio::ip::udp::endpoint local_ep_;  // Local bound address
@@ -1056,6 +1105,13 @@ private:
   std::atomic<bool> send_in_progress_{false};
 #if !defined(_WIN32) && defined(UDP_SEGMENT)
   bool udp_gso_supported_ = true;
+#endif
+
+#if NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY
+  uint64_t sanity_receive_callbacks_ = 0;
+  uint64_t sanity_received_packets_ = 0;
+  uint64_t sanity_initial_packets_ = 0;
+  uint64_t sanity_established_packets_ = 0;
 #endif
 
   std::atomic<bool> running_{false};
@@ -1106,8 +1162,7 @@ Http3Connection::Http3Connection(
   }
 
   // Generate our own source CID
-  scid_.datalen = SCID_LEN;
-  random_bytes(scid_.data, scid_.datalen);
+  generate_server_connection_id(&scid_, SCID_LEN, server_->worker_id());
 
   send_packet_ = server_->acquire_send_packet();
 
@@ -3171,15 +3226,14 @@ int Http3Connection::on_get_new_connection_id(ngtcp2_conn* conn,
                                               size_t cidlen,
                                               void* user_data)
 {
-  random_bytes(cid->data, cidlen);
-  cid->datalen = cidlen;
+  auto h = static_cast<Http3Connection*>(user_data);
+  generate_server_connection_id(cid, cidlen, h->server_->worker_id());
 
   if (ngtcp2_crypto_generate_stateless_reset_token(
           token, g_static_secret.data(), g_static_secret.size(), cid) != 0) {
     return NGTCP2_ERR_CALLBACK_FAILURE;
   }
 
-  auto h = static_cast<Http3Connection*>(user_data);
   h->server_->associate_cid(cid, h->shared_from_this());
 
   return 0;
@@ -3434,14 +3488,140 @@ nghttp3_ssize Http3Connection::http_read_data_cb(nghttp3_conn* conn,
 // Http3Server Implementation
 //==============================================================================
 
+#if !defined(_WIN32) && defined(NPRPC_HTTP3_REUSEPORT_BPF_ENABLED) && \
+    defined(SO_ATTACH_REUSEPORT_EBPF)
+#include "http3_quic_reuseport_bpf.inc"
+
+namespace {
+
+class Http3ReusePortBpfProgram
+{
+public:
+  bool load(size_t worker_count, size_t scid_len)
+  {
+    struct Config {
+      uint32_t worker_count;
+      uint32_t scid_len;
+    } config{static_cast<uint32_t>(worker_count), static_cast<uint32_t>(scid_len)};
+
+    constexpr uint32_t key = 0;
+    bpf_map* config_map = nullptr;
+    bpf_program* program = nullptr;
+    int rc = 0;
+
+    object_.reset(bpf_object__open_mem(nprpc_http3_quic_reuseport_bpf_obj,
+                                       nprpc_http3_quic_reuseport_bpf_obj_len,
+                                       nullptr));
+    if (!object_) {
+      NPRPC_HTTP3_ERROR("Failed to open embedded HTTP/3 reuseport BPF object");
+      return false;
+    }
+
+    rc = bpf_object__load(object_.get());
+    if (rc != 0) {
+      NPRPC_HTTP3_ERROR("Failed to load HTTP/3 reuseport BPF object: {}",
+                        rc);
+      return false;
+    }
+
+    program = bpf_object__find_program_by_name(object_.get(),
+                                               "quic_select_reuseport");
+    if (!program) {
+      NPRPC_HTTP3_ERROR("Failed to locate HTTP/3 reuseport BPF program");
+      return false;
+    }
+
+    prog_fd_ = bpf_program__fd(program);
+    if (prog_fd_ < 0) {
+      NPRPC_HTTP3_ERROR("Failed to acquire HTTP/3 reuseport BPF program fd");
+      return false;
+    }
+
+    config_map = bpf_object__find_map_by_name(object_.get(), "config_map");
+    if (!config_map) {
+      NPRPC_HTTP3_ERROR("Failed to locate HTTP/3 reuseport BPF config map");
+      return false;
+    }
+
+    rc = bpf_map_update_elem(bpf_map__fd(config_map), &key, &config, BPF_ANY);
+    if (rc != 0) {
+      NPRPC_HTTP3_ERROR("Failed to configure HTTP/3 reuseport BPF program: {}",
+                        std::strerror(errno));
+      return false;
+    }
+
+    auto* sockarray = bpf_object__find_map_by_name(object_.get(),
+                                                    "reuseport_array");
+    if (!sockarray) {
+      NPRPC_HTTP3_ERROR("Failed to locate HTTP/3 reuseport BPF sockarray map");
+      return false;
+    }
+
+    sockarray_fd_ = bpf_map__fd(sockarray);
+    if (sockarray_fd_ < 0) {
+      NPRPC_HTTP3_ERROR("Failed to acquire HTTP/3 reuseport BPF sockarray fd");
+      return false;
+    }
+
+    return true;
+  }
+
+  bool register_socket(uint32_t index, int socket_fd)
+  {
+    if (sockarray_fd_ < 0) {
+      return false;
+    }
+
+    uint64_t fd_val = static_cast<uint64_t>(socket_fd);
+    int rc = bpf_map_update_elem(sockarray_fd_, &index, &fd_val, BPF_ANY);
+    if (rc != 0) {
+      NPRPC_HTTP3_ERROR(
+          "Failed to register socket fd {} at index {} in reuseport BPF: {}",
+          socket_fd, index, std::strerror(errno));
+      return false;
+    }
+    return true;
+  }
+
+  bool attach(int socket_fd) const
+  {
+    if (prog_fd_ < 0) {
+      return false;
+    }
+
+    if (::setsockopt(socket_fd, SOL_SOCKET, SO_ATTACH_REUSEPORT_EBPF, &prog_fd_,
+                     sizeof(prog_fd_)) != 0) {
+      NPRPC_HTTP3_ERROR("Failed to attach HTTP/3 reuseport BPF program: {}",
+                        std::strerror(errno));
+      return false;
+    }
+
+    return true;
+  }
+
+private:
+  struct bpf_object_deleter {
+    void operator()(bpf_object* object) const { bpf_object__close(object); }
+  };
+
+  std::unique_ptr<bpf_object, bpf_object_deleter> object_;
+  int prog_fd_ = -1;
+  int sockarray_fd_ = -1;
+};
+
+} // namespace
+#endif
+
 Http3Server::Http3Server(boost::asio::io_context& ioc,
                          const std::string& cert_file,
                          const std::string& key_file,
-                         uint16_t port)
+                         uint16_t port,
+                         uint8_t worker_id)
     : ioc_(ioc)
     , cert_file_(cert_file)
     , key_file_(key_file)
     , port_(port)
+    , worker_id_(worker_id)
     , socket_(ioc)
 {
 }
@@ -4083,6 +4263,10 @@ void Http3Server::do_receive()
       boost::asio::buffer(recv_buf_), remote_ep_,
       [this](boost::system::error_code ec, std::size_t bytes_recvd) {
         if (!ec && bytes_recvd > 0) {
+#if NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY
+          ++sanity_receive_callbacks_;
+          ++sanity_received_packets_;
+#endif
           handle_packet(remote_ep_, recv_buf_.data(), bytes_recvd);
         }
 
@@ -4115,6 +4299,9 @@ void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
   auto conn = find_connection(&dcid);
 
   if (conn) {
+#if NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY
+    ++sanity_established_packets_;
+#endif
     // Existing connection - feed data
     ngtcp2_pkt_info pi{};
     conn->enqueue_packet(copy_bytes_to_buffer(data, len), pi);
@@ -4138,6 +4325,10 @@ void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
   if (hd.type != NGTCP2_PKT_INITIAL) {
     return;
   }
+
+#if NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY
+  ++sanity_initial_packets_;
+#endif
 
   // Validate QUIC version
   if (!ngtcp2_is_supported_version(hd.version)) {
@@ -4288,20 +4479,57 @@ public:
              const std::string& key_file,
              uint16_t port)
   {
-    const auto worker_count = effective_http3_worker_count();
+    const auto worker_count = 6; //effective_http3_worker_count();
+
+    if (!can_embed_http3_worker_id(worker_count)) {
+      NPRPC_HTTP3_ERROR(
+          "HTTP/3 worker_count={} exceeds embedded worker ID range 0..{}",
+          worker_count, MAX_HTTP3_EMBEDDED_WORKER_ID);
+      return false;
+    }
+
     workers_.reserve(worker_count);
 
     for (size_t index = 0; index < worker_count; ++index) {
-      auto worker = std::make_unique<Worker>(cert_file, key_file, port);
+      auto worker =
+          std::make_unique<Worker>(cert_file, key_file, port,
+                                   static_cast<uint8_t>(index));
       if (!worker->server->start()) {
         NPRPC_HTTP3_ERROR("Failed to start HTTP/3 worker {}/{}", index + 1,
                           worker_count);
         stop();
         return false;
       }
-
-      worker->thread = std::thread([ioc = &worker->ioc] { ioc->run(); });
       workers_.push_back(std::move(worker));
+    }
+
+#if !defined(_WIN32) && defined(NPRPC_HTTP3_REUSEPORT_BPF_ENABLED) && \
+    defined(SO_ATTACH_REUSEPORT_EBPF)
+    if (worker_count > 1) {
+      reuseport_bpf_ = std::make_unique<Http3ReusePortBpfProgram>();
+      if (!reuseport_bpf_->load(worker_count, SCID_LEN)) {
+        stop();
+        return false;
+      }
+
+      for (size_t i = 0; i < worker_count; ++i) {
+        int fd = workers_[i]->server->socket().native_handle();
+        if (!reuseport_bpf_->register_socket(static_cast<uint32_t>(i), fd)) {
+          stop();
+          return false;
+        }
+      }
+
+      if (!reuseport_bpf_->attach(
+              workers_.front()->server->socket().native_handle())) {
+        stop();
+        return false;
+      }
+    }
+#endif
+
+    for (auto& worker : workers_) {
+      worker->thread = std::thread([ioc = &worker->ioc] { ioc->run(); });
     }
 
     NPRPC_LOG_INFO("[HTTP/3] Started {} dedicated worker(s) on UDP port {}",
@@ -4328,16 +4556,91 @@ public:
       }
     }
 
+#if NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY
+    log_reuseport_sanity_report();
+#endif
+
     workers_.clear();
+#if !defined(_WIN32) && defined(NPRPC_HTTP3_REUSEPORT_BPF_ENABLED) && \
+  defined(SO_ATTACH_REUSEPORT_EBPF)
+    reuseport_bpf_.reset();
+#endif
   }
 
 private:
+#if NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY
+  void log_reuseport_sanity_report() const
+  {
+    if (workers_.empty()) {
+      return;
+    }
+
+    std::vector<Http3ReusePortSanitySnapshot> snapshots;
+    snapshots.reserve(workers_.size());
+
+    uint64_t total_receive_callbacks = 0;
+    uint64_t total_initial_packets = 0;
+    uint64_t max_receive_callbacks = 0;
+    uint64_t min_receive_callbacks = std::numeric_limits<uint64_t>::max();
+
+    for (const auto& worker : workers_) {
+      auto snapshot = worker->server->reuseport_sanity_snapshot();
+      total_receive_callbacks += snapshot.receive_callbacks;
+      total_initial_packets += snapshot.initial_packets;
+      max_receive_callbacks =
+          std::max(max_receive_callbacks, snapshot.receive_callbacks);
+      min_receive_callbacks =
+          std::min(min_receive_callbacks, snapshot.receive_callbacks);
+      snapshots.push_back(snapshot);
+    }
+
+    NPRPC_LOG_ERROR(
+        "[HTTP/3][SANITY] reuseport totals receive_callbacks={} initial_packets={} workers={}",
+        total_receive_callbacks, total_initial_packets, snapshots.size());
+
+    for (const auto& snapshot : snapshots) {
+      const double receive_share =
+          total_receive_callbacks == 0
+              ? 0.0
+              : (100.0 * static_cast<double>(snapshot.receive_callbacks) /
+                 static_cast<double>(total_receive_callbacks));
+      const double initial_share =
+          total_initial_packets == 0
+              ? 0.0
+              : (100.0 * static_cast<double>(snapshot.initial_packets) /
+                 static_cast<double>(total_initial_packets));
+
+      NPRPC_LOG_ERROR(
+          "[HTTP/3][SANITY] worker={} receive_callbacks={} ({:.1f}%) received_packets={} initial_packets={} ({:.1f}%) established_packets={}",
+          snapshot.worker_id, snapshot.receive_callbacks, receive_share,
+          snapshot.received_packets, snapshot.initial_packets, initial_share,
+          snapshot.established_packets);
+    }
+
+    if (snapshots.size() > 1 && total_receive_callbacks >= snapshots.size()) {
+      const double imbalance_ratio =
+          min_receive_callbacks == 0
+              ? std::numeric_limits<double>::infinity()
+              : static_cast<double>(max_receive_callbacks) /
+                    static_cast<double>(min_receive_callbacks);
+
+      if (min_receive_callbacks == 0 || imbalance_ratio > 2.0) {
+        NPRPC_LOG_ERROR(
+            "[HTTP/3][SANITY] suspicious receive imbalance detected: min_callbacks={} max_callbacks={} ratio={:.2f}",
+            min_receive_callbacks, max_receive_callbacks, imbalance_ratio);
+      }
+    }
+  }
+#endif
+
   struct Worker {
     explicit Worker(const std::string& cert_file,
                     const std::string& key_file,
-                    uint16_t port)
+                    uint16_t port,
+                    uint8_t worker_id)
         : work_guard(boost::asio::make_work_guard(ioc))
-        , server(std::make_unique<Http3Server>(ioc, cert_file, key_file, port))
+        , server(std::make_unique<Http3Server>(ioc, cert_file, key_file, port,
+                                               worker_id))
     {
     }
 
@@ -4349,6 +4652,10 @@ private:
   };
 
   std::vector<std::unique_ptr<Worker>> workers_;
+#if !defined(_WIN32) && defined(NPRPC_HTTP3_REUSEPORT_BPF_ENABLED) && \
+    defined(SO_ATTACH_REUSEPORT_EBPF)
+  std::unique_ptr<Http3ReusePortBpfProgram> reuseport_bpf_;
+#endif
 };
 
 //==============================================================================

@@ -155,6 +155,52 @@ if(NPRPC_ENABLE_HTTP3)
   set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
   set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
   add_subdirectory(third_party/nghttp3 EXCLUDE_FROM_ALL)
+
+  if(UNIX AND NOT WIN32)
+    pkg_check_modules(libbpf QUIET IMPORTED_TARGET libbpf)
+    find_program(CLANG_EXECUTABLE NAMES clang)
+    find_program(XXD_EXECUTABLE NAMES xxd)
+
+    if(TARGET PkgConfig::libbpf AND CLANG_EXECUTABLE AND XXD_EXECUTABLE)
+      set(NPRPC_HTTP3_REUSEPORT_BPF_OBJECT
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/http3_quic_reuseport.bpf.o)
+      set(NPRPC_HTTP3_REUSEPORT_BPF_HEADER
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/http3_quic_reuseport_bpf.inc)
+
+      add_custom_command(
+        OUTPUT
+          ${NPRPC_HTTP3_REUSEPORT_BPF_OBJECT}
+          ${NPRPC_HTTP3_REUSEPORT_BPF_HEADER}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/generated
+        COMMAND ${CLANG_EXECUTABLE}
+          -target bpf
+          -O2
+          -g
+          -c
+          ${CMAKE_CURRENT_SOURCE_DIR}/src/http/http3_quic_reuseport.bpf.c
+          -o
+          ${NPRPC_HTTP3_REUSEPORT_BPF_OBJECT}
+        COMMAND ${XXD_EXECUTABLE}
+          -i
+          -n nprpc_http3_quic_reuseport_bpf_obj
+          ${NPRPC_HTTP3_REUSEPORT_BPF_OBJECT}
+          ${NPRPC_HTTP3_REUSEPORT_BPF_HEADER}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/http/http3_quic_reuseport.bpf.c
+        COMMENT "Compiling HTTP/3 QUIC reuseport eBPF program"
+        VERBATIM
+      )
+
+      add_custom_target(nprpc_http3_reuseport_bpf_gen
+        DEPENDS
+          ${NPRPC_HTTP3_REUSEPORT_BPF_OBJECT}
+          ${NPRPC_HTTP3_REUSEPORT_BPF_HEADER}
+      )
+
+      set(NPRPC_HTTP3_REUSEPORT_BPF_ENABLED ON)
+    else()
+      message(WARNING "HTTP/3 reuseport eBPF support disabled: clang, xxd, or libbpf not found")
+    endif()
+  endif()
 endif()
 
 # Add subdirectories
@@ -325,6 +371,7 @@ target_include_directories(nprpc
     $<INSTALL_INTERFACE:include>
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
 )
 
 # Link libraries
@@ -364,6 +411,12 @@ if(NPRPC_ENABLE_HTTP3)
     ${CMAKE_CURRENT_BINARY_DIR}/third_party/nghttp3/lib/includes
   )
   target_compile_definitions(nprpc PRIVATE NPRPC_HTTP3_BACKEND_NGHTTP3)
+
+  if(NPRPC_HTTP3_REUSEPORT_BPF_ENABLED)
+    add_dependencies(nprpc nprpc_http3_reuseport_bpf_gen)
+    target_link_libraries(nprpc PRIVATE PkgConfig::libbpf)
+    target_compile_definitions(nprpc PRIVATE NPRPC_HTTP3_REUSEPORT_BPF_ENABLED)
+  endif()
 endif()
 
 # Platform-specific settings
