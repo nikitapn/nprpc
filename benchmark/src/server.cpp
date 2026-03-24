@@ -116,7 +116,7 @@ public:
                     "/home/nikita/projects/nprpc/certs/out/localhost.crt")
                 .build();
 
-      rpc->start_thread_pool(16);
+      rpc->start_thread_pool(1);
 
       // Use the new PoaBuilder API
       poa = rpc->create_poa()

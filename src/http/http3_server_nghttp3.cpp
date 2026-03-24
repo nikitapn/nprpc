@@ -1006,6 +1006,7 @@ private:
   void recycle_send_packet(PendingSendPacket* packet);
   void drain_send_inbox();
   bool try_send_gso_batch();
+  void send_batch(PendingSendPacket** packets, size_t count);
   void on_connection_accepted(const boost::asio::ip::udp::endpoint& remote_ep);
   void do_send();
   void do_receive();
@@ -1422,12 +1423,15 @@ int Http3Connection::on_write()
 
   ngtcp2_path_storage_zero(&ps);
 
-  // Write loop
-
   // Use a single timestamp for all packets in this batch
   // vDSO is also expensive, so we want to amortize it over the whole batch if possible
   auto ts = timestamp_ns();
 
+  // Local batch to coalesce packets for a single GSO sendmsg
+  std::array<PendingSendPacket*, MAX_PKTS_BURST> batch{};
+  size_t batch_count = 0;
+
+  // Write loop
   for (;;) {
     if (!send_packet_) {
       send_packet_ = server_->acquire_send_packet();
@@ -1606,11 +1610,20 @@ int Http3Connection::on_write()
     send_packet_->remote_ep = remote_ep_;
     send_packet_->payload_len = static_cast<size_t>(nwrite);
     send_packet_->gso_segment_size = static_cast<std::uint16_t>(nwrite);
-    server_->send_packet(send_packet_);
+    batch[batch_count++] = send_packet_;
     send_packet_ = nullptr;
+
+    if (batch_count >= MAX_PKTS_BURST) {
+      server_->send_batch(batch.data(), batch_count);
+      batch_count = 0;
+    }
   }
 
-  ngtcp2_conn_update_pkt_tx_time(conn_, timestamp_ns());
+  if (batch_count > 0) {
+    server_->send_batch(batch.data(), batch_count);
+  }
+
+  ngtcp2_conn_update_pkt_tx_time(conn_, ts);
   schedule_timer();
 
   return 0;
@@ -3867,6 +3880,95 @@ bool Http3Server::try_send_gso_batch()
   return true;
 #else
   return false;
+#endif
+}
+
+void Http3Server::send_batch(PendingSendPacket** packets, size_t count)
+{
+  if (!count || !running_.load(std::memory_order_acquire)) {
+    return;
+  }
+
+#if !defined(_WIN32) && defined(UDP_SEGMENT)
+  if (udp_gso_supported_ && count >= 2) {
+    auto* first = packets[0];
+    const auto segment_size = first->gso_segment_size;
+
+    bool gso_ok = true;
+    for (size_t i = 1; i < count; ++i) {
+      if (packets[i]->gso_segment_size != segment_size ||
+          packets[i]->remote_ep != first->remote_ep) {
+        gso_ok = false;
+        break;
+      }
+    }
+
+    if (gso_ok) {
+      std::array<iovec, MAX_PKTS_BURST> iov{};
+      size_t total_bytes = 0;
+      for (size_t i = 0; i < count; ++i) {
+        iov[i].iov_base = packets[i]->payload_data();
+        iov[i].iov_len = packets[i]->payload_len;
+        total_bytes += packets[i]->payload_len;
+      }
+
+      alignas(cmsghdr) unsigned char control[CMSG_SPACE(sizeof(std::uint16_t))]{};
+      msghdr msg{};
+      msg.msg_name = first->remote_ep.data();
+      msg.msg_namelen = static_cast<socklen_t>(first->remote_ep.size());
+      msg.msg_iov = iov.data();
+      msg.msg_iovlen = count;
+      msg.msg_control = control;
+      msg.msg_controllen = sizeof(control);
+
+      auto* cmsg = CMSG_FIRSTHDR(&msg);
+      cmsg->cmsg_level = IPPROTO_UDP;
+      cmsg->cmsg_type = UDP_SEGMENT;
+      cmsg->cmsg_len = CMSG_LEN(sizeof(std::uint16_t));
+      std::memcpy(CMSG_DATA(cmsg), &segment_size, sizeof(segment_size));
+
+      const auto sent = ::sendmsg(socket_.native_handle(), &msg, MSG_DONTWAIT);
+      if (sent >= 0 && static_cast<size_t>(sent) == total_bytes) {
+        for (size_t i = 0; i < count; ++i) {
+          recycle_send_packet(packets[i]);
+        }
+        return;
+      }
+
+      const auto err = errno;
+      if (err == EINVAL || err == EOPNOTSUPP || err == ENOPROTOOPT ||
+          err == ENOTSUP) {
+        udp_gso_supported_ = false;
+        NPRPC_HTTP3_TRACE("UDP GSO disabled after send_batch failure: {}",
+                          std::strerror(err));
+      }
+      // Fall through to per-packet send
+    }
+  }
+#endif
+
+#if !defined(_WIN32)
+  for (size_t i = 0; i < count; ++i) {
+    auto* p = packets[i];
+    const auto sent = ::sendto(
+        socket_.native_handle(),
+        p->payload_data(), p->payload_len,
+        MSG_DONTWAIT,
+        p->remote_ep.data(),
+        static_cast<socklen_t>(p->remote_ep.size()));
+    if (sent >= 0) {
+      recycle_send_packet(p);
+    } else {
+      for (size_t j = i; j < count; ++j) {
+        send_packet(packets[j]);
+      }
+      return;
+    }
+  }
+#else
+  for (size_t i = 0; i < count; ++i) {
+    send_packet(packets[i]);
+  }
 #endif
 }
 

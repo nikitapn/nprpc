@@ -64,10 +64,11 @@ namespace nprpc::impl {
 namespace {
 size_t default_stream_pool_size() noexcept
 {
-  const auto hw = std::thread::hardware_concurrency();
-  if (hw == 0)
-    return 1;
-  return std::min<size_t>(4, hw);
+  return 1;
+  // const auto hw = std::thread::hardware_concurrency();
+  // if (hw == 0)
+  //   return 1;
+  // return std::min<size_t>(4, hw);
 }
 } // namespace
 

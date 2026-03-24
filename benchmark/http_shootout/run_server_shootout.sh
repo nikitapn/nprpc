@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/.build_relwith_debinfo}"
+BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/.build_release}"
 RESULTS_DIR="${RESULTS_DIR:-$ROOT_DIR/benchmark/http_shootout/results}"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/benchmark/http_shootout/.work}"
 WWW_DIR="$WORK_DIR/www"
@@ -345,21 +345,21 @@ run_suite() {
   start_nginx
   start_caddy
 
-  run_oha "nprpc-http1-1kb" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/1kb.bin"
-  run_oha "nginx-http1-1kb" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/1kb.bin"
-  run_oha "caddy-http1-1kb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1kb.bin"
+  # run_oha "nprpc-http1-1kb" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/1kb.bin"
+  # run_oha "nginx-http1-1kb" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/1kb.bin"
+  # run_oha "caddy-http1-1kb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1kb.bin"
 
-  run_oha "nprpc-http1-1mb" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/1mb.bin"
-  run_oha "nginx-http1-1mb" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/1mb.bin"
-  run_oha "caddy-http1-1mb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1mb.bin"
+  # run_oha "nprpc-http1-1mb" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/1mb.bin"
+  # run_oha "nginx-http1-1mb" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/1mb.bin"
+  # run_oha "caddy-http1-1mb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1mb.bin"
 
-  run_h2load "nprpc-http3-1kb" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/1kb.bin"
-  if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then
-    run_h2load "nginx-http3-1kb" "$BENCH_HOST" "$NGINX_HTTPS_PORT" "/1kb.bin"
-  else
-    log "Skipping nginx HTTP/3 benchmark (http_v3_module not available in current mode)"
-  fi
-  run_h2load "caddy-http3-1kb" "$BENCH_HOST" "$CADDY_HTTPS_PORT" "/1kb.bin"
+  # run_h2load "nprpc-http3-1kb" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/1kb.bin"
+  # if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then
+  #   run_h2load "nginx-http3-1kb" "$BENCH_HOST" "$NGINX_HTTPS_PORT" "/1kb.bin"
+  # else
+  #   log "Skipping nginx HTTP/3 benchmark (http_v3_module not available in current mode)"
+  # fi
+  # run_h2load "caddy-http3-1kb" "$BENCH_HOST" "$CADDY_HTTPS_PORT" "/1kb.bin"
 
   run_h2load "nprpc-http3-1mb" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/1mb.bin"
   if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then
