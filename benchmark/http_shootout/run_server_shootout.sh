@@ -9,7 +9,9 @@ WORK_DIR="${WORK_DIR:-$ROOT_DIR/benchmark/http_shootout/.work}"
 WWW_DIR="$WORK_DIR/www"
 TMP_DIR="$WORK_DIR/tmp"
 LOCAL_H2LOAD_BIN="$ROOT_DIR/third_party/nghttp2/build-h2load/src/h2load"
+SKIP_HTTP1="${SKIP_HTTP1:-0}"
 
+NPRPC_DO_NOT_START_SERVER="${NPRPC_DO_NOT_START_SERVER:-0}"
 NPRPC_HTTP_PORT="${NPRPC_HTTP_PORT:-22223}"
 NPRPC_QUIC_PORT="${NPRPC_QUIC_PORT:-22225}"
 NGINX_HTTP_PORT="${NGINX_HTTP_PORT:-28080}"
@@ -46,6 +48,35 @@ require_cmd() {
   }
 }
 
+ensure_nprpc_bpf_capabilities() {
+  local binary="$BUILD_DIR/benchmark/benchmark_server"
+  local current_caps=""
+
+  require_cmd getcap
+  require_cmd setcap
+
+  if [[ ! -x "$binary" ]]; then
+    log "benchmark_server not found or not executable: $binary"
+    exit 1
+  fi
+
+  current_caps="$(getcap "$binary" 2>/dev/null || true)"
+  if [[ "$current_caps" == *"cap_net_admin"* && "$current_caps" == *"cap_bpf"* ]]; then
+    return 0
+  fi
+
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    setcap cap_net_admin,cap_bpf+ep "$binary"
+  else
+    # sudo -v || {
+    #   log "Failed to obtain sudo permissions; cannot grant BPF capabilities to benchmark_server"
+    #   exit 1
+    # }
+    log "Granting cap_net_admin,cap_bpf to benchmark_server for HTTP/3 reuseport BPF"
+    sudo setcap cap_net_admin,cap_bpf+ep "$binary"
+  fi
+}
+
 cleanup() {
   set +e
   if [[ -n "$NPRPC_PID" ]] && kill -0 "$NPRPC_PID" 2>/dev/null; then
@@ -69,6 +100,21 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+wait_for_nprpc() {
+  require_cmd curl
+
+  local url="https://$BENCH_HOST:$NPRPC_HTTP_PORT/1kb.bin"
+  for _ in $(seq 1 50); do
+    if curl -ksS --http1.1 "$url" -o /dev/null >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  log "NPRPC benchmark server did not become ready; see $TMP_DIR/nprpc_server.log"
+  return 1
+}
 
 prepare_assets() {
   log "Preparing shared static assets"
@@ -118,15 +164,41 @@ nginx_supports_http3() {
 }
 
 start_nprpc() {
+  if [[ "$NPRPC_DO_NOT_START_SERVER" == "1" ]]; then
+    SERVER_PID="$(pgrep -n -f benchmark_server || true)"
+    if [ -n "$SERVER_PID" ]; then
+      log "NPRPC benchmark server is already running with PID $SERVER_PID; skipping startup"
+      return
+    else
+      log "NPRPC_DO_NOT_START_SERVER=1, but no running server found; cannot proceed"
+      exit 1
+    fi
+  fi
+
+  ensure_nprpc_bpf_capabilities
+
   log "Starting NPRPC benchmark server"
+  local -a server_cmd
+
+  server_cmd=(
+    env
+    "NPRPC_HTTP_ROOT_DIR=$WWW_DIR"
+    "NPRPC_BENCH_ENABLE_HTTP3=1"
+    "$BUILD_DIR/benchmark/benchmark_server"
+  )
+
+  killall -9 npnameserver benchmark_server 2>/dev/null || true
+  sleep 0.1
+
   (
     cd "$ROOT_DIR"
-    NPRPC_HTTP_ROOT_DIR="$WWW_DIR" \
-    NPRPC_BENCH_ENABLE_HTTP3=1 \
-    exec "$BUILD_DIR/benchmark/benchmark_server"
+    exec "${server_cmd[@]}"
   ) >"$TMP_DIR/nprpc_server.log" 2>&1 &
   NPRPC_PID=$!
-  sleep 2
+
+  wait_for_nprpc
+
+  log "NPRPC benchmark_server PID=$NPRPC_PID"
 }
 
 generate_nginx_conf() {
@@ -141,6 +213,7 @@ generate_nginx_conf() {
   fi
   cat > "$TMP_DIR/nginx.conf" <<EOF
 worker_processes auto;
+worker_cpu_affinity auto;
 worker_rlimit_nofile 65535;
 pid $TMP_DIR/nginx.pid;
 
@@ -345,21 +418,25 @@ run_suite() {
   start_nginx
   start_caddy
 
-  # run_oha "nprpc-http1-1kb" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/1kb.bin"
-  # run_oha "nginx-http1-1kb" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/1kb.bin"
-  # run_oha "caddy-http1-1kb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1kb.bin"
+  if [[ "$SKIP_HTTP1" != "1" ]]; then
+    run_oha "nprpc-http1-1kb" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/1kb.bin"
+    run_oha "nginx-http1-1kb" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/1kb.bin"
+    run_oha "caddy-http1-1kb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1kb.bin"
 
-  # run_oha "nprpc-http1-1mb" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/1mb.bin"
-  # run_oha "nginx-http1-1mb" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/1mb.bin"
-  # run_oha "caddy-http1-1mb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1mb.bin"
+    run_oha "nprpc-http1-1mb" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/1mb.bin"
+    run_oha "nginx-http1-1mb" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/1mb.bin"
+    run_oha "caddy-http1-1mb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1mb.bin"
+  else
+    log "Skipping HTTP/1.1 benchmarks as SKIP_HTTP1=1"
+  fi
 
-  # run_h2load "nprpc-http3-1kb" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/1kb.bin"
-  # if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then
-  #   run_h2load "nginx-http3-1kb" "$BENCH_HOST" "$NGINX_HTTPS_PORT" "/1kb.bin"
-  # else
-  #   log "Skipping nginx HTTP/3 benchmark (http_v3_module not available in current mode)"
-  # fi
-  # run_h2load "caddy-http3-1kb" "$BENCH_HOST" "$CADDY_HTTPS_PORT" "/1kb.bin"
+  run_h2load "nprpc-http3-1kb" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/1kb.bin"
+  if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then
+    run_h2load "nginx-http3-1kb" "$BENCH_HOST" "$NGINX_HTTPS_PORT" "/1kb.bin"
+  else
+    log "Skipping nginx HTTP/3 benchmark (http_v3_module not available in current mode)"
+  fi
+  run_h2load "caddy-http3-1kb" "$BENCH_HOST" "$CADDY_HTTPS_PORT" "/1kb.bin"
 
   run_h2load "nprpc-http3-1mb" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/1mb.bin"
   if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then

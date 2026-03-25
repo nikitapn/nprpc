@@ -1,4 +1,4 @@
-import { spawn, ChildProcess, execSync } from 'child_process';
+import { spawn, spawnSync, ChildProcess, execSync } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 
@@ -15,6 +15,32 @@ function killProcessByName(processName: string): void {
     } catch (error) {
         // No process found or already terminated - this is fine
         console.log(`No process found for: ${processName}`);
+    }
+}
+
+function ensureNprpcBpfCapabilities(binaryPath: string): void {
+    const getcapResult = spawnSync('getcap', [binaryPath], { encoding: 'utf8' });
+    if (getcapResult.error) {
+        throw getcapResult.error;
+    }
+
+    const currentCaps = getcapResult.stdout ?? '';
+    if (currentCaps.includes('cap_net_admin') && currentCaps.includes('cap_bpf')) {
+        return;
+    }
+
+    const sudoCheck = spawnSync('sudo', ['-v'], { stdio: 'inherit' });
+    if (sudoCheck.status !== 0) {
+        throw new Error('Failed to obtain sudo permissions for setcap');
+    }
+
+    const setcapResult = spawnSync(
+        'sudo',
+        ['setcap', 'cap_net_admin,cap_bpf+ep', binaryPath],
+        { stdio: 'inherit' },
+    );
+    if (setcapResult.status !== 0) {
+        throw new Error(`Failed to grant BPF capabilities to ${binaryPath}`);
     }
 }
 
@@ -42,6 +68,7 @@ export class ServerManager {
             if (!fs.existsSync(path))
                 continue;
             try {
+                ensureNprpcBpfCapabilities(path);
                 this.serverProcess = spawn(path, [], {
                     stdio: ['pipe', outFile, errFile],
                     detached: false

@@ -220,6 +220,40 @@ SCRIPT_DIR=\"$(cd \"$(dirname \"\${BASH_SOURCE[0]}\")\" && pwd)\"
 SERVER=\"\${SCRIPT_DIR}/nprpc_server_test\"
 TEST_SCRIPT=\"\${SCRIPT_DIR}/test_http3_rpc.sh\"
 
+  ensure_nprpc_bpf_capabilities() {
+    local binary=\"\${1:?binary path is required}\"
+    local current_caps=\"\"
+
+    command -v getcap >/dev/null 2>&1 || {
+      echo \"Required command not found: getcap\" >&2
+      exit 1
+    }
+    command -v setcap >/dev/null 2>&1 || {
+      echo \"Required command not found: setcap\" >&2
+      exit 1
+    }
+
+    if [[ ! -x \"\$binary\" ]]; then
+      echo \"nprpc_server_test not found or not executable: \$binary\" >&2
+      exit 1
+    fi
+
+    current_caps=\"$(getcap \"\$binary\" 2>/dev/null || true)\"
+    if [[ \"\$current_caps\" == *\"cap_net_admin\"* && \"\$current_caps\" == *\"cap_bpf\"* ]]; then
+      return 0
+    fi
+
+    if [[ \${EUID:-$(id -u)} -eq 0 ]]; then
+      setcap cap_net_admin,cap_bpf+ep \"\$binary\"
+    else
+      # sudo -v || {
+      #   echo \"Failed to obtain sudo permissions; cannot grant BPF capabilities to nprpc_server_test\" >&2
+      #   exit 1
+      # }
+      sudo setcap cap_net_admin,cap_bpf+ep \"\$binary\"
+    fi
+  }
+
 cleanup() {
     # Kill server and nameserver processes
     kill \$SERVER_PID 2>/dev/null
@@ -232,6 +266,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Start server in background
+ensure_nprpc_bpf_capabilities \"\$SERVER\"
 \"\$SERVER\" &
 SERVER_PID=\$!
 

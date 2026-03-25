@@ -73,6 +73,33 @@ def _env_build_dir() -> str:
     return ".build_relwith_debinfo"
 
 
+def ensure_nprpc_bpf_capabilities(binary: Path) -> None:
+    if not binary.exists():
+        return
+
+    getcap = shutil.which("getcap")
+    setcap = shutil.which("setcap")
+    if not getcap or not setcap:
+        raise RuntimeError("getcap/setcap is required to grant HTTP/3 reuseport BPF capabilities")
+
+    current_caps = subprocess.run(
+        [getcap, str(binary)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ).stdout
+
+    if "cap_net_admin" in current_caps and "cap_bpf" in current_caps:
+        return
+
+    if os.geteuid() == 0:
+        subprocess.run([setcap, "cap_net_admin,cap_bpf+ep", str(binary)], check=True)
+        return
+
+    subprocess.run(["sudo", "-v"], check=True)
+    subprocess.run(["sudo", setcap, "cap_net_admin,cap_bpf+ep", str(binary)], check=True)
+
+
 @dataclass
 class Result:
     stage: str
@@ -161,6 +188,7 @@ class Runner:
         # Kill leftover helper processes from previous runs
         subprocess.run(["pkill", "-9", "npnameserver"], capture_output=True)
         subprocess.run(["pkill", "-9", "nprpc_server_test"], capture_output=True)
+        ensure_nprpc_bpf_capabilities(self.build_dir / "test" / "nprpc_server_test")
 
         cmd = ["ctest", "--test-dir", str(ctest_dir), "--output-on-failure"]
         if ctest_filter:
@@ -183,6 +211,7 @@ class Runner:
         # Kill leftover processes
         subprocess.run(["killall", "-9", "nprpc_server_test", "npnameserver"],
                        capture_output=True)
+        ensure_nprpc_bpf_capabilities(self.build_dir / "test" / "nprpc_server_test")
 
         cmd = ["npm", "run", "build"]
         r_build = self._stage("JS build (tsc)", cmd, cwd=js_dir, timeout=120)

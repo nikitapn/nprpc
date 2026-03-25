@@ -87,7 +87,7 @@
 #endif
 
 #define NPRPC_NGTCP2_ENABLE_LOGGING 0
-#define NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY 1
+#define NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY 0
 
 namespace nprpc::impl {
 

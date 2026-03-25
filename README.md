@@ -4,7 +4,7 @@ NPRPC is a high-performance, multi-transport RPC framework for distributed syste
 
 ## Key Features
 
-- **Multiple transports** — WebSocket, WSS, HTTP, HTTP/3, TCP, Shared Memory, QUIC, WebTransport
+- **Multiple transports** — WebSocket (WS/WSS), HTTP/HTTPS, HTTP/3, TCP, Shared Memory, QUIC, WebTransport
 - **Streaming RPC** — server (`stream<T>`), client (`client_stream<T>`), and bidi (`bidi_stream<In,Out>`) streams with C++20 coroutines
 - **Type-safe IDL** — `.npidl` → C++/TypeScript/Swift stubs with `npidl`
 - **Cross-language** — seamless C++ ↔ TypeScript/JavaScript ↔ Swift interop
@@ -18,15 +18,13 @@ NPRPC is a high-performance, multi-transport RPC framework for distributed syste
 
 | Transport | Use Case | Notes |
 |-----------|----------|-------|
-| **TCP** | Native IPC, microservices | Lowest overhead, no browser support; optional epoll/io_uring backend |
-| **WebSocket (WS)** | Real-time, bidirectional | Persistent connection, streams supported |
-| **WebSocket (WSS)** | Secure real-time | Encrypted WS |
-| **HTTP** | Stateless web APIs | Browser-compatible, SSR-capable |
-| **HTTPS** | Secure web APIs | Encrypted HTTP |
+| **TCP** | Native IPC, microservices | Lowest overhead, no browser support; optional io_uring backend (experimental) |
+| **WebSocket** | Real-time, bidirectional | Persistent connection, streams supported; TLS via WSS |
+| **HTTP** | Stateless web APIs | Browser-compatible, SSR-capable; TLS via HTTPS |
 | **HTTP/3** | Modern web | QUIC-based, SSR-capable; requires `-DNPRPC_ENABLE_HTTP3=ON` |
 | **WebTransport** | Browser streaming | Multiplexed streams over HTTP/3; native stream mapping for `stream<T>` |
-| **QUIC** | Native next-gen | Multiplexed, encrypted, ~43k calls/s; requires `-DNPRPC_ENABLE_QUIC=ON` |
-| **Shared Memory** | Same-machine IPC | Zero-copy, 8× memory efficiency vs TCP |
+| **QUIC** | Native next-gen | Multiplexed, encrypted; requires `-DNPRPC_ENABLE_QUIC=ON` |
+| **Shared Memory** | Same-machine IPC | Zero-copy in some cases; extremely low latency |
 
 ## Quick Start
 
@@ -280,6 +278,33 @@ poa->activate_object(&obj, nprpc::ObjectActivationFlags::wss);
 // TypeScript client automatically uses wss:// when served over HTTPS
 const rpc = await NPRPC.init();
 ```
+
+### HTTP/3 Launch Requirements on Linux
+
+When HTTP/3 is enabled with multiple workers, NPRPC uses an eBPF `SO_REUSEPORT`
+selector with a reuseport sockarray to keep QUIC packets pinned to the correct
+worker. On Linux this is not an unprivileged operation.
+
+If your application links against `libnprpc` and starts an HTTP/3 server with
+more than one worker, grant capabilities to your application executable after
+each build:
+
+```bash
+sudo setcap cap_net_admin,cap_bpf+ep /path/to/your_server_binary
+getcap /path/to/your_server_binary
+```
+
+Capabilities must be applied to the final executable that starts the NPRPC
+runtime, not to `libnprpc.so`.
+
+Notes:
+
+- Rebuilding the binaries may clear file capabilities, so scripts that launch
+  HTTP/3 servers should re-apply them after each rebuild.
+- If capabilities are unavailable, the safe fallback is to run HTTP/3 with a
+  single worker; multi-worker HTTP/3 requires the reuseport BPF path.
+- In Docker, grant the container the matching capabilities, for example
+  `--cap-add=NET_ADMIN --cap-add=BPF`.
 
 ### Nameserver
 

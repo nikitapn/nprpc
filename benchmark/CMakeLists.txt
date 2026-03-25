@@ -125,7 +125,7 @@ endif()
 
 # Benchmark server executable
 add_executable(benchmark_server
-  src/server.cpp
+  src/benchmark_server.cpp
   ${nprpc_benchmark_stub_GENERATED_SOURCES}
 )
 

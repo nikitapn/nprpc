@@ -22,7 +22,7 @@ if [ "$1" = "--test" ]; then
 fi
 
 if [ "$RUN_TESTS" = true ]; then
-  docker run --rm -v         \
+  docker run --rm --cap-add=NET_ADMIN --cap-add=BPF -v         \
     "$NPRPC_ROOT:/workspace" \
      ${DOCKER_IMAGE_NAME} bash -c '
       set -e

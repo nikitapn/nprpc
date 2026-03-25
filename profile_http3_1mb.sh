@@ -26,7 +26,6 @@ OUTPUT_PATH="${OUTPUT_PATH:-$ROOT_DIR/perf.txt}"
 SERVER_PID=""
 SERVER_LAUNCH_PID=""
 PERF_PID=""
-PERF_NEEDS_CHOWN=0
 
 log() {
   printf '[profile_http3_1mb] %s\n' "$*"
@@ -39,6 +38,35 @@ require_cmd() {
   }
 }
 
+ensure_nprpc_bpf_capabilities() {
+  local binary="$BUILD_DIR/benchmark/benchmark_server"
+  local current_caps=""
+
+  require_cmd getcap
+  require_cmd setcap
+
+  if [[ ! -x "$binary" ]]; then
+    log "benchmark_server not found or not executable: $binary"
+    exit 1
+  fi
+
+  current_caps="$(getcap "$binary" 2>/dev/null || true)"
+  if [[ "$current_caps" == *"cap_net_admin"* && "$current_caps" == *"cap_bpf"* ]]; then
+    return 0
+  fi
+
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    setcap cap_net_admin,cap_bpf+ep "$binary"
+  else
+    # sudo -v || {
+    #   log "Failed to obtain sudo permissions; cannot grant BPF capabilities to benchmark_server"
+    #   exit 1
+    # }
+    log "Granting cap_net_admin,cap_bpf to benchmark_server for HTTP/3 reuseport BPF"
+    sudo setcap cap_net_admin,cap_bpf+ep "$binary"
+  fi
+}
+
 cleanup() {
   set +e
   if [[ -n "$PERF_PID" ]] && kill -0 "$PERF_PID" 2>/dev/null; then
@@ -46,13 +74,7 @@ cleanup() {
   fi
 
   if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
-    local owner_uid=""
-    owner_uid="$(stat -c %u "/proc/$SERVER_PID" 2>/dev/null || true)"
-    if [[ -n "$owner_uid" && "$owner_uid" != "$(id -u)" ]]; then
-      sudo kill -INT "$SERVER_PID" 2>/dev/null || true
-    else
-      kill -INT "$SERVER_PID" 2>/dev/null || true
-    fi
+    kill -INT "$SERVER_PID" 2>/dev/null || true
   fi
 
   if [[ -n "$SERVER_LAUNCH_PID" ]] && kill -0 "$SERVER_LAUNCH_PID" 2>/dev/null; then
@@ -142,23 +164,6 @@ wait_for_server() {
   return 1
 }
 
-restore_perf_output_ownership() {
-  local target_uid target_gid owner_uid
-  target_uid="$(id -u)"
-  target_gid="$(id -g)"
-
-  for path in "$PERF_DATA" "$PERF_DATA.old"; do
-    if [[ ! -e "$path" ]]; then
-      continue
-    fi
-
-    owner_uid="$(stat -c %u "$path" 2>/dev/null || true)"
-    if [[ -n "$owner_uid" && "$owner_uid" != "$target_uid" ]]; then
-      sudo chown "$target_uid:$target_gid" "$path"
-    fi
-  done
-}
-
 start_server() {
   mkdir -p "$(dirname "$SERVER_LOG")"
   local -a server_cmd
@@ -172,12 +177,6 @@ start_server() {
     "NPRPC_BENCH_ENABLE_HTTP3=1"
     "$BUILD_DIR/benchmark/benchmark_server"
   )
-
-  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-    # log "Refreshing sudo credentials for benchmark_server"
-    # sudo -v
-    server_cmd=(sudo "${server_cmd[@]}")
-  fi
 
   log "Starting benchmark_server"
   (
@@ -200,19 +199,8 @@ start_server() {
 record_server() {
   require_cmd perf
 
-  local -a perf_cmd=(perf)
-  local owner_uid=""
-  owner_uid="$(stat -c %u "/proc/$SERVER_PID" 2>/dev/null || true)"
-
-  if [[ -n "$owner_uid" && "$owner_uid" != "$(id -u)" ]]; then
-    perf_cmd=(sudo perf)
-    PERF_NEEDS_CHOWN=1
-  else
-    PERF_NEEDS_CHOWN=0
-  fi
-
   log "Recording perf to $PERF_DATA (event=$PERF_EVENT, call-graph=$PERF_CALL_GRAPH)"
-  "${perf_cmd[@]}" record \
+  sudo perf record \
     -e "$PERF_EVENT" \
     -o "$PERF_DATA" \
     -g \
@@ -239,6 +227,7 @@ run_h2load() {
 profile_http3() {
   require_cmd bash
   configure_and_build
+  ensure_nprpc_bpf_capabilities
   prepare_assets
   ensure_h2load
   start_server
@@ -247,13 +236,12 @@ profile_http3() {
   wait "$PERF_PID"
   PERF_PID=""
 
-  if [[ "$PERF_NEEDS_CHOWN" -eq 1 ]]; then
-    restore_perf_output_ownership
-  fi
-
   log "Perf data written to $PERF_DATA"
   log "Inspect with: perf report -i $PERF_DATA --no-children -g graph,0.5,caller"
   log "Or see output in $OUTPUT_PATH"
+
+  sudo chown "$USER" "$PERF_DATA"
+  sudo chown "$USER" "${PERF_DATA}.old" >/dev/null 2>&1 || true
 
   cat "/tmp/h2load_output.txt" > "$OUTPUT_PATH"
   perf report --stdio -i /home/nikita/projects/nprpc/perf-http3-1mb.data --no-children -g graph,0.5,caller >> "$OUTPUT_PATH"
