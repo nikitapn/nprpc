@@ -404,6 +404,133 @@ run_h2load() {
     > "$RESULTS_DIR/${name}.h2load.txt"
 }
 
+capture_environment_report() {
+  local report="$RESULTS_DIR/ENVIRONMENT.md"
+  local resolved_nginx_mode="auto"
+  local resolved_caddy_mode="auto"
+  local nginx_http3_capable="0"
+  local hostname_value="unknown"
+  local kernel_value="unknown"
+  local architecture="unknown"
+  local cpu_model="unknown"
+  local cpu_count="unknown"
+  local sockets="unknown"
+  local cores_per_socket="unknown"
+  local threads_per_core="unknown"
+  local numa_nodes="unknown"
+  local max_mhz="unknown"
+  local min_mhz="unknown"
+  local virtualization="unknown"
+  local mem_total="unknown"
+  local current_clocksource="unknown"
+  local available_clocksources="unknown"
+  local scaling_governor="unknown"
+  local cpu_driver="unknown"
+  local h2load_version="unknown"
+  local oha_version="unknown"
+  local nginx_version="not installed"
+  local caddy_version="not installed"
+
+  hostname_value="$(hostname 2>/dev/null || true)"
+  kernel_value="$(uname -srmo 2>/dev/null || uname -a 2>/dev/null || true)"
+  resolved_nginx_mode="$(choose_mode "$NGINX_MODE" nginx)"
+  resolved_caddy_mode="$(choose_mode "$CADDY_MODE" caddy)"
+  if [[ "$resolved_nginx_mode" == "system" ]] && nginx_supports_http3; then
+    nginx_http3_capable="1"
+  fi
+
+  if command -v lscpu >/dev/null 2>&1; then
+    architecture="$(lscpu | awk -F: '/^Architecture:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
+    cpu_model="$(lscpu | awk -F: '/^Model name:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
+    cpu_count="$(lscpu | awk -F: '/^CPU\(s\):/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
+    sockets="$(lscpu | awk -F: '/^Socket\(s\):/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
+    cores_per_socket="$(lscpu | awk -F: '/^Core\(s\) per socket:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
+    threads_per_core="$(lscpu | awk -F: '/^Thread\(s\) per core:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
+    numa_nodes="$(lscpu | awk -F: '/^NUMA node\(s\):/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
+    max_mhz="$(lscpu | awk -F: '/^CPU max MHz:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
+    min_mhz="$(lscpu | awk -F: '/^CPU min MHz:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
+    virtualization="$(lscpu | awk -F: '/^Virtualization:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
+  fi
+
+  if [[ -r /proc/meminfo ]]; then
+    mem_total="$(awk '/^MemTotal:/ {printf "%.2f GiB", $2 / 1024 / 1024; exit}' /proc/meminfo)"
+  fi
+
+  if [[ -r /sys/devices/system/clocksource/clocksource0/current_clocksource ]]; then
+    current_clocksource="$(< /sys/devices/system/clocksource/clocksource0/current_clocksource)"
+  fi
+  if [[ -r /sys/devices/system/clocksource/clocksource0/available_clocksource ]]; then
+    available_clocksources="$(< /sys/devices/system/clocksource/clocksource0/available_clocksource)"
+  fi
+  if [[ -r /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]]; then
+    scaling_governor="$(< /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
+  fi
+  if [[ -r /sys/devices/system/cpu/cpu0/cpufreq/scaling_driver ]]; then
+    cpu_driver="$(< /sys/devices/system/cpu/cpu0/cpufreq/scaling_driver)"
+  fi
+
+  if [[ -x "$H2LOAD_BIN" ]]; then
+    h2load_version="$($H2LOAD_BIN --version 2>/dev/null | head -n1 || true)"
+  elif command -v "$H2LOAD_BIN" >/dev/null 2>&1; then
+    h2load_version="$("$H2LOAD_BIN" --version 2>/dev/null | head -n1 || true)"
+  fi
+
+  if command -v "$OHA_BIN" >/dev/null 2>&1; then
+    oha_version="$("$OHA_BIN" --version 2>/dev/null | head -n1 || true)"
+  fi
+  if command -v nginx >/dev/null 2>&1; then
+    nginx_version="$(nginx -V 2>&1 | head -n1 || true)"
+  fi
+  if command -v caddy >/dev/null 2>&1; then
+    caddy_version="$(caddy version 2>/dev/null | head -n1 || true)"
+  fi
+
+  result=$(cat << EOF
+# Benchmark Environment
+
+- Generated at: $(date -Is)
+- Hostname: ${hostname_value:-unknown}
+- Kernel: ${kernel_value:-unknown}
+- Architecture: ${architecture:-unknown}
+- CPU model: ${cpu_model:-unknown}
+- Logical CPUs: ${cpu_count:-unknown}
+- Sockets: ${sockets:-unknown}
+- Cores per socket: ${cores_per_socket:-unknown}
+- Threads per core: ${threads_per_core:-unknown}
+- NUMA nodes: ${numa_nodes:-unknown}
+- CPU max MHz: ${max_mhz:-unknown}
+- CPU min MHz: ${min_mhz:-unknown}
+- Virtualization: ${virtualization:-unknown}
+- Memory: ${mem_total:-unknown}
+- Current clocksource: ${current_clocksource:-unknown}
+- Available clocksources: ${available_clocksources:-unknown}
+- CPU scaling governor: ${scaling_governor:-unknown}
+- CPU scaling driver: ${cpu_driver:-unknown}
+
+## Harness
+
+- Build dir: ${BUILD_DIR}
+- Benchmark host: ${BENCH_HOST}
+- Payload sizes: ${PAYLOAD_SIZES[*]}
+- H2LOAD_BIN: ${H2LOAD_BIN}
+- h2load version: ${h2load_version:-unknown}
+- OHA_BIN: ${OHA_BIN}
+- oha version: ${oha_version:-unknown}
+- nginx mode: ${NGINX_MODE}
+- nginx resolved mode: ${resolved_nginx_mode}
+- nginx version: ${nginx_version:-not installed}
+- nginx HTTP/3 capable: ${nginx_http3_capable}
+- caddy mode: ${CADDY_MODE}
+- caddy resolved mode: ${resolved_caddy_mode}
+- caddy version: ${caddy_version:-not installed}
+- SKIP_HTTP1: ${SKIP_HTTP1}
+- SKIP_CADDY: ${SKIP_CADDY}
+EOF
+)
+  echo "$result" > "$report"
+  echo "$result"
+}
+
 write_summary() {
   cat > "$RESULTS_DIR/README.md" <<'EOF'
 # HTTP Shootout Results
@@ -411,6 +538,10 @@ write_summary() {
 Generated by 
 
 	benchmark/http_shootout/run_server_shootout.sh
+
+Environment:
+
+- `ENVIRONMENT.md` contains the host hardware, kernel, clocksource, and tool configuration for this run.
 
 Files:
 
@@ -438,6 +569,8 @@ run_suite() {
   start_nginx
   [ "$SKIP_CADDY" -ne 1 ] &&
     start_caddy
+
+  capture_environment_report
 
   if [[ "$SKIP_HTTP1" != "1" ]]; then
     for size in "${PAYLOAD_SIZES[@]}"; do
@@ -470,12 +603,13 @@ run_suite() {
 
 usage() {
   cat <<EOF
-Usage: $0 [prepare-assets|build|build-h2load|start-nprpc|run|view]
+Usage: $0 [prepare-assets|build|build-h2load|capture-environment|start-nprpc|run|view]
 
 Commands:
   prepare-assets  Create shared static files for all servers.
   build           Build the NPRPC benchmark server.
   build-h2load    Build a vendored h2load under third_party/nghttp2.
+  capture-environment  Write ENVIRONMENT.md and refresh README.md in the results directory.
   start-nprpc     Start only the NPRPC benchmark server with HTTP/3 enabled.
   run             Run the full shootout suite against NPRPC, nginx, and Caddy.
   view            Summarize result files in benchmark/http_shootout/results.
@@ -501,6 +635,10 @@ case "${1:-run}" in
     ;;
   build-h2load)
     "$ROOT_DIR/benchmark/http_shootout/build_h2load.sh"
+    ;;
+  capture-environment)
+    capture_environment_report
+    write_summary
     ;;
   start-nprpc)
     prepare_assets
