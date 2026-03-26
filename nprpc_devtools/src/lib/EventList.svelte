@@ -21,7 +21,7 @@
   let scrollTop = $state(0);
   let viewportHeight = $state(0);
 
-  const ROW_HEIGHT = 21; // 20px row content + 1px bottom border
+  const ROW_HEIGHT = 21; // Includes the row border because `.row` uses `box-sizing: border-box`
   const OVERSCAN_ROWS = 12;
 
   function syncViewport() {
@@ -215,9 +215,9 @@
       };
     }
 
-    const visibleRows = Math.max(1, Math.ceil(viewportHeight / ROW_HEIGHT));
+    const viewportRowCount = Math.max(1, Math.ceil(viewportHeight / ROW_HEIGHT));
     const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_ROWS);
-    const end = Math.min(total, start + visibleRows + OVERSCAN_ROWS * 2);
+    const end = Math.min(total, start + viewportRowCount + OVERSCAN_ROWS * 2);
 
     return {
       start,
