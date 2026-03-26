@@ -18,6 +18,33 @@
   let prevLen = $state(0);
   let sortKey = $state<SortKey>('seq');
   let sortDir = $state<'asc' | 'desc'>('asc');
+  let scrollTop = $state(0);
+  let viewportHeight = $state(0);
+
+  const ROW_HEIGHT = 21;
+  const OVERSCAN_ROWS = 12;
+
+  function syncViewport() {
+    if (!tbody) return;
+    scrollTop = tbody.scrollTop;
+    viewportHeight = tbody.clientHeight;
+  }
+
+  $effect(() => {
+    if (!tbody) return;
+
+    syncViewport();
+
+    const resizeObserver = new ResizeObserver(() => {
+      syncViewport();
+    });
+
+    resizeObserver.observe(tbody);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  });
 
   // Auto-scroll to newest row unless the user has scrolled up manually.
   $effect(() => {
@@ -26,11 +53,13 @@
     prevLen = displayedEvents.length;
     if (!userScrolled) {
       tbody.scrollTop = tbody.scrollHeight;
+      syncViewport();
     }
   });
 
   function onScroll() {
     if (!tbody) return;
+    syncViewport();
     const atBottom = tbody.scrollHeight - tbody.scrollTop - tbody.clientHeight < 8;
     userScrolled = !atBottom;
   }
@@ -173,6 +202,33 @@
     return sorted;
   });
 
+  const windowRange = $derived.by(() => {
+    const total = displayedEvents.length;
+    if (!total) {
+      return {
+        start: 0,
+        end: 0,
+        topPadding: 0,
+        bottomPadding: 0
+      };
+    }
+
+    const visibleRows = Math.max(1, Math.ceil(viewportHeight / ROW_HEIGHT));
+    const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_ROWS);
+    const end = Math.min(total, start + visibleRows + OVERSCAN_ROWS * 2);
+
+    return {
+      start,
+      end,
+      topPadding: start * ROW_HEIGHT,
+      bottomPadding: Math.max(0, (total - end) * ROW_HEIGHT)
+    };
+  });
+
+  const visibleEvents = $derived.by(() =>
+    displayedEvents.slice(windowRange.start, windowRange.end)
+  );
+
   function row_class(ev: DebugEntry): string {
     const parts = ['row'];
     if (ev.direction === 'server') parts.push('server');
@@ -189,6 +245,7 @@
 <div
   class="list-wrap"
   role="grid"
+  aria-rowcount={displayedEvents.length}
   tabindex="0"
   onkeydown={onKeyDown}
 >
@@ -206,47 +263,61 @@
     bind:this={tbody}
     onscroll={onScroll}
   >
-    {#each displayedEvents as ev (ev.id)}
+    {#if displayedEvents.length}
       <div
-        class={row_class(ev)}
-        role="row"
-        tabindex="-1"
-        onclick={() => select(ev)}
-        onkeydown={(e) => onRowKeyDown(e, ev)}
-      >
-        <span class="col-seq mono">{ev.seq}</span>
+        class="spacer"
+        aria-hidden="true"
+        style={`height: ${windowRange.topPadding}px;`}
+      ></div>
 
-        <span class="col-dir">
-          {#if ev.entry_kind === 'stream'}
-            <span class="badge badge-stream" title="Stream session">⇄</span>
-          {:else if ev.direction === 'client'}
-            <span class="badge badge-client" title="Client → Server">↑</span>
-          {:else}
-            <span class="badge badge-server" title="Server → Client">↓</span>
-          {/if}
-        </span>
+      {#each visibleEvents as ev (ev.id)}
+        <div
+          class={row_class(ev)}
+          role="row"
+          tabindex="-1"
+          onclick={() => select(ev)}
+          onkeydown={(e) => onRowKeyDown(e, ev)}
+        >
+          <span class="col-seq mono">{ev.seq}</span>
 
-        <span class="col-method" title={method_label(ev)}>{method_label(ev)}</span>
+          <span class="col-dir">
+            {#if ev.entry_kind === 'stream'}
+              <span class="badge badge-stream" title="Stream session">⇄</span>
+            {:else if ev.direction === 'client'}
+              <span class="badge badge-client" title="Client → Server">↑</span>
+            {:else}
+              <span class="badge badge-server" title="Server → Client">↓</span>
+            {/if}
+          </span>
 
-        <span class="col-dur mono dur-{ev.status}">{fmt_duration(ev)}</span>
+          <span class="col-method" title={method_label(ev)}>{method_label(ev)}</span>
 
-        <span class="col-bytes mono" title={fmt_entry_bytes(ev)}>{fmt_entry_bytes(ev)}</span>
+          <span class="col-dur mono dur-{ev.status}">{fmt_duration(ev)}</span>
 
-        <span class="col-status">
-          {#if ev.status === 'success'}
-            <span class="dot dot-ok" title="Success">●</span>
-          {:else if ev.status === 'error'}
-            <span class="dot dot-err" title={ev.error ?? 'Error'}>●</span>
-          {:else if ev.status === 'cancelled'}
-            <span class="dot dot-cancel" title="Cancelled">●</span>
-          {:else}
-            <span class="dot dot-pending" title="Pending">●</span>
-          {/if}
-        </span>
-      </div>
+          <span class="col-bytes mono" title={fmt_entry_bytes(ev)}>{fmt_entry_bytes(ev)}</span>
+
+          <span class="col-status">
+            {#if ev.status === 'success'}
+              <span class="dot dot-ok" title="Success">●</span>
+            {:else if ev.status === 'error'}
+              <span class="dot dot-err" title={ev.error ?? 'Error'}>●</span>
+            {:else if ev.status === 'cancelled'}
+              <span class="dot dot-cancel" title="Cancelled">●</span>
+            {:else}
+              <span class="dot dot-pending" title="Pending">●</span>
+            {/if}
+          </span>
+        </div>
+      {/each}
+
+      <div
+        class="spacer"
+        aria-hidden="true"
+        style={`height: ${windowRange.bottomPadding}px;`}
+      ></div>
     {:else}
       <div class="empty">No RPC calls recorded yet.</div>
-    {/each}
+    {/if}
   </div>
 </div>
 
@@ -300,7 +371,8 @@
     display: flex;
     align-items: center;
     padding: 0 4px;
-    height: 20px;
+    box-sizing: border-box;
+    height: 21px;
     font-size: 11px;
     color: #e8eaed;
     border-bottom: 1px solid #2d2f33;
@@ -369,5 +441,9 @@
     color: #555;
     font-size: 12px;
     text-align: center;
+  }
+
+  .spacer {
+    flex: 0 0 auto;
   }
 </style>
