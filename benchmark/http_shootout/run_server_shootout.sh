@@ -10,7 +10,7 @@ RESULTS_DIR="${RESULTS_DIR:-$ROOT_DIR/benchmark/http_shootout/results}"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/benchmark/http_shootout/.work}"
 WWW_DIR="$WORK_DIR/www"
 TMP_DIR="$WORK_DIR/tmp"
-LOCAL_H2LOAD_BIN="$ROOT_DIR/third_party/nghttp2/build-h2load/src/h2load"
+LOCAL_H2LOAD_BIN="$ROOT_DIR/third_party/nghttp2/build/src/h2load"
 SKIP_HTTP1="${SKIP_HTTP1:-0}"
 SKIP_CADDY="${SKIP_CADDY:-0}"
 

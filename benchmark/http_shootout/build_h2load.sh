@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NGHTTP2_DIR="$ROOT_DIR/third_party/nghttp2"
-BUILD_DIR="$NGHTTP2_DIR/build-h2load"
+BUILD_DIR="$NGHTTP2_DIR/build"
 REPO_URL="${NGHTTP2_REPO_URL:-https://github.com/nghttp2/nghttp2.git}"
 
 log() {
@@ -21,7 +21,7 @@ require_cmd() {
 require_cmd git
 require_cmd cmake
 
-if [[ ! -d "$NGHTTP2_DIR/.git" ]]; then
+if ! git -C "$NGHTTP2_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   log "Cloning nghttp2 into third_party/nghttp2"
   git clone --depth 1 "$REPO_URL" "$NGHTTP2_DIR"
 else

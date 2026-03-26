@@ -89,7 +89,7 @@ For a quick terminal summary of the generated result files, run:
 
 By default, the runner looks for `h2load` at:
 
-- [third_party/nghttp2/build-h2load/src/h2load](../../third_party/nghttp2/build-h2load/src/h2load)
+- [third_party/nghttp2/build/src/h2load](../../third_party/nghttp2/build/src/h2load)
 
 You can override that with `H2LOAD_BIN=/path/to/h2load`.
 

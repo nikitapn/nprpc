@@ -88,6 +88,7 @@
 
 #define NPRPC_NGTCP2_ENABLE_LOGGING 0
 #define NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY 0
+#define NPRPC_ENABLE_HTTP3_MONOTONIC_TIMESTAMP_WORKAROUND 1
 
 namespace nprpc::impl {
 
@@ -175,9 +176,26 @@ namespace {
 uint64_t timestamp_ns()
 {
   auto now = std::chrono::steady_clock::now();
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(
-             now.time_since_epoch())
-      .count();
+  auto now_ns = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          now.time_since_epoch())
+          .count());
+
+#if NPRPC_ENABLE_HTTP3_MONOTONIC_TIMESTAMP_WORKAROUND
+  static std::atomic<uint64_t> last_ts{0};
+
+  auto observed = last_ts.load(std::memory_order_relaxed);
+  for (;;) {
+    auto clamped = std::max(now_ns, observed);
+    if (last_ts.compare_exchange_weak(observed, clamped,
+                                      std::memory_order_relaxed,
+                                      std::memory_order_relaxed)) {
+      return clamped;
+    }
+  }
+#else
+  return now_ns;
+#endif
 }
 
 void append_bytes(flat_buffer& buffer, const uint8_t* data, size_t len)
