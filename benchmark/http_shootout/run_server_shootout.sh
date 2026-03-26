@@ -2,7 +2,9 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source $SCRIPT_DIR/.settings
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/.build_release}"
 RESULTS_DIR="${RESULTS_DIR:-$ROOT_DIR/benchmark/http_shootout/results}"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/benchmark/http_shootout/.work}"
@@ -10,6 +12,13 @@ WWW_DIR="$WORK_DIR/www"
 TMP_DIR="$WORK_DIR/tmp"
 LOCAL_H2LOAD_BIN="$ROOT_DIR/third_party/nghttp2/build-h2load/src/h2load"
 SKIP_HTTP1="${SKIP_HTTP1:-0}"
+SKIP_CADDY="${SKIP_CADDY:-0}"
+
+# Payload sizes to benchmark.  Add or remove entries as needed.
+# Supported suffixes: kb (kibibytes), mb (mebibytes).
+if [ -z "${PAYLOAD_SIZES+x}" ]; then
+  PAYLOAD_SIZES=("1kb" "64kb" "256kb" "1mb")
+fi
 
 NPRPC_DO_NOT_START_SERVER="${NPRPC_DO_NOT_START_SERVER:-0}"
 NPRPC_HTTP_PORT="${NPRPC_HTTP_PORT:-22223}"
@@ -133,20 +142,26 @@ prepare_assets() {
 </html>
 EOF
 
-  python3 - <<'PY' "$WWW_DIR"
+  python3 - <<'PY' "$WWW_DIR" "${PAYLOAD_SIZES[@]}"
 from pathlib import Path
 import random
 import sys
 
 root = Path(sys.argv[1])
+sizes_raw = sys.argv[2:]
 rng = random.Random(0xC0FFEE)
 
-def write_fixture(name: str, size: int) -> None:
-    (root / name).write_bytes(rng.randbytes(size))
+def parse_bytes(label: str) -> int:
+    label = label.lower()
+    if label.endswith("mb"):
+        return int(label[:-2]) * 1024 * 1024
+    if label.endswith("kb"):
+        return int(label[:-2]) * 1024
+    return int(label)
 
-write_fixture("1kb.bin", 1024)
-write_fixture("64kb.bin", 64 * 1024)
-write_fixture("1mb.bin", 1024 * 1024)
+for size_label in sizes_raw:
+    nbytes = parse_bytes(size_label)
+    (root / f"{size_label}.bin").write_bytes(rng.randbytes(nbytes))
 PY
 }
 
@@ -412,37 +427,42 @@ EOF
 }
 
 run_suite() {
+  if [ "$RESULTS_DIR" == "$ROOT_DIR/benchmark/http_shootout/results" ]; then
+    echo "Clearing default results directory: $RESULTS_DIR"
+    rm -rf "$RESULTS_DIR"/*
+  fi
+
   prepare_assets
   build_benchmark_server
   start_nprpc
   start_nginx
-  start_caddy
+  [ "$SKIP_CADDY" -ne 1 ] &&
+    start_caddy
 
   if [[ "$SKIP_HTTP1" != "1" ]]; then
-    run_oha "nprpc-http1-1kb" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/1kb.bin"
-    run_oha "nginx-http1-1kb" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/1kb.bin"
-    run_oha "caddy-http1-1kb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1kb.bin"
-
-    run_oha "nprpc-http1-1mb" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/1mb.bin"
-    run_oha "nginx-http1-1mb" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/1mb.bin"
-    run_oha "caddy-http1-1mb" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/1mb.bin"
+    for size in "${PAYLOAD_SIZES[@]}"; do
+      run_oha "nprpc-http1-${size}" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/${size}.bin"
+      run_oha "nginx-http1-${size}" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/${size}.bin"
+      if [[ "$SKIP_CADDY" -ne 1 ]]; then
+        run_oha "caddy-http1-${size}" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/${size}.bin"
+      fi
+    done
   else
     log "Skipping HTTP/1.1 benchmarks as SKIP_HTTP1=1"
   fi
 
-  run_h2load "nprpc-http3-1kb" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/1kb.bin"
-  if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then
-    run_h2load "nginx-http3-1kb" "$BENCH_HOST" "$NGINX_HTTPS_PORT" "/1kb.bin"
-  else
-    log "Skipping nginx HTTP/3 benchmark (http_v3_module not available in current mode)"
+  for size in "${PAYLOAD_SIZES[@]}"; do
+    run_h2load "nprpc-http3-${size}" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/${size}.bin"
+    if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then
+      run_h2load "nginx-http3-${size}" "$BENCH_HOST" "$NGINX_HTTPS_PORT" "/${size}.bin"
+    fi
+    if [[ "$SKIP_CADDY" -ne 1 ]]; then
+      run_h2load "caddy-http3-${size}" "$BENCH_HOST" "$CADDY_HTTPS_PORT" "/${size}.bin"
+    fi
+  done
+  if [[ "$NGINX_HTTP3_ENABLED" != "1" ]]; then
+    log "Skipping nginx HTTP/3 benchmarks (http_v3_module not available in current mode)"
   fi
-  run_h2load "caddy-http3-1kb" "$BENCH_HOST" "$CADDY_HTTPS_PORT" "/1kb.bin"
-
-  run_h2load "nprpc-http3-1mb" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/1mb.bin"
-  if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then
-    run_h2load "nginx-http3-1mb" "$BENCH_HOST" "$NGINX_HTTPS_PORT" "/1mb.bin"
-  fi
-  run_h2load "caddy-http3-1mb" "$BENCH_HOST" "$CADDY_HTTPS_PORT" "/1mb.bin"
 
   write_summary
   log "Results written to $RESULTS_DIR"
@@ -492,6 +512,10 @@ case "${1:-run}" in
     run_suite
     ;;
   view)
+    python3 "$ROOT_DIR/benchmark/http_shootout/view_results.py" "$RESULTS_DIR"
+    ;;
+  run-view)
+    run_suite
     python3 "$ROOT_DIR/benchmark/http_shootout/view_results.py" "$RESULTS_DIR"
     ;;
   *)

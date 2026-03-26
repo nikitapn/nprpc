@@ -22,3 +22,4 @@
 
 /node_modules
 /crash_reports
+/__pycache__
