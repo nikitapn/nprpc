@@ -21,7 +21,7 @@
   let scrollTop = $state(0);
   let viewportHeight = $state(0);
 
-  const ROW_HEIGHT = 21;
+  const ROW_HEIGHT = 21; // 20px row content + 1px bottom border
   const OVERSCAN_ROWS = 12;
 
   function syncViewport() {
@@ -30,14 +30,16 @@
     viewportHeight = tbody.clientHeight;
   }
 
+  function onViewportResize() {
+    syncViewport();
+  }
+
   $effect(() => {
     if (!tbody) return;
 
     syncViewport();
 
-    const resizeObserver = new ResizeObserver(() => {
-      syncViewport();
-    });
+    const resizeObserver = new ResizeObserver(onViewportResize);
 
     resizeObserver.observe(tbody);
 
