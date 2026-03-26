@@ -4522,6 +4522,8 @@ Http3Server::find_connection(const ngtcp2_cid* dcid)
 class Http3ServerRuntime
 {
 public:
+  ~Http3ServerRuntime() { stop(); }
+
   bool start(const std::string& cert_file,
              const std::string& key_file,
              uint16_t port)
