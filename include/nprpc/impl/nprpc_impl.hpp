@@ -59,7 +59,7 @@ struct Config {
   size_t http_websocket_upgrades_burst = NPRPC_DEFAULT_HTTP_WEBSOCKET_UPGRADES_BURST;
   size_t http_websocket_requests_per_session_per_second = NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_PER_SESSION_PER_SECOND;
   size_t http_websocket_requests_burst = NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_BURST;
-  size_t http3_worker_count = NPRPC_DEFAULT_HTTP3_WORKER_COUNT; // 0 = auto
+  size_t http3_worker_count = NPRPC_DEFAULT_HTTP3_WORKER_COUNT; // 0 = auto fallback
   size_t http3_max_active_connections_per_ip = NPRPC_DEFAULT_HTTP3_MAX_ACTIVE_CONNECTIONS_PER_IP;
   size_t http3_max_new_connections_per_ip_per_second = NPRPC_DEFAULT_HTTP3_MAX_NEW_CONNECTIONS_PER_IP_PER_SECOND;
   size_t http3_max_new_connections_burst = NPRPC_DEFAULT_HTTP3_MAX_NEW_CONNECTIONS_BURST;

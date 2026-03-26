@@ -86,7 +86,7 @@ try rpc.run()  // Blocks until shutdown
 | `.enableWebSocketCompression(_:)` | Enable or disable WebSocket permessage-deflate |
 | `.maxWebSocketMessageSize(_:)` | Cap inbound WebSocket message size |
 | `.maxWebTransportMessageSize(_:)` | Cap inbound WebTransport message size |
-| `.http3Workers(_:)` | Set dedicated HTTP/3 REUSE_PORT worker count |
+| `.http3Workers(_:)` | Set dedicated HTTP/3 REUSE_PORT worker count (default: 4; pass 0 for auto) |
 | `.maxWebSocketSessionsPerIp(_:)` | Cap active WebSocket sessions per client IP |
 | `.maxWebSocketUpgradesPerIpPerSecond(_:burst:)` | Rate-limit WebSocket upgrades per client IP |
 | `.maxWebSocketRequestsPerSessionPerSecond(_:burst:)` | Rate-limit WebSocket request messages per session |
