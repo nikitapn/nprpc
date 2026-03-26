@@ -541,6 +541,8 @@ public:
     return *this;
   }
 
+  /// Set the number of dedicated HTTP/3 worker sockets/threads.
+  /// Pass 0 to auto-size from hardware concurrency; default: 4.
   RpcBuilderHttp& http3_workers(size_t count) noexcept
   {
     cfg_.http3_worker_count = count;

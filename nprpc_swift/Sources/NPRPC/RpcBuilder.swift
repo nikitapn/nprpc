@@ -33,7 +33,7 @@ class BuildConfig {
     var httpWebSocketUpgradesBurst: UInt = 0
     var httpWebSocketRequestsPerSessionPerSecond: UInt = 0
     var httpWebSocketRequestsBurst: UInt = 0
-    var http3WorkerCount: UInt = 0
+    var http3WorkerCount: UInt = 4
     var http3MaxActiveConnectionsPerIp: UInt = 0
     var http3MaxNewConnectionsPerIpPerSecond: UInt = 0
     var http3MaxNewConnectionsBurst: UInt = 0
@@ -302,6 +302,7 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
     }
 
     /// Set the number of dedicated HTTP/3 worker sockets/threads.
+    /// Pass 0 to auto-size from hardware concurrency; default: 4.
     @discardableResult
     public func http3Workers(_ count: UInt) -> RpcBuilderHttp {
         config.http3WorkerCount = count

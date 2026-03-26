@@ -4526,7 +4526,7 @@ public:
              const std::string& key_file,
              uint16_t port)
   {
-    const auto worker_count = 6; //effective_http3_worker_count();
+    const auto worker_count = effective_http3_worker_count();
 
     if (!can_embed_http3_worker_id(worker_count)) {
       NPRPC_HTTP3_ERROR(
