@@ -388,7 +388,7 @@ std::vector<uint8_t> base64_decode(std::string_view encoded)
 }
 
 template <typename T>
-void write_le(std::vector<uint8_t>& buf, T value)
+[[gnu::noinline]] void write_le(std::vector<uint8_t>& buf, T value)
 {
   for (size_t i = 0; i < sizeof(T); ++i) {
     buf.push_back(static_cast<uint8_t>(value & 0xFF));
