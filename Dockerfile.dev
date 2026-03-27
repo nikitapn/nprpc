@@ -90,6 +90,9 @@ WORKDIR /workspace
 # Copy NPRPC source (assuming build context is nprpc root)
 COPY ./ /workspace/
 
+ARG NPRPC_PROJECT_GIT_COMMIT
+ARG NPRPC_THIRD_PARTY_GIT_COMMITS
+
 # Build NPRPC C++ library and tools
 RUN cmake -G Ninja \
     -S . \
@@ -110,6 +113,8 @@ RUN cmake -G Ninja \
     -DBUILD_SHARED_LIBS=ON \
     -DNPRPC_BUILD_TESTS=OFF \
     -DNPRPC_BUILD_JS=OFF \
+    "-DNPRPC_PROJECT_GIT_COMMIT=${NPRPC_PROJECT_GIT_COMMIT}" \
+    "-DNPRPC_THIRD_PARTY_GIT_COMMITS=${NPRPC_THIRD_PARTY_GIT_COMMITS}" \
     && cmake --build .build_relwith_debinfo -j$(nproc) \
     && cmake --install .build_relwith_debinfo
 

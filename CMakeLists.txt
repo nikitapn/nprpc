@@ -39,12 +39,15 @@ option(NPRPC_ENABLE_HTTP3 "Enable HTTP/3 server" OFF)
 option(NPRPC_ENABLE_SSR "Enable SSR support via Node.js worker (requires Boost.Process)" OFF)
 option(NPRPC_BUILD_NODE_ADDON "Build Node.js addon" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+set(NPRPC_PROJECT_GIT_COMMIT "" CACHE STRING "Override git commit hash recorded in build info")
+set(NPRPC_THIRD_PARTY_GIT_COMMITS "" CACHE STRING "Override third-party git commits as name=commit|name=commit")
 
 if(NPRPC_BUILD_DEV_DOCKER OR NPRPC_BUILD_EXAMPLES)
   find_program(DOCKER_EXECUTABLE NAMES docker REQUIRED)
   set(NPRPC_DEV_DOCKER_STAMP ${CMAKE_CURRENT_BINARY_DIR}/nprpc_dev_docker.stamp)
   set(NPRPC_DEV_DOCKER_DEPENDENCIES
     ${CMAKE_CURRENT_SOURCE_DIR}/Dockerfile.dev
+    ${CMAKE_CURRENT_SOURCE_DIR}/.dockerignore
     ${CMAKE_CURRENT_SOURCE_DIR}/build-dev-image.sh
   )
 
@@ -53,6 +56,8 @@ if(NPRPC_BUILD_DEV_DOCKER OR NPRPC_BUILD_EXAMPLES)
     COMMAND ${CMAKE_COMMAND} -E env
       IMAGE_NAME=nprpc-dev
       IMAGE_TAG=latest
+      PROJECT_GIT_COMMIT=${NPRPC_PROJECT_GIT_COMMIT}
+      THIRD_PARTY_GIT_COMMITS=${NPRPC_THIRD_PARTY_GIT_COMMITS}
       ${CMAKE_CURRENT_SOURCE_DIR}/build-dev-image.sh
     COMMAND ${CMAKE_COMMAND} -E touch ${NPRPC_DEV_DOCKER_STAMP}
     DEPENDS ${NPRPC_DEV_DOCKER_DEPENDENCIES}
@@ -225,6 +230,8 @@ add_custom_target(nprpc_build_info_gen
     "-DOUTPUT_FILE=${NPRPC_BUILD_INFO_HEADER}"
     "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
     "-DPROJECT_VERSION=${PROJECT_VERSION}"
+    "-DPROJECT_GIT_COMMIT=${NPRPC_PROJECT_GIT_COMMIT}"
+    "-DTHIRD_PARTY_GIT_COMMITS=${NPRPC_THIRD_PARTY_GIT_COMMITS}"
     "-DTHIRD_PARTY_DIRS=${NPRPC_THIRD_PARTY_DIRS}"
     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_build_info.cmake
   BYPRODUCTS ${NPRPC_BUILD_INFO_HEADER}
