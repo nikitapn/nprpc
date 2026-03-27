@@ -724,7 +724,7 @@ public:
       : Session(connection.get_executor())
       , connection_(connection)
       , session_stream_id_(session_stream_id)
-        , throttle_session_key_(http_request_throttler().allocate_session_key())
+      , throttle_session_key_(http_request_throttler().allocate_session_key())
       , rx_buffer_(4 * 1024 * 1024)
   {
     ctx_.remote_endpoint = EndPoint(EndPointType::WebTransport,
@@ -1554,8 +1554,9 @@ ngtcp2_ssize Http3Connection::write_pkt(
         if (using_http_stream && httpconn_) {
           nghttp3_conn_block_stream(httpconn_, stream_id);
         } else if (raw_stream) {
+          // Re-enqueue so it retries when unblocked; continue to let
+          // other streams write in this burst.
           schedule_raw_writable_stream(raw_stream);
-          return 0;
         }
         continue;
       case NGTCP2_ERR_STREAM_SHUT_WR:
@@ -1641,18 +1642,17 @@ int Http3Connection::on_write()
   ngtcp2_path_storage ps;
   ngtcp2_pkt_info pi;
   size_t gso_size = 0;
-  auto ts = timestamp_ns();
 
   ngtcp2_path_storage_zero(&ps);
 
   auto nwrite = ngtcp2_conn_write_aggregate_pkt2(
       conn_, &ps.path, &pi, txbuf_.data(), txbuf_.size(), &gso_size,
-      write_pkt_cb, MAX_PKTS_BURST, ts);
+      write_pkt_cb, MAX_PKTS_BURST, timestamp_ns());
   if (nwrite < 0) {
     return handle_error();
   }
 
-  ngtcp2_conn_update_pkt_tx_time(conn_, ts);
+  ngtcp2_conn_update_pkt_tx_time(conn_, timestamp_ns());
 
   if (nwrite > 0) {
     server_->send_aggregated(remote_ep_, txbuf_.data(),
@@ -1956,6 +1956,12 @@ int Http3Connection::acked_stream_data_offset(int64_t stream_id,
     return 0;
   }
 
+  // Raw WT child streams are not managed by nghttp3 — skip ack offset.
+  auto* stream = find_stream(stream_id);
+  if (stream && stream->webtransport_child_stream) {
+    return 0;
+  }
+
   int rv = nghttp3_conn_add_ack_offset(httpconn_, stream_id, datalen);
   if (rv != 0) {
     NPRPC_HTTP3_ERROR("nghttp3_conn_add_ack_offset: {}", nghttp3_strerror(rv));
@@ -1980,7 +1986,8 @@ void Http3Connection::extend_max_stream_data(int64_t stream_id,
     signal_write();
   }
 
-  if (httpconn_) {
+  // Only unblock streams that nghttp3 manages (not WT child streams).
+  if (httpconn_ && (!stream || !stream->webtransport_child_stream)) {
     nghttp3_conn_unblock_stream(httpconn_, stream_id);
   }
 }
@@ -2900,16 +2907,15 @@ void Http3Connection::queue_raw_stream_write(int64_t stream_id,
 {
   boost::asio::post(
       strand_, [self = shared_from_this(), stream_id, data = std::move(data)]() mutable {
+        if (self->closed_) return;
         auto* stream = self->find_stream(stream_id);
-        if (!stream) {
-          stream = self->create_stream(stream_id);
-        }
+        if (!stream) return; // stream already closed, discard
         const bool was_empty = stream->raw_write_queue.empty();
         stream->raw_write_queue.emplace_back(std::move(data));
         if (was_empty) {
           self->schedule_raw_writable_stream(stream);
         }
-        self->signal_write();
+        self->on_write(); // already on the strand, call directly
       });
 }
 
