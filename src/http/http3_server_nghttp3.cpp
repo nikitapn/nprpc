@@ -3,7 +3,7 @@
 
 #include <nprpc/impl/http3_server.hpp>
 
-// This file implements HTTP/3 using ngtcp2 + nghttp3 backend
+// This file implements HTTP/3 and WebTransport using ngtcp2 + nghttp3 backend
 #if defined(NPRPC_HTTP3_ENABLED) && defined(NPRPC_HTTP3_BACKEND_NGHTTP3)
 
 #include <nprpc/impl/http_file_cache.hpp>
@@ -61,7 +61,19 @@
 
 #include <ankerl/unordered_dense.h>
 
-#define NPRPC_ENABLE_HTTP3_TRACE 0
+//==============================================================================
+// Configuration macros
+//==============================================================================
+
+#define NPRPC_ENABLE_HTTP3_TRACE 1
+#define NPRPC_ENABLE_HTTP3_RESPONSE_DEBUG 1
+#define NPRPC_NGTCP2_ENABLE_LOGGING 0
+#define NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY 0
+#define NPRPC_ENABLE_HTTP3_MONOTONIC_TIMESTAMP_WORKAROUND 1
+
+//==============================================================================
+// Logging macros
+//==============================================================================
 
 #if NPRPC_ENABLE_HTTP3_TRACE
 # include <format>
@@ -76,8 +88,6 @@
   NPRPC_LOG_ERROR(                                           \
     "[HTTP/3] " format_string __VA_OPT__(, ) __VA_ARGS__);
 
-#define NPRPC_ENABLE_HTTP3_RESPONSE_DEBUG 0
-
 #if NPRPC_ENABLE_HTTP3_RESPONSE_DEBUG
 # define NPRPC_HTTP3_DEBUG(format_string, ...)               \
   NPRPC_LOG_INFO(                                            \
@@ -85,10 +95,6 @@
 #else
 # define NPRPC_HTTP3_DEBUG(format_string, ...) do {} while (0)
 #endif
-
-#define NPRPC_NGTCP2_ENABLE_LOGGING 0
-#define NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY 0
-#define NPRPC_ENABLE_HTTP3_MONOTONIC_TIMESTAMP_WORKAROUND 1
 
 namespace nprpc::impl {
 
@@ -246,6 +252,17 @@ std::string cid_to_string(const ngtcp2_cid* cid)
   return std::string(reinterpret_cast<const char*>(cid->data), cid->datalen);
 }
 
+std::string cid_to_hex(const ngtcp2_cid* cid)
+{
+  std::string hex;
+  hex.reserve(cid->datalen * 2);
+  for (size_t i = 0; i < cid->datalen; ++i) {
+    hex += "0123456789abcdef"[cid->data[i] >> 4];
+    hex += "0123456789abcdef"[cid->data[i] & 0xf];
+  }
+  return hex;
+}
+
 const char* crypto_default_ciphers()
 {
   return "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_"
@@ -353,6 +370,9 @@ struct Http3Stream {
   flat_buffer webtransport_probe_buffer;
   std::deque<flat_buffer> raw_write_queue;
   bool raw_write_scheduled = false;
+  bool wt_data_stream_opened = false; // nghttp3 WT data stream write registered
+  bool wt_write_fin_pending = false; // EOF should be sent after all data is drained
+  size_t wt_write_offset = 0; // offset within front chunk already provided
 
   // Response data - kept alive for async sending
   // For cached files: cached_file keeps the data alive (zero-copy)
@@ -499,10 +519,7 @@ private:
   // RPC Handling
   int handle_rpc_request(Http3Stream* stream);
   int handle_webtransport_connect(Http3Stream* stream);
-  int handle_webtransport_stream_data(Http3Stream* stream,
-                                      uint32_t flags,
-                                      const uint8_t* data,
-                                      size_t datalen);
+
   bool has_webtransport_session(int64_t session_stream_id) const;
   std::shared_ptr<WebTransportControlSession>
   get_or_create_webtransport_control_session(int64_t session_stream_id);
@@ -668,6 +685,22 @@ private:
                                          uint32_t* pflags,
                                          void* user_data,
                                          void* stream_user_data);
+  static nghttp3_ssize wt_read_data_cb(nghttp3_conn* conn,
+                                       int64_t stream_id,
+                                       nghttp3_vec* vec,
+                                       size_t veccnt,
+                                       uint32_t* pflags,
+                                       void* user_data,
+                                       void* stream_user_data);
+  static int http_recv_wt_data_cb(nghttp3_conn* conn,
+                                  int64_t session_id,
+                                  int64_t stream_id,
+                                  const uint8_t* data,
+                                  size_t datalen,
+                                  void* conn_user_data,
+                                  void* stream_user_data);
+  int recv_wt_data(int64_t session_id, int64_t stream_id,
+                   const uint8_t* data, size_t datalen);
 
   Http3Server* server_;
   boost::asio::ip::udp::socket& socket_;
@@ -781,7 +814,28 @@ public:
       std::memcpy(mb.data(), receive_buffer.data_ptr(), frame_len);
       rx_buffer_.commit(frame_len);
 
-      if (!allow_request()) {
+      // Only rate-limit messages that require a reply (FunctionCall, StreamInit,
+      // AddReference, etc.).  Fire-and-forget stream control messages
+      // (WindowUpdate, DataChunk, Completion, Error, Cancellation) must never
+      // be throttled — rejecting a window update starves the server-side writer
+      // coroutine and kills the entire session.
+      const bool is_fire_and_forget = [&]() {
+        if (frame_len < sizeof(impl::flat::Header)) return false;
+        const auto* hdr = reinterpret_cast<const impl::flat::Header*>(
+            rx_buffer_.data().data());
+        switch (hdr->msg_id) {
+        case MessageId::StreamDataChunk:
+        case MessageId::StreamCompletion:
+        case MessageId::StreamError:
+        case MessageId::StreamCancellation:
+        case MessageId::StreamWindowUpdate:
+          return true;
+        default:
+          return false;
+        }
+      }();
+
+      if (!is_fire_and_forget && !allow_request()) {
         NPRPC_LOG_ERROR(
             "[HTTP/3][WT] Rejecting throttled session message: session_stream_id={} transport_stream_id={} size={} rate={} burst={}",
             session_stream_id_, transport_stream_id, frame_len,
@@ -1431,7 +1485,7 @@ int Http3Connection::on_read(const uint8_t* data,
           },
   };
 
-  NPRPC_HTTP3_TRACE("Reading packet, len={}", len);
+  // NPRPC_HTTP3_TRACE("Reading packet, len={}", len);
 
   int rv = ngtcp2_conn_read_pkt(conn_, &path, pi, data, len, timestamp_ns());
   if (rv != 0) {
@@ -1471,8 +1525,8 @@ int Http3Connection::on_read(const uint8_t* data,
     return handle_error();
   }
 
-  NPRPC_HTTP3_TRACE("Packet processed successfully, handshake_completed={}",
-                    ngtcp2_conn_get_handshake_completed(conn_));
+  // NPRPC_HTTP3_TRACE("Packet processed successfully, handshake_completed={}",
+  //                   ngtcp2_conn_get_handshake_completed(conn_));
 
   print_ssl_state("on_read end");
 
@@ -1637,7 +1691,7 @@ int Http3Connection::on_write()
     return 0;
   }
 
-  NPRPC_HTTP3_TRACE("on_write called");
+  // NPRPC_HTTP3_TRACE("on_write called");
 
   ngtcp2_path_storage ps;
   ngtcp2_pkt_info pi;
@@ -1750,6 +1804,7 @@ int Http3Connection::setup_httpconn()
   callbacks.end_stream = http_end_stream_cb;
   callbacks.stop_sending = http_stop_sending_cb;
   callbacks.reset_stream = http_reset_stream_cb;
+  callbacks.recv_wt_data = http_recv_wt_data_cb;
 
   nghttp3_settings settings;
   nghttp3_settings_default(&settings);
@@ -1757,6 +1812,7 @@ int Http3Connection::setup_httpconn()
   settings.qpack_blocked_streams = 100;
   settings.enable_connect_protocol = 1;
   settings.h3_datagram = 1;
+  settings.wt_enabled = 1;
 
   NPRPC_HTTP3_TRACE("[HTTP/3] Advertising SETTINGS: extended_connect=1 h3_datagram=1 wt_enabled=1");
 
@@ -1902,32 +1958,11 @@ int Http3Connection::recv_stream_data(uint32_t flags,
     stream = create_stream(stream_id);
   }
 
-  const bool should_probe_webtransport =
-      stream->webtransport_child_stream ||
-      (!stream->http_stream && ngtcp2_is_bidi_stream(stream_id) &&
-       !ngtcp2_conn_is_local_stream(conn_, stream_id) &&
-       !webtransport_session_ids_.empty());
-
-  if (should_probe_webtransport) {
-    if (stream->webtransport_rejected) {
-      return 0;
-    }
-
-    if (handle_webtransport_stream_data(stream, flags, data, datalen) != 0) {
-      return -1;
-    }
-    if (stream->webtransport_child_stream && !stream->webtransport_rejected) {
-      ngtcp2_conn_extend_max_stream_offset(conn_, stream_id,
-                                           static_cast<uint64_t>(datalen));
-      ngtcp2_conn_extend_max_offset(conn_, static_cast<uint64_t>(datalen));
-      return 0;
-    }
-  }
-
   if (!httpconn_) {
     return 0;
   }
 
+  // Feed ALL stream data to nghttp3 — it handles WT stream framing internally.
   auto nconsumed =
       nghttp3_conn_read_stream2(httpconn_, stream_id, data, datalen,
                                 (flags & NGTCP2_STREAM_DATA_FLAG_FIN) != 0,
@@ -1956,12 +1991,6 @@ int Http3Connection::acked_stream_data_offset(int64_t stream_id,
     return 0;
   }
 
-  // Raw WT child streams are not managed by nghttp3 — skip ack offset.
-  auto* stream = find_stream(stream_id);
-  if (stream && stream->webtransport_child_stream) {
-    return 0;
-  }
-
   int rv = nghttp3_conn_add_ack_offset(httpconn_, stream_id, datalen);
   if (rv != 0) {
     NPRPC_HTTP3_ERROR("nghttp3_conn_add_ack_offset: {}", nghttp3_strerror(rv));
@@ -1981,13 +2010,7 @@ void Http3Connection::extend_max_remote_streams_bidi(uint64_t max_streams)
 void Http3Connection::extend_max_stream_data(int64_t stream_id,
                                              uint64_t max_data)
 {
-  auto* stream = find_stream(stream_id);
-  if (stream && !stream->raw_write_queue.empty()) {
-    signal_write();
-  }
-
-  // Only unblock streams that nghttp3 manages (not WT child streams).
-  if (httpconn_ && (!stream || !stream->webtransport_child_stream)) {
+  if (httpconn_) {
     nghttp3_conn_unblock_stream(httpconn_, stream_id);
   }
 }
@@ -2052,6 +2075,11 @@ void Http3Connection::http_recv_header(Http3Stream* stream,
     stream->accept = std::move(header_value);
     break;
   }
+
+  // NPRPC_HTTP3_DEBUG("Stream {} recv_header", stream->stream_id);
+  // for (const auto& [key, value] : stream->headers) {
+  //   NPRPC_HTTP3_DEBUG("\t{}: {}", key, value);
+  // }
 }
 
 int Http3Connection::http_end_headers(Http3Stream* stream)
@@ -2607,13 +2635,12 @@ int Http3Connection::send_webtransport_connect_response(Http3Stream* stream)
       });
       }
 
-  nghttp3_data_reader dr{.read_data = http_read_data_cb};
   log_http3_response_submit("webtransport_connect", stream, 200, "", 0);
-  int rv = nghttp3_conn_submit_response(httpconn_, stream->stream_id,
-                                        headers.headers.data(),
-                                        headers.headers.size(), &dr);
+  int rv = nghttp3_conn_submit_wt_response(httpconn_, stream->stream_id,
+                                           headers.headers.data(),
+                                           headers.headers.size());
   if (rv != 0) {
-    NPRPC_HTTP3_ERROR("nghttp3_conn_submit_response(CONNECT): {}", nghttp3_strerror(rv));
+    NPRPC_HTTP3_ERROR("nghttp3_conn_submit_wt_response(CONNECT): {}", nghttp3_strerror(rv));
     return -1;
   }
 
@@ -2705,203 +2732,6 @@ void Http3Connection::reject_webtransport_stream(Http3Stream* stream,
                                     NGHTTP3_H3_MESSAGE_ERROR);
 }
 
-int Http3Connection::handle_webtransport_stream_data(Http3Stream* stream,
-                                                     uint32_t flags,
-                                                     const uint8_t* data,
-                                                     size_t datalen)
-{
-  if (!ngtcp2_is_bidi_stream(stream->stream_id) ||
-      ngtcp2_conn_is_local_stream(conn_, stream->stream_id)) {
-    return 0;
-  }
-
-  if (!stream->webtransport_child_stream) {
-    if (webtransport_session_ids_.empty() || stream->http_stream) {
-      return 0;
-    }
-
-    NPRPC_HTTP3_DEBUG(
-        "conn={} wt_probe_begin transport_stream_id={} datalen={} fin={} buffered={} ",
-        debug_id(), stream->stream_id, datalen,
-        (flags & NGTCP2_STREAM_DATA_FLAG_FIN) != 0,
-        stream->webtransport_probe_buffer.size());
-
-    if (stream->webtransport_probe_buffer.size() >
-        g_cfg.http_webtransport_max_message_size ||
-      datalen > g_cfg.http_webtransport_max_message_size -
-              stream->webtransport_probe_buffer.size()) {
-      reject_webtransport_stream(stream, "probe buffer too large",
-                   stream->webtransport_probe_buffer.size() +
-                     datalen);
-      return 0;
-    }
-
-    append_bytes(stream->webtransport_probe_buffer, data, datalen);
-
-    auto signal = decode_quic_varint(stream->webtransport_probe_buffer.data_ptr(),
-                                     stream->webtransport_probe_buffer.size());
-    if (!signal) {
-      if (flags & NGTCP2_STREAM_DATA_FLAG_FIN) {
-        return -1;
-      }
-      return 0;
-    }
-
-    const auto [stream_type, stream_type_len] = *signal;
-    if (stream_type != k_webtransport_bidi_stream_type) {
-      NPRPC_HTTP3_DEBUG(
-          "conn={} wt_probe_non_wt transport_stream_id={} stream_type={} buffered={}",
-          debug_id(), stream->stream_id, stream_type,
-          stream->webtransport_probe_buffer.size());
-      return 0;
-    }
-
-    auto session_id = decode_quic_varint(
-        stream->webtransport_probe_buffer.data_ptr() + stream_type_len,
-        stream->webtransport_probe_buffer.size() - stream_type_len);
-    if (!session_id) {
-      if (flags & NGTCP2_STREAM_DATA_FLAG_FIN) {
-        return -1;
-      }
-      return 0;
-    }
-
-    const auto [session_stream_id, session_id_len] = *session_id;
-    const auto header_len = stream_type_len + session_id_len;
-    if (!has_webtransport_session(static_cast<int64_t>(session_stream_id))) {
-      NPRPC_HTTP3_DEBUG(
-          "conn={} wt_probe_unknown_session transport_stream_id={} session_stream_id={} buffered={}",
-          debug_id(), stream->stream_id, session_stream_id,
-          stream->webtransport_probe_buffer.size());
-      return 0;
-    }
-
-    stream->webtransport_child_stream = true;
-    stream->webtransport_session_id = static_cast<int64_t>(session_stream_id);
-
-    NPRPC_HTTP3_DEBUG(
-        "conn={} wt_probe_child transport_stream_id={} session_stream_id={} header_len={} buffered={}",
-        debug_id(), stream->stream_id, stream->webtransport_session_id,
-        header_len, stream->webtransport_probe_buffer.size());
-
-    flat_buffer remaining(stream->webtransport_probe_buffer.size() > header_len
-                              ? stream->webtransport_probe_buffer.size() - header_len
-                              : flat_buffer::default_initial_size());
-    if (stream->webtransport_probe_buffer.size() > header_len) {
-      append_bytes(remaining,
-                   stream->webtransport_probe_buffer.data_ptr() + header_len,
-                   stream->webtransport_probe_buffer.size() - header_len);
-    }
-    stream->webtransport_probe_buffer = std::move(remaining);
-  } else if (stream->webtransport_child_binding == WebTransportChildBinding::Unbound) {
-    NPRPC_HTTP3_DEBUG(
-        "conn={} wt_probe_append transport_stream_id={} datalen={} fin={} buffered={}",
-        debug_id(), stream->stream_id, datalen,
-        (flags & NGTCP2_STREAM_DATA_FLAG_FIN) != 0,
-        stream->webtransport_probe_buffer.size());
-
-    if (stream->webtransport_probe_buffer.size() >
-            g_cfg.http_webtransport_max_message_size ||
-        datalen > g_cfg.http_webtransport_max_message_size -
-                      stream->webtransport_probe_buffer.size()) {
-      reject_webtransport_stream(stream, "child binding probe too large",
-                                 stream->webtransport_probe_buffer.size() +
-                                     datalen);
-      return 0;
-    }
-
-    append_bytes(stream->webtransport_probe_buffer, data, datalen);
-  } else {
-    NPRPC_HTTP3_DEBUG(
-        "conn={} wt_child_payload transport_stream_id={} session_stream_id={} binding={} datalen={} fin={}",
-        debug_id(), stream->stream_id, stream->webtransport_session_id,
-        static_cast<int>(stream->webtransport_child_binding), datalen,
-        (flags & NGTCP2_STREAM_DATA_FLAG_FIN) != 0);
-    auto session =
-        get_or_create_webtransport_control_session(stream->webtransport_session_id);
-    if (!session->process_bytes(stream->stream_id, data, datalen)) {
-      reject_webtransport_stream(stream, "payload frame too large", datalen);
-    }
-    return 0;
-  }
-
-  auto session =
-      get_or_create_webtransport_control_session(stream->webtransport_session_id);
-
-  if (stream->webtransport_child_binding == WebTransportChildBinding::Unbound) {
-    if (stream->webtransport_probe_buffer.size() < 1) {
-      if (flags & NGTCP2_STREAM_DATA_FLAG_FIN) {
-        return -1;
-      }
-      return 0;
-    }
-
-    const auto* probe = stream->webtransport_probe_buffer.data_ptr();
-    const auto bind_kind = probe[0];
-    size_t binding_len = 0;
-
-    switch (bind_kind) {
-    case k_webtransport_bind_control:
-      if (!session->allow_child_stream_open(bind_kind)) {
-        reject_webtransport_stream(stream, "child stream open throttled",
-                                   stream->webtransport_probe_buffer.size());
-        return 0;
-      }
-      stream->webtransport_child_binding = WebTransportChildBinding::Control;
-      session->bind_control_stream(stream->stream_id);
-      binding_len = 1;
-      NPRPC_HTTP3_DEBUG(
-          "conn={} wt_bind_control transport_stream_id={} session_stream_id={} buffered={}",
-          debug_id(), stream->stream_id, stream->webtransport_session_id,
-          stream->webtransport_probe_buffer.size());
-      break;
-    case k_webtransport_bind_native_stream:
-      if (stream->webtransport_probe_buffer.size() < 9) {
-        if (flags & NGTCP2_STREAM_DATA_FLAG_FIN) {
-          return -1;
-        }
-        return 0;
-      }
-      if (!session->allow_child_stream_open(bind_kind)) {
-        reject_webtransport_stream(stream, "child stream open throttled",
-                                   stream->webtransport_probe_buffer.size());
-        return 0;
-      }
-      std::memcpy(&stream->webtransport_native_stream_id, probe + 1,
-                  sizeof(stream->webtransport_native_stream_id));
-      stream->webtransport_child_binding = WebTransportChildBinding::Native;
-      session->bind_native_stream(stream->webtransport_native_stream_id,
-                                  stream->stream_id);
-      binding_len = 9;
-      NPRPC_HTTP3_DEBUG(
-          "conn={} wt_bind_native transport_stream_id={} session_stream_id={} native_stream_id={} buffered={}",
-          debug_id(), stream->stream_id, stream->webtransport_session_id,
-          stream->webtransport_native_stream_id,
-          stream->webtransport_probe_buffer.size());
-      break;
-    default:
-      NPRPC_LOG_ERROR("[HTTP/3][WT] Unknown child stream binding kind {}",
-                      bind_kind);
-      return -1;
-    }
-
-    if (stream->webtransport_probe_buffer.size() > binding_len) {
-      if (!session->process_bytes(
-              stream->stream_id,
-              stream->webtransport_probe_buffer.data_ptr() + binding_len,
-              stream->webtransport_probe_buffer.size() - binding_len)) {
-        reject_webtransport_stream(stream, "post-bind payload too large",
-                                   stream->webtransport_probe_buffer.size() -
-                                       binding_len);
-        return 0;
-      }
-    }
-    stream->webtransport_probe_buffer.clear();
-  }
-
-  return 0;
-}
-
 void Http3Connection::queue_raw_stream_write(int64_t stream_id,
                                              flat_buffer&& data)
 {
@@ -2910,12 +2740,54 @@ void Http3Connection::queue_raw_stream_write(int64_t stream_id,
         if (self->closed_) return;
         auto* stream = self->find_stream(stream_id);
         if (!stream) return; // stream already closed, discard
-        const bool was_empty = stream->raw_write_queue.empty();
-        stream->raw_write_queue.emplace_back(std::move(data));
-        if (was_empty) {
-          self->schedule_raw_writable_stream(stream);
+
+        // Detect terminal stream messages (StreamCompletion/StreamError)
+        // to signal EOF to nghttp3 after all data is drained.
+        // Only for Native streams — the Control stream multiplexes all
+        // NPRPC traffic and must never be FIN'd.
+        if (stream->webtransport_child_binding == WebTransportChildBinding::Native &&
+            data.size() >= sizeof(impl::flat::Header)) {
+          const auto* hdr = reinterpret_cast<const impl::flat::Header*>(
+              data.data().data());
+          if (hdr->msg_id == MessageId::StreamCompletion ||
+              hdr->msg_id == MessageId::StreamError) {
+            NPRPC_HTTP3_DEBUG(
+                "conn={} wt_write_fin_pending stream_id={} msg_id={} msg_len={}",
+                self->debug_id(), stream_id, static_cast<int>(hdr->msg_id),
+                data.size());
+            stream->wt_write_fin_pending = true;
+          }
         }
-        self->on_write(); // already on the strand, call directly
+
+        stream->raw_write_queue.emplace_back(std::move(data));
+
+        // For WT data streams, use nghttp3's write scheduling.
+        if (stream->webtransport_child_stream && self->httpconn_) {
+          if (!stream->wt_data_stream_opened) {
+            nghttp3_data_reader dr{.read_data = wt_read_data_cb};
+            int rv = nghttp3_conn_open_wt_data_stream(
+                self->httpconn_,
+                stream->webtransport_session_id,
+                stream_id, &dr, stream);
+            if (rv != 0) {
+              NPRPC_HTTP3_ERROR(
+                  "nghttp3_conn_open_wt_data_stream: stream_id={} session_id={} err={}",
+                  stream_id, stream->webtransport_session_id,
+                  nghttp3_strerror(rv));
+              return;
+            }
+            stream->wt_data_stream_opened = true;
+          } else {
+            // Stream already opened — resume it so writev_stream picks up new data.
+            nghttp3_conn_resume_stream(self->httpconn_, stream_id);
+          }
+        } else {
+          // Non-WT raw stream: use the old raw write scheduling.
+          if (stream->raw_write_queue.size() == 1) {
+            self->schedule_raw_writable_stream(stream);
+          }
+        }
+        self->on_write();
       });
 }
 
@@ -3153,7 +3025,8 @@ int Http3Connection::on_stream_close(ngtcp2_conn* conn,
     app_error_code = NGHTTP3_H3_NO_ERROR;
   }
 
-  if (h->httpconn_ && (!stream || !stream->webtransport_child_stream)) {
+  // Forward ALL stream closures to nghttp3 (including WT data streams).
+  if (h->httpconn_) {
     int rv = nghttp3_conn_close_stream(h->httpconn_, stream_id, app_error_code);
     if (rv != 0 && rv != NGHTTP3_ERR_STREAM_NOT_FOUND) {
       NPRPC_HTTP3_ERROR("nghttp3_conn_close_stream: {}", nghttp3_strerror(rv));
@@ -3251,7 +3124,26 @@ int Http3Connection::http_acked_stream_data_cb(nghttp3_conn* conn,
                                                void* user_data,
                                                void* stream_user_data)
 {
-  // Stream data was acknowledged - we could free resources here
+  // For WT data streams, consume acknowledged data from raw_write_queue.
+  // wt_write_offset is relative to current queue start, so adjust it as
+  // we pop/consume chunks from the front.
+  auto stream = static_cast<Http3Stream*>(stream_user_data);
+  if (stream && stream->wt_data_stream_opened) {
+    auto remaining = datalen;
+    while (remaining > 0 && !stream->raw_write_queue.empty()) {
+      auto& front = stream->raw_write_queue.front();
+      if (front.size() <= remaining) {
+        remaining -= front.size();
+        stream->wt_write_offset -= front.size();
+        stream->raw_write_queue.pop_front();
+      } else {
+        auto n = static_cast<size_t>(remaining);
+        front.consume(n);
+        stream->wt_write_offset -= n;
+        remaining = 0;
+      }
+    }
+  }
   return 0;
 }
 
@@ -3468,6 +3360,182 @@ nghttp3_ssize Http3Connection::http_read_data_cb(nghttp3_conn* conn,
   }
 
   return 1;
+}
+
+// WT data stream read callback — serves data from raw_write_queue.
+// Advances wt_write_offset; buffers freed later in acked_stream_data_cb.
+nghttp3_ssize Http3Connection::wt_read_data_cb(nghttp3_conn* conn,
+                                                int64_t stream_id,
+                                                nghttp3_vec* vec,
+                                                size_t veccnt,
+                                                uint32_t* pflags,
+                                                void* user_data,
+                                                void* stream_user_data)
+{
+  auto stream = static_cast<Http3Stream*>(stream_user_data);
+  if (!stream) {
+    return NGHTTP3_ERR_WOULDBLOCK;
+  }
+  if (stream->raw_write_queue.empty()) {
+    if (stream->wt_write_fin_pending) {
+      NPRPC_HTTP3_DEBUG(
+          "wt_read_data_cb stream_id={} wt_write_fin_pending=true empty_queue eof",
+          stream_id);
+      *pflags |= NGHTTP3_DATA_FLAG_EOF;
+      return 0;
+    }
+    return NGHTTP3_ERR_WOULDBLOCK;
+  }
+
+  // Find the first chunk that hasn't been fully scheduled yet.
+  // wt_write_offset is cumulative across all chunks in the queue.
+  size_t cumulative = 0;
+  for (auto& chunk : stream->raw_write_queue) {
+    cumulative += chunk.size();
+    if (stream->wt_write_offset < cumulative) {
+      const size_t offset_in_chunk =
+          chunk.size() - (cumulative - stream->wt_write_offset);
+      const size_t remaining = chunk.size() - offset_in_chunk;
+      vec[0].base = chunk.data_ptr() + offset_in_chunk;
+      vec[0].len = remaining;
+      stream->wt_write_offset += remaining;
+      return 1;
+    }
+  }
+
+  // All data already scheduled.
+  // If the stream is done (StreamCompletion/StreamError was queued),
+  // signal EOF so nghttp3 sends FIN and the QUIC stream can close,
+  // which allows extend_max_streams_bidi to reclaim the slot.
+  if (stream->wt_write_fin_pending) {
+    *pflags |= NGHTTP3_DATA_FLAG_EOF;
+    return 0;
+  }
+
+  return NGHTTP3_ERR_WOULDBLOCK;
+}
+
+int Http3Connection::http_recv_wt_data_cb(nghttp3_conn* conn,
+                                          int64_t session_id,
+                                          int64_t stream_id,
+                                          const uint8_t* data,
+                                          size_t datalen,
+                                          void* conn_user_data,
+                                          void* stream_user_data)
+{
+  auto h = static_cast<Http3Connection*>(conn_user_data);
+  if (h->recv_wt_data(session_id, stream_id, data, datalen) != 0) {
+    return NGHTTP3_ERR_CALLBACK_FAILURE;
+  }
+  // nghttp3 does NOT include WT data payload in the nconsumed value
+  // returned by read_stream2, so we must extend flow control here.
+  ngtcp2_conn_extend_max_stream_offset(h->conn_, stream_id, datalen);
+  ngtcp2_conn_extend_max_offset(h->conn_, datalen);
+  return 0;
+}
+
+int Http3Connection::recv_wt_data(int64_t session_id,
+                                  int64_t stream_id,
+                                  const uint8_t* data,
+                                  size_t datalen)
+{
+  NPRPC_HTTP3_DEBUG(
+      "conn={} recv_wt_data session_id={} stream_id={} datalen={}", debug_id(),
+      session_id, stream_id, datalen);
+  auto* stream = find_stream(stream_id);
+  if (!stream) {
+    stream = create_stream(stream_id);
+  }
+
+  // Mark as WT child stream and associate with session
+  if (!stream->webtransport_child_stream) {
+    stream->webtransport_child_stream = true;
+    stream->webtransport_session_id = session_id;
+    // Set stream user data so nghttp3 callbacks get our Http3Stream*
+    nghttp3_conn_set_stream_user_data(httpconn_, stream_id, stream);
+  }
+
+  // Binding protocol: first byte determines control vs native stream
+  if (stream->webtransport_child_binding == WebTransportChildBinding::Unbound) {
+    // Accumulate into probe buffer for binding detection
+    append_bytes(stream->webtransport_probe_buffer, data, datalen);
+
+    if (stream->webtransport_probe_buffer.size() < 1) {
+      return 0;
+    }
+
+    const auto* probe = stream->webtransport_probe_buffer.data_ptr();
+    const auto bind_kind = probe[0];
+    size_t binding_len = 0;
+
+    auto session = get_or_create_webtransport_control_session(session_id);
+
+    NPRPC_HTTP3_DEBUG(
+        "conn={} wt_binding_probe stream_id={} session_stream_id={} bind_kind={} buffered={}",
+        debug_id(), stream_id, session_id, bind_kind,
+        stream->webtransport_probe_buffer.size());
+
+    switch (bind_kind) {
+    case k_webtransport_bind_control:
+      if (!session->allow_child_stream_open(bind_kind)) {
+        NPRPC_LOG_ERROR("[HTTP/3][WT] child stream open throttled for control binding");
+        return -1;
+      }
+      stream->webtransport_child_binding = WebTransportChildBinding::Control;
+      session->bind_control_stream(stream_id);
+      binding_len = 1;
+      NPRPC_HTTP3_DEBUG(
+          "conn={} wt_bind_control transport_stream_id={} session_stream_id={}",
+          debug_id(), stream_id, session_id);
+      break;
+    case k_webtransport_bind_native_stream:
+      if (stream->webtransport_probe_buffer.size() < 9) {
+        return 0; // Need more data (1 byte kind + 8 byte stream_id)
+      }
+      if (!session->allow_child_stream_open(bind_kind)) {
+        NPRPC_LOG_ERROR("[HTTP/3][WT] child stream open throttled for native binding");
+        return -1;
+      }
+      std::memcpy(&stream->webtransport_native_stream_id, probe + 1,
+                   sizeof(stream->webtransport_native_stream_id));
+      stream->webtransport_child_binding = WebTransportChildBinding::Native;
+      session->bind_native_stream(stream->webtransport_native_stream_id,
+                                  stream_id);
+      binding_len = 9;
+      NPRPC_HTTP3_DEBUG(
+          "conn={} wt_bind_native transport_stream_id={} session_stream_id={} native_stream_id={}",
+          debug_id(), stream_id, session_id,
+          stream->webtransport_native_stream_id);
+      break;
+    default:
+      NPRPC_LOG_ERROR("[HTTP/3][WT] Unknown child stream binding kind {}",
+                      bind_kind);
+      return -1;
+    }
+
+    // Forward remaining data after binding header to session
+    if (stream->webtransport_probe_buffer.size() > binding_len) {
+      if (!session->process_bytes(
+              stream_id,
+              stream->webtransport_probe_buffer.data_ptr() + binding_len,
+              stream->webtransport_probe_buffer.size() - binding_len)) {
+        return -1;
+      }
+    }
+    stream->webtransport_probe_buffer.clear();
+    return 0;
+  }
+
+  // Already bound — forward payload directly to session
+  NPRPC_HTTP3_DEBUG(
+      "conn={} wt_child_payload transport_stream_id={} session_stream_id={} binding={} datalen={}",
+      debug_id(), stream_id, session_id,
+      static_cast<int>(stream->webtransport_child_binding), datalen);
+  auto session = get_or_create_webtransport_control_session(session_id);
+  if (!session->process_bytes(stream_id, data, datalen)) {
+    return -1;
+  }
+  return 0;
 }
 
 //==============================================================================
@@ -4421,6 +4489,12 @@ void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
   // Note: client_scid is the client's Source CID (from hd.scid/vc.scid)
   //       client_dcid is what client sent as Destination CID (from
   //       hd.dcid/vc.dcid)
+
+  NPRPC_HTTP3_TRACE(
+      "Accepting new connection from {}, client DCID={}, client SCID={}",
+      remote_ep.address().to_string(), cid_to_hex(&dcid),
+      cid_to_hex(&scid));
+
   conn = std::make_shared<Http3Connection>(
       this, socket_, local_ep_, remote_ep, &scid, &dcid,
       nullptr, // client_scid=scid, client_dcid=dcid, no retry token initially

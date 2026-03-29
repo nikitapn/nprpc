@@ -15,6 +15,8 @@
 #include <nprpc/export.hpp>
 #include <nprpc_base_ext.hpp>
 
+#define NPRPC_LOGGER_ENABLE_COLOR 0
+
 namespace nprpc::impl {
 
 // Simple logger that mimics spdlog's interface
@@ -44,23 +46,23 @@ class SimpleLogger
     }
   }
 
-  const char* level_name(LogLevel lvl) const
+  constexpr char level_name(LogLevel lvl) const
   {
     switch (lvl) {
     case LogLevel::trace:
-      return "trace";
+      return 'T';
     case LogLevel::debug:
-      return "debug";
+      return 'D';
     case LogLevel::info:
-      return "info";
+      return 'I';
     case LogLevel::warn:
-      return "warn";
+      return 'W';
     case LogLevel::error:
-      return "error";
+      return 'E';
     case LogLevel::critical:
-      return "critical";
+      return 'C';
     default:
-      return "unknown";
+      return 'U'; // Unknown
     }
   }
 
@@ -92,9 +94,13 @@ class SimpleLogger
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Format: [2025-12-09 15:30:45.123] [nprpc] [level] message
-    std::clog << "[" << format_time() << "] "
-              << "[" << name_ << "] "
-              << "[" << level_color(lvl) << level_name(lvl) << "\033[0m] "
+    std::clog << '[' << format_time() << "] "
+              << '[' << name_ << "] "
+#if NPRPC_LOGGER_ENABLE_COLOR
+              << '[' << level_color(lvl) << level_name(lvl) << "\033[0m] "
+#else
+              << '[' << level_name(lvl) << "] "
+#endif
               << std::format(fmt, std::forward<Args>(args)...) << std::endl;
   }
 

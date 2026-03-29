@@ -12,14 +12,14 @@
 #include <atomic>
 #include <random>
 
-#define NPRPC_ENABLE_STREAM_MANAGER_TRACE 0
+#define NPRPC_ENABLE_STREAM_MANAGER_TRACE 1
 
 #if NPRPC_ENABLE_STREAM_MANAGER_TRACE
-# define NPRPC_STREAM_MANAGER_LOG_TRACE(format, ...)              \
-  NPRPC_LOG_TRACE(                                                \
-    "[StreamManager] {:p} {} " #format __VA_OPT__(, )__VA_ARGS__)
+# define NPRPC_STREAM_MANAGER_LOG_TRACE(format_string, ...)              \
+  NPRPC_LOG_TRACE(                                                       \
+    "[StreamManager] ptr={:p} " format_string, static_cast<void*>(this) __VA_OPT__(, )__VA_ARGS__)
 #else
-# define NPRPC_STREAM_MANAGER_LOG_TRACE(format, ...) do {} while(0)
+# define NPRPC_STREAM_MANAGER_LOG_TRACE(format_string, ...) do {} while(0)
 #endif
 
 namespace nprpc::impl {
@@ -49,6 +49,7 @@ bool StreamManager::is_stream_started(uint64_t stream_id) const
 
 void StreamManager::dispatch_buffer(uint64_t stream_id, flat_buffer&& fb)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("Dispatching buffer to stream: stream_id={} buffer_size={}", stream_id, fb.data().size());
   auto* header = reinterpret_cast<flat::Header*>(fb.data().data());
   if (header->msg_id == MessageId::StreamDataChunk) {
     const bool unreliable = is_stream_unreliable(stream_id);
@@ -66,6 +67,22 @@ void StreamManager::dispatch_buffer(uint64_t stream_id, flat_buffer&& fb)
     return;
   }
 
+  // StreamCompletion/StreamError must go on the same native transport stream
+  // as the data chunks, so that the WT bidi stream can be FIN'd after the
+  // last buffer is drained.  Falls back to the control stream when native
+  // streams are not in use (e.g. TCP transport).
+  if (header->msg_id == MessageId::StreamCompletion ||
+      header->msg_id == MessageId::StreamError) {
+    if (send_native_stream_callback_) {
+      send_native_stream_callback_(std::move(fb));
+    } else if (send_callback_) {
+      send_callback_(std::move(fb));
+    } else {
+      NPRPC_LOG_ERROR("StreamManager::dispatch_buffer: no send callback set");
+    }
+    return;
+  }
+
   if (send_callback_) {
     send_callback_(std::move(fb));
   } else {
@@ -75,12 +92,14 @@ void StreamManager::dispatch_buffer(uint64_t stream_id, flat_buffer&& fb)
 
 void StreamManager::defer_stream_start(uint64_t stream_id)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("Deferring stream start: stream_id={}", stream_id);
   std::lock_guard<std::mutex> lock(mutex_);
   pending_stream_starts_.push_back(stream_id);
 }
 
 void StreamManager::start_task_after_reply(uint64_t stream_id, ::nprpc::Task<> task)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("Registering task to start after reply: stream_id={}", stream_id);
   task.set_completion_handler([this, stream_id](std::exception_ptr ep) {
     this->post([this, stream_id, ep]() mutable {
       ::nprpc::Task<> completed_task;
@@ -122,6 +141,7 @@ void StreamManager::start_task_after_reply(uint64_t stream_id, ::nprpc::Task<> t
 
 void StreamManager::on_reply_sent()
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("Reply sent, checking for pending stream starts");
   std::vector<uint64_t> streams;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -135,6 +155,7 @@ void StreamManager::on_reply_sent()
 
 void StreamManager::start_stream(uint64_t stream_id)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("Starting stream: stream_id={}", stream_id);
   StreamWriterBase* raw_writer = nullptr;
   std::vector<flat_buffer> pending;
   bool has_task = false;
@@ -261,6 +282,7 @@ bool StreamManager::is_stream_unreliable(uint64_t stream_id) const
 void StreamManager::register_reader(uint64_t stream_id,
                                     StreamReaderBase* reader)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("Registering reader: stream_id={}", stream_id);
   std::lock_guard<std::mutex> lock(mutex_);
   auto& state = readers_[stream_id];
   state.reader = reader;
@@ -269,6 +291,7 @@ void StreamManager::register_reader(uint64_t stream_id,
 void StreamManager::unregister_reader(uint64_t stream_id,
                                       StreamReaderBase* reader)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("Unregistering reader: stream_id={}", stream_id);
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = readers_.find(stream_id);
   if (it != readers_.end() && it->second.reader == reader) {
@@ -288,6 +311,9 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
   flat::StreamChunk_Direct chunk(fb, sizeof(flat::Header));
   const auto stream_id = chunk.stream_id();
   const auto sequence = chunk.sequence();
+
+  NPRPC_STREAM_MANAGER_LOG_TRACE("on_chunk_received called: stream_id={} chunk_size={} sequence={}",
+                                 stream_id, fb.data().size(), sequence);
 
   StreamReaderBase* reader = nullptr;
   bool should_complete = false;
@@ -332,6 +358,7 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
 
 void StreamManager::on_stream_complete(uint64_t stream_id, uint64_t final_sequence)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("on_stream_complete called: stream_id={} final_sequence={}", stream_id, final_sequence);
   StreamReaderBase* reader = nullptr;
 
   {
@@ -359,6 +386,7 @@ void StreamManager::on_stream_complete(uint64_t stream_id, uint64_t final_sequen
 
 void StreamManager::on_stream_error(uint64_t stream_id, uint32_t error_code, flat_buffer&& error_data)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("on_stream_error called: stream_id={}, error_code={}", stream_id, error_code);
   StreamReaderBase* reader = nullptr;
 
   {
@@ -377,6 +405,7 @@ void StreamManager::on_stream_error(uint64_t stream_id, uint32_t error_code, fla
 
 void StreamManager::on_stream_cancel(uint64_t stream_id)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("on_stream_cancel called: stream_id={}", stream_id);
   StreamReaderBase* reader = nullptr;
   std::unique_ptr<StreamWriterBase> writer;
 
@@ -415,7 +444,7 @@ void StreamManager::send_chunk(uint64_t stream_id,
     unreliable = is_stream_unreliable(stream_id);
   }
 
-  NPRPC_STREAM_MANAGER_LOG_TRACE("StreamManager::send_chunk called: stream_id={}, data.size()={}, sequence={}, unreliable={}",
+  NPRPC_STREAM_MANAGER_LOG_TRACE("send_chunk called: stream_id={}, data.size()={}, sequence={}, unreliable={}",
                   stream_id, data.size(), sequence, unreliable);
 
   // TODO: Shared Memory Optimization - write directly to shared ring buffer
@@ -472,6 +501,7 @@ void StreamManager::send_chunk(uint64_t stream_id,
 
 void StreamManager::send_complete(uint64_t stream_id, uint64_t final_sequence)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("send_complete called: stream_id={} final_sequence={}", stream_id, final_sequence);
   flat_buffer fb;
   constexpr size_t header_size = sizeof(flat::Header);
   constexpr size_t msg_size = sizeof(flat::StreamComplete);  // stream_id(8) + final_sequence(8)
@@ -505,6 +535,8 @@ void StreamManager::send_error(uint64_t stream_id,
                                uint32_t error_code,
                                std::span<const uint8_t> error_data)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("send_error called: stream_id={} error_code={} error_data.size()={}",
+                                 stream_id, error_code, error_data.size());
   flat_buffer fb;
   constexpr size_t header_size = sizeof(flat::Header);
   constexpr size_t error_fixed_size = sizeof(flat::StreamError);
@@ -548,6 +580,7 @@ void StreamManager::send_error(uint64_t stream_id,
 
 void StreamManager::send_cancel(uint64_t stream_id)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("send_cancel called: stream_id={}", stream_id);
   flat_buffer fb;
   constexpr size_t header_size = sizeof(flat::Header);
   constexpr size_t msg_size = sizeof(flat::StreamCancel);  // stream_id(8)
@@ -578,6 +611,7 @@ void StreamManager::send_cancel(uint64_t stream_id)
 
 void StreamManager::send_window_update(uint64_t stream_id, uint32_t credits)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("send_window_update stream_id={} credits={}", stream_id, credits);
   // Window updates flow from receiver to sender via the main reliable channel.
   flat_buffer fb;
   constexpr size_t header_size = sizeof(flat::Header);
@@ -606,7 +640,7 @@ void StreamManager::send_window_update(uint64_t stream_id, uint32_t credits)
 
 void StreamManager::on_window_update(uint64_t stream_id, uint32_t credits)
 {
-  NPRPC_STREAM_MANAGER_LOG_TRACE("StreamManager::on_window_update stream_id={} credits={}", stream_id, credits);
+  NPRPC_STREAM_MANAGER_LOG_TRACE("on_window_update stream_id={} credits={}", stream_id, credits);
 
   boost::asio::steady_timer* timer = nullptr;
   std::vector<std::pair<flat_buffer, std::function<void()>>> to_dispatch;
@@ -665,6 +699,7 @@ void StreamManager::on_window_update(uint64_t stream_id, uint32_t credits)
 
 void StreamManager::register_external_writer(uint64_t stream_id)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("External writer registered for stream_id={}", stream_id);
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = writers_.find(stream_id);
   if (it == writers_.end()) {
@@ -679,6 +714,9 @@ void StreamManager::write_chunk_or_queue(uint64_t stream_id,
                                          uint64_t sequence,
                                          std::function<void()> callback)
 {
+  NPRPC_STREAM_MANAGER_LOG_TRACE("write_chunk_or_queue called: stream_id={}, data.size()={}, sequence={}",
+                  stream_id, data.size(), sequence);
+
   flat_buffer fb_to_send;
   bool send_now = false;
 

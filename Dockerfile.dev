@@ -94,7 +94,8 @@ ARG NPRPC_PROJECT_GIT_COMMIT
 ARG NPRPC_THIRD_PARTY_GIT_COMMITS
 
 # Build NPRPC C++ library and tools
-RUN cmake -G Ninja \
+RUN --mount=type=cache,id=nprpc-build,target=/workspace/.build_relwith_debinfo \
+  cmake -G Ninja \
     -S . \
     -B .build_relwith_debinfo \
     -DCMAKE_C_COMPILER=clang \
@@ -126,7 +127,8 @@ FROM nprpc-builder AS swift-builder
 WORKDIR /workspace/nprpc_swift
 
 # Generate Swift stubs
-RUN NPIDL=.build_relwith_debinfo/npidl/npidl ./gen_stubs.sh
+RUN --mount=type=cache,id=nprpc-build,target=/workspace/.build_relwith_debinfo \
+    NPIDL=/workspace/.build_relwith_debinfo/npidl/npidl ./gen_stubs.sh
 
 # Build Swift package (release mode)
 RUN swift build -c release \

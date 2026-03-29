@@ -198,6 +198,7 @@ export class StreamWriter<T> {
     }
     this.manager.send_complete(this.stream_id, this.sequence === 0n ? 0n : this.sequence - 1n);
     this.closed = true;
+    this.manager.writer_closed(this.stream_id);
   }
 
   abort(error_code: number = 1): void {
@@ -206,6 +207,7 @@ export class StreamWriter<T> {
     }
     this.manager.send_error(this.stream_id, error_code, new Uint8Array(0));
     this.closed = true;
+    this.manager.writer_closed(this.stream_id);
   }
 
   cancel(): void {
@@ -214,6 +216,7 @@ export class StreamWriter<T> {
     }
     this.manager.send_cancel(this.stream_id);
     this.closed = true;
+    this.manager.writer_closed(this.stream_id);
   }
 }
 
@@ -228,6 +231,7 @@ export const bytes_deserializer = (data: Uint8Array): Uint8Array => data;
 
 export class StreamManager {
   private readers = new Map<bigint, StreamReaderBase>();
+  private active_writers = new Set<bigint>();
   private id_counter = 0n;
   private static readonly random_base =
     (BigInt(Math.floor(Math.random() * 0xFFFFFFFF)) << 32n) |
@@ -236,6 +240,7 @@ export class StreamManager {
   constructor(
     private readonly send_message: (payload: ArrayBufferView) => void,
     private readonly send_native_stream?: (stream_id: bigint, payload: ArrayBufferView) => void,
+    private readonly on_stream_finished?: (stream_id: bigint) => void,
   ) {}
 
   generate_stream_id(): bigint {
@@ -260,6 +265,7 @@ export class StreamManager {
   }
 
   create_writer<T>(stream_id: bigint, serialize: (value: T) => Uint8Array): StreamWriter<T> {
+    this.active_writers.add(stream_id);
     return new StreamWriter<T>(serialize, this, stream_id);
   }
 
@@ -277,6 +283,18 @@ export class StreamManager {
   cancel_reader(stream_id: bigint, reader: StreamReaderBase): void {
     this.unregister_reader(stream_id, reader);
     this.send_cancel(stream_id);
+    this.maybe_stream_finished(stream_id);
+  }
+
+  writer_closed(stream_id: bigint): void {
+    this.active_writers.delete(stream_id);
+    this.maybe_stream_finished(stream_id);
+  }
+
+  private maybe_stream_finished(stream_id: bigint): void {
+    if (!this.readers.has(stream_id) && !this.active_writers.has(stream_id)) {
+      this.on_stream_finished?.(stream_id);
+    }
   }
 
   on_chunk_received(stream_id: bigint, data: Uint8Array, sequence: bigint): void {
@@ -287,6 +305,7 @@ export class StreamManager {
     }
     if (reader.push_chunk(data, sequence)) {
       this.readers.delete(stream_id);
+      this.maybe_stream_finished(stream_id);
     }
   }
 
@@ -298,6 +317,7 @@ export class StreamManager {
     }
     if (reader.complete(final_sequence)) {
       this.readers.delete(stream_id);
+      this.maybe_stream_finished(stream_id);
     }
   }
 
@@ -309,6 +329,7 @@ export class StreamManager {
     }
     reader.fail(error_code);
     this.readers.delete(stream_id);
+    this.maybe_stream_finished(stream_id);
   }
 
   on_stream_cancel(stream_id: bigint): void {
@@ -318,6 +339,7 @@ export class StreamManager {
     }
     reader.complete();
     this.readers.delete(stream_id);
+    this.maybe_stream_finished(stream_id);
   }
 
   send_chunk(stream_id: bigint, data: Uint8Array, sequence: bigint): void {

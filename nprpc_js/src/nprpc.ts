@@ -35,6 +35,7 @@ export type { ObjectId };
 
 export let rpc: Rpc;
 let host_info: HostInfo = {secured: false, webtransport: false, objects: {}};
+let initPromise_: Promise<Rpc> | null = null;
 
 let gLogLevel: LogLevel = LogLevel.error;
 const isBrowser = typeof window !== "undefined";
@@ -158,9 +159,12 @@ export class Connection {
   next_request_id: number;
   stream_manager: StreamManager;
   ready_: Promise<void>;
+  private closed_ = false;
   private wt_receive_buffer: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
   private wt_native_streams = new Map<bigint, WebTransportStreamState>();
   private wt_native_stream_opens = new Map<bigint, Promise<void>>();
+
+  public get is_closed() { return this.closed_; }
 
   private async perform_request(request_id: number, buffer: FlatBuffer) {
     // Inject request ID into the message header
@@ -170,6 +174,7 @@ export class Connection {
 
   private async send_payload(payload: ArrayBufferView) {
     await this.ready_;
+    if (this.closed_) throw new Error("Connection closed");
 
     if (this.endpoint.type === EndPointType.WebTransport) {
       await this.wt_writer.write(payload);
@@ -420,7 +425,7 @@ export class Connection {
     const opening = (async () => {
       await this.ready_;
 
-      const bidi = await this.wt.createBidirectionalStream();
+      const bidi = await this.wt_create_bidi_stream();
       const writer = bidi.writable.getWriter();
       this.wt_native_streams.set(stream_id, {
         writer,
@@ -509,6 +514,20 @@ export class Connection {
     });
   }
 
+  private async wt_create_bidi_stream(max_attempts = 5): Promise<any> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.wt.createBidirectionalStream();
+      } catch (e: any) {
+        if (attempt >= max_attempts - 1 ||
+            !e?.message?.includes('Insufficient resources')) {
+          throw e;
+        }
+        await new Promise(r => setTimeout(r, 50 * Math.pow(2, attempt)));
+      }
+    }
+  }
+
   private async init_webtransport(): Promise<void> {
     const WT = (globalThis as any).WebTransport;
     if (!WT) {
@@ -523,30 +542,46 @@ export class Connection {
     );
 
     await this.wt.ready;
-    const bidi = await this.wt.createBidirectionalStream();
+    const bidi = await this.wt_create_bidi_stream();
     this.wt_writer = bidi.writable.getWriter();
     await this.write_webtransport_bind_prefix(this.wt_writer,
                                               webtransport_bind_control);
     void this.read_webtransport_stream(bidi.readable);
   }
 
+  private close_native_stream(stream_id: bigint) {
+    if (this.endpoint.type !== EndPointType.WebTransport) return;
+    const state = this.wt_native_streams.get(stream_id);
+    if (!state) return;
+    try { state.writer.close(); } catch {}
+    this.wt_native_streams.delete(stream_id);
+  }
+
   private on_close() { 
-    // Cancel all pending requests and streams on connection close
+    if (this.closed_) return;
+    this.closed_ = true;
     for (const [, pending_request] of this.pending_requests) {
       pending_request.promise.set_exception(new Error("Connection closed") as any);
     }
     this.pending_requests.clear();
+    for (const [, state] of this.wt_native_streams) {
+      try { state.writer.close(); } catch {}
+    }
     this.wt_native_streams.clear();
     this.wt_native_stream_opens.clear();
     this.stream_manager.cancel_all();
   }
 
   private on_error(ev: Event) {
-    // Cancel all pending requests and streams on connection error
+    if (this.closed_) return;
+    this.closed_ = true;
     for (const [, pending_request] of this.pending_requests) {
       pending_request.promise.set_exception(new Error("Connection error") as any);
     }
     this.pending_requests.clear();
+    for (const [, state] of this.wt_native_streams) {
+      try { state.writer.close(); } catch {}
+    }
     this.wt_native_streams.clear();
     this.wt_native_stream_opens.clear();
     this.stream_manager.cancel_all();
@@ -564,6 +599,8 @@ export class Connection {
       void this.send_payload(payload);
     }, (stream_id, payload) => {
       void this.send_native_stream_payload(stream_id, payload);
+    }, (stream_id) => {
+      this.close_native_stream(stream_id);
     });
   }
 }
@@ -578,8 +615,11 @@ export class Rpc {
   private poa_list_: Poa[];
 
   get_connection(endpoint: EndPoint): Connection {
-    let existed = this.opened_connections_.find(c => c.endpoint.equal(endpoint));
-    if (existed) return existed;
+    const idx = this.opened_connections_.findIndex(c => c.endpoint.equal(endpoint));
+    if (idx >= 0) {
+      if (!this.opened_connections_[idx].is_closed) return this.opened_connections_[idx];
+      this.opened_connections_.splice(idx, 1);
+    }
 
     let con = new Connection(endpoint);
     this.opened_connections_.push(con);
@@ -1201,15 +1241,29 @@ export const init = async (
   use_host_json: boolean = true,
   explicit_host_info?: HostInfo,
 ): Promise<Rpc> => {
+  if (rpc) return rpc;
+  if (initPromise_) return initPromise_;
+
   if (explicit_host_info) {
     host_info.secured = Boolean(explicit_host_info.secured);
     host_info.webtransport = Boolean(explicit_host_info.webtransport);
     host_info.webtransport_options = explicit_host_info.webtransport_options;
   }
 
-  return rpc
-    ? rpc
-    : (rpc = new Rpc(explicit_host_info ?? (use_host_json ? await Rpc.read_host() : {} as HostInfo)));
+  initPromise_ = (async () => {
+    try {
+      const info = explicit_host_info ?? (use_host_json ? await Rpc.read_host() : {} as HostInfo);
+      rpc = new Rpc(info);
+      return rpc;
+    } catch (e) {
+      initPromise_ = null;
+      throw e;
+    }
+  })();
+
+  console.log("Sanity check: 1");
+
+  return initPromise_;
 }
 
 export const setLogLevel = (logLevel: LogLevel): void => {
