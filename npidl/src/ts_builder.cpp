@@ -2213,7 +2213,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       }
       out << ");\n"
           << bl() << "for await (const chunk of source as any) {\n"
-          << bb(false) << bl() << "writer.write(chunk);\n" << eb()
+          << bb(false) << bl() << "await writer.write(chunk);\n" << eb()
           << bl() << "writer.close();\n"
           << eb(false)
           << bl() << "} catch (e) {\n"

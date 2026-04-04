@@ -35,33 +35,6 @@ namespace nprpc {
 }
 
 namespace nprpc_swift {
-
-// ============================================================================
-// Version & Info
-// ============================================================================
-
-/// Get NPRPC version string
-inline const char* get_version() {
-    return "1.0.0";  // TODO: Pull from actual version
-}
-
-// ============================================================================
-// Simple test function to verify interop works
-// ============================================================================
-
-/// Simple function to verify Swift can call C++ code
-inline int32_t add_numbers(int32_t a, int32_t b) {
-    return a + b;
-}
-
-/// Test string passing from Swift to C++
-inline std::string greet(const std::string& name) {
-    std::string result = "Hello from NPRPC C++, ";
-    result += name;
-    result += "!";
-    return result;
-}
-
 /// Helper to convert std::string to C string for Swift (avoids interior pointer issues)
 /// Swift can't call .c_str() due to lifetime concerns
 inline const char* string_to_cstr(const std::string& str) {
@@ -226,6 +199,10 @@ struct EndPointInfo {
 // ============================================================================
 
 extern "C" {
+
+// Get current thread ID for logging
+uint32_t nprpc_get_thread_id();
+const char* nprpc_get_thread_name();
 
 // FlatBuffer operations
 void* nprpc_flatbuffer_create();

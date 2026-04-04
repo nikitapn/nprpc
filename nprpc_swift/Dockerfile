@@ -1,5 +1,5 @@
 # Use official Swift Docker image (Ubuntu-based)
-FROM swift:6.2.4
+FROM swift:6.3.0
 
 # Install additional build dependencies (Swift image already has build essentials)
 RUN apt-get update && apt-get install -y \

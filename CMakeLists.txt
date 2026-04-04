@@ -313,6 +313,7 @@ add_library(nprpc
   src/helper.cpp
   src/flat_buffer.cpp
   src/uuid.cpp
+  src/thread_identity.cpp
   # Public headers
   include/nprpc_base_ext.hpp
   include/nprpc_nameserver.hpp

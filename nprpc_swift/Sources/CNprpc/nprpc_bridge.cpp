@@ -110,7 +110,6 @@ struct RpcHandleImpl {
 
     ~RpcHandleImpl() {
         if (rpc_instance) {
-            NPRPC_LOG_INFO("[SWB] About to destroy Rpc instance");
             rpc_instance->destroy();
             rpc_instance = nullptr;
         }
@@ -465,6 +464,15 @@ std::string EndPointInfo::to_url() const {
 // ============================================================================
 
 extern "C" {
+
+uint32_t nprpc_get_thread_id() {
+    uint32_t id = nprpc::impl::get_thread_id() & 0xFFFFFFFF; // Ensure it fits in 32 bits
+    return id;
+}
+
+const char* nprpc_get_thread_name() {
+    return nprpc::impl::get_thread_name_cstr();
+}
 
 // FlatBuffer operations
 void* nprpc_flatbuffer_create() {
@@ -1121,7 +1129,6 @@ void* nprpc_get_stream_manager(void* session_ctx) {
         NPRPC_LOG_WARN("[SWB] nprpc_get_stream_manager: session_ctx is null");
         return nullptr;
     }
-    NPRPC_LOG_INFO("[SWB] nprpc_get_stream_manager: stream_manager={}", (void*)ctx->stream_manager);
     return ctx->stream_manager;
 }
 
@@ -1132,8 +1139,6 @@ void nprpc_stream_manager_send_chunk(
     uint32_t data_size,
     uint64_t sequence)
 {
-    NPRPC_LOG_INFO("[SWB] send_chunk: stream_id={} data_size={} sequence={}", stream_id, data_size, sequence);
-
     auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
     if (!mgr) {
         NPRPC_LOG_ERROR("[SWB] send_chunk: stream_manager is null");
@@ -1149,7 +1154,6 @@ void nprpc_stream_manager_send_chunk(
 }
 
 void nprpc_stream_manager_send_complete(void* stream_manager, uint64_t stream_id, uint64_t final_sequence) {
-    NPRPC_LOG_INFO("[SWB] send_complete: stream_id={} final_sequence={}", stream_id, final_sequence);
     auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
     if (!mgr) return;
 
@@ -1157,7 +1161,6 @@ void nprpc_stream_manager_send_complete(void* stream_manager, uint64_t stream_id
 }
 
 void nprpc_stream_manager_send_cancel(void* stream_manager, uint64_t stream_id) {
-    NPRPC_LOG_INFO("[SWB] send_cancel: stream_id={}", stream_id);
     auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
     if (!mgr) return;
 
@@ -1304,7 +1307,6 @@ struct SwiftStreamReader : public nprpc::StreamReaderBase {
         on_error_callback(on_error) {}
 
     void on_chunk_received(nprpc::flat_buffer fb) override {
-        NPRPC_LOG_INFO("[SWB] SwiftStreamReader::on_chunk_received");
         // Extract data from StreamChunk
         // Chunk layout: Header (16) + stream_id (8) + sequence (8) + data vector header (8) + window_size (4)
         constexpr size_t header_size = 16;
@@ -1317,8 +1319,6 @@ struct SwiftStreamReader : public nprpc::StreamReaderBase {
         const uint8_t* chunk_ptr = static_cast<const uint8_t*>(data.data()) + chunk_offset;
         uint32_t data_rel_offset = *reinterpret_cast<const uint32_t*>(chunk_ptr + 16);
         uint32_t data_count = *reinterpret_cast<const uint32_t*>(chunk_ptr + 20);
-
-        NPRPC_LOG_INFO("[SWB] Chunk: data_count={}", data_count);
 
         if (data_count > 0 && on_chunk_callback) {
             const void* data_ptr = chunk_ptr + 16 + data_rel_offset;
@@ -1347,7 +1347,6 @@ void nprpc_stream_register_reader(
     void (*on_complete)(void*),
     void (*on_error)(void*, uint32_t))
 {
-    NPRPC_LOG_INFO("[SWB] nprpc_stream_register_reader: stream_id={}", stream_id);
     auto* obj = static_cast<nprpc::Object*>(object_ptr);
     if (!obj) {
         NPRPC_LOG_ERROR("[SWB] nprpc_stream_register_reader: object_ptr is null");
@@ -1365,7 +1364,6 @@ void nprpc_stream_register_reader(
     // Note: Memory ownership is transferred to stream_manager
     auto* reader = new SwiftStreamReader(context, on_chunk, on_complete, on_error);
     session->ctx().stream_manager->register_reader(stream_id, reader);
-    NPRPC_LOG_INFO("[SWB] nprpc_stream_register_reader: Reader registered with stream_manager={}", (void*)session->ctx().stream_manager);
 }
 
 void nprpc_stream_set_reader_unreliable(
@@ -1396,7 +1394,6 @@ void nprpc_stream_manager_register_reader(
     void (*on_complete)(void*),
     void (*on_error)(void*, uint32_t))
 {
-    NPRPC_LOG_INFO("[SWB] nprpc_stream_manager_register_reader: stream_id={}", stream_id);
     auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
     if (!mgr) {
         NPRPC_LOG_ERROR("[SWB] nprpc_stream_manager_register_reader: stream_manager is null");

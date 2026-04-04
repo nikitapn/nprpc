@@ -5,6 +5,7 @@
 #include <nprpc/impl/shared_memory_channel.hpp>
 #include <nprpc/impl/shared_memory_connection.hpp>
 #include <nprpc/serialization/oarchive.h>
+#include <nprpc/impl/misc/thread_identity.hpp>
 #ifdef NPRPC_QUIC_ENABLED
 #include <nprpc/impl/quic_transport.hpp>
 #endif
@@ -317,7 +318,10 @@ void RpcImpl::start_thread_pool(size_t thread_count) noexcept
 {
   pool_ = std::make_unique<boost::asio::thread_pool>(thread_count);
   for (size_t i = 0; i < thread_count; ++i) {
-    boost::asio::post(*pool_, [this] { ioc_.run(); });
+    boost::asio::post(*pool_, [this, i] { 
+      nprpc::impl::set_thread_name("rpc_worker_" + std::to_string(i));
+      ioc_.run();
+    });
   }
 }
 
@@ -796,7 +800,6 @@ RpcImpl::RpcImpl()
                                    const std::filesystem::path&,
                                    std::function<void()>);
 #ifdef NPRPC_SSR_ENABLED
-    namespace impl = nprpc::impl;
     std::filesystem::path ssr_server_root;
     if (g_cfg.ssr_enabled && !g_cfg.ssr_handler_dir.empty()) {
       // Watch the whole handler dir (e.g. build/), not just build/server/.

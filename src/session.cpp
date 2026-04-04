@@ -11,7 +11,7 @@
 
 #include "logging.hpp"
 
-#define NPRPC_ENABLE_SESSION_TRACE 1
+#define NPRPC_ENABLE_SESSION_TRACE 0
 
 #if NPRPC_ENABLE_SESSION_TRACE
 # define NPRPC_SESSION_LOG_TRACE(format, ...)                \

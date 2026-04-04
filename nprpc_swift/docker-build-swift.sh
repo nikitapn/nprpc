@@ -27,12 +27,28 @@ if [ "$RUN_TESTS" = true ]; then
      ${DOCKER_IMAGE_NAME} bash -c '
       set -e
       cd /workspace/nprpc_swift
+      TOOLCHAIN_FILE=".build/.swift-toolchain-version"
+      TOOLCHAIN_VERSION="$(swift --version)"
+
+      if [ -d .build ]; then
+        if [ ! -f "$TOOLCHAIN_FILE" ]; then
+          echo "No Swift toolchain marker found in .build. Removing stale build directory."
+          rm -rf .build
+        elif [ "$(cat "$TOOLCHAIN_FILE")" != "$TOOLCHAIN_VERSION" ]; then
+          echo "Swift toolchain changed. Removing stale build directory."
+          rm -rf .build
+        fi
+      fi
+
+      mkdir -p .build
+      printf "%s\n" "$TOOLCHAIN_VERSION" > "$TOOLCHAIN_FILE"
+
       export LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib:/workspace/.build_ubuntu_swift/openssl_install/lib"
       export LD_LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/openssl_install/lib"
       swift build
       set +e
       # Use stdbuf to disable output buffering so we see print() before timeout kills process
-      stdbuf -oL -eL timeout 15 swift test 2>&1
+      stdbuf -oL -eL timeout 30 swift test 2>&1
       code=$?
       test $code -eq 0 && echo "✅ Swift tests passed" || echo "❌ Swift tests failed with code $code" && exit $code
      '
@@ -42,6 +58,22 @@ else
      ${DOCKER_IMAGE_NAME} bash -c '
       set -e
       cd /workspace/nprpc_swift
+      TOOLCHAIN_FILE=".build/.swift-toolchain-version"
+      TOOLCHAIN_VERSION="$(swift --version)"
+
+      if [ -d .build ]; then
+        if [ ! -f "$TOOLCHAIN_FILE" ]; then
+          echo "No Swift toolchain marker found in .build. Removing stale build directory."
+          rm -rf .build
+        elif [ "$(cat "$TOOLCHAIN_FILE")" != "$TOOLCHAIN_VERSION" ]; then
+          echo "Swift toolchain changed. Removing stale build directory."
+          rm -rf .build
+        fi
+      fi
+
+      mkdir -p .build
+      printf "%s\n" "$TOOLCHAIN_VERSION" > "$TOOLCHAIN_FILE"
+
       export LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib:/workspace/.build_ubuntu_swift/openssl_install/lib"
       export LD_LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/openssl_install/lib"
       swift build

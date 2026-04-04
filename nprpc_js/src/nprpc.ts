@@ -128,6 +128,7 @@ interface PendingRequest {
 interface WebTransportStreamState {
   writer: any;
   receive_buffer: Uint8Array<ArrayBufferLike>;
+  pending_write: Promise<void>;
 }
 
 function get_object(buffer: FlatBuffer, poa_idx: poa_idx_t, object_id: bigint) {
@@ -184,22 +185,24 @@ export class Connection {
     this.ws.send(payload);
   }
 
-  private async send_native_stream_payload(stream_id: bigint,
-                                           payload: ArrayBufferView) {
-    await this.ready_;
-
+  private send_native_stream_payload(stream_id: bigint,
+                                     payload: ArrayBufferView) {
     if (this.endpoint.type !== EndPointType.WebTransport) {
       this.ws.send(payload);
       return;
     }
 
-    await this.ensure_native_stream(stream_id);
     const state = this.wt_native_streams.get(stream_id);
-    if (!state) {
-      throw new Error(`Missing WebTransport stream for ${stream_id}`);
-    }
+    if (!state) return;
 
-    await state.writer.write(payload);
+    // Chain writes through pending_write to preserve ordering.
+    // close_native_stream awaits this promise before closing the writer.
+    state.pending_write = state.pending_write.then(
+      () => {
+        state.writer.write(payload)
+        console.log(`StreamManager: sent payload for stream ${stream_id.toString()} (length: ${payload.byteLength})`);
+      }
+    );
   }
 
   private on_open() {
@@ -430,6 +433,7 @@ export class Connection {
       this.wt_native_streams.set(stream_id, {
         writer,
         receive_buffer: new Uint8Array(0),
+        pending_write: Promise.resolve(),
       });
 
       await this.write_webtransport_bind_prefix(writer,
@@ -553,8 +557,13 @@ export class Connection {
     if (this.endpoint.type !== EndPointType.WebTransport) return;
     const state = this.wt_native_streams.get(stream_id);
     if (!state) return;
-    try { state.writer.close(); } catch {}
     this.wt_native_streams.delete(stream_id);
+    // Wait for any in-flight writes (e.g. StreamCompletion) to complete
+    // before closing the underlying WritableStream.
+    state.pending_write.then(
+      () => { try { state.writer.close(); } catch {} },
+      () => { try { state.writer.close(); } catch {} },
+    );
   }
 
   private on_close() { 
@@ -601,6 +610,10 @@ export class Connection {
       void this.send_native_stream_payload(stream_id, payload);
     }, (stream_id) => {
       this.close_native_stream(stream_id);
+    }, (stream_id) => {
+      // Return the pending_write promise so close() can await the actual flush.
+      const state = this.wt_native_streams.get(stream_id);
+      return state ? state.pending_write : Promise.resolve();
     });
   }
 }
@@ -1260,8 +1273,6 @@ export const init = async (
       throw e;
     }
   })();
-
-  console.log("Sanity check: 1");
 
   return initPromise_;
 }

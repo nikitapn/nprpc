@@ -116,10 +116,10 @@ extern "C" {
   // Access buffers during dispatch
   FlatBufferHandle* SessionContext_get_rx_buffer(void* ctx);
   FlatBufferHandle* SessionContext_get_tx_buffer(void* ctx);
-  
+
   // Make simple responses
   void SessionContext_make_simple_answer(void* ctx, uint32_t message_id);
-  
+
   // Zero-copy buffer prep
   bool SessionContext_prepare_zero_copy_buffer(void* ctx, FlatBufferHandle* buf, size_t size);
 }
@@ -134,5 +134,7 @@ extern "C" {
 }
 
 } // namespace nprpc_swift
+
+
 
 #endif // __NPRPC_RUNTIME_BRIDGE_HPP__

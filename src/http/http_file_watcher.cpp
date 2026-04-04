@@ -3,6 +3,7 @@
 
 #include <nprpc/impl/http_file_watcher.hpp>
 #include <nprpc/impl/http_file_cache.hpp>
+#include <nprpc/impl/misc/thread_identity.hpp>
 
 #include "../logging.hpp"
 
@@ -73,7 +74,10 @@ HttpFileWatcher::HttpFileWatcher(std::filesystem::path root,
     add_tree(ssr_server_root_);
   }
 
-  thread_ = std::thread([this] { run(); });
+  thread_ = std::thread([this] { 
+    nprpc::impl::set_thread_name("file_watcher");
+    run(); 
+  });
   NPRPC_LOG_INFO("[FileWatcher] Watching {} for changes", root_.string());
   if (!ssr_server_root_.empty()) {
     NPRPC_LOG_INFO("[FileWatcher] Watching {} for SSR restarts",

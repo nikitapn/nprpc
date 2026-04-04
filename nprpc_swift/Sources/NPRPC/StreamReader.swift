@@ -89,22 +89,37 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
         return stream
     }
 
-    public func makeAsyncIterator() -> AsyncThrowingStream<T, Error>.Iterator {
-        stream.makeAsyncIterator()
+    public func makeAsyncIterator() -> WindowedIterator {
+        WindowedIterator(base: stream.makeAsyncIterator(), windowUpdateFn: windowUpdateFn)
     }
-    
-    /// Called when a data chunk is received from server
-    internal func onChunkReceived(data: UnsafeRawPointer, size: Int) {
-        guard size > 0 else {
-            return
-        }
 
+    /// Custom iterator that sends the window update *after* consuming a chunk,
+    /// i.e. after `base.next()` returns the value.  This is the correct
+    /// backpressure pattern: credit for chunk N is granted once Swift has
+    /// received it, not speculatively before requesting N+1.
+    /// Calling `windowUpdateFn` before the `await` on `base.next()` — even
+    /// when the buffer already holds data — created a suspension-point race on
+    /// single-core hosts that caused the iterator to miss the final chunk.
+    public struct WindowedIterator: AsyncIteratorProtocol {
+        var base: AsyncThrowingStream<T, Error>.AsyncIterator
+        let windowUpdateFn: (() -> Void)?
+
+        public mutating func next() async throws -> T? {
+            let value = try await base.next()
+            if value != nil { windowUpdateFn?() }
+            return value
+        }
+    }
+
+    /// Called when a data chunk is received — just buffer it; the window update
+    /// is deferred to WindowedIterator.next() so we don't grant a credit while
+    /// still on the Boost.Asio strand thread.
+    internal func onChunkReceived(data: UnsafeRawPointer, size: Int) {
+        guard size > 0 else { return }
         let value = deserializer(data, size)
         continuation?.yield(value)
-        // Grant one credit back to the sender for each chunk we accept.
-        windowUpdateFn?()
     }
-    
+
     /// Called when stream completes successfully
     internal func onComplete() {
         lock.lock()

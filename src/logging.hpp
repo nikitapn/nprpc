@@ -14,6 +14,7 @@
 
 #include <nprpc/export.hpp>
 #include <nprpc_base_ext.hpp>
+#include <nprpc/impl/misc/thread_identity.hpp>
 
 #define NPRPC_LOGGER_ENABLE_COLOR 0
 
@@ -93,8 +94,11 @@ class SimpleLogger
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // Format: [2025-12-09 15:30:45.123] [nprpc] [level] message
+    std::string thread_name = get_thread_name();
+    // Format: [2025-12-09 15:30:45.123] [tid] [NPRPC] [level] message
     std::clog << '[' << format_time() << "] "
+              << "[0x" << std::hex << get_thread_id() << std::dec <<
+              ( thread_name.empty() ? "" : ("|" + thread_name)) << "] "
               << '[' << name_ << "] "
 #if NPRPC_LOGGER_ENABLE_COLOR
               << '[' << level_color(lvl) << level_name(lvl) << "\033[0m] "

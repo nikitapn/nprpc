@@ -166,9 +166,14 @@ export class StreamReader<T> extends StreamReaderBase {
   public get is_done(): boolean { return this.done_; }
 }
 
+const kInitialWindowSize = 8;
+
 export class StreamWriter<T> {
   private sequence = 0n;
   private closed = false;
+  private credits = kInitialWindowSize;
+  private credit_resolve: (() => void) | null = null;
+  private write_error: Error | null = null;
 
   constructor(
     private readonly serialize: (value: T) => Uint8Array,
@@ -176,10 +181,18 @@ export class StreamWriter<T> {
     private readonly stream_id: bigint,
   ) {}
 
-  write(value: T): void {
+  async write(value: T): Promise<void> {
     if (this.closed) {
       throw new Error('Stream is already closed');
     }
+
+    // Wait for a credit if none available.
+    while (this.credits <= 0) {
+      await new Promise<void>(resolve => { this.credit_resolve = resolve; });
+      if (this.write_error) throw this.write_error;
+    }
+    this.credits--;
+
     const sequence = this.sequence++;
     const data = this.serialize(value);
     emit_stream_debug_event(this.stream_id, {
@@ -192,12 +205,42 @@ export class StreamWriter<T> {
     this.manager.send_chunk(this.stream_id, data, sequence);
   }
 
-  close(): void {
+  /** @internal — called by StreamManager when the remote consumer grants credits. */
+  _grant_credits(credits: number): void {
+    this.credits += credits;
+    if (this.credits > 0 && this.credit_resolve) {
+      const fn = this.credit_resolve;
+      this.credit_resolve = null;
+      fn();
+    }
+  }
+
+  /** @internal — called when the underlying transport closes; unblocks any parked write. */
+  _cancel(error: Error): void {
+    if (!this.closed) {
+      this.closed = true;
+      this.write_error = error;
+      if (this.credit_resolve) {
+        const fn = this.credit_resolve;
+        this.credit_resolve = null;
+        fn();
+      }
+    }
+  }
+
+  async close(): Promise<void> {
     if (this.closed) {
       return;
     }
-    this.manager.send_complete(this.stream_id, this.sequence === 0n ? 0n : this.sequence - 1n);
+    const final_sequence = this.sequence === 0n ? 0n : this.sequence - 1n;
+    console.log(`StreamWriter: close called for stream ${this.stream_id.toString()} (final sequence: ${final_sequence.toString()})`);
+    this.manager.send_complete(this.stream_id, final_sequence);
     this.closed = true;
+    // Wait for StreamCompletion to be physically written before the caller
+    // can proceed to fire FinishUpload on the control stream.  Without this
+    // await, FinishUpload may race the StreamCompletion on the server.
+    await this.manager.flush_native_stream(this.stream_id);
+    // Clean up writer state and close the underlying native stream writer.
     this.manager.writer_closed(this.stream_id);
   }
 
@@ -237,11 +280,19 @@ export class StreamManager {
     (BigInt(Math.floor(Math.random() * 0xFFFFFFFF)) << 32n) |
     BigInt(Math.floor(Math.random() * 0xFFFFFFFF));
 
+  private writer_objects = new Map<bigint, StreamWriter<any>>();
+
   constructor(
     private readonly send_message: (payload: ArrayBufferView) => void,
     private readonly send_native_stream?: (stream_id: bigint, payload: ArrayBufferView) => void,
     private readonly on_stream_finished?: (stream_id: bigint) => void,
+    private readonly get_native_stream_flush?: (stream_id: bigint) => Promise<void>,
   ) {}
+
+  /** Resolves after all pending writes for the native stream have been flushed. */
+  flush_native_stream(stream_id: bigint): Promise<void> {
+    return this.get_native_stream_flush ? this.get_native_stream_flush(stream_id) : Promise.resolve();
+  }
 
   generate_stream_id(): bigint {
     return StreamManager.random_base ^ (++this.id_counter);
@@ -266,7 +317,9 @@ export class StreamManager {
 
   create_writer<T>(stream_id: bigint, serialize: (value: T) => Uint8Array): StreamWriter<T> {
     this.active_writers.add(stream_id);
-    return new StreamWriter<T>(serialize, this, stream_id);
+    const writer = new StreamWriter<T>(serialize, this, stream_id);
+    this.writer_objects.set(stream_id, writer);
+    return writer;
   }
 
   create_bidi_stream<TIn, TOut>(
@@ -288,6 +341,7 @@ export class StreamManager {
 
   writer_closed(stream_id: bigint): void {
     this.active_writers.delete(stream_id);
+    this.writer_objects.delete(stream_id);
     this.maybe_stream_finished(stream_id);
   }
 
@@ -373,7 +427,12 @@ export class StreamManager {
     buf.write_msg_type(impl.MessageType.Request);
     impl.marshal_StreamComplete(buf, header_size, { stream_id, final_sequence });
     buf.write_len(buf.size);
-    this.send_message(buf.writable_view);
+    if (this.send_native_stream) {
+      console.log(`StreamManager: sending complete for stream ${stream_id.toString()} (final sequence: ${final_sequence.toString()})`);
+      this.send_native_stream(stream_id, buf.writable_view);
+    } else {
+      this.send_message(buf.writable_view);
+    }
   }
 
   send_error(stream_id: bigint, error_code: number, error_data: Uint8Array): void {
@@ -389,7 +448,11 @@ export class StreamManager {
     buf.write_msg_type(impl.MessageType.Request);
     impl.marshal_StreamError(buf, header_size, { stream_id, error_code, error_data });
     buf.write_len(buf.size);
-    this.send_message(buf.writable_view);
+    if (this.send_native_stream) {
+      this.send_native_stream(stream_id, buf.writable_view);
+    } else {
+      this.send_message(buf.writable_view);
+    }
   }
 
   send_cancel(stream_id: bigint): void {
@@ -429,12 +492,28 @@ export class StreamManager {
       direction: 'incoming',
       credits,
     });
-    // For TS-side writers this is currently a no-op because the TS StreamWriter
-    // does not implement backpressure yet. Reserved for future client-stream use.
-    void stream_id; void credits;
+    const writer = this.writer_objects.get(stream_id);
+    if (writer) {
+      writer._grant_credits(credits);
+    }
+  }
+
+  cancel_writer_for_stream(stream_id: bigint, error: Error): void {
+    const writer = this.writer_objects.get(stream_id);
+    if (writer) {
+      writer._cancel(error);
+      this.writer_objects.delete(stream_id);
+      this.active_writers.delete(stream_id);
+    }
   }
 
   cancel_all(): void {
+    const connectionError = new Error('Connection closed');
+    for (const writer of this.writer_objects.values()) {
+      writer._cancel(connectionError);
+    }
+    this.writer_objects.clear();
+    this.active_writers.clear();
     for (const reader of this.readers.values()) {
       reader.fail(0);
     }

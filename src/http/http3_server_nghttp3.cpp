@@ -11,6 +11,7 @@
 #include <nprpc/impl/http_rpc_session.hpp>
 #include <nprpc/impl/http_utils.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/misc/thread_identity.hpp>
 #ifdef NPRPC_SSR_ENABLED
 #include <nprpc/impl/ssr_manager.hpp>
 #endif
@@ -65,8 +66,8 @@
 // Configuration macros
 //==============================================================================
 
-#define NPRPC_ENABLE_HTTP3_TRACE 1
-#define NPRPC_ENABLE_HTTP3_RESPONSE_DEBUG 1
+#define NPRPC_ENABLE_HTTP3_TRACE 0
+#define NPRPC_ENABLE_HTTP3_RESPONSE_DEBUG 0
 #define NPRPC_NGTCP2_ENABLE_LOGGING 0
 #define NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY 0
 #define NPRPC_ENABLE_HTTP3_MONOTONIC_TIMESTAMP_WORKAROUND 1
@@ -140,6 +141,7 @@ constexpr std::size_t kMaxUdpGsoSegments = MAX_PKTS_BURST;
 
 size_t default_http3_worker_count() noexcept
 {
+  return 1;
   const auto hw = std::thread::hardware_concurrency();
   if (hw == 0) {
     return 1;
@@ -4676,7 +4678,10 @@ public:
 #endif
 
     for (auto& worker : workers_) {
-      worker->thread = std::thread([ioc = &worker->ioc] { ioc->run(); });
+      worker->thread = std::thread([ioc = &worker->ioc, worker_id = worker->server->worker_id()] {
+        nprpc::impl::set_thread_name("h3_" + std::to_string(worker_id));
+        ioc->run();
+      });
     }
 
     NPRPC_LOG_INFO("[HTTP/3] Started {} dedicated worker(s) on UDP port {}",
