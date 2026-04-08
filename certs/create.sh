@@ -1,5 +1,8 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 # IMPORTANT: ALWAYS USE SHORT-LIVED CERTIFICATE FOR TESTING PURPOSES (13 DAYS MAX)
 DAYS=13
 
@@ -25,3 +28,5 @@ DNS.1=localhost
 DNS.2=linuxvm
 EOF
 )
+
+openssl x509 -in out/localhost.crt -text -noout | sed -n '1,220p'

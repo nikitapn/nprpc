@@ -518,7 +518,8 @@ void nprpc_stream_register_reader(
     void* context,
     void (*on_chunk)(void*, const void*, uint32_t),
     void (*on_complete)(void*),
-    void (*on_error)(void*, uint32_t));
+    void (*on_error)(void*, uint32_t),
+    void (*on_destroy)(void*));
 
 void nprpc_stream_set_reader_unreliable(
     void* object_ptr,
@@ -532,7 +533,8 @@ void nprpc_stream_manager_register_reader(
     void* context,
     void (*on_chunk)(void*, const void*, uint32_t),
     void (*on_complete)(void*),
-    void (*on_error)(void*, uint32_t));
+    void (*on_error)(void*, uint32_t),
+    void (*on_destroy)(void*));
 
 void nprpc_stream_manager_set_reader_unreliable(
     void* stream_manager,

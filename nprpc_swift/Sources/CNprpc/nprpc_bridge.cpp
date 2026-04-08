@@ -1295,16 +1295,25 @@ struct SwiftStreamReader : public nprpc::StreamReaderBase {
     void (*on_chunk_callback)(void*, const void*, uint32_t);
     void (*on_complete_callback)(void*);
     void (*on_error_callback)(void*, uint32_t);
+    void (*on_destroy_callback)(void*);
 
     SwiftStreamReader(
         void* context,
         void (*on_chunk)(void*, const void*, uint32_t),
         void (*on_complete)(void*),
-        void (*on_error)(void*, uint32_t)
+        void (*on_error)(void*, uint32_t),
+        void (*on_destroy)(void*)
     ) : swift_context(context),
         on_chunk_callback(on_chunk),
         on_complete_callback(on_complete),
-        on_error_callback(on_error) {}
+        on_error_callback(on_error),
+        on_destroy_callback(on_destroy) {}
+
+    ~SwiftStreamReader() override {
+        if (swift_context && on_destroy_callback) {
+            on_destroy_callback(swift_context);
+        }
+    }
 
     void on_chunk_received(nprpc::flat_buffer fb) override {
         // Extract data from StreamChunk
@@ -1345,11 +1354,15 @@ void nprpc_stream_register_reader(
     void* context,
     void (*on_chunk)(void*, const void*, uint32_t),
     void (*on_complete)(void*),
-    void (*on_error)(void*, uint32_t))
+    void (*on_error)(void*, uint32_t),
+    void (*on_destroy)(void*))
 {
     auto* obj = static_cast<nprpc::Object*>(object_ptr);
     if (!obj) {
         NPRPC_LOG_ERROR("[SWB] nprpc_stream_register_reader: object_ptr is null");
+        if (context && on_destroy) {
+            on_destroy(context);
+        }
         return;
     }
 
@@ -1357,13 +1370,16 @@ void nprpc_stream_register_reader(
     auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
     if (!session || !session->ctx().stream_manager) {
         NPRPC_LOG_ERROR("[SWB] nprpc_stream_register_reader: no session or stream_manager");
+        if (context && on_destroy) {
+            on_destroy(context);
+        }
         return;
     }
 
     // Create and register the Swift reader bridge
     // Note: Memory ownership is transferred to stream_manager
-    auto* reader = new SwiftStreamReader(context, on_chunk, on_complete, on_error);
-    session->ctx().stream_manager->register_reader(stream_id, reader);
+    auto reader = std::make_unique<SwiftStreamReader>(context, on_chunk, on_complete, on_error, on_destroy);
+    session->ctx().stream_manager->register_reader(stream_id, std::move(reader));
 }
 
 void nprpc_stream_set_reader_unreliable(
@@ -1392,16 +1408,20 @@ void nprpc_stream_manager_register_reader(
     void* context,
     void (*on_chunk)(void*, const void*, uint32_t),
     void (*on_complete)(void*),
-    void (*on_error)(void*, uint32_t))
+    void (*on_error)(void*, uint32_t),
+    void (*on_destroy)(void*))
 {
     auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
     if (!mgr) {
         NPRPC_LOG_ERROR("[SWB] nprpc_stream_manager_register_reader: stream_manager is null");
+        if (context && on_destroy) {
+            on_destroy(context);
+        }
         return;
     }
 
-    auto* reader = new SwiftStreamReader(context, on_chunk, on_complete, on_error);
-    mgr->register_reader(stream_id, reader);
+    auto reader = std::make_unique<SwiftStreamReader>(context, on_chunk, on_complete, on_error, on_destroy);
+    mgr->register_reader(stream_id, std::move(reader));
 }
 
 void nprpc_stream_manager_set_reader_unreliable(

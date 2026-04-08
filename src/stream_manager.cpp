@@ -282,10 +282,21 @@ bool StreamManager::is_stream_unreliable(uint64_t stream_id) const
 void StreamManager::register_reader(uint64_t stream_id,
                                     StreamReaderBase* reader)
 {
-  NPRPC_STREAM_MANAGER_LOG_TRACE("Registering reader: stream_id={}", stream_id);
+  NPRPC_STREAM_MANAGER_LOG_TRACE("Registering borrowed reader: stream_id={}", stream_id);
   std::lock_guard<std::mutex> lock(mutex_);
   auto& state = readers_[stream_id];
   state.reader = reader;
+  state.owned_reader.reset();
+}
+
+void StreamManager::register_reader(uint64_t stream_id,
+                                    std::unique_ptr<StreamReaderBase> reader)
+{
+  NPRPC_STREAM_MANAGER_LOG_TRACE("Registering owned reader: stream_id={}", stream_id);
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto& state = readers_[stream_id];
+  state.reader = reader.get();
+  state.owned_reader = std::move(reader);
 }
 
 void StreamManager::unregister_reader(uint64_t stream_id,
@@ -316,6 +327,7 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
                                  stream_id, fb.data().size(), sequence);
 
   StreamReaderBase* reader = nullptr;
+  std::unique_ptr<StreamReaderBase> completed_reader;
   bool should_complete = false;
   std::vector<flat_buffer> ready_chunks;
 
@@ -327,8 +339,8 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
       return;
     }
 
-    reader = it->second.reader;
     auto& state = it->second;
+    reader = state.reader;
     if (state.unreliable) {
       ready_chunks.push_back(std::move(fb));
     } else if (sequence >= state.next_expected_sequence) {
@@ -344,6 +356,7 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
 
     if (state.final_sequence && state.next_expected_sequence > *state.final_sequence) {
       should_complete = true;
+      completed_reader = std::move(state.owned_reader);
       readers_.erase(it);
     }
   }
@@ -351,7 +364,7 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
   for (auto& ready_fb : ready_chunks) {
     reader->on_chunk_received(std::move(ready_fb));
   }
-  if (should_complete) {
+  if (should_complete && reader) {
     reader->on_complete();
   }
 }
@@ -360,6 +373,7 @@ void StreamManager::on_stream_complete(uint64_t stream_id, uint64_t final_sequen
 {
   NPRPC_LOG_WARN("on_stream_complete called: stream_id={} final_sequence={}", stream_id, final_sequence);
   StreamReaderBase* reader = nullptr;
+  std::unique_ptr<StreamReaderBase> owned_reader;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -368,11 +382,12 @@ void StreamManager::on_stream_complete(uint64_t stream_id, uint64_t final_sequen
       return;
     }
 
+    reader = it->second.reader;
     if (it->second.unreliable || final_sequence == kEmptyStreamFinalSequence) {
-      reader = it->second.reader;
+      owned_reader = std::move(it->second.owned_reader);
       readers_.erase(it);
     } else if (it->second.next_expected_sequence > final_sequence) {
-      reader = it->second.reader;
+      owned_reader = std::move(it->second.owned_reader);
       readers_.erase(it);
     } else {
       it->second.final_sequence = final_sequence;
@@ -388,12 +403,14 @@ void StreamManager::on_stream_error(uint64_t stream_id, uint32_t error_code, fla
 {
   NPRPC_STREAM_MANAGER_LOG_TRACE("on_stream_error called: stream_id={}, error_code={}", stream_id, error_code);
   StreamReaderBase* reader = nullptr;
+  std::unique_ptr<StreamReaderBase> owned_reader;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = readers_.find(stream_id);
     if (it != readers_.end()) {
       reader = it->second.reader;
+      owned_reader = std::move(it->second.owned_reader);
       readers_.erase(it);
     }
   }
@@ -407,6 +424,7 @@ void StreamManager::on_stream_cancel(uint64_t stream_id)
 {
   NPRPC_STREAM_MANAGER_LOG_TRACE("on_stream_cancel called: stream_id={}", stream_id);
   StreamReaderBase* reader = nullptr;
+  std::unique_ptr<StreamReaderBase> owned_reader;
   std::unique_ptr<StreamWriterBase> writer;
 
   {
@@ -414,6 +432,7 @@ void StreamManager::on_stream_cancel(uint64_t stream_id)
     auto reader_it = readers_.find(stream_id);
     if (reader_it != readers_.end()) {
       reader = reader_it->second.reader;
+      owned_reader = std::move(reader_it->second.owned_reader);
       readers_.erase(reader_it);
     }
 
@@ -748,25 +767,32 @@ void StreamManager::write_chunk_or_queue(uint64_t stream_id,
 
 void StreamManager::cancel_all()
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<std::pair<StreamReaderBase*, std::unique_ptr<StreamReaderBase>>> readers;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
 
-  for (auto& [id, info] : writers_) {
-    info.writer->cancel();
-  }
-  writers_.clear();
-  active_tasks_.clear();
-  pending_messages_.clear();
-  pending_stream_starts_.clear();
-  started_streams_.clear();
-
-  for (auto& [id, reader] : readers_) {
-    // Send empty error buffer to indicate connection closed
-    flat_buffer empty_fb;
-    if (reader.reader) {
-      reader.reader->on_error(0, std::move(empty_fb));
+    for (auto& [id, info] : writers_) {
+      info.writer->cancel();
     }
+    writers_.clear();
+    active_tasks_.clear();
+    pending_messages_.clear();
+    pending_stream_starts_.clear();
+    started_streams_.clear();
+
+    readers.reserve(readers_.size());
+    for (auto& [id, state] : readers_) {
+      if (state.reader) {
+        readers.emplace_back(state.reader, std::move(state.owned_reader));
+      }
+    }
+    readers_.clear();
   }
-  readers_.clear();
+
+  for (auto& [reader, _] : readers) {
+    flat_buffer empty_fb;
+    reader->on_error(0, std::move(empty_fb));
+  }
 }
 
 } // namespace nprpc::impl

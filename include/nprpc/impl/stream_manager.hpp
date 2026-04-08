@@ -63,6 +63,7 @@ public:
 
   // Client-side: register incoming stream
   void register_reader(uint64_t stream_id, StreamReaderBase* reader);
+  void register_reader(uint64_t stream_id, std::unique_ptr<StreamReaderBase> reader);
   void unregister_reader(uint64_t stream_id, StreamReaderBase* reader);
   void set_reader_unreliable(uint64_t stream_id, bool unreliable);
 
@@ -143,10 +144,9 @@ private:
   std::unordered_map<uint64_t, StreamInfo> writers_;
 
   // Active incoming streams (client-side)
-  // Readers are owned by the client application (StreamReader<T>), so we hold
-  // raw pointers
   struct ReaderState {
     StreamReaderBase* reader = nullptr;
+    std::unique_ptr<StreamReaderBase> owned_reader;
     bool unreliable = false;
     std::optional<uint64_t> final_sequence;
     uint64_t next_expected_sequence = 0;
