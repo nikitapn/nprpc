@@ -142,9 +142,9 @@ export async function echoBidiByteStream() {
   const stream = await testStreams.EchoByteStream(mask);
 
   for (const value of input) {
-    stream.writer.write(Uint8Array.of(value));
+    await stream.writer.write(Uint8Array.of(value));
   }
-  stream.writer.close();
+  await stream.writer.close();
 
   const chunks = await collectStream(stream.reader);
   return {
@@ -255,7 +255,7 @@ export async function stressConcurrentBidiStreams(streamCount: number, chunksPer
       for (let streamIndex = 0; streamIndex < streamCount; ++streamIndex) {
         const value = (streamIndex * 53 + round) & 0xff;
         sent[streamIndex].push(value);
-        streams[streamIndex].writer.write(Uint8Array.of(value));
+        await streams[streamIndex].writer.write(Uint8Array.of(value));
       }
     }
 
@@ -265,14 +265,14 @@ export async function stressConcurrentBidiStreams(streamCount: number, chunksPer
       for (let streamIndex = 0; streamIndex < streamCount; ++streamIndex) {
         const value = (streamIndex * 53 + round) & 0xff;
         sent[streamIndex].push(value);
-        streams[streamIndex].writer.write(Uint8Array.of(value));
+        await streams[streamIndex].writer.write(Uint8Array.of(value));
       }
     }
 
     const controlResult = await controlPromise;
 
     for (const stream of streams) {
-      stream.writer.close();
+      await stream.writer.close();
     }
 
     const outputs = await Promise.all(outputPromises);

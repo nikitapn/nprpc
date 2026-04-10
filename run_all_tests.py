@@ -96,7 +96,7 @@ def ensure_nprpc_bpf_capabilities(binary: Path) -> None:
         subprocess.run([setcap, "cap_net_admin,cap_bpf+ep", str(binary)], check=True)
         return
 
-    subprocess.run(["sudo", "-v"], check=True)
+    # subprocess.run(["sudo", "-v"], check=True)
     subprocess.run(["sudo", setcap, "cap_net_admin,cap_bpf+ep", str(binary)], check=True)
 
 

@@ -1876,15 +1876,15 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
     if (fn->out_s) {
       for (auto arg : fn->args) {
         if (arg->modifier == ArgumentModifier::Out) {
-          // For output parameters, use ObjectId instead of
-          // ObjectProxy for object types
-          out << bl() << "let _out_" << ++out_ix << ": ";
+          // For output parameters, wrap in NPRPC.make_ref<T>() so the
+          // servant implementation can assign through the ref object.
+          out << bl() << "const _out_" << ++out_ix << " = NPRPC.make_ref<";
           if (arg->type->id == FieldType::Object) {
             out << "NPRPC.ObjectId";
           } else {
             out << emit_type(arg->type);
           }
-          out << ";\n";
+          out << ">();\n";
         }
       }
     }
@@ -2059,9 +2059,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
           out << ", ";
         ++ix;
         out << "_" << ix << ": ";
-        // Output variables are now declared as ObjectId directly, no
-        // .data needed
-        out << "_out_" << ix;
+        out << "_out_" << ix << ".value";
       }
       out << "};\n";
 
