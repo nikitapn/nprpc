@@ -35,46 +35,6 @@ private final class StreamReaderBridge<T: Sendable>: StreamReaderBridgeBase {
     }
 }
 
-private final class StreamReaderContinuationCore<T: Sendable> : @unchecked Sendable {
-    private let callbackQueue: DispatchQueue
-    private var continuation: AsyncThrowingStream<T, Error>.Continuation?
-
-    init(streamId: UInt64, continuation: AsyncThrowingStream<T, Error>.Continuation?) {
-        self.callbackQueue = DispatchQueue(label: "nprpc.stream-reader.\(streamId)")
-        self.continuation = continuation
-    }
-
-    func yield(_ value: T) {
-        callbackQueue.async {
-            self.continuation?.yield(value)
-        }
-    }
-
-    func finish() {
-        callbackQueue.async {
-            let cont = self.continuation
-            self.continuation = nil
-            cont?.finish()
-        }
-    }
-
-    func fail(_ error: Error) {
-        callbackQueue.async {
-            let cont = self.continuation
-            self.continuation = nil
-            cont?.finish(throwing: error)
-        }
-    }
-
-    func cancel() {
-        callbackQueue.async {
-            let cont = self.continuation
-            self.continuation = nil
-            cont?.finish(throwing: CancellationError())
-        }
-    }
-}
-
 internal let nprpcStreamReaderOnChunk: @convention(c) (UnsafeMutableRawPointer?, UnsafeRawPointer?, UInt32) -> Void = {
     context, dataPtr, size in
     guard let context = context, let dataPtr = dataPtr else { return }
@@ -109,7 +69,7 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
 
     private let streamId: UInt64
     private let stream: AsyncThrowingStream<T, Error>
-    private let continuationCore: StreamReaderContinuationCore<T>
+    private let continuation: AsyncThrowingStream<T, Error>.Continuation
     private var buffer: FlatBuffer?
     private let deserializer: (UnsafeRawPointer, Int) -> T
     // Optional callback invoked after each yielded chunk to send a window
@@ -126,8 +86,7 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
         self.stream = AsyncThrowingStream { continuation in
             cont = continuation
         }
-        self.continuationCore = StreamReaderContinuationCore(streamId: streamId,
-                                                             continuation: cont)
+        self.continuation = cont!
     }
 
     /// Get the underlying async stream for iteration
@@ -163,22 +122,22 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     internal func onChunkReceived(data: UnsafeRawPointer, size: Int) {
         guard size > 0 else { return }
         let value = deserializer(data, size)
-        continuationCore.yield(value)
+        continuation.yield(value)
     }
 
     /// Called when stream completes successfully
     internal func onComplete() {
-        continuationCore.finish()
+        continuation.finish()
     }
 
     /// Called when stream encounters an error
     internal func onError(_ error: Error) {
-        continuationCore.fail(error)
+        continuation.finish(throwing: error)
     }
 
     /// Cancel the stream
     public func cancel() {
-        continuationCore.cancel()
+        continuation.finish(throwing: CancellationError())
     }
 
     internal func makeBridgeContext() -> UnsafeMutableRawPointer {

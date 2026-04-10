@@ -4,6 +4,7 @@
 // Main module for NPRPC Swift bindings
 // Re-exports all public types and functions
 
+import Foundation
 // Export C bridge module
 @_exported import CNprpc
 
@@ -75,4 +76,32 @@ public func handleStandardReply(buffer: FlatBuffer) throws -> Int32 {
     default:
         return -1
     }
+}
+
+
+
+
+// ============================================================================
+// MARK: - NPRPC Logging Utility
+// ============================================================================
+
+private let _logDateFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+    return f
+}()
+private let _logLock = NSLock()
+
+public func nplog(_ level: String = "I", _ message: String, component: String = "NPRPC") {
+    _logLock.lock()
+    let ts = _logDateFormatter.string(from: Date())
+    _logLock.unlock()
+    // let threadId = Thread.current.isMainThread ? "main" : Thread.current.name ?? "unknown"
+    let threadId = NPRPC.getThreadId()
+    let threadName = NPRPC.getThreadName()
+    let threadIdHex = String(threadId, radix: 16)
+    print("[\(ts)] [0x\(threadIdHex)\(threadName.isEmpty ? "" : "|\(threadName)")] [\(component)] [\(level)] \(message)")
+#if canImport(Glibc)
+    fflush(nil)
+#endif
 }

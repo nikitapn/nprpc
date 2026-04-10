@@ -323,7 +323,7 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
   const auto stream_id = chunk.stream_id();
   const auto sequence = chunk.sequence();
 
-  NPRPC_LOG_WARN("on_chunk_received called: stream_id={} chunk_size={} sequence={}",
+  NPRPC_STREAM_MANAGER_LOG_TRACE("on_chunk_received called: stream_id={} chunk_size={} sequence={}",
                                  stream_id, fb.data().size(), sequence);
 
   StreamReaderBase* reader = nullptr;
@@ -371,7 +371,7 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
 
 void StreamManager::on_stream_complete(uint64_t stream_id, uint64_t final_sequence)
 {
-  NPRPC_LOG_WARN("on_stream_complete called: stream_id={} final_sequence={}", stream_id, final_sequence);
+  NPRPC_STREAM_MANAGER_LOG_TRACE("on_stream_complete called: stream_id={} final_sequence={}", stream_id, final_sequence);
   StreamReaderBase* reader = nullptr;
   std::unique_ptr<StreamReaderBase> owned_reader;
 
