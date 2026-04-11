@@ -16,14 +16,14 @@ const nested_test_str2 = "d34234k24j1;lk24j12lk341234n45n345n3kj45n2345jn34lk5jn
 
 describe('NPRPC Integration Tests', function() {
     this.timeout(30000); // 30 second timeout for all tests
-    
+
     let rpc: NPRPC.Rpc;
     let poa: NPRPC.Poa;
     let nameserver: NPRPC.Nameserver;
 
     before(async function() {
         this.timeout(60000); // 60 seconds for setup
-        
+
         console.log('Setting up NPRPC test environment...');
 
         // Initialize RPC connection
@@ -39,7 +39,7 @@ describe('NPRPC Integration Tests', function() {
         try {
             nameserver = NPRPC.get_nameserver('127.0.0.1');
             console.log('Nameserver proxy created');
-            
+
             // Wait a bit more for test server to register objects
             await new Promise(resolve => setTimeout(resolve, 3000));
         } catch (error) {
@@ -58,7 +58,7 @@ describe('NPRPC Integration Tests', function() {
         try {
             const objRef = NPRPC.make_ref<NPRPC.ObjectProxy>();
             const found = await nameserver.Resolve(objectName, objRef);
-            
+
             if (!found) {
                 throw new Error(`Failed to resolve object: ${objectName}`);
             }
@@ -111,7 +111,7 @@ describe('NPRPC Integration Tests', function() {
             const result = await testBasic.ReturnBoolean();
             expect(result).to.be.true;
         }); 
-        
+
         it('should return u32', async function() {
             const result = await testBasic.ReturnU32();
             expect(result).to.equal(42);
@@ -133,15 +133,15 @@ describe('NPRPC Integration Tests', function() {
             const aRef = NPRPC.make_ref();
             const bRef = NPRPC.make_ref();
             const cArray = NPRPC.make_ref<Uint8Array>();
-            
+
             // Call the Out method
             await testBasic.Out(aRef, bRef, cArray);
-            
+
             // Verify output values match C++ implementation
             expect(aRef.value).to.equal(100);
             expect(bRef.value).to.be.true;
             expect(cArray.value.length).to.equal(256);
-            
+
             // Verify the array content (should be 0, 1, 2, ..., 255)
             for (let i = 0; i < 256; i++) {
                 expect(cArray.value[i]).to.equal(i);
@@ -212,9 +212,9 @@ describe('NPRPC Integration Tests', function() {
             // This tests the fix for: output parameters in flat structs with exception handlers
             // The C++ generator must declare output variables before the try block
             const valueRef = NPRPC.make_ref<number>();
-            
+
             await testBasic.OutScalarWithException(10, 20, valueRef);
-            
+
             // Verify the output value (dev_addr + addr = 10 + 20 = 30)
             expect(valueRef.value).to.equal(30);
         });
@@ -274,7 +274,7 @@ describe('NPRPC Integration Tests', function() {
                 throw error;
             }
         });
-        
+
         it('should return optional', async function() {
             try {
                 const opt = await testOptional.ReturnOpt1();
@@ -359,7 +359,6 @@ describe('NPRPC Integration Tests', function() {
         }
 
         it('should send object proxy correctly', async function() {
-            
 
             const simpleObjectProxy = new SimpleObjectImpl();
             const oid = poa.activate_object(simpleObjectProxy);
@@ -896,11 +895,11 @@ describe('NPRPC Integration Tests', function() {
         it('should return output parameters directly via HTTP', async function() {
             // HTTP methods return values directly, no ref objects needed
             const result = await testBasic.http.Out();
-            
+
             expect(result.a).to.equal(100);
             expect(result.b).to.be.true;
             expect(result.c.length).to.equal(256);
-            
+
             for (let i = 0; i < 256; i++) {
                 expect(result.c[i]).to.equal(i);
             }
@@ -964,7 +963,7 @@ describe('NPRPC Integration Tests', function() {
 
         it('should handle nested structures via HTTP', async function() {
             const result = await testNested.http.Out();
-            
+
             expect(result).to.not.be.undefined;
             expect(result.a).to.be.an('array').that.has.lengthOf(1024);
             for (let i = 0; i < 1024; i++) {
@@ -1013,18 +1012,18 @@ describe('NPRPC Integration Tests', function() {
 
         before(async function() {
             this.timeout(10000);
-            
+
             // Check if HTTP/3 is available (curl with HTTP/3 support)
             http3Available = await installHttp3Fetch();
             if (!http3Available) {
                 console.log('[HTTP/3] Skipping HTTP/3 tests - curl does not support HTTP/3');
                 return;
             }
-            
+
             testBasic = await resolveTestObject('nprpc_test_basic', test.TestBasic);
             testOptional = await resolveTestObject('nprpc_test_optional', test.TestOptional);
             testNested = await resolveTestObject('nprpc_test_nested', test.TestNested);
-            
+
             // Override endpoint for HTTP/3: set port and type to SecuredHttp
             (testBasic.endpoint as any).port = HTTP3_PORT;
             (testBasic.endpoint as any).type = EndPointType.SecuredHttp;
@@ -1032,7 +1031,7 @@ describe('NPRPC Integration Tests', function() {
             (testOptional.endpoint as any).type = EndPointType.SecuredHttp;
             (testNested.endpoint as any).port = HTTP3_PORT;
             (testNested.endpoint as any).type = EndPointType.SecuredHttp;
-            
+
             console.log(`[HTTP/3] Test endpoint configured: https://127.0.0.1:${HTTP3_PORT}`);
         });
 
@@ -1060,18 +1059,18 @@ describe('NPRPC Integration Tests', function() {
             expect(result).to.be.true;
         });
 
-        // it('should return output parameters directly via HTTP/3', async function() {
-        //     if (!http3Available) this.skip();
-        //     const result = await testBasic.http.Out();
-            
-        //     expect(result.a).to.equal(100);
-        //     expect(result.b).to.be.true;
-        //     expect(result.c.length).to.equal(256);
-            
-        //     for (let i = 0; i < 256; i++) {
-        //         expect(result.c[i]).to.equal(i);
-        //     }
-        // });
+        it('should return output parameters directly via HTTP/3', async function() {
+            if (!http3Available) this.skip();
+            const result = await testBasic.http.Out();
+
+            expect(result.a).to.equal(100);
+            expect(result.b).to.be.true;
+            expect(result.c.length).to.equal(256);
+
+            for (let i = 0; i < 256; i++) {
+                expect(result.c[i]).to.equal(i);
+            }
+        });
 
         it('should return array of IDs via HTTP/3', async function() {
             if (!http3Available) this.skip();
@@ -1133,7 +1132,7 @@ describe('NPRPC Integration Tests', function() {
         it('should handle nested structures via HTTP/3', async function() {
             if (!http3Available) this.skip();
             const result = await testNested.http.Out();
-            
+
             expect(result).to.not.be.undefined;
             expect(result.a).to.be.an('array').that.has.lengthOf(1024);
             for (let i = 0; i < 1024; i++) {

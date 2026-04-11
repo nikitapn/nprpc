@@ -390,7 +390,10 @@ void StreamManager::on_stream_complete(uint64_t stream_id, uint64_t final_sequen
       owned_reader = std::move(it->second.owned_reader);
       readers_.erase(it);
     } else {
+      // Not all chunks received yet — store final_sequence so that
+      // on_chunk_received() will trigger on_complete() once it advances past it.
       it->second.final_sequence = final_sequence;
+      reader = nullptr;
     }
   }
 
