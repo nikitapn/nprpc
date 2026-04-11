@@ -1,11 +1,11 @@
 # TODO.md
 
 ## STD
-* [ ] Replace std::unordered_map with absl::flat_hash_map in performance-critical paths.
+* [ ] Replace std::unordered_map with absl::flat_hash_map in performance-critical paths. (Partially done in http3_server_nghttp3, need to audit the rest of the codebase for hot paths like pending request tracking, connection maps, etc.)
 
 ## Packaging / DX
 * [ ] Write a friction-free setup guide for a mixed Swift/C++ + SvelteKit project with `nprpc_node` / `nprpc_shm.node`, including build, runtime layout, and SSR packaging expectations.
-* [ ] Provide a minimal starter template or reference example that works out of the box for Swift backend + SvelteKit frontend + NPRPC SSR/addon integration.
+* [x] Provide a minimal starter template or reference example that works out of the box for Swift backend + SvelteKit frontend + NPRPC SSR/addon integration.
 
 ## Runtime Configuration
 * [ ] Add `RpcBuilder` options for socket send/receive buffer sizes so applications can tune kernel buffers without patching transport code.
@@ -18,10 +18,9 @@
 
 ## Serialization
 * [ ] Add hint attributes [estimated_in_size=x], [estimated_out_size=x] to IDL for preallocating buffers, before method calls.
-* [ ] Support flat_buffer view mode in generated code to avoid copies when serializing/deserializing from shared memory.
 
 ## Shared Memory Transport
-* [ ] Optimize shared memory server session to avoid unnecessary copies when receiving messages.
+* [ ] Optimize shared memory server session to avoid unnecessary copies when sending messages. We can traverse the nested stucts first to calculate the total size, and then reserve the entire buffer once in the ring buffer and that will eliminate memcpy entirely.
 * [ ] Build on Windows is broken due to missing `sys/mman.h` and `shm_open()`. Need to implement Windows shared memory APIs using `CreateFileMapping` and `MapViewOfFile`.
 * [ ] **Add cross-process atomic tests**: Current tests run client/server in same process. Need separate executables to verify atomics work correctly across true process boundaries (different address spaces). This is critical because the recent race bug was single-process (read thread vs io_context thread), not cross-process.
 
@@ -30,62 +29,16 @@
 * [ ] Deflate or zlib compression for large messages.
 * [ ] Async socket connect with timeout.
 
-## WebSocket Transport
+## WebSocket/WebTransport
 * [ ] Support openning another WebSocket connection on demand when existing one is busy (for high-throughput clients).
+* [ ] **[HIGH]** Add cancellation support for in-flight regular (non-streaming) RPC calls via `AbortSignal`. When triggered, send a `Cancel` message with the matching request ID over the transport before the reply arrives, then reject the pending promise on the client. Server-side cooperative cancellation is a bonus but not required — letting the handler finish and dropping the reply on the client is acceptable. Requires tracking in-flight request IDs in `PendingRequestMap` (or equivalent) and wiring `AbortSignal` through the generated proxy call signatures.
 
 ## HTTP/3 Server
 
-## QUIC Transport (MsQuic) ✅ COMPLETE
+## Streaming
+* [ ] **[HIGH]** Improve the window credit flow-control system for server-side and bidi streams. Current implementation grants one credit per consumed chunk (see `send_window_update`), which can cause unnecessary round-trips and head-of-line stalling under burst workloads. Investigate: batching credit returns (return N credits after N chunks rather than 1-at-a-time), a configurable initial window size per stream, and adaptive credit sizing based on observed throughput. Also audit the interaction between the credit system and seek/cancel — credits sent to an already-cancelled stream should be silently dropped.
 
-Motivation: Add a modern, high-performance transport option with built-in encryption and multiplexing. QUIC offers:
-- Reliable streams with automatic retransmission
-- Unreliable datagrams (RFC 9221) for fire-and-forget
-- Built-in congestion control and flow control
-- TLS 1.3 encryption
-- 0-RTT connection establishment
-- Connection migration (survives IP changes)
-
-### Phase 1: Core Integration ✅
-* [x] Add MsQuic as submodule/dependency in CMake
-* [x] Create `QuicConnection` class (client-side)
-  - Wraps `QUIC_CONNECTION` handle
-  - Manages streams for RPC calls
-  - Integrates with boost::asio io_context
-* [x] Create `QuicListener` class (server-side)
-  - Accepts incoming QUIC connections
-  - Creates server sessions per connection
-* [x] Implement `QuicServerSession` for dispatching
-* [x] Wire up QUIC to RPC framework (endpoint URL: `quic://host:port`)
-* [x] Add `quic` activation flag
-* [x] Add `set_listen_quic_port()` to RpcBuilder
-
-### Phase 2: Stream Management ✅
-* [x] Use bidirectional streams for request/response RPC (default, reliable)
-* [x] Use QUIC DATAGRAM extension for `[unreliable]` methods
-* [x] Graceful shutdown (track connections, clear callbacks)
-* [ ] Connection pooling and multiplexing (future optimization)
-
-### Phase 3: IDL `[unreliable]` Attribute ✅
-* [x] Support `[unreliable]` attribute on methods (not interface-level)
-* [x] Transport behavior:
-  - **TCP/WebSocket**: Ignore `[unreliable]` (always reliable)
-  - **QUIC**: Default reliable (streams), `[unreliable]` uses datagrams
-
-### Phase 4: Testing & Benchmarks ✅
-* [x] Unit tests for QUIC transport (TestQuicBasic, TestQuicUnreliable)
-* [x] Latency benchmarks vs TCP
-* [ ] Throughput benchmarks
-* [ ] Connection establishment time (0-RTT)
-
-## HTTP/3 Server ✅ Core Implementation Complete
-
-Serve web clients over HTTP/3 using nghttp3/ngtcp2
-
-### Why HTTP/3?
-- Modern web standard, shows technical credibility
-- Reuse existing MsQuic infrastructure
-- Lower latency for web clients (0-RTT, multiplexing)
-- "My personal site runs on HTTP/3" 🚀
+## HTTP/3 Server
 
 ### Implementation Status
 * [x] Create `Http3Server` class (include/nprpc/impl/http3_server.hpp, src/http3_server.cpp)
@@ -100,12 +53,12 @@ Serve web clients over HTTP/3 using nghttp3/ngtcp2
 * [x] Test with actual HTTP/3 client (curl --http3, browser)
 
 ### Remaining Work
-* [ ] Error handling improvements
-* [ ] Performance tuning
+* [x] Error handling improvements
+* [x] Performance tuning
 * [ ] QUIC/HTTP/3 endpoint sharing (same port, ALPN differentiation)
-* [ ] CORS headers for browser requests
-* [ ] Add an HTTP server option to disable or aggressively invalidate the static file cache during development so rebuilt frontend assets do not require a server restart.
-* [ ] Evaluate a better cache invalidation strategy than manual restart, e.g. mtime checks, versioned asset keys, or inotify-based invalidation.
+* [x] CORS headers for browser requests
+* [x] Add an HTTP server option to disable or aggressively invalidate the static file cache during development so rebuilt frontend assets do not require a server restart.
+* [x] Evaluate a better cache invalidation strategy than manual restart, e.g. mtime checks, versioned asset keys, or inotify-based invalidation.
 
 ### Ideas for Future Enhancements
 | Area | Improvement | Complexity |
@@ -134,22 +87,3 @@ Serve web clients over HTTP/3 using nghttp3/ngtcp2
 │               http:// https://  wt:// (WebTransport)                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
-
-## Swift Language Bindings ✅ COMPLETE
-
-Full Swift 6.2+ bindings via C++ interop. All core features working:
-
-* [x] Swift package structure (nprpc_swift)
-* [x] Swift wrappers for Rpc, Poa, ObjectPtr
-* [x] npidl `--swift` code generation
-* [x] Marshalling: fundamentals, enums, strings, vectors, arrays, flat/nested structs, optionals, objects
-* [x] Servant base classes with dispatch
-* [x] Client proxy generation
-* [x] Exception propagation (Swift throws ↔ C++ exceptions)
-* [x] Async methods (Swift concurrency)
-* [x] Object references as parameters
-* [x] Streaming RPC (AsyncStream servant → AsyncThrowingStream client)
-* [x] Bad input validation ([trusted=false])
-* [x] Large message support
-* [x] Docker-based build pipeline
-* [x] Comprehensive integration test suite
