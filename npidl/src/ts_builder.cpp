@@ -337,6 +337,9 @@ void TSBuilder::emit_type(AstTypeDecl* type, std::ostream& os)
   case FieldType::Optional:
     emit_type(cwt(type)->type, os);
     break;
+  case FieldType::Variant:
+    os << ns(cvar(type)->nm) << cvar(type)->name;
+    break;
   default:
     assert(false);
   }
@@ -381,6 +384,12 @@ void TSBuilder::emit_variable(AstTypeDecl* type,
   case FieldType::Optional:
     emit_variable(cwt(type)->type, name, os);
     break;
+  case FieldType::Variant: {
+    auto v = cvar(type);
+    os << bl() << "let " << name << ": " << ns(v->nm) << v->name << " = {} as "
+       << ns(v->nm) << v->name << ";\n";
+    break;
+  }
   default:
     assert(false);
   }
@@ -430,6 +439,9 @@ void TSBuilder::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type,
     // Input: ObjectId (raw oid from poa.activate_object)
     // Output: ObjectProxy (with endpoint selection)
     os << (input ? "NPRPC.ObjectId" : "NPRPC.ObjectProxy");
+    break;
+  case FieldType::Variant:
+    os << ns(cvar(type)->nm) << cvar(type)->name;
     break;
   default:
     assert(false);
@@ -1054,6 +1066,94 @@ void TSBuilder::emit_using(AstAliasDecl* u)
 {
   out << bl() << "export type " << u->name << " = " << emit_type(u->type)
       << ";\n";
+}
+
+void TSBuilder::emit_variant(AstVariantDecl* v)
+{
+  // Discriminated union type declaration
+  out << bl() << "export type " << v->name << " =\n";
+  for (size_t i = 0; i < v->arms.size(); ++i) {
+    out << bl() << "  | { kind: '" << v->arms[i].name << "'; value: "
+        << emit_type(v->arms[i].type) << " }";
+    if (i + 1 < v->arms.size())
+      out << "\n";
+  }
+  out << ";\n\n";
+
+  // Marshal function
+  // Wire layout: uint32_t discriminant (offset+0) + uint32_t arm_offset (offset+4)
+  out << bl() << "export function marshal_" << v->name
+      << "(buf: NPRPC.FlatBuffer, offset: number, data: " << v->name
+      << "): void {\n";
+  bb();
+  out << bl() << "switch (data.kind) {\n";
+  bb();
+  for (size_t i = 0; i < v->arms.size(); ++i) {
+    auto& arm = v->arms[i];
+    auto* atype = arm.type;
+    if (atype->id == FieldType::Alias)
+      atype = calias(atype)->get_real_type();
+
+    out << bl() << "case '" << arm.name << "': {\n";
+    bb();
+    out << bl() << "buf.dv.setUint32(offset, " << i << ", true);\n";
+
+    switch (atype->id) {
+    case FieldType::Struct: {
+      auto* s = cflat(atype);
+      out << bl() << "NPRPC.marshal_optional_struct(buf, offset + 4, data.value, marshal_"
+          << s->name << ", " << s->size << ", " << s->align << ");\n";
+      break;
+    }
+    case FieldType::String:
+      out << bl() << "NPRPC.marshal_optional_struct(buf, offset + 4, data.value, NPRPC.marshal_string, 8, 4);\n";
+      break;
+    default: {
+      // Fundamental/enum/other: grow buffer manually and write value inline
+      auto [sz, al] = get_type_size_align(atype);
+      out << bl() << "{ const __arm = buf.size; buf.commit(" << sz << ");\n"
+          << bl() << "  buf.dv.setUint32(offset + 4, __arm, true); }\n";
+      break;
+    }
+    }
+
+    out << bl() << "break;\n";
+    out << eb();
+  }
+  out << eb(); // switch
+  out << eb() << "\n"; // function
+
+  // Unmarshal function
+  out << bl() << "export function unmarshal_" << v->name
+      << "(buf: NPRPC.FlatBuffer, offset: number): " << v->name << " {\n";
+  bb();
+  out << bl() << "const kind = buf.dv.getUint32(offset, true);\n";
+  out << bl() << "const arm_offset = (offset + 4) + buf.dv.getUint32(offset + 4, true);\n";
+  out << bl() << "switch (kind) {\n";
+  bb();
+  for (size_t i = 0; i < v->arms.size(); ++i) {
+    auto& arm = v->arms[i];
+    auto* atype = arm.type;
+    if (atype->id == FieldType::Alias)
+      atype = calias(atype)->get_real_type();
+
+    out << bl() << "case " << i << ": return { kind: '" << arm.name << "', value: ";
+    switch (atype->id) {
+    case FieldType::Struct:
+      out << "unmarshal_" << cflat(atype)->name << "(buf, arm_offset)";
+      break;
+    case FieldType::String:
+      out << "NPRPC.unmarshal_string(buf, arm_offset)";
+      break;
+    default:
+      out << "buf.dv.getUint8(arm_offset) /* TODO: correct read for arm type */";
+      break;
+    }
+    out << " };\n";
+  }
+  out << bl() << "default: throw new NPRPC.Exception('Invalid variant discriminant: ' + kind);\n";
+  out << eb(); // switch
+  out << eb() << "\n"; // function
 }
 
 void TSBuilder::emit_enum(AstEnumDecl* e)
@@ -2614,6 +2714,13 @@ void TSBuilder::emit_field_marshal(AstFieldDecl* f,
     emit_field_marshal(&temp_field, offset, data_name);
     return;
   }
+  case FieldType::Variant: {
+    auto* v = cvar(f->type);
+    const int field_offset = align_offset(4, offset, 8);
+    out << bl() << "marshal_" << v->name << "(buf, offset + " << field_offset
+        << ", " << field_access << ");\n";
+    break;
+  }
   default:
     assert(false);
   }
@@ -2941,6 +3048,13 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
     temp_field.type = real_type;
     emit_field_unmarshal(&temp_field, offset, result_name, has_endpoint);
     return;
+  }
+  case FieldType::Variant: {
+    auto* v = cvar(f->type);
+    const int field_offset = align_offset(4, offset, 8);
+    out << bl() << field_name << " = unmarshal_" << v->name << "(buf, offset + "
+        << field_offset << ");\n";
+    break;
   }
   default:
     assert(false);

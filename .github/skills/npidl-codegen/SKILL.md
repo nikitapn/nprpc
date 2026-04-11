@@ -29,6 +29,25 @@ if (peek() == TokenId::OutDirect) { fn->direct = true; }
 if (check(&Parser::one, TokenId::OutDirect)) { fn->direct = true; }
 ```
 
+### Example (variant arm parsing)
+
+Mixing `peek()` + `match()` corrupts `tokens_looked_` and causes subsequent
+`type_decl` calls to over-read or find wrong tokens.
+
+```cpp
+// WRONG — match() pops the queue but tokens_looked_ is not decremented,
+// so the following check(&Parser::type_decl,...) mis-reads the next arm:
+Token arm_tok = match(TokenId::Identifier);
+match(':');
+if (!check(&Parser::type_decl, std::ref(arm_type))) ...  // Wrong token!
+
+// CORRECT — use a pure peek-chain; type_decl1's flush() consumes
+// arm_tok, ':', and the type name all at once:
+Token arm_tok = peek();                   // stays queued
+if (peek() != TokenId::Colon) ...        // stays queued  
+if (!check(&Parser::type_decl, ...)) ... // flush() consumes all 3
+```
+
 ---
 
 ## 2. C++ Direct-Type Accessor: `top_object` Flag
@@ -152,7 +171,34 @@ namespace nprpc_stream {
 
 ---
 
-## 6. MsQuic: Always Call `StreamClose` in `SHUTDOWN_COMPLETE`
+## 7. Variant Direct Accessor: `Kind` Enum Lives Outside `namespace flat`
+
+The `flat::TestVariant_Direct` class is emitted **inside** `namespace flat {}`.
+The `Kind` enum is part of the **outer** non-flat type (`nprpc::test::TestVariant::Kind`).
+Referencing it as `TestVariant::Kind` inside `namespace flat` resolves to
+`flat::TestVariant::Kind` which does **not** exist.
+
+### Fix
+
+Make `kind()` return `std::uint32_t` and accept `std::uint32_t` in the setter:
+
+```cpp
+// Inside namespace flat — CORRECT
+std::uint32_t kind() const noexcept { return base().kind; }
+void set_kind(std::uint32_t k) noexcept { base().kind = k; }
+```
+
+When calling from outside `namespace flat` (e.g., in `assign_from_flat_type`),
+cast to the enum before the switch, and cast to `uint32_t` before the setter:
+
+```cpp
+// assign_from_flat_type — switch needs enum type
+switch (static_cast<nprpc::test::TestVariant::Kind>(vd.kind())) { ... }
+
+// assign_from_cpp_type — setter needs uint32_t
+vd.set_kind(static_cast<std::uint32_t>(src.payload.kind));
+```
+
 
 After `QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE`, MsQuic requires the app to call
 `StreamClose(stream)` to release the handle. Omitting this keeps the

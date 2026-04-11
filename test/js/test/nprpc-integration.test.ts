@@ -1194,4 +1194,56 @@ describe('NPRPC Integration Tests', function() {
             expect(throttled.length).to.be.greaterThan(0);
         });
     }); // describe HTTP Request Throttling
+
+    describe('TestVariantRpc Interface', function() {
+        it('should echo a payloadA variant round-trip via WebSocket', async function() {
+            const variantRpc = await resolveTestObject('nprpc_test_variant_rpc', test.TestVariantRpc);
+            const input: test.TestVariant = { kind: 'payloadA', value: { id: 42, label: 'hello variant' } };
+            const resultRef = NPRPC.make_ref<test.TestVariant>();
+            await variantRpc.Echo(input, resultRef);
+            const result = resultRef.value;
+            expect(result.kind).to.equal('payloadA');
+            if (result.kind === 'payloadA') {
+                expect(result.value.id).to.equal(42);
+                expect(result.value.label).to.equal('hello variant');
+            }
+        });
+
+        it('should echo a payloadB variant round-trip via WebSocket', async function() {
+            const variantRpc = await resolveTestObject('nprpc_test_variant_rpc', test.TestVariantRpc);
+            const input: test.TestVariant = { kind: 'payloadB', value: { code: 99, detail: 'some detail' } };
+            const resultRef = NPRPC.make_ref<test.TestVariant>();
+            await variantRpc.Echo(input, resultRef);
+            const result = resultRef.value;
+            expect(result.kind).to.equal('payloadB');
+            if (result.kind === 'payloadB') {
+                expect(result.value.code).to.equal(99);
+                expect(result.value.detail).to.equal('some detail');
+            }
+        });
+
+        it('should echo an empty-string label payloadA via WebSocket', async function() {
+            const variantRpc = await resolveTestObject('nprpc_test_variant_rpc', test.TestVariantRpc);
+            const input: test.TestVariant = { kind: 'payloadA', value: { id: 0, label: '' } };
+            const resultRef = NPRPC.make_ref<test.TestVariant>();
+            await variantRpc.Echo(input, resultRef);
+            const result = resultRef.value;
+            expect(result.kind).to.equal('payloadA');
+            if (result.kind === 'payloadA') {
+                expect(result.value.id).to.equal(0);
+                expect(result.value.label).to.equal('');
+            }
+        });
+
+        it('should echo payloadA via HTTP transport', async function() {
+            const variantRpc = await resolveTestObject('nprpc_test_variant_rpc', test.TestVariantRpc);
+            const input: test.TestVariant = { kind: 'payloadA', value: { id: 7, label: 'http test' } };
+            const result = await variantRpc.http.Echo(input);
+            expect(result.kind).to.equal('payloadA');
+            if (result.kind === 'payloadA') {
+                expect(result.value.id).to.equal(7);
+                expect(result.value.label).to.equal('http test');
+            }
+        });
+    }); // describe TestVariantRpc Interface
 });

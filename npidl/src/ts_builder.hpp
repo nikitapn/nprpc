@@ -93,6 +93,7 @@ public:
   virtual void emit_interface(AstInterfaceDecl* ifs) override;
   virtual void emit_using(AstAliasDecl* u) override;
   virtual void emit_enum(AstEnumDecl* e) override;
+  virtual void emit_variant(AstVariantDecl* v) override;
   virtual void finalize() override;
   virtual Builder* clone(Context* ctx) const override
   {

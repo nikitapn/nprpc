@@ -94,6 +94,10 @@ int main(int argc, char** argv)
   TestStreamsImpl test_bidi_streams;
   nprpctest::bind<nprpc::test::TestStreams>(test_bidi_streams, flags, "bidi_stream_test");
 
+  #include "common/tests/variant.inl"
+  TestVariantRpcImpl test_variant_rpc;
+  nprpctest::bind<nprpc::test::TestVariantRpc>(test_variant_rpc, flags, "nprpc_test_variant_rpc");
+
   // Capture interrupt signal to allow graceful shutdown
   signal(SIGINT, [](int signum) {
     std::cout << "Interrupt signal (" << signum << ") received." << std::endl;

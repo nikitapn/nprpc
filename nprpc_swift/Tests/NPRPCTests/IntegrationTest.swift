@@ -1862,4 +1862,50 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(echoedObjects[1].b, "beta-ok")
         XCTAssertEqual(echoedObjects[1].c, "two-ok")
     }
+
+    func testVariantRpc() throws {
+        class TestVariantRpcServantImpl: TestVariantRpcServant, @unchecked Sendable {
+            override func echo(value: TestVariant) throws -> TestVariant {
+                return value
+            }
+        }
+
+        let servant = TestVariantRpcServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+        let client = narrow(obj, to: TestVariantRpc.self)!
+
+        // Echo payloadA
+        let inputA = TestVariant.payloadA(VariantPayloadA(id: 42, label: "hello swift"))
+        let resultA = try client.echo(value: inputA)
+        if case .payloadA(let val) = resultA {
+            XCTAssertEqual(val.id, 42)
+            XCTAssertEqual(val.label, "hello swift")
+        } else {
+            XCTFail("Expected payloadA, got \(resultA)")
+        }
+
+        // Echo payloadB
+        let inputB = TestVariant.payloadB(VariantPayloadB(code: 99, detail: "swift detail"))
+        let resultB = try client.echo(value: inputB)
+        if case .payloadB(let val) = resultB {
+            XCTAssertEqual(val.code, 99)
+            XCTAssertEqual(val.detail, "swift detail")
+        } else {
+            XCTFail("Expected payloadB, got \(resultB)")
+        }
+
+        // Echo payloadA with empty string
+        let inputEmpty = TestVariant.payloadA(VariantPayloadA(id: 0, label: ""))
+        let resultEmpty = try client.echo(value: inputEmpty)
+        if case .payloadA(let val) = resultEmpty {
+            XCTAssertEqual(val.id, 0)
+            XCTAssertEqual(val.label, "")
+        } else {
+            XCTFail("Expected payloadA, got \(resultEmpty)")
+        }
+    }
 }

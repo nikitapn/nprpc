@@ -29,10 +29,10 @@ function ensureNprpcBpfCapabilities(binaryPath: string): void {
         return;
     }
 
-    const sudoCheck = spawnSync('sudo', ['-v'], { stdio: 'inherit' });
-    if (sudoCheck.status !== 0) {
-        throw new Error('Failed to obtain sudo permissions for setcap');
-    }
+    // const sudoCheck = spawnSync('sudo', ['-v'], { stdio: 'inherit' });
+    // if (sudoCheck.status !== 0) {
+    //     throw new Error('Failed to obtain sudo permissions for setcap');
+    // }
 
     const setcapResult = spawnSync(
         'sudo',

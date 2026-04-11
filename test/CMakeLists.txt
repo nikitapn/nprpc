@@ -146,6 +146,37 @@ target_link_libraries(test_lock_free_ring_buffer
 
 add_test(NAME LockFreeRingBuffer COMMAND test_lock_free_ring_buffer)
 
+# Test executable for variant / one-of feature (pure type tests, no nameserver needed)
+add_executable(test_variant
+  src/test_variant.cpp
+)
+
+add_dependencies(test_variant nprpc_test_gen)
+
+target_include_directories(test_variant
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${nprpc_test_stub_INCLUDE_DIR}
+)
+
+target_compile_definitions(test_variant
+  PRIVATE
+    NPRPC_USE_GTEST
+)
+
+target_link_libraries(test_variant
+  PRIVATE
+    nprpc::nprpc
+    GTest::gtest_main
+)
+
+gtest_discover_tests(test_variant
+  PROPERTIES
+    TIMEOUT 30
+  DISCOVERY_TIMEOUT 15
+  DISCOVERY_MODE PRE_TEST
+)
+
 # Test executable for shared memory endpoint
 add_executable(test_shared_memory_endpoint
   src/test_shared_memory_endpoint.cpp

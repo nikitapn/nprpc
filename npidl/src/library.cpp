@@ -275,6 +275,8 @@ class Lexer : public ILexer
         {"server_stream"sv, TokenId::ServerStream},
         {"client_stream"sv, TokenId::ClientStream},
         {"bidi_stream"sv, TokenId::BidiStream},
+        {"one"sv, TokenId::One},
+        {"of"sv, TokenId::Of},
     };
 
     static constexpr Map<std::string_view, TokenId,
@@ -856,6 +858,38 @@ class Parser : public IParser
       flush();
       type = new AstObjectDecl();
       return true;
+    case TokenId::One: {
+      flush(); // consume 'one'
+      if (peek() != TokenId::Of)
+        throw_error("Expected 'of' after 'one'. Syntax: one of { arm_name: Type; ... }");
+      flush(); // consume 'of'
+      match('{');
+      auto* v = new AstVariantDecl();
+      // Use pure peek-chain: arm_tok and ':' stay in the lookahead queue so
+      // that type_decl1's flush() consumes them together with the type name.
+      // Mixing peek() + match() would corrupt tokens_looked_.
+      while (true) {
+        Token arm_tok = peek(); // peek arm name or '}'
+        if (arm_tok == TokenId::BracketClose) {
+          flush(); // commit '}'
+          break;
+        }
+        if (arm_tok != TokenId::Identifier)
+          throw_error("Expected identifier as variant arm name");
+        if (peek() != TokenId::Colon) // peek ':' while arm_tok is still queued
+          throw_error("Expected ':' after variant arm name '" + arm_tok.name + "'");
+        AstTypeDecl* arm_type;
+        if (!check(&Parser::type_decl, std::ref(arm_type)))
+          throw_error("Expected a type for variant arm '" + arm_tok.name + "'");
+        // type_decl1 called flush() which consumed arm_tok, ':', and TypeName
+        match(';');
+        v->arms.push_back({arm_tok.name, arm_type});
+      }
+      if (v->arms.empty())
+        throw_error("Variant 'one of' must have at least one arm");
+      type = v;
+      return true;
+    }
     default:
       return false;
     }
@@ -1011,7 +1045,14 @@ class Parser : public IParser
       AstFieldDecl* field;
       if (check(&Parser::field_decl, std::ref(field))) {
         s->fields.push_back(field);
-        s->flat &= is_flat(field->type);
+        // Variants are never flat — resolve through Optional wrapper too
+        AstTypeDecl* ft = field->type;
+        if (ft->id == FieldType::Optional)
+          ft = static_cast<AstWrapType*>(ft)->type;
+        if (ft->id == FieldType::Variant)
+          s->flat = false;
+        else
+          s->flat &= is_flat(field->type);
         match(';');
       } else if (check(&Parser::version_decl, s)) {
         // ok
@@ -1024,6 +1065,26 @@ class Parser : public IParser
 
     // Set position range for the struct declaration
     set_node_position(s, name_tok);
+
+    // Before emitting the struct, register and emit any anonymous inline
+    // variants so their type names are available.
+    for (auto* f : s->fields) {
+      AstTypeDecl* t = f->type;
+      if (t->id == FieldType::Optional)
+        t = static_cast<AstWrapType*>(t)->type;
+      if (t->id == FieldType::Variant) {
+        auto* v = cvar(t);
+        if (v->name.empty()) {
+          v->name = s->name + "_" + f->name;
+          v->nm = s->nm;
+          auto result = ctx_.nm_cur()->add(v->name, v);
+          if (!result) {
+            throw_error(result.error());
+          }
+          builder_.emit(&builders::Builder::emit_variant, v);
+        }
+      }
+    }
 
     builder_.emit((!s->is_exception() ? &builders::Builder::emit_struct
                                       : &builders::Builder::emit_exception),
@@ -1530,6 +1591,7 @@ class Parser : public IParser
   }
 
   // alias_decl ::= 'alias' IDENTIFIER '=' type_decl ';'
+  //             | 'alias' IDENTIFIER '=' 'one' 'of' '{' arm_decl* '}' ';'
   bool alias_decl()
   {
     Token start_tok;
@@ -1544,6 +1606,21 @@ class Parser : public IParser
     AstTypeDecl* right;
     if (!check(&Parser::type_decl, std::ref(right))) {
       throw_error("Expected a type declaration after 'alias'. Example: alias MyInt = u32;");
+    }
+
+    // If the RHS is a variant ('one of { ... }'), register it directly as a
+    // named type rather than wrapping it in an AstAliasDecl.
+    if (right->id == FieldType::Variant) {
+      auto* v = cvar(right);
+      v->name = left.name;
+      v->nm = ctx_.nm_cur();
+      set_node_position(v, start_tok);
+      auto result = ctx_.nm_cur()->add(v->name, v);
+      if (!result) {
+        throw_error(result.error());
+      }
+      builder_.emit(&builders::Builder::emit_variant, v);
+      return true;
     }
 
     auto a = new AstAliasDecl(std::move(left.name), ctx_.nm_cur(), right);

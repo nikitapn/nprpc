@@ -25,6 +25,7 @@ public:
   void emit_enum(AstEnumDecl*) override {}
   void emit_constant(const std::string&, AstNumber*) override {}
   void emit_using(AstAliasDecl*) override {}
+  void emit_variant(AstVariantDecl*) override {}
 
   Builder* clone(Context* ctx) const override { return new NullBuilder(ctx); }
 };

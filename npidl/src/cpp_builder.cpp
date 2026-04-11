@@ -141,6 +141,9 @@ void CppBuilder::emit_type(AstTypeDecl* type, std::ostream& os)
   case FieldType::Enum:
     os << ns(cenum(type)->nm) << cenum(type)->name;
     break;
+  case FieldType::Variant:
+    os << ns(cvar(type)->nm) << cvar(type)->name;
+    break;
   default:
     assert(false);
   }
@@ -182,6 +185,9 @@ void CppBuilder::emit_flat_type(AstTypeDecl* type, std::ostream& os)
   }
   case FieldType::Enum:
     os << ns(cenum(type)->nm) << cenum(type)->name;
+    break;
+  case FieldType::Variant:
+    os << ns(cvar(type)->nm) << "flat::" << cvar(type)->name;
     break;
   default:
     assert(false);
@@ -239,6 +245,9 @@ void CppBuilder::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type,
       os << "ObjectId";
     else
       os << "Object*";
+    break;
+  case FieldType::Variant:
+    os << ns(cvar(type)->nm) << cvar(type)->name;
     break;
   default:
     assert(false);
@@ -383,6 +392,11 @@ void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type,
     }
     break;
   }
+  case FieldType::Variant: {
+    auto* v = cvar(type);
+    os << ns(v->nm) << "flat::" << v->name << "_Direct";
+    break;
+  }
   case FieldType::Interface:
     assert(false);
     break;
@@ -406,7 +420,8 @@ void CppBuilder::emit_parameter_type_for_servant_callback(AstFunctionArgument* a
       arg->type->id != FieldType::Object &&
       arg->type->id != FieldType::String &&
       arg->type->id != FieldType::Optional &&
-      arg->type->id != FieldType::Struct)
+      arg->type->id != FieldType::Struct &&
+      arg->type->id != FieldType::Variant)
   {
     os << '&';
   }
@@ -542,6 +557,13 @@ void CppBuilder::emit_accessors(const std::string& flat_name, AstFieldDecl* f, s
        << "() const noexcept { return base()." << f->name << ";}\n";
     os << "  " << ns(e->nm) << e->name << "& " << f->name << "() noexcept { return base()."
        << f->name << ";}\n";
+    break;
+  }
+  case FieldType::Variant: {
+    auto* v = cvar(f->type);
+    os << "  auto " << f->name << "() noexcept { return "
+       << ns(v->nm) << "flat::" << v->name
+       << "_Direct(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
     break;
   }
   default:
@@ -680,6 +702,53 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
     os << bd << "}\n";
     break;
 
+  case FieldType::Variant: {
+    auto* v = cvar(type);
+    const auto bd0 = bd;
+    os << bd0 << "{\n";
+    const std::string_view vd_access = top_type ? "." : "().";
+    // If top_type is true, op1 is already a Direct variable; otherwise call op1() to get one
+    if (top_type) {
+      os << bd + 1 << "auto& vd = " << op1 << ";\n";
+    } else {
+      os << bd + 1 << "auto vd = " << op1 << "();\n";
+    }
+    os << bd + 1 << "vd.set_kind(static_cast<std::uint32_t>(" << op2 << ".kind));\n";
+    os << bd + 1 << "std::visit([&](auto&& val) {\n";
+    bd = bd + 2;
+    os << bd << "using T = std::decay_t<decltype(val)>;\n";
+    for (size_t i = 0; i < v->arms.size(); ++i) {
+      auto& arm = v->arms[i];
+      auto* atype = arm.type;
+      if (atype->id == FieldType::Alias) atype = calias(atype)->get_real_type();
+      // if constexpr branch: match on the C++ arm type
+      os << (bd - 1) << (i == 0 ? "if" : "} else if") << " constexpr (std::is_same_v<T, ";
+      emit_type(atype, os);
+      os << ">) {\n";
+      // Allocate flat storage for the arm in the growing buffer
+      os << bd << "vd.alloc_arm(sizeof(";
+      emit_flat_type(atype, os);
+      os << "), alignof(";
+      emit_flat_type(atype, os);
+      os << "));\n";
+      auto* direct_atype = atype->id == FieldType::Alias ? calias(atype)->get_real_type() : atype;
+      if (direct_atype->id == FieldType::Struct || direct_atype->id == FieldType::Vector ||
+          direct_atype->id == FieldType::Array || direct_atype->id == FieldType::String) {
+        os << bd << "auto arm_d = vd.value_" << arm.name << "();\n";
+        assign_from_cpp_type(atype, "arm_d", "val", os, false, true);
+      } else {
+        // Fundamental/Enum: value_armName() returns T&, pass as callable
+        assign_from_cpp_type(atype, "vd.value_" + arm.name, "val", os, false, false);
+      }
+    }
+    if (!v->arms.empty()) os << (bd - 1) << "}\n";
+    bd = bd0;
+    os << bd + 1 << "}, " << op2 << ".value);\n";
+    os << bd0 << "}\n";
+    bd = bd0;
+    break;
+  }
+
   default:
     assert(false);
     break;
@@ -803,6 +872,46 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type,
       os << bd << op1 << ".assign_from_direct(" << op2 << "());\n";
     }
     break;
+
+  case FieldType::Variant: {
+    auto* v = cvar(type);
+    const auto bd0 = bd;
+    os << bd0 << "{\n";
+    os << bd + 1 << "auto vd = " << op2 << "();\n";
+    os << bd + 1 << "switch (static_cast<" << ns(v->nm) << v->name << "::Kind>(vd.kind())) {\n";
+    for (size_t i = 0; i < v->arms.size(); ++i) {
+      auto& arm = v->arms[i];
+      auto* atype = arm.type;
+      if (atype->id == FieldType::Alias) atype = calias(atype)->get_real_type();
+      os << bd + 1 << "case " << ns(v->nm) << v->name << "::Kind::" << arm.name << ": {\n";
+      // Declare arm_val of the C++ type
+      os << bd + 2;
+      emit_type(atype, os);
+      os << " arm_val{};\n";
+      // Follow the Optional pattern:
+      // complex types (Struct/Vector/Array/String) → get Direct wrapper, recurse with top_object=true
+      // simple types (Fundamental/Enum)            → pass callable name,  recurse with top_object=false
+      auto* direct_atype = atype->id == FieldType::Alias ? calias(atype)->get_real_type() : atype;
+      if (direct_atype->id == FieldType::Struct || direct_atype->id == FieldType::Vector ||
+          direct_atype->id == FieldType::Array || direct_atype->id == FieldType::String) {
+        os << bd + 2 << "auto arm_d = vd.value_" << arm.name << "();\n";
+        bd = bd + 2;
+        assign_from_flat_type(atype, "arm_val", "arm_d", os, false, true);
+        bd = bd0;
+      } else {
+        bd = bd + 2;
+        assign_from_flat_type(atype, "arm_val", "vd.value_" + arm.name, os, false, false);
+        bd = bd0;
+      }
+      os << bd + 2 << op1 << " = {" << ns(v->nm) << v->name << "::Kind::" << arm.name << ", std::move(arm_val)};\n";
+      os << bd + 2 << "break;\n";
+      os << bd + 1 << "}\n";
+    }
+    os << bd + 1 << "}\n";
+    os << bd0 << "}\n";
+    bd = bd0;
+    break;
+  }
 
   default:
     assert(false);
@@ -964,6 +1073,8 @@ void CppBuilder::finalize()
              "#define "
           << h1
           << "\n\n"
+             "#include <cstring>\n"
+             "#include <variant>\n"
              "#include <nprpc/flat.hpp>\n";
 
   if (!ctx_->is_nprpc_base()) {
@@ -2889,6 +3000,98 @@ void CppBuilder::emit_using(AstAliasDecl* u)
   oh << "using " << u->name << " = ";
   emit_type(u->type, oh);
   oh << ";\n";
+}
+
+void CppBuilder::emit_variant(AstVariantDecl* v)
+{
+  // Regular type: struct with Kind enum + std::variant
+  oh << "struct " << v->name << " {\n";
+  oh << "  enum class Kind : std::uint32_t {\n";
+  for (size_t i = 0; i < v->arms.size(); ++i) {
+    oh << "    " << v->arms[i].name << " = " << i;
+    if (i + 1 < v->arms.size()) oh << ",";
+    oh << "\n";
+  }
+  oh << "  };\n";
+  oh << "  using value_type = std::variant<";
+  for (size_t i = 0; i < v->arms.size(); ++i) {
+    emit_type(v->arms[i].type, oh);
+    if (i + 1 < v->arms.size()) oh << ", ";
+  }
+  oh << ">;\n";
+  oh << "  Kind kind;\n";
+  oh << "  value_type value;\n";
+  oh << "};\n\n";
+
+  // Flat type: discriminant + arm_offset (used by Direct accessor layer)
+  oh << "namespace flat {\n";
+  oh << "struct " << v->name << " {\n";
+  oh << "  std::uint32_t kind;\n";
+  oh << "  std::uint32_t arm_offset;\n";
+  oh << "};\n";
+
+  // Direct accessor
+  const std::string accessor_name = v->name + "_Direct";
+  oh << "class " << accessor_name << " {\n"
+        "  ::nprpc::flat_buffer& buffer_;\n"
+        "  const std::uint32_t offset_;\n"
+        "  auto& base() noexcept { return *reinterpret_cast<" << v->name
+     << "*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }\n"
+        "  auto const& base() const noexcept { return *reinterpret_cast<const "
+     << v->name
+     << "*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }\n"
+        "public:\n"
+        "  uint32_t offset() const noexcept { return offset_; }\n"
+        "  void* __data() noexcept { return (void*)&base(); }\n"
+        "  " << accessor_name << "(::nprpc::flat_buffer& buffer, std::uint32_t offset)\n"
+        "    : buffer_(buffer), offset_(offset) {}\n";
+
+  // Accessors — kind()/set_kind() use std::uint32_t so they're valid inside
+  // namespace flat without needing to resolve the outer Kind enum type.
+  oh << "  std::uint32_t kind() const noexcept { return base().kind; }\n";
+  oh << "  void set_kind(std::uint32_t k) noexcept { base().kind = k; }\n";
+  oh << "  std::uint32_t arm_offset() const noexcept { return base().arm_offset; }\n";
+  oh << "  void set_arm_offset(std::uint32_t v) noexcept { base().arm_offset = v; }\n";
+
+  // alloc_arm: grows the flat buffer to hold one arm struct, zero-inits it,
+  // and stores the relative offset from the arm_offset field (offset_+4).
+  oh << "  void alloc_arm(std::uint32_t arm_size, std::uint32_t arm_align) noexcept {\n"
+        "    auto cur = static_cast<std::uint32_t>(buffer_.data().size());\n"
+        "    auto rem = cur % arm_align;\n"
+        "    auto pad = rem ? arm_align - rem : 0;\n"
+        "    auto off = cur + pad;\n"
+        "    auto ptr = static_cast<std::byte*>(buffer_.prepare(arm_size + pad).data());\n"
+        "    std::memset(ptr, 0, arm_size + pad);\n"
+        "    buffer_.commit(arm_size + pad);\n"
+        "    set_arm_offset(off - (offset_ + 4));\n"
+        "  }\n";
+
+  // Per-arm value accessors — mirror the Optional_Direct<T,TD>::value() pattern:
+  // complex types (Struct/String/Vector/Array) → Direct wrapper at arm_offset
+  // simple types (Fundamental/Enum)            → T& at arm_offset
+  for (auto& arm : v->arms) {
+    auto* atype = arm.type;
+    if (atype->id == FieldType::Alias) atype = calias(atype)->get_real_type();
+    if (atype->id == FieldType::Fundamental) {
+      const auto ftype = fundamental_to_flat(cft(atype)->token_id);
+      oh << "  " << ftype << "& value_" << arm.name << "() noexcept { return "
+         << "*reinterpret_cast<" << ftype
+         << "*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_ + 4 + base().arm_offset); }\n";
+    } else if (atype->id == FieldType::Enum) {
+      std::ostringstream tmp;
+      emit_type(atype, tmp);
+      oh << "  " << tmp.str() << "& value_" << arm.name << "() noexcept { return "
+         << "*reinterpret_cast<" << tmp.str()
+         << "*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_ + 4 + base().arm_offset); }\n";
+    } else {
+      // Struct, String, Vector, Array — emit_direct_type covers all
+      oh << "  auto value_" << arm.name << "() noexcept { return ";
+      emit_direct_type(atype, oh);
+      oh << "(buffer_, offset_ + 4 + base().arm_offset); }\n";
+    }
+  }
+
+  oh << "};\n} // namespace flat\n\n";
 }
 
 void CppBuilder::emit_enum(AstEnumDecl* e)

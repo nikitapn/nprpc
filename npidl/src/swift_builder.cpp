@@ -171,6 +171,9 @@ void SwiftBuilder::emit_type(AstTypeDecl* type, std::ostream& os)
     emit_type(cwt(type)->type, os);
     os << ", Error>";
     break;
+  case FieldType::Variant:
+    os << swift_type_name(cvar(type)->name);
+    break;
   default:
     assert(false && "Unknown type");
   }
@@ -498,6 +501,23 @@ void SwiftBuilder::emit_struct2(AstStructDecl* s, Target target)
       // Initialize nested struct with its default initializer
       out << " = " << swift_type_name(cflat(actual_type)->name) << "()";
       break;
+    case FieldType::Variant: {
+      // Use first arm with its default-initialised payload as the default
+      auto* v = cvar(actual_type);
+      auto& first_arm = v->arms.front();
+      auto* arm_type = first_arm.type;
+      if (arm_type->id == FieldType::Alias)
+        arm_type = calias(arm_type)->get_real_type();
+      out << " = ." << first_arm.name << "(";
+      if (arm_type->id == FieldType::Struct)
+        out << swift_type_name(cflat(arm_type)->name) << "()";
+      else if (arm_type->id == FieldType::String)
+        out << "\"\"";
+      else if (arm_type->id == FieldType::Fundamental)
+        out << "0";
+      out << ")";
+      break;
+    }
     default:
       // Other complex types don't get defaults
       break;
@@ -590,6 +610,99 @@ void SwiftBuilder::emit_using(AstAliasDecl* u)
   out << bl() << "public typealias " << swift_type_name(u->name) << " = ";
   emit_type(u->type, out);
   out << "\n";
+}
+
+void SwiftBuilder::emit_variant(AstVariantDecl* v)
+{
+  const std::string type_name = swift_type_name(v->name);
+
+  // Associated-value enum declaration
+  out << bl() << "public enum " << type_name << ": Codable, Sendable " << bb();
+  for (auto& arm : v->arms) {
+    out << bl() << "case " << arm.name << "(";
+    emit_type(arm.type, out);
+    out << ")\n";
+  }
+  out << eb() << "\n";
+
+  // Marshal function
+  // Wire layout: UInt32 discriminant (offset+0) + UInt32 arm_offset (offset+4)
+  out << "\n// MARK: - Marshal " << type_name << "\n";
+  out << bl() << "public func marshal_" << v->name
+      << "(buffer: FlatBuffer, offset: Int, data: " << type_name << ") " << bb();
+  out << bl() << "switch data " << bb();
+  for (size_t i = 0; i < v->arms.size(); ++i) {
+    auto& arm = v->arms[i];
+    auto* atype = arm.type;
+    if (atype->id == FieldType::Alias)
+      atype = calias(atype)->get_real_type();
+
+    out << bl() << "case ." << arm.name << "(let value):\n" << bb(false);
+    out << bl() << "buffer.storeBytes(of: UInt32(" << i
+        << "), toByteOffset: offset, as: UInt32.self)\n";
+
+    switch (atype->id) {
+    case FieldType::Struct: {
+      auto* s = cflat(atype);
+      out << bl() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + 4, value: value) { buf, off in\n"
+          << bb(false)
+          << bl() << "marshal_" << s->name << "(buffer: buf, offset: off, data: value)\n"
+          << eb();
+      break;
+    }
+    case FieldType::String:
+      out << bl() << "NPRPC.marshal_optional_struct(buffer: buffer, offset: offset + 4, value: value) { buf, off in\n"
+          << bb(false)
+          << bl() << "NPRPC.marshal_string(buffer: buf, offset: off, string: value)\n"
+          << eb();
+      break;
+    default: {
+      auto [sz, al] = get_type_size_align(atype);
+      out << bl() << "let __arm = buffer.size\n"
+          << bl() << "buffer.grow(by: " << sz << ")\n"
+          << bl() << "buffer.storeBytes(of: UInt32(__arm), toByteOffset: offset + 4, as: UInt32.self)\n";
+      break;
+    }
+    }
+    out << eb(false);
+  }
+  out << eb(); // switch
+  out << eb() << "\n"; // function
+
+  // Unmarshal function
+  out << "\n// MARK: - Unmarshal " << type_name << "\n";
+  out << bl() << "public func unmarshal_" << v->name
+      << "(buffer: UnsafeRawPointer, offset: Int) -> " << type_name << " " << bb();
+  out << bl() << "let kind = buffer.load(fromByteOffset: offset, as: UInt32.self)\n";
+  out << bl() << "let arm_offset = (offset + 4) + Int(buffer.load(fromByteOffset: offset + 4, as: UInt32.self))\n";
+  out << bl() << "switch kind " << bb();
+  for (size_t i = 0; i < v->arms.size(); ++i) {
+    auto& arm = v->arms[i];
+    auto* atype = arm.type;
+    if (atype->id == FieldType::Alias)
+      atype = calias(atype)->get_real_type();
+
+    out << bl() << "case " << i << ":\n" << bb(false);
+    out << bl() << "return ." << arm.name << "(";
+    switch (atype->id) {
+    case FieldType::Struct:
+      out << "unmarshal_" << cflat(atype)->name << "(buffer: buffer, offset: arm_offset)";
+      break;
+    case FieldType::String:
+      out << "NPRPC.unmarshal_string(buffer: buffer, offset: arm_offset)";
+      break;
+    default:
+      out << "buffer.load(fromByteOffset: arm_offset, as: UInt8.self) /* TODO: correct type */";
+      break;
+    }
+    out << ")\n";
+    out << eb(false);
+  }
+  out << bl() << "default:\n" << bb(false)
+      << bl() << "fatalError(\"Invalid variant discriminant: \\(kind)\")\n"
+      << eb(false);
+  out << eb(); // switch
+  out << eb() << "\n"; // function
 }
 
 void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
@@ -1907,6 +2020,13 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
     emit_field_marshal(&temp_field, offset, data_name);
     return;
   }
+  case FieldType::Variant: {
+    auto* v = cvar(f->type);
+    const int field_offset = align_offset(4, offset, 8);
+    out << bl() << "marshal_" << v->name << "(buffer: buffer, offset: offset + "
+        << field_offset << ", data: " << field_access << ")\n";
+    break;
+  }
   default:
     out << bb() << "// TODO: marshal field " << f->name << " (type " << static_cast<int>(f->type->id) << ")\n";
   }
@@ -2072,6 +2192,13 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
     temp_field.type = real_type;
     emit_field_unmarshal(&temp_field, offset, result_name, has_endpoint);
     return;
+  }
+  case FieldType::Variant: {
+    auto* v = cvar(f->type);
+    const int field_offset = align_offset(4, offset, 8);
+    out << bl() << field_name << " = unmarshal_" << v->name
+        << "(buffer: buffer, offset: offset + " << field_offset << ")\n";
+    break;
   }
   default:
     out << bb() << "// TODO: unmarshal field " << f->name << " (type " << static_cast<int>(f->type->id) << ")\n";

@@ -280,3 +280,37 @@ interface TestDirect {
 	// ill formed case: does not make sense to return a direct value for primitive types, and should be rejected by the compiler ?
 	void GetFundamentalDirect(result: out /* direct */ u32) raises (AssertionFailed);
 }
+
+// ─── Variant / one-of feature tests ─────────────────────────────────────────
+
+[force_helpers=1]
+message VariantPayloadA {
+  id: u32;
+  label: string;
+}
+
+[force_helpers=1]
+message VariantPayloadB {
+  code: u32;
+  detail: string;
+}
+
+// Named alias for a discriminated union of two struct types.
+alias TestVariant = one of {
+  payloadA: VariantPayloadA;
+  payloadB: VariantPayloadB;
+};
+
+// A container message that embeds the variant.
+[force_helpers=1]
+message VariantContainer {
+  id: u32;
+  payload: TestVariant;
+}
+
+// Interface for RPC round-trip tests of the variant type.
+interface TestVariantRpc {
+  // Echo back a TestVariant: server reads the in-param and writes the same
+  // value to the out-param.
+  void Echo(value: TestVariant, result: out TestVariant) raises (AssertionFailed);
+}

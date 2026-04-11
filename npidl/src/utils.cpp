@@ -87,6 +87,12 @@ void calc_struct_size_align(AstStructDecl* s,
       s->align = 4;
     align_offset(4, offset, 4, elements_size);
     break;
+  case FieldType::Variant:
+    // discriminant (uint32_t) + arm_offset (uint32_t) = 8 bytes, align 4
+    if (s->align < 4)
+      s->align = 4;
+    align_offset(4, offset, 8, elements_size);
+    break;
   case FieldType::Object: // nprpc::detail::flat::ObjectId
     if (s->align < static_cast<int>(align_of_object))
       s->align = align_of_object;
@@ -139,6 +145,9 @@ std::tuple<int, int> get_type_size_align(AstTypeDecl* type)
 
   case FieldType::Object:
     return {size_of_object, align_of_object};
+
+  case FieldType::Variant:
+    return {8, 4}; // discriminant (4) + arm_offset (4)
 
   default:
     assert(false);
@@ -225,6 +234,9 @@ void get_type_id(const AstTypeDecl* type,
   case FieldType::Alias:
     id += 'L' + calias(type)->name;
     break;
+  case FieldType::Variant:
+    id += 'W' + static_cast<const AstVariantDecl*>(type)->name;
+    break;
   default:
     assert(false);
     break;
@@ -262,6 +274,7 @@ bool is_flat(AstTypeDecl* type)
   case FieldType::Optional:
   case FieldType::Object:
   case FieldType::Interface:
+  case FieldType::Variant:
     return false;
   default:
     assert(false);

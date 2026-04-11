@@ -86,7 +86,9 @@ enum class TokenId {
   Stream,
   ServerStream,
   ClientStream,
-  BidiStream
+  BidiStream,
+  One,
+  Of
 };
 
 struct AstStructDecl;
@@ -270,7 +272,8 @@ enum class FieldType {
   Interface,
   Alias,
   Enum,
-  Stream
+  Stream,
+  Variant
 };
 
 inline bool operator==(std::int64_t x, const AstNumber& n)
@@ -514,6 +517,17 @@ struct AstOptionalDecl : AstWrapType {
   }
 };
 
+struct AstVariantArm {
+  std::string name;
+  AstTypeDecl* type;
+};
+
+struct AstVariantDecl : AstTypeDecl, AstNodeWithPosition {
+  Namespace* nm = nullptr;
+  std::vector<AstVariantArm> arms;
+  AstVariantDecl() { id = FieldType::Variant; }
+};
+
 constexpr auto cft(AstTypeDecl* type) noexcept
 {
   assert(type->id == FieldType::Fundamental || type->id == FieldType::Enum);
@@ -597,6 +611,18 @@ constexpr auto copt(AstTypeDecl* type) noexcept
 {
   assert(type->id == FieldType::Optional);
   return static_cast<AstOptionalDecl*>(type);
+}
+
+constexpr auto cvar(AstTypeDecl* type) noexcept
+{
+  assert(type->id == FieldType::Variant);
+  return static_cast<AstVariantDecl*>(type);
+}
+
+constexpr auto cvar(const AstTypeDecl* type) noexcept
+{
+  assert(type->id == FieldType::Variant);
+  return static_cast<const AstVariantDecl*>(type);
 }
 
 inline AstTypeDecl* AstWrapType::real_type()

@@ -152,6 +152,7 @@ public:
   virtual void emit_interface(AstInterfaceDecl* ifs) = 0;
   virtual void emit_using(AstAliasDecl* u) = 0;
   virtual void emit_enum(AstEnumDecl* e) = 0;
+  virtual void emit_variant(AstVariantDecl* v) = 0;
   /**
    * @brief Finalize the builder, write any pending data to files.
    */

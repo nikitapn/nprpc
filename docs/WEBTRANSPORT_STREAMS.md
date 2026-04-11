@@ -225,7 +225,7 @@ Server (producer)                          Client (consumer)
 **Client side (JS `StreamReader`):**
 - The async iterator yields chunks one at a time
 - After each `yield`, sends `send_window_update(stream_id, 1)` — granting exactly **one credit per consumed chunk**
-- The window update is sent over the **control stream** (not the native stream), since it's an RPC-level message
+- The window update is sent over the same **control stream**
 
 **Client side (C++ `StreamReader`):**
 - `read_next()` pops a chunk from the queue, increments `window_size_`, sends `send_window_update(1)`
