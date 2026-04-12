@@ -446,6 +446,72 @@ nprpc::set_cookie("session", new_token, {
 | Dynamic array | `T[]` or `vector<T>` |
 | Fixed array | `T[N]` |
 | Alias | `alias Foo = vector<Bar>` |
+| Discriminated union | `alias Foo = one of { arm1: T1; arm2: T2; }` |
+
+### Discriminated Unions (`one of`)
+
+The `one of` construct defines a tagged union of named struct arms. It generates a `std::variant`-backed C++ type with a `Kind` enum, a TypeScript discriminated union, and a Swift enum with associated values.
+
+```
+// IDL
+message MsgA { id: u32; label: string; }
+message MsgB { code: u32; detail: string; }
+
+alias MyVariant = one of {
+  msgA: MsgA;
+  msgB: MsgB;
+};
+
+message Envelope {
+  seq: u32;
+  payload: MyVariant;
+}
+
+interface EventService {
+  void Send(event: MyVariant, echo: out MyVariant);
+}
+```
+
+**C++ usage:**
+
+```cpp
+// Construct
+MyVariant v{ MyVariant::Kind::msgA, MsgA{42u, "hello"} };
+
+// Dispatch
+std::visit([](auto&& arm) {
+  using T = std::decay_t<decltype(arm)>;
+  if constexpr (std::is_same_v<T, MsgA>)
+    std::cout << "A: " << arm.label;
+  else if constexpr (std::is_same_v<T, MsgB>)
+    std::cout << "B: " << arm.code;
+}, v.value);
+```
+
+**TypeScript usage:**
+
+```typescript
+// Construct
+const v: MyVariant = { kind: 'msgA', value: { id: 42, label: 'hello' } };
+
+// Narrow
+if (v.kind === 'msgA') {
+  console.log(v.value.label);
+}
+```
+
+**Swift usage:**
+
+```swift
+// Construct
+let v = MyVariant.msgA(MsgA(id: 42, label: "hello"))
+
+// Switch
+switch v {
+case .msgA(let a): print("A: \(a.label)")
+case .msgB(let b): print("B: \(b.code)")
+}
+```
 
 ### Qualifiers
 
