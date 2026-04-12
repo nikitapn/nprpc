@@ -49,9 +49,11 @@
 #include <atomic>
 #include <cerrno>
 #include <cstring>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <stop_token>
 #include <thread>
 #include <unordered_map>
 #include <variant>
@@ -550,7 +552,8 @@ public:
   }
 
   nprpc::Task<> send_receive_coro(flat_buffer& buffer,
-                                   uint32_t /*timeout_ms*/) override
+                                   uint32_t /*timeout_ms*/,
+                                   std::stop_token st = {}) override
   {
     assert(*reinterpret_cast<const uint32_t*>(buffer.data().data()) ==
            buffer.size());
@@ -566,7 +569,10 @@ public:
       UringClientConnection* self;
       uint32_t               rid;
       flat_buffer&           buffer;
+      std::stop_token        st;
       CoroWaiter             waiter{};  // frame-local; pointer stored in map
+      // stop_callback is optional — only constructed when st.stop_possible()
+      std::optional<std::stop_callback<std::function<void()>>> stop_cb;
 
       bool await_ready() noexcept { return false; }
 
@@ -579,6 +585,36 @@ public:
         {
           std::lock_guard lk(self->pending_mutex_);
           self->pending_requests_.emplace(rid, &waiter);
+        }
+
+        // Arm cancellation callback after registering the waiter so the
+        // callback can always find it in the map.
+        if (st.stop_possible()) {
+          stop_cb.emplace(st, [this]() noexcept {
+            std::lock_guard lk(self->pending_mutex_);
+            auto it = self->pending_requests_.find(rid);
+            if (it != self->pending_requests_.end()) {
+              waiter.status = -2; // cancelled
+              self->pending_requests_.erase(it);
+              boost::asio::post(self->exec_,
+                  [h = waiter.continuation]() { h.resume(); });
+            }
+          });
+          // If stop was already requested before we armed the callback, the
+          // callback fires synchronously inside the emplace above and the
+          // waiter is already removed.  Check whether we are still registered.
+          if (st.stop_requested()) {
+            std::lock_guard lk(self->pending_mutex_);
+            auto it = self->pending_requests_.find(rid);
+            if (it == self->pending_requests_.end()) {
+              // The stop_callback fired synchronously inside emplace above
+              // (stop was already requested).  It already posted h.resume()
+              // on exec_ — returning false here would cause a second resume
+              // (UB).  Return true instead so the single exec_-posted resume
+              // is the only path.
+              return true;
+            }
+          }
         }
 
         bool ok;
@@ -599,11 +635,12 @@ public:
       }
 
       void await_resume() {
+        if (waiter.status == -2) throw nprpc::OperationCancelled();
         if (waiter.status < 0) throw nprpc::ExceptionCommFailure();
       }
     };
 
-    co_await SendAndAwait{this, rid, buffer};
+    co_await SendAndAwait{this, rid, buffer, std::move(st)};
   }
 
   void send_receive_async(

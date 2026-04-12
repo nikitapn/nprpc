@@ -985,6 +985,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
       if (has_outputs) {
         // Async method with output parameters - use sendAsyncReceive
         out << bl() << "// Send async and receive response\n";
+        out << bl() << "try Task.checkCancellation()\n";
         out << bl() << "let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)\n\n";
         
         // Handle reply
@@ -1041,6 +1042,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
         // Async method without outputs - fire-and-forget
         out << bl() << "// Send async (no reply expected)\n";
         if (fn->is_throwing()) {
+          out << bl() << "try Task.checkCancellation()\n";
           out << bl() << "try await sendAsync(buffer: buffer, timeout: timeout)\n";
         } else {
           // Fire-and-forget: wrap in do/catch since sendAsync can throw

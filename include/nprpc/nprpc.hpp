@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <optional>
+#include <stop_token>
 #include <string_view>
 
 #include <boost/asio/io_context.hpp>

@@ -1293,17 +1293,25 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       }
 
       out << bl() << "public async " << fn->name;
-      emit_function_arguments(
-          true, fn, out,
-          std::bind(&TSBuilder::emit_parameter_type_for_proxy_call, this, _1,
-                    _2),
-          fn->stream_kind != StreamKind::Server);
+      {
+        std::ostringstream sig;
+        emit_function_arguments(
+            true, fn, sig,
+            std::bind(&TSBuilder::emit_parameter_type_for_proxy_call, this, _1,
+                      _2),
+            fn->stream_kind != StreamKind::Server);
+        auto s = sig.str();
+        s.pop_back(); // strip trailing ")"
+        if (visible_arg_count > 0) s += ", ";
+        s += "signal?: AbortSignal)";
+        out << s;
+      }
       out << ": Promise<";
       emit_stream_proxy_return_type(fn, out);
       out << "> {\n"
           << bb(false) << bl()
-          << "const interface_idx = (arguments.length == " << visible_arg_count
-          << " ? 0 : arguments[arguments.length - 1]);\n"
+          << "const interface_idx = typeof signal === 'number' ? (signal as unknown as number) : 0;\n"
+          << bl() << "const _sig: AbortSignal | undefined = signal instanceof AbortSignal ? signal : undefined;\n"
           << bl() << "const conn = NPRPC.rpc.get_connection(this.endpoint);\n"
           << bl() << "const stream_id = conn.stream_manager.generate_stream_id();\n";
 
@@ -1397,19 +1405,19 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       case StreamKind::Server:
         out << bl() << "return await NPRPC.rpc.open_server_stream(this.endpoint, buf, stream_id, this.timeout, ";
         emit_stream_deserializer(fn->stream_decl->stream_out_type(), out);
-        out << ");\n";
+        out << ", _sig);\n";
         break;
       case StreamKind::Client:
         out << bl() << "return await NPRPC.rpc.open_client_stream(this.endpoint, buf, stream_id, this.timeout, ";
         emit_stream_serializer(fn->stream_decl->stream_in_type(), out);
-        out << ");\n";
+        out << ", _sig);\n";
         break;
       case StreamKind::Bidi:
         out << bl() << "return await NPRPC.rpc.open_bidi_stream(this.endpoint, buf, stream_id, this.timeout, ";
         emit_stream_serializer(fn->stream_decl->stream_in_type(), out);
         out << ", ";
         emit_stream_deserializer(fn->stream_decl->stream_out_type(), out);
-        out << ");\n";
+        out << ", _sig);\n";
         break;
       default:
         assert(false);
@@ -1420,14 +1428,27 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
 
     out << bl() << "public async " << fn->name;
-    emit_function_arguments(
-        true, fn, out,
-        std::bind(&TSBuilder::emit_parameter_type_for_proxy_call, this, _1,
-                  _2));
+    {
+      // Emit IDL args then append signal?: AbortSignal.
+      // signal is also used as the interface_idx slot for inherited-interface
+      // dispatch (which passes a number there); we detect this at runtime via
+      // typeof checks so both uses are unambiguous.
+      std::ostringstream sig;
+      emit_function_arguments(true, fn, sig,
+          std::bind(&TSBuilder::emit_parameter_type_for_proxy_call, this, _1, _2));
+      auto s = sig.str(); // "(arg1: T1, ...)"
+      // Strip closing ')' and append signal.
+      s.pop_back();
+      if (!fn->args.empty()) s += ", ";
+      s += "signal?: AbortSignal)";
+      out << s;
+    }
     out << ": Promise<" << emit_type(fn->ret_value) << "> {\n"
-        << bb(false) << bl()
-        << "let interface_idx = (arguments.length == " << fn->args.size()
-        << " ? 0 : arguments[arguments.length - 1]);\n";
+        << bb(false)
+        // interface_idx: when called from inherited-interface dispatcher the
+        // signal slot holds a number; detect with typeof.
+        << bl() << "const interface_idx = typeof signal === 'number' ? (signal as unknown as number) : 0;\n"
+        << bl() << "const _sig: AbortSignal | undefined = signal instanceof AbortSignal ? signal : undefined;\n";
 
     const auto fixed_size =
         get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
@@ -1490,7 +1511,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
     out << "},request_bytes:buf.size});\n";
 
-    out << bl() << "await NPRPC.rpc.call(this.endpoint, buf, this.timeout);\n"
+    out << bl() << "await NPRPC.rpc.call(this.endpoint, buf, this.timeout, _sig);\n"
         << bl() << "let std_reply = NPRPC.handle_standart_reply(buf);\n";
 
     if (fn->ex) {
@@ -1599,8 +1620,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       out << arg->name << (arg->is_optional() ? "?: " : ": ");
       emit_parameter_type_for_proxy_call(arg, out);
     }
-
-    out << "): Promise<";
+    if (!first_param) out << ", ";
+    out << "signal?: AbortSignal): Promise<";
 
     // Return type: combine return value + out parameters into object/tuple
     bool has_return = !fn->is_void();
@@ -1706,6 +1727,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
     out << "},request_bytes:buf.size});\n\n";
 
     // HTTP fetch instead of WebSocket
+    out << bl() << "try {\n" << bb(false);
     out << bl()
         << "const url = `http${this.endpoint.is_ssl() ? 's' : "
            "''}://${this.endpoint.hostname}:${this.endpoint.port}/rpc`;\n"
@@ -1713,7 +1735,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
         << bb(false) << bl() << "method: 'POST',\n"
         << bl() << "headers: { 'Content-Type': 'application/octet-stream' },\n"
         << bl() << "credentials: 'include',\n"
-        << bl() << "body: buf.array_buffer\n"
+        << bl() << "body: buf.array_buffer,\n"
+        << bl() << "signal\n"
         << eb() << ");\n\n"
         << bl()
         << "if (!response.ok) throw new NPRPC.Exception(`HTTP error: "
@@ -1818,6 +1841,16 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
         out << " };\n";
       }
     }
+
+    // catch block: report cancellation/error to devtools then re-throw
+    out << eb(false); // close try body
+    out << bl() << "} catch(__e) {\n" << bb(false);
+    out << bl() << "(globalThis as any).__nprpc_debug?.call_end(__dbg_id,"
+        << "{status:(__e instanceof DOMException && __e.name==='AbortError')?'cancelled':'error',"
+        << "duration_ms:Date.now()-__dbg_t0,error:String(__e)});\n";
+    out << bl() << "throw __e;\n";
+    out << eb(false); // close catch body
+    out << bl() << "}\n";
 
     out << eb(false);   // Decrement depth
     out << bl() << "}"; // Close arrow function (no newline - comma comes after)

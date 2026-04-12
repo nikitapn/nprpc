@@ -354,7 +354,7 @@ export class StreamManager {
   on_chunk_received(stream_id: bigint, data: Uint8Array, sequence: bigint): void {
     const reader = this.readers.get(stream_id);
     if (!reader) {
-      console.warn(`StreamManager: chunk for unknown stream ${stream_id}`);
+      // console.warn(`StreamManager: chunk for unknown stream ${stream_id}`);
       return;
     }
     if (reader.push_chunk(data, sequence)) {
@@ -366,7 +366,7 @@ export class StreamManager {
   on_stream_complete(stream_id: bigint, final_sequence: bigint): void {
     const reader = this.readers.get(stream_id);
     if (!reader) {
-      console.warn(`StreamManager: completion for unknown stream ${stream_id}`);
+      // console.warn(`StreamManager: completion for unknown stream ${stream_id}`);
       return;
     }
     if (reader.complete(final_sequence)) {
@@ -378,7 +378,7 @@ export class StreamManager {
   on_stream_error(stream_id: bigint, error_code: number): void {
     const reader = this.readers.get(stream_id);
     if (!reader) {
-      console.warn(`StreamManager: error for unknown stream ${stream_id}`);
+      // console.warn(`StreamManager: error for unknown stream ${stream_id}`);
       return;
     }
     reader.fail(error_code);

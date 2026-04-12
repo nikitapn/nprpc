@@ -167,12 +167,13 @@ open class NPRPCObject: Codable, @unchecked Sendable {
     ///   - timeout: Timeout in milliseconds
     /// - Throws: RpcError on communication failure
     public func sendAsync(buffer: FlatBuffer, timeout: UInt32) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        try Task.checkCancellation()
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             // Box the continuation so we can pass a pointer to C++
             let boxedContinuation = Unmanaged.passRetained(
                 ContinuationBox(continuation)
             ).toOpaque()
-            
+
             // C callback that resumes the Swift continuation
             let callback: swift_async_callback = { context, errorCode, errorMessage in
                 guard let context = context else { return }
@@ -184,7 +185,7 @@ open class NPRPCObject: Codable, @unchecked Sendable {
                     box.continuation.resume(throwing: RuntimeError(message: msg))
                 }
             }
-            
+
             let result = nprpc_object_send_async(
                 handle,
                 buffer.handle,
@@ -192,7 +193,7 @@ open class NPRPCObject: Codable, @unchecked Sendable {
                 callback,
                 timeout
             )
-            
+
             if result != 0 {
                 // Failed to start - take back ownership and resume with error
                 let box = Unmanaged<ContinuationBox<Void>>.fromOpaque(boxedContinuation).takeRetainedValue()
@@ -215,12 +216,13 @@ open class NPRPCObject: Codable, @unchecked Sendable {
     /// - Returns: FlatBuffer containing the response
     /// - Throws: RpcError on communication failure
     public func sendAsyncReceive(buffer: FlatBuffer, timeout: UInt32) async throws -> FlatBuffer {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<FlatBuffer, Error>) in
+        try Task.checkCancellation()
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<FlatBuffer, Error>) in
             // Box the continuation so we can pass a pointer to C++
             let boxedContinuation = Unmanaged.passRetained(
                 ContinuationBox(continuation)
             ).toOpaque()
-            
+
             // C callback that resumes the Swift continuation with the response buffer
             let callback: swift_async_receive_callback = { context, errorCode, errorMessage, responseBuffer in
                 guard let context = context else { return }
@@ -238,7 +240,7 @@ open class NPRPCObject: Codable, @unchecked Sendable {
                     box.continuation.resume(throwing: RuntimeError(message: msg))
                 }
             }
-            
+
             let result = nprpc_object_send_async_receive(
                 handle,
                 buffer.handle,
@@ -246,7 +248,7 @@ open class NPRPCObject: Codable, @unchecked Sendable {
                 callback,
                 timeout
             )
-            
+
             if result != 0 {
                 // Failed to start - take back ownership and resume with error
                 let box = Unmanaged<ContinuationBox<FlatBuffer>>.fromOpaque(boxedContinuation).takeRetainedValue()

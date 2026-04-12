@@ -1245,4 +1245,52 @@ describe('NPRPC Integration Tests', function() {
             }
         });
     }); // describe TestVariantRpc Interface
+
+    describe('Cancellation', function() {
+        let testBasic: test.TestBasic;
+
+        before(async function() {
+            testBasic = await resolveTestObject('nprpc_test_basic', test.TestBasic);
+        });
+
+        it('should throw AbortError on pre-aborted signal via WebSocket', async function() {
+            const ac = new AbortController();
+            ac.abort();
+            let threw = false;
+            try {
+                await testBasic.ReturnU32(ac.signal);
+            } catch (e: any) {
+                threw = true;
+                expect(e.name).to.equal('AbortError');
+            }
+            expect(threw, 'expected AbortError to be thrown').to.be.true;
+        });
+
+        it('should throw AbortError on pre-aborted signal via HTTP', async function() {
+            const ac = new AbortController();
+            ac.abort();
+            let threw = false;
+            try {
+                await testBasic.http.ReturnU32(ac.signal);
+            } catch (e: any) {
+                threw = true;
+                expect(e.name).to.equal('AbortError');
+            }
+            expect(threw, 'expected AbortError to be thrown').to.be.true;
+        });
+
+        it('should throw AbortError on pre-aborted signal for stream init via WebSocket', async function() {
+            const testStreams = await resolveTestObject('streams_test', test.TestStreams);
+            const ac = new AbortController();
+            ac.abort();
+            let threw = false;
+            try {
+                await testStreams.GetByteStream(5n, ac.signal);
+            } catch (e: any) {
+                threw = true;
+                expect(e.name).to.equal('AbortError');
+            }
+            expect(threw, 'expected AbortError to be thrown').to.be.true;
+        });
+    }); // describe Cancellation
 });

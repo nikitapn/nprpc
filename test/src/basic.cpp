@@ -708,6 +708,34 @@ TEST_F(NprpcTest, TestQuicUnreliable)
 }
 #endif // NPRPC_HAS_QUIC
 
+// Cancellation test: pre-cancel a stop_source and verify OperationCancelled
+// is thrown from the generated *Async stub.  Only the TCP transport uses
+// UringClientConnection which supports true coroutine cancellation via
+// stop_token; the test binds over TCP explicitly.
+TEST_F(NprpcTest, TestCancellation)
+{
+#include "common/tests/basic.inl"
+  TestBasicImpl servant;
+  try {
+    auto obj = bind_and_resolve<nprpc::test::TestBasic>(
+        servant, nprpc::ObjectActivationFlags::tcp, "cancel_test_object");
+
+    // Request stop before the call, so send_receive_coro detects it immediately.
+    std::stop_source ss;
+    ss.request_stop();
+
+    bool caught = false;
+    try {
+      auto task = obj->ReturnU32Async(ss.get_token());
+      task.get();
+    } catch (const nprpc::OperationCancelled&) {
+      caught = true;
+    }
+    EXPECT_TRUE(caught);
+  } catch (nprpc::Exception& ex) {
+    FAIL() << "Unexpected exception in TestCancellation: " << ex.what();
+  }
+}
 
 } // namespace nprpctest
 

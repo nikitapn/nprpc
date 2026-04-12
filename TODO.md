@@ -28,6 +28,7 @@
 * [ ] Encryption support (TLS) for TCP transport.
 * [ ] Deflate or zlib compression for large messages.
 * [ ] Async socket connect with timeout.
+* [ ] **[Cancellation refactor]** `send_receive_coro` is currently only a true coroutine in `UringClientConnection`; all other transports (`SocketConnection`, WebSocket, shared memory, QUIC) inherit the blocking base-class stub that ignores the `stop_token`. Until they are ported, the only cancellation that works is pre-flight (`stop_requested()` checked at the top of every generated `*Async` body). Proper mid-flight cancellation on non-uring transports requires each one to track pending requests by ID, register a `stop_callback`, and post a resume with `status = -2` when triggered — the same pattern already used in `UringClientConnection::send_receive_coro`.
 
 ## WebSocket/WebTransport
 * [ ] Support openning another WebSocket connection on demand when existing one is busy (for high-throughput clients).

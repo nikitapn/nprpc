@@ -722,7 +722,10 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
       auto* atype = arm.type;
       if (atype->id == FieldType::Alias) atype = calias(atype)->get_real_type();
       // if constexpr branch: match on the C++ arm type
+      // Use elaborated type specifier (struct Foo) to avoid name lookup
+      // ambiguity with helpers::Foo namespaces that share the same local name.
       os << (bd - 1) << (i == 0 ? "if" : "} else if") << " constexpr (std::is_same_v<T, ";
+      if (atype->id == FieldType::Struct) os << "struct ";
       emit_type(atype, os);
       os << ">) {\n";
       // Allocate flat storage for the arm in the growing buffer
@@ -884,8 +887,11 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type,
       auto* atype = arm.type;
       if (atype->id == FieldType::Alias) atype = calias(atype)->get_real_type();
       os << bd + 1 << "case " << ns(v->nm) << v->name << "::Kind::" << arm.name << ": {\n";
-      // Declare arm_val of the C++ type
+      // Declare arm_val of the C++ type.
+      // Use elaborated type specifier (struct Foo) to avoid name lookup
+      // ambiguity with helpers::Foo namespaces that share the same local name.
       os << bd + 2;
+      if (atype->id == FieldType::Struct) os << "struct ";
       emit_type(atype, os);
       os << " arm_val{};\n";
       // Follow the Optional pattern:
@@ -1681,7 +1687,7 @@ void CppBuilder::emit_stream_proxy_reply_handling(AstFunctionDecl* fn)
 
 void CppBuilder::proxy_call_coro(AstFunctionDecl* fn)
 {
-  oc << "  co_await session->send_receive_coro(buf, this->get_timeout());\n"
+  oc << "  co_await session->send_receive_coro(buf, this->get_timeout(), std::move(st));\n"
         "  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);\n";
 
   if (fn->ex)
@@ -2306,7 +2312,15 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       oh << "  ::nprpc::Task<";
       emit_type(fn->ret_value, oh);
       oh << "> " << fn->name << "Async ";
-      oh << proxy_arguments(fn) << ";\n";
+      // Append the stop_token to the Async overload; proxy_arguments already
+      // emits the closing ')' so we need a separate emission here.
+      {
+        auto args = proxy_arguments(fn);
+        // args ends with ')'; strip it and append the stop_token default arg.
+        oh << args.substr(0, args.size() - 1);
+        if (args.size() > 2) oh << ", "; // non-empty arg list
+        oh << "std::stop_token st = {});\n";
+      }
     }
   }
 
@@ -2427,7 +2441,15 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       emit_type(fn->ret_value, oc);
       oc << ">\n";
       oc << ns(ctx_->nm_cur()) << ifs->name << "::" << fn->name << "Async";
-      oc << proxy_arguments(fn) << " {\n";
+      {
+        auto args = proxy_arguments(fn);
+        oc << args.substr(0, args.size() - 1);
+        if (args.size() > 2) oc << ", ";
+        oc << "std::stop_token st) {\n";
+      }
+      // Early cancellation check — works for all transports; in-flight cancellation
+      // is an additional capability of UringClientConnection.
+      oc << "  if (st.stop_requested()) throw nprpc::OperationCancelled();\n";
       // Coro: plain heap buffer — no TLS arena (unsafe across co_await thread switch)
       oc << "  ::nprpc::flat_buffer buf;\n";
       oc << "  auto session = "

@@ -8,6 +8,7 @@
 #include <boost/date_time/posix_time/ptime.hpp>
 
 #include <chrono>
+#include <stop_token>
 
 #include <nprpc/basic.hpp>
 #include <nprpc/common.hpp>
@@ -40,8 +41,10 @@ public:
   // Coroutine variant — suspends the caller until the response arrives.
   // Default implementation wraps the blocking send_receive(); concrete
   // transports (UringClientConnection) override with a true suspension.
+  // Pass a stop_token to enable cancellation; throws OperationCancelled.
   virtual nprpc::Task<> send_receive_coro(flat_buffer& buffer,
-                                          uint32_t timeout_ms)
+                                          uint32_t timeout_ms,
+                                          std::stop_token st = {})
   {
     send_receive(buffer, timeout_ms);
     co_return;

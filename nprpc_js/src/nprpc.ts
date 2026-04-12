@@ -3,16 +3,15 @@
 
 import { FlatBuffer } from './flat_buffer';
 import { MyPromise } from "./utils";
-import { BidiStream, StreamManager, StreamReader, StreamWriter, bytes_deserializer } from './stream';
+import { BidiStream, StreamManager, StreamReader, StreamWriter } from './stream';
 export { BidiStream, StreamReader, StreamWriter, bytes_deserializer } from './stream';
 import {
   impl, detail, oid_t, poa_idx_t,
   LogLevel,
-  ExceptionObjectNotExist, 
-  ExceptionUnknownFunctionIndex, 
-  ExceptionUnknownMessageId, 
-  ExceptionCommFailure, 
-  ExceptionUnsecuredObject,
+  ExceptionObjectNotExist,
+  ExceptionUnknownFunctionIndex,
+  ExceptionUnknownMessageId,
+  ExceptionCommFailure,
   ExceptionBadAccess,
   ExceptionBadInput,
   EndPointType,
@@ -170,6 +169,9 @@ export class Connection {
   private async perform_request(request_id: number, buffer: FlatBuffer) {
     // Inject request ID into the message header
     buffer.write_request_id(request_id);
+    await this.ready_;
+    // Guard: abort may have fired while waiting for the connection to be established.
+    if (!this.pending_requests.has(request_id)) return;
     await this.send_payload(buffer.writable_view);
   }
 
@@ -200,7 +202,7 @@ export class Connection {
     state.pending_write = state.pending_write.then(
       () => {
         state.writer.write(payload)
-        console.log(`StreamManager: sent payload for stream ${stream_id.toString()} (length: ${payload.byteLength})`);
+        // console.log(`StreamManager: sent payload for stream ${stream_id.toString()} (length: ${payload.byteLength})`);
       }
     );
   }
@@ -209,23 +211,42 @@ export class Connection {
     // WebSocket is ready, all pending requests will be sent when needed
   }
 
-  public async send_receive(buffer: FlatBuffer, timeout_ms: number): Promise<any> {
+  public async send_receive(buffer: FlatBuffer, timeout_ms: number, signal?: AbortSignal): Promise<any> {
+    // Pre-flight check: reject immediately if already aborted.
+    if (signal?.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+
     const request_id = this.next_request_id++;
     const promise = new MyPromise<void, Error>();
-    
-    // Store the pending request
+
     this.pending_requests.set(request_id, { buffer: buffer, promise: promise });
 
     this.perform_request(request_id, buffer).catch(error => {
       const pending_request = this.pending_requests.get(request_id);
-      if (!pending_request) {
-        return;
-      }
+      if (!pending_request) return;
       this.pending_requests.delete(request_id);
       pending_request.promise.set_exception(error as any);
     });
-    
-    return promise.$;
+
+    if (!signal) {
+      return await promise.$;
+    }
+
+    // Mid-flight cancellation: race the RPC promise against an abort promise.
+    let abort_handler!: () => void;
+    const abort_promise = new Promise<never>((_, reject) => {
+      abort_handler = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+      signal.addEventListener('abort', abort_handler, { once: true });
+    });
+
+    try {
+      return await Promise.race([promise.$, abort_promise]);
+    } finally {
+      signal.removeEventListener('abort', abort_handler);
+      // Clean up pending request in case we lost the race to abort.
+      this.pending_requests.delete(request_id);
+    }
   }
 
   private handle_message(data: ArrayBuffer) {
@@ -234,15 +255,14 @@ export class Connection {
       // Extract request ID from the response
       const request_id = buf.read_request_id();
       const pending_request = this.pending_requests.get(request_id);
-      
-      if (pending_request) {
-        // Update the buffer with response data
-        pending_request.buffer.set_buffer(data);
-        this.pending_requests.delete(request_id);
-        pending_request.promise.set_promise();
-      } else {
-        console.warn("Received response for unknown request ID:", request_id);
-      }
+
+      if (!pending_request)
+        return; // Aborted or unknown request ID, ignore the response
+
+      // Update the buffer with response data
+      pending_request.buffer.set_buffer(data);
+      this.pending_requests.delete(request_id);
+      pending_request.promise.set_promise();
     } else {
       const msg_id = buf.read_msg_id();
 
@@ -278,7 +298,7 @@ export class Connection {
 
       // Remaining messages require a reply - store request_id to echo back
       const request_id = buf.read_request_id();
-      
+
       switch (msg_id) {
         case impl.MessageId.FunctionCall: {
           let ch = impl.unmarshal_CallHeader(buf, header_size);
@@ -287,7 +307,7 @@ export class Connection {
             console.log("FunctionCall. interface_idx: " + ch.interface_idx + " , fn_idx: " + ch.function_idx 
               + " , poa_idx: " + ch.poa_idx + " , oid: " + ch.object_id);
           }
-      
+
           let obj = get_object(buf, ch.poa_idx, ch.object_id)
           if (obj) {
             //console.log(obj);
@@ -327,9 +347,8 @@ export class Connection {
             console.log("AddReference. poa_idx: " + msg.poa_idx + " , oid: " + msg.object_id);
           }
 
-  
           let obj = get_object(buf, msg.poa_idx, msg.object_id)
-  
+
           if (obj) {
             //    std::cout << "Refference added." << std::endl;
 
@@ -356,7 +375,7 @@ export class Connection {
           make_simple_answer(buf, impl.MessageId.Error_UnknownMessageId);
           break;
       }
-      
+
       // Restore the request ID before sending the response
       buf.write_request_id(request_id);
       void this.send_payload(buf.writable_view);
@@ -652,8 +671,8 @@ export class Rpc {
     return this.poa_list_[poa_idx];
   }
 
-  public async call(endpoint: EndPoint, buffer: FlatBuffer, timeout_ms: number = 2500): Promise<any> {
-    return this.get_connection(endpoint).send_receive(buffer, timeout_ms);
+  public async call(endpoint: EndPoint, buffer: FlatBuffer, timeout_ms: number = 2500, signal?: AbortSignal): Promise<any> {
+    return this.get_connection(endpoint).send_receive(buffer, timeout_ms, signal);
   }
 
   public async open_server_stream<T>(
@@ -662,11 +681,12 @@ export class Rpc {
     stream_id: bigint,
     timeout_ms: number,
     deserialize: (data: Uint8Array) => T,
+    signal?: AbortSignal,
   ): Promise<StreamReader<T>> {
     const conn = this.get_connection(endpoint);
     const reader = conn.stream_manager.create_reader(stream_id, deserialize);
     try {
-      await conn.send_receive(buf, timeout_ms);
+      await conn.send_receive(buf, timeout_ms, signal);
       if (handle_standart_reply(buf) !== 0) {
         throw new Exception("Unexpected stream initialization reply");
       }
@@ -684,10 +704,11 @@ export class Rpc {
     stream_id: bigint,
     timeout_ms: number,
     serialize: (value: T) => Uint8Array,
+    signal?: AbortSignal,
   ): Promise<StreamWriter<T>> {
     const conn = this.get_connection(endpoint);
     const writer = conn.stream_manager.create_writer(stream_id, serialize);
-    await conn.send_receive(buf, timeout_ms);
+    await conn.send_receive(buf, timeout_ms, signal);
     if (handle_standart_reply(buf) !== 0) {
       throw new Exception("Unexpected stream initialization reply");
     }
@@ -702,11 +723,12 @@ export class Rpc {
     timeout_ms: number,
     serialize: (value: TIn) => Uint8Array,
     deserialize: (data: Uint8Array) => TOut,
+    signal?: AbortSignal,
   ): Promise<BidiStream<TIn, TOut>> {
     const conn = this.get_connection(endpoint);
     const stream = conn.stream_manager.create_bidi_stream(stream_id, serialize, deserialize);
     try {
-      await conn.send_receive(buf, timeout_ms);
+      await conn.send_receive(buf, timeout_ms, signal);
       if (handle_standart_reply(buf) !== 0) {
         throw new Exception("Unexpected stream initialization reply");
       }
@@ -723,7 +745,6 @@ export class Rpc {
     let x = await fetch("/host.json");
     if (!x.ok)
       throw "read_host error: " + x.statusText;
-
 
     const reviver = (key:string, value: any) => {
       if (key === 'object_id')
@@ -985,47 +1006,47 @@ export class ObjectProxy {
    */
   public toString(): string {
     const oid = this.data;
-    
+
     // Calculate total size
     const class_id_bytes = u8enc.encode(oid.class_id);
     const urls_bytes = u8enc.encode(oid.urls);
-    
+
     // Binary format: object_id(8) + poa_idx(2) + flags(2) + origin(16) + 
     //                class_id_len(4) + class_id + urls_len(4) + urls
     const total_size = 8 + 2 + 2 + 16 + 4 + class_id_bytes.length + 4 + urls_bytes.length;
     const buffer = new ArrayBuffer(total_size);
     const view = new DataView(buffer);
     const bytes = new Uint8Array(buffer);
-    
+
     let offset = 0;
-    
+
     // object_id (u64, little-endian)
     view.setBigUint64(offset, oid.object_id, true);
     offset += 8;
-    
+
     // poa_idx (u16, little-endian)
     view.setUint16(offset, oid.poa_idx, true);
     offset += 2;
-    
+
     // flags (u16, little-endian)
     view.setUint16(offset, oid.flags, true);
     offset += 2;
-    
+
     // origin (16 bytes UUID)
     bytes.set(oid.origin, offset);
     offset += 16;
-    
+
     // class_id_len (u32, little-endian) + class_id
     view.setUint32(offset, class_id_bytes.length, true);
     offset += 4;
     bytes.set(class_id_bytes, offset);
     offset += class_id_bytes.length;
-    
+
     // urls_len (u32, little-endian) + urls
     view.setUint32(offset, urls_bytes.length, true);
     offset += 4;
     bytes.set(urls_bytes, offset);
-    
+
     // Base64 encode
     const base64 = btoa(String.fromCharCode(...bytes));
     return "NPRPC1:" + base64;
@@ -1041,7 +1062,7 @@ export class ObjectProxy {
     if (!str.startsWith(prefix)) {
       return null;
     }
-    
+
     try {
       const base64 = str.substring(prefix.length);
       const binary = atob(base64);
@@ -1049,37 +1070,37 @@ export class ObjectProxy {
       for (let i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i);
       }
-      
+
       const view = new DataView(bytes.buffer);
       let offset = 0;
-      
+
       // object_id (u64, little-endian)
       const object_id = view.getBigUint64(offset, true);
       offset += 8;
-      
+
       // poa_idx (u16, little-endian)
       const poa_idx = view.getUint16(offset, true);
       offset += 2;
-      
+
       // flags (u16, little-endian)
       const flags = view.getUint16(offset, true);
       offset += 2;
-      
+
       // origin (16 bytes UUID)
       const origin = new Uint8Array(bytes.buffer, offset, 16);
       offset += 16;
-      
+
       // class_id_len (u32, little-endian) + class_id
       const class_id_len = view.getUint32(offset, true);
       offset += 4;
       const class_id = u8dec.decode(new Uint8Array(bytes.buffer, offset, class_id_len));
       offset += class_id_len;
-      
+
       // urls_len (u32, little-endian) + urls
       const urls_len = view.getUint32(offset, true);
       offset += 4;
       const urls = u8dec.decode(new Uint8Array(bytes.buffer, offset, urls_len));
-      
+
       const oid: ObjectId = {
         object_id,
         poa_idx,
@@ -1088,7 +1109,7 @@ export class ObjectProxy {
         class_id,
         urls
       };
-      
+
       return new ObjectProxy(oid);
     } catch (e) {
       return null;
@@ -1172,7 +1193,7 @@ export const handle_standart_reply = (buf: FlatBuffer): number => {
     // Don't forget to add case for each of them, when IDL changes
     case impl.MessageId.Error_PoaNotExist:
       throw new Exception("POA does not exist");
-    
+
     case impl.MessageId.Error_ObjectNotExist:
       throw new ExceptionObjectNotExist();
 

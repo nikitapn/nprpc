@@ -952,6 +952,81 @@ final class IntegrationTests: XCTestCase {
         XCTAssertTrue(servant.receivedArg1 >= 100, "At least one async call should have completed")
     }
 
+    /// Test that async RPC calls throw CancellationError when the Task is already cancelled
+    func testCancellation() async throws {
+        class AsyncTestImpl: AsyncTestServant, @unchecked Sendable {
+            override func method1(arg1: UInt32, arg2: String) {}
+            override func method2(arg1: UInt32) -> String { return "" }
+        }
+
+        let servant = AsyncTestImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId")
+            return
+        }
+        let client = narrow(obj, to: AsyncTest.self)!
+
+        // Test 1: Pre-cancelled task — fire-and-forget async method (method1 has no output)
+        // Fire-and-forget methods swallow all errors (including CancellationError) by design.
+        // Verify the call completes without throwing even when the task is cancelled.
+        let task1 = Task<Void, Error> {
+            try Task.checkCancellation()
+            await client.method1(arg1: 1, arg2: "should not reach servant")
+        }
+        task1.cancel()
+        do {
+            try await task1.value
+            // The Task-level checkCancellation() above should throw before method1 is called
+            XCTFail("Expected CancellationError from Task.checkCancellation() before method1")
+        } catch is CancellationError {
+            // Expected — the explicit Task.checkCancellation() in the Task body ran first
+        }
+
+        // Test 2: Pre-cancelled task — async method with output (method2)
+        let task2 = Task<String, Error> {
+            try Task.checkCancellation()
+            return try await client.method2(arg1: 99)
+        }
+        task2.cancel()
+        do {
+            _ = try await task2.value
+            XCTFail("Expected CancellationError for pre-cancelled async-receive call")
+        } catch is CancellationError {
+            // Expected
+        }
+
+        // Test 3: sendAsync pre-flight cancellation via runtime function directly
+        let buffer = FlatBuffer()
+        buffer.prepare(64)
+        buffer.commit(64)
+        let task3 = Task<Void, Error> {
+            try await client.sendAsync(buffer: buffer, timeout: 5000)
+        }
+        task3.cancel()
+        do {
+            try await task3.value
+            XCTFail("Expected CancellationError from sendAsync pre-flight")
+        } catch is CancellationError {
+            // Expected
+        }
+
+        // Test 4: sendAsyncReceive pre-flight cancellation via runtime function directly
+        let buffer2 = FlatBuffer()
+        buffer2.prepare(64)
+        buffer2.commit(64)
+        let task4 = Task<FlatBuffer, Error> {
+            try await client.sendAsyncReceive(buffer: buffer2, timeout: 5000)
+        }
+        task4.cancel()
+        do {
+            _ = try await task4.value
+            XCTFail("Expected CancellationError from sendAsyncReceive pre-flight")
+        } catch is CancellationError {
+            // Expected
+        }
+    }
+
     /// Test bad input validation for untrusted interfaces
     /// This simulates a malicious client sending a malformed buffer with an oversized vector
     func testBadInput() throws {

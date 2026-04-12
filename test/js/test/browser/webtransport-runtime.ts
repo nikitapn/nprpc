@@ -318,6 +318,42 @@ export async function callTestBasicHttp() {
   };
 }
 
+export async function testCancellation() {
+  const testBasic = await resolveProxy<TestBasic>('nprpc_test_basic', TestBasic);
+
+  // WebTransport pre-flight cancellation
+  const ac1 = new AbortController();
+  ac1.abort();
+  let wtThrew = false;
+  let wtErrorName = '';
+  try {
+    await testBasic.ReturnU32(ac1.signal);
+  } catch (e: any) {
+    wtThrew = true;
+    wtErrorName = e.name;
+  }
+
+  // HTTP pre-flight cancellation
+  const ac2 = new AbortController();
+  ac2.abort();
+  let httpThrew = false;
+  let httpErrorName = '';
+  try {
+    await testBasic.http.ReturnU32(ac2.signal);
+  } catch (e: any) {
+    httpThrew = true;
+    httpErrorName = e.name;
+  }
+
+  return {
+    wtThrew,
+    wtErrorName,
+    httpThrew,
+    httpErrorName,
+    endpointType: testBasic.endpoint.type,
+  };
+}
+
 export async function repeatedTestBasicHttpCalls(callCount: number) {
   const testBasic = await resolveProxy<TestBasic>('nprpc_test_basic', TestBasic);
   const values = [];

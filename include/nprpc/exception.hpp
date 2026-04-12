@@ -19,4 +19,12 @@ public:
   {
   }
 };
+
+/// Thrown when an async RPC call is cancelled via std::stop_token.
+class OperationCancelled : public Exception
+{
+public:
+  OperationCancelled() : Exception("OperationCancelled") {}
+};
+
 } // namespace nprpc

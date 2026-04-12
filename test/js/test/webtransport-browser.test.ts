@@ -423,4 +423,30 @@ describe('WebTransport Browser Transport', function() {
       await context.close();
     }
   });
+
+  it('should throw AbortError on pre-aborted signal over WebTransport and HTTP', async function() {
+    if (!browser) {
+      this.skip();
+    }
+
+    const { context, page, initResult } = await createBrowserPage();
+
+    try {
+      if ((initResult as any).unsupported) {
+        this.skip();
+      }
+
+      const result = await page.evaluate(async () => {
+        return await (globalThis as any).nprpc_test_runtime.testCancellation();
+      });
+
+      expect((result as any).endpointType).to.equal(EndPointType.WebTransport);
+      expect((result as any).wtThrew, 'WebTransport pre-flight should throw').to.be.true;
+      expect((result as any).wtErrorName).to.equal('AbortError');
+      expect((result as any).httpThrew, 'HTTP pre-flight should throw').to.be.true;
+      expect((result as any).httpErrorName).to.equal('AbortError');
+    } finally {
+      await context.close();
+    }
+  });
 });
