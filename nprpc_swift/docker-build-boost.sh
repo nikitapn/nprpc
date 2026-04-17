@@ -1,5 +1,7 @@
 #!/bin/bash
-# Build Boost 1.89.0 and OpenSSL 3.6.1 (QUIC-capable) with Swift's Clang in Docker
+# Build Boost 1.89.0 with Swift's Clang in Docker
+# BoringSSL is built in-tree by CMake from third_party/boringssl (submodule);
+# there is no longer a separate OpenSSL build step.
 # This only needs to be run once before docker-build-nprpc.sh
 # Run from nprpc_swift/ directory
 
@@ -10,38 +12,10 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 DOCKER_IMAGE_NAME="nprpc-swift-ubuntu"
 
-echo "Building Boost and OpenSSL in Docker container..."
+echo "Building Boost in Docker container..."
 docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace ${DOCKER_IMAGE_NAME} bash -c '
     set -e
 
-    echo "=== Building OpenSSL 3.6.1 with QUIC support ==="
-    if [ ! -f ".build_ubuntu_swift/openssl_install/lib/libssl.so" ]; then
-        if [ ! -d "third_party/openssl-3.6.1" ]; then
-            mkdir -p third_party
-            cd third_party
-            wget https://www.openssl.org/source/openssl-3.6.1.tar.gz
-            tar xzf openssl-3.6.1.tar.gz
-            rm openssl-3.6.1.tar.gz
-            cd ..
-        fi
-        mkdir -p .build_ubuntu_swift/openssl_install
-        cd third_party/openssl-3.6.1
-        ./config \
-            --prefix=/workspace/.build_ubuntu_swift/openssl_install \
-            --openssldir=/workspace/.build_ubuntu_swift/openssl_install/ssl \
-            --libdir=lib \
-            CC=clang \
-            shared \
-            no-tests
-        make -j$(nproc)
-        make install_sw
-        cd ../..
-        echo "✅ OpenSSL 3.6.1 build complete!"
-    else
-        echo "=== Using existing OpenSSL installation ==="
-    fi
-
-    echo ""
     echo "=== Downloading Boost 1.89.0 ==="
     if [ ! -d "third_party/boost_1_89_0" ]; then
         mkdir -p third_party
@@ -92,4 +66,4 @@ EOF
 
 echo ""
 echo "Boost installed to: .build_ubuntu_swift/boost_install"
-echo "OpenSSL installed to: .build_ubuntu_swift/openssl_install"
+echo "Note: BoringSSL will be built automatically by CMake from third_party/boringssl"

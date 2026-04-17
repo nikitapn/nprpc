@@ -42,33 +42,8 @@ RUN ./b2 --user-config=user-config.jam \
     rm -rf boost_1_89_0 boost_1_89_0.tar.gz
 
 # ============================================================================
-# Stage 2: Build OpenSSL 3.6.1 with QUIC support (SSL_set_quic_tls_cbs)
-# ============================================================================
-FROM swift:6.3.0 AS openssl-builder
-
-RUN apt-get update && apt-get install -y \
-    wget \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-
-RUN wget https://www.openssl.org/source/openssl-3.6.1.tar.gz && \
-    tar -xzf openssl-3.6.1.tar.gz
-
-RUN cd openssl-3.6.1 && \
-    ./config \
-        --prefix=/opt/openssl \
-        --openssldir=/opt/openssl/ssl \
-        --libdir=lib \
-        CC=clang \
-        shared \
-        no-tests && \
-    make -j$(nproc) && \
-    make install_sw
-
-# ============================================================================
 # Stage 2: Build NPRPC C++
+# (BoringSSL is built in-tree from third_party/boringssl submodule)
 # ============================================================================
 FROM swift:6.3.0 AS nprpc-builder
 
@@ -77,13 +52,13 @@ RUN apt-get update && apt-get install -y \
     ninja-build \
     build-essential \
     git \
+    golang \
     liburing-dev \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Boost and OpenSSL from previous stages
+# Copy Boost from previous stage
 COPY --from=boost-builder /opt/boost /opt/boost
-COPY --from=openssl-builder /opt/openssl /opt/openssl
 
 WORKDIR /workspace
 
@@ -94,6 +69,7 @@ ARG NPRPC_PROJECT_GIT_COMMIT
 ARG NPRPC_THIRD_PARTY_GIT_COMMITS
 
 # Build NPRPC C++ library and tools
+# BoringSSL is built automatically via -DNPRPC_USE_BORINGSSL=ON (third_party/boringssl submodule)
 RUN --mount=type=cache,id=nprpc-build,target=/workspace/.build_relwith_debinfo \
   cmake -G Ninja \
     -S . \
@@ -102,10 +78,7 @@ RUN --mount=type=cache,id=nprpc-build,target=/workspace/.build_relwith_debinfo \
     -DCMAKE_CXX_COMPILER=clang++ \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DBOOST_DIR=/opt/boost \
-    -DOPENSSL_ROOT_DIR=/opt/openssl \
-    -DOPENSSL_INCLUDE_DIR=/opt/openssl/include \
-    -DOPENSSL_SSL_LIBRARY=/opt/openssl/lib/libssl.so \
-    -DOPENSSL_CRYPTO_LIBRARY=/opt/openssl/lib/libcrypto.so \
+    -DNPRPC_USE_BORINGSSL=ON \
     -DCMAKE_INSTALL_PREFIX=/opt/nprpc \
     -DNPRPC_BUILD_TOOLS=ON \
     -DNPRPC_ENABLE_QUIC=ON \
@@ -117,7 +90,10 @@ RUN --mount=type=cache,id=nprpc-build,target=/workspace/.build_relwith_debinfo \
     "-DNPRPC_PROJECT_GIT_COMMIT=${NPRPC_PROJECT_GIT_COMMIT}" \
     "-DNPRPC_THIRD_PARTY_GIT_COMMITS=${NPRPC_THIRD_PARTY_GIT_COMMITS}" \
     && cmake --build .build_relwith_debinfo -j$(nproc) \
-    && cmake --install .build_relwith_debinfo
+    && cmake --install .build_relwith_debinfo \
+    && cp .build_relwith_debinfo/third_party/boringssl/libssl.a /opt/nprpc/lib/ \
+    && cp .build_relwith_debinfo/third_party/boringssl/libcrypto.a /opt/nprpc/lib/ \
+    && cp -r third_party/boringssl/include/openssl /opt/nprpc/include/openssl
 
 # ============================================================================
 # Stage 3: Build Swift bindings
@@ -131,9 +107,11 @@ RUN --mount=type=cache,id=nprpc-build,target=/workspace/.build_relwith_debinfo \
     NPIDL=/workspace/.build_relwith_debinfo/npidl/npidl ./gen_stubs.sh
 
 # Build Swift package (release mode)
+# BoringSSL headers are in the source tree; libnprpc.so already links against
+# the static BoringSSL libs, so Swift only needs the nprpc shared library.
 RUN swift build -c release \
     -Xcc -I/opt/boost/include \
-    -Xcc -I/opt/openssl/include \
+    -Xcc -I/workspace/third_party/boringssl/include \
     -Xcc -I/opt/nprpc/include \
     -Xlinker -L/opt/boost/lib \
     -Xlinker -L/opt/nprpc/lib \
@@ -170,10 +148,8 @@ RUN apt-get update && apt-get install -y \
 # Copy Boost runtime libraries
 COPY --from=boost-builder /opt/boost /opt/boost
 
-# Copy OpenSSL (QUIC-capable) runtime libraries
-COPY --from=openssl-builder /opt/openssl /opt/openssl
-
 # Copy NPRPC C++ artifacts (libs, headers, tools, cmake configs)
+# BoringSSL is statically linked into libnprpc.so; no separate runtime copy needed.
 COPY --from=nprpc-builder /opt/nprpc /opt/nprpc
 
 # Copy the compiled bridge static library from swift-builder
@@ -204,8 +180,8 @@ RUN mkdir -p /opt/nprpc/lib/pkgconfig && \
 Name: nprpc-swift
 Description: NPRPC C++ bridge for Swift (pre-built)
 Version: 1.0.0
-Cflags: -I/opt/nprpc/include -I/opt/boost/include -I/opt/openssl/include
-Libs: -L/opt/nprpc/lib -L/opt/boost/lib -L/opt/openssl/lib -lCNprpc -lnprpc -lssl -lcrypto
+Cflags: -I/opt/nprpc/include -I/opt/boost/include
+Libs: -L/opt/nprpc/lib -L/opt/boost/lib -lCNprpc -lnprpc -lssl -lcrypto
 EOF
 
 # ---------------------------------------------------------------------------
@@ -213,18 +189,17 @@ EOF
 # Make /opt trees group-readable and give ubuntu ownership of /project so
 # `docker run --user $(id -u):$(id -g)` writes .build/ files as the host user.
 # ---------------------------------------------------------------------------
-RUN chown -R root:ubuntu /opt/nprpc /opt/nprpc_swift /opt/boost /opt/openssl && \
-    chmod -R g+rX /opt/nprpc /opt/nprpc_swift /opt/boost /opt/openssl && \
+RUN chown -R root:ubuntu /opt/nprpc /opt/nprpc_swift /opt/boost && \
+    chmod -R g+rX /opt/nprpc /opt/nprpc_swift /opt/boost && \
     mkdir -p /project && chown ubuntu:ubuntu /project
 
 # Set environment variables for easy discovery
 ENV BOOST_ROOT=/opt/boost
 ENV NPRPC_ROOT=/opt/nprpc
 ENV NPRPC_SWIFT_ROOT=/opt/nprpc_swift
-ENV OPENSSL_ROOT=/opt/openssl
 ENV PATH="${PATH}:/opt/nprpc/bin"
-ENV LD_LIBRARY_PATH="/opt/boost/lib:/opt/nprpc/lib:/opt/openssl/lib:${LD_LIBRARY_PATH}"
-ENV PKG_CONFIG_PATH="/opt/nprpc/lib/pkgconfig:/opt/openssl/lib/pkgconfig:${PKG_CONFIG_PATH}"
+ENV LD_LIBRARY_PATH="/opt/boost/lib:/opt/nprpc/lib:${LD_LIBRARY_PATH}"
+ENV PKG_CONFIG_PATH="/opt/nprpc/lib/pkgconfig:${PKG_CONFIG_PATH}"
 
 # Create CMake toolchain hint file for projects
 RUN echo "# NPRPC Paths\n\

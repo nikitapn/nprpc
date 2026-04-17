@@ -20,7 +20,11 @@
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
-#include <ngtcp2/ngtcp2_crypto_ossl.h>
+#if defined(OPENSSL_IS_BORINGSSL)
+# include <ngtcp2/ngtcp2_crypto_boringssl.h>
+#else
+# include <ngtcp2/ngtcp2_crypto_ossl.h>
+#endif
 
 #include <openssl/err.h>
 #include <openssl/rand.h>
@@ -53,6 +57,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <map>
 #include <span>
 #include <thread>
 #include <string_view>
@@ -615,10 +620,14 @@ private:
     NPRPC_HTTP3_TRACE("on_recv_crypto_data: level={}, offset={}, len={}",
                       (int)crypto_level, offset, datalen);
 
-    // Get the ossl_ctx to check state before and after
+    // Get the SSL object to check state before and after
+#if defined(OPENSSL_IS_BORINGSSL)
+    auto ssl = static_cast<SSL*>(ngtcp2_conn_get_tls_native_handle(conn));
+#else
     auto ossl_ctx = static_cast<ngtcp2_crypto_ossl_ctx*>(
         ngtcp2_conn_get_tls_native_handle(conn));
     auto ssl = ngtcp2_crypto_ossl_ctx_get_ssl(ossl_ctx);
+#endif
     NPRPC_HTTP3_TRACE("on_recv_crypto_data: SSL state before: {}",
                       SSL_state_string_long(ssl));
 
@@ -714,7 +723,10 @@ private:
   ngtcp2_conn* conn_ = nullptr;
   ngtcp2_crypto_conn_ref conn_ref_;
   nghttp3_conn* httpconn_ = nullptr;
+#if !defined(OPENSSL_IS_BORINGSSL)
   ngtcp2_crypto_ossl_ctx* ossl_ctx_ = nullptr;
+#endif
+  SSL* ssl_ = nullptr;
   SSL_CTX* ssl_ctx_ = nullptr;
 
   ngtcp2_cid scid_;
@@ -1270,6 +1282,12 @@ Http3Connection::~Http3Connection()
   if (conn_) {
     ngtcp2_conn_del(conn_);
   }
+#if defined(OPENSSL_IS_BORINGSSL)
+  if (ssl_) {
+    SSL_set_app_data(ssl_, nullptr);
+    SSL_free(ssl_);
+  }
+#else
   if (ossl_ctx_) {
     auto ssl = ngtcp2_crypto_ossl_ctx_get_ssl(ossl_ctx_);
     if (ssl) {
@@ -1278,17 +1296,20 @@ Http3Connection::~Http3Connection()
     }
     ngtcp2_crypto_ossl_ctx_del(ossl_ctx_);
   }
+#endif
 }
 
 bool Http3Connection::init()
 {
   NPRPC_HTTP3_TRACE("Http3Connection::init() starting...");
 
-  // Create OpenSSL QUIC context
+#if !defined(OPENSSL_IS_BORINGSSL)
+  // Create the OpenSSL QUIC context wrapper (not needed for BoringSSL)
   if (ngtcp2_crypto_ossl_ctx_new(&ossl_ctx_, nullptr) != 0) {
     NPRPC_LOG_ERROR("[HTTP/3][E] Failed to create OpenSSL QUIC context");
     return false;
   }
+#endif
 
   // Set up ngtcp2 callbacks
   ngtcp2_callbacks callbacks{
@@ -1406,28 +1427,38 @@ bool Http3Connection::init()
   // /home/nikita/projects/nprpc/third_party/ngtcp2/examples/tls_server_session_ossl.cc
 
   // Create SSL object
-  SSL* ssl = SSL_new(ssl_ctx_);
-  if (!ssl) {
+  ssl_ = SSL_new(ssl_ctx_);
+  if (!ssl_) {
     NPRPC_LOG_ERROR("[HTTP/3][E] SSL_new failed: {}",
                     ERR_error_string(ERR_get_error(), nullptr));
     return false;
   }
 
-  ngtcp2_crypto_ossl_ctx_set_ssl(ossl_ctx_, ssl);
+#if defined(OPENSSL_IS_BORINGSSL)
+  // The QUIC method was set on ssl_ctx_ in Http3Server::start();
+  // per-connection init only needs to set app data and accept state.
+  SSL_set_app_data(ssl_, &conn_ref_);
+  SSL_set_accept_state(ssl_);
+
+  ngtcp2_conn_set_tls_native_handle(conn_, ssl_);
+#else
+  ngtcp2_crypto_ossl_ctx_set_ssl(ossl_ctx_, ssl_);
 
   // Configure SSL for QUIC server FIRST - this sets up the QUIC TLS callbacks
-  if (ngtcp2_crypto_ossl_configure_server_session(ssl) != 0) {
+  if (ngtcp2_crypto_ossl_configure_server_session(ssl_) != 0) {
     NPRPC_LOG_ERROR("[HTTP/3][E] Failed to configure server SSL session");
-    SSL_free(ssl);
+    SSL_free(ssl_);
+    ssl_ = nullptr;
     return false;
   }
 
   // Set app data AFTER configuring for QUIC (reference order)
-  SSL_set_app_data(ssl, &conn_ref_);
-  SSL_set_accept_state(ssl);
-  SSL_set_quic_tls_early_data_enabled(ssl, 0);
+  SSL_set_app_data(ssl_, &conn_ref_);
+  SSL_set_accept_state(ssl_);
+  SSL_set_quic_tls_early_data_enabled(ssl_, 0);
 
   ngtcp2_conn_set_tls_native_handle(conn_, ossl_ctx_);
+#endif
 
   print_ssl_state("After SSL setup");
 
@@ -2933,9 +2964,13 @@ int Http3Connection::start_closing_period()
 //==============================================================================
 void Http3Connection::print_ssl_state(std::string_view prefix)
 {
-#if NPRPC_NGTCP2_ENABLE_LOGGING 
+#if NPRPC_NGTCP2_ENABLE_LOGGING
   // Check SSL state
+# if defined(OPENSSL_IS_BORINGSSL)
+  auto ssl = ssl_;
+# else
   auto ssl = ngtcp2_crypto_ossl_ctx_get_ssl(ossl_ctx_);
+# endif
   if (ssl) {
     NPRPC_HTTP3_TRACE("SSL [{}]: state: {}", prefix,
                       SSL_state_string_long(ssl));
@@ -3689,12 +3724,6 @@ bool Http3Server::start()
   // Initialize static secret for tokens
   init_static_secret();
 
-  // Initialize ngtcp2 crypto
-  if (ngtcp2_crypto_ossl_init() != 0) {
-    NPRPC_HTTP3_ERROR("Failed to initialize ngtcp2 crypto");
-    return false;
-  }
-
   // Create SSL context
   ssl_ctx_ = SSL_CTX_new(TLS_server_method());
   if (!ssl_ctx_) {
@@ -3702,26 +3731,44 @@ bool Http3Server::start()
     return false;
   }
 
+#if defined(OPENSSL_IS_BORINGSSL)
+  // Configure the context for QUIC (sets QUIC method and TLS 1.3 on the ctx)
+  if (ngtcp2_crypto_boringssl_configure_server_context(ssl_ctx_) != 0) {
+    NPRPC_HTTP3_ERROR("Failed to configure SSL context for QUIC");
+    SSL_CTX_free(ssl_ctx_);
+    ssl_ctx_ = nullptr;
+    return false;
+  }
+#endif
+
   // Set TLS 1.3 minimum (required for QUIC)
   SSL_CTX_set_min_proto_version(ssl_ctx_, TLS1_3_VERSION);
   SSL_CTX_set_max_proto_version(ssl_ctx_, TLS1_3_VERSION);
 
   // Disable 0-RTT. NPRPC serves mutable RPC and upgrade endpoints where
   // replayable early data is not an acceptable tradeoff.
+#if defined(OPENSSL_IS_BORINGSSL)
+  SSL_CTX_set_early_data_enabled(ssl_ctx_, 0);
+#else
   SSL_CTX_set_max_early_data(ssl_ctx_, 0);
+#endif
 
-  // SSL options
+#if !defined(OPENSSL_IS_BORINGSSL)
+  // SSL options (OpenSSL-specific flags; BoringSSL does not expose these)
   SSL_CTX_set_options(
       ssl_ctx_, (SSL_OP_ALL & ~SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS) |
             SSL_OP_SINGLE_ECDH_USE | SSL_OP_CIPHER_SERVER_PREFERENCE);
 
-  // Set ciphersuites for TLS 1.3
+  // Set ciphersuites for TLS 1.3 (BoringSSL does not expose this — built-in)
   if (SSL_CTX_set_ciphersuites(ssl_ctx_, crypto_default_ciphers()) != 1) {
     NPRPC_HTTP3_TRACE("Failed to set ciphersuites");
     SSL_CTX_free(ssl_ctx_);
     ssl_ctx_ = nullptr;
     return false;
   }
+
+  SSL_CTX_set_mode(ssl_ctx_, SSL_MODE_RELEASE_BUFFERS);
+#endif
 
   // Set groups for key exchange
   if (SSL_CTX_set1_groups_list(ssl_ctx_, crypto_default_groups()) != 1) {
@@ -3730,8 +3777,6 @@ bool Http3Server::start()
     ssl_ctx_ = nullptr;
     return false;
   }
-
-  SSL_CTX_set_mode(ssl_ctx_, SSL_MODE_RELEASE_BUFFERS);
 
   // Set ALPN callback for HTTP/3
   SSL_CTX_set_alpn_select_cb(

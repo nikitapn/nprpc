@@ -39,6 +39,7 @@ option(NPRPC_ENABLE_HTTP3 "Enable HTTP/3 server" OFF)
 option(NPRPC_ENABLE_SSR "Enable SSR support via Node.js worker (requires Boost.Process)" OFF)
 option(NPRPC_BUILD_NODE_ADDON "Build Node.js addon" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+option(NPRPC_USE_BORINGSSL "Use BoringSSL from third_party/boringssl instead of system OpenSSL" OFF)
 set(NPRPC_PROJECT_GIT_COMMIT "" CACHE STRING "Override git commit hash recorded in build info")
 set(NPRPC_THIRD_PARTY_GIT_COMMITS "" CACHE STRING "Override third-party git commits as name=commit|name=commit")
 
@@ -94,8 +95,29 @@ endif()
 
 # Find dependencies
 find_package(Threads REQUIRED)
-find_package(OpenSSL REQUIRED)
 find_package(Git QUIET)
+
+if(NPRPC_USE_BORINGSSL)
+  message(STATUS "Using BoringSSL from third_party/boringssl")
+  # BoringSSL must always be static even when BUILD_SHARED_LIBS=ON
+  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "" FORCE)
+  set(_saved_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+  set(BUILD_SHARED_LIBS OFF)
+  add_subdirectory(third_party/boringssl EXCLUDE_FROM_ALL)
+  set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS})
+  # GCC issues a false-positive -Werror=array-bounds= on BoringSSL's own
+  # e_aesgcmsiv.cc; suppress it so the build doesn't fail.
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(crypto PRIVATE -Wno-array-bounds -Wno-stringop-overread)
+  endif()
+  # Expose BoringSSL under the conventional OpenSSL:: namespace so that
+  # Boost.Asio and other consumers compile without changes.
+  add_library(OpenSSL::Crypto ALIAS crypto)
+  add_library(OpenSSL::SSL ALIAS ssl)
+else()
+  find_package(OpenSSL REQUIRED)
+endif()
 
 # Find liburing via pkg-config (required for io_uring support in Boost.Asio)
 find_package(PkgConfig REQUIRED)
@@ -148,10 +170,20 @@ if(NPRPC_ENABLE_HTTP3)
   set(ENABLE_STATIC_LIB ON CACHE BOOL "" FORCE)
   set(ENABLE_SHARED_LIB OFF CACHE BOOL "" FORCE)
   set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
-  set(ENABLE_OPENSSL ON CACHE BOOL "" FORCE)
   set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
   # Need PIC for static libs that will be linked into shared libraries
   set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "" FORCE)
+  if(NPRPC_USE_BORINGSSL)
+    set(ENABLE_OPENSSL OFF CACHE BOOL "" FORCE)
+    set(ENABLE_BORINGSSL ON CACHE BOOL "" FORCE)
+    # BORINGSSL_INCLUDE_DIR is used by ngtcp2's configure-time header check
+    # (OPENSSL_IS_BORINGSSL is a #define, so no linking needed for that check)
+    set(BORINGSSL_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/boringssl/include CACHE PATH "" FORCE)
+    set(BORINGSSL_LIBRARIES "" CACHE STRING "" FORCE)
+  else()
+    set(ENABLE_OPENSSL ON CACHE BOOL "" FORCE)
+    set(ENABLE_BORINGSSL OFF CACHE BOOL "" FORCE)
+  endif()
   add_subdirectory(third_party/ngtcp2 EXCLUDE_FROM_ALL)
 
   # Build nghttp3 (HTTP/3 framing)
@@ -383,16 +415,38 @@ target_include_directories(nprpc
 )
 
 # Link libraries
-target_link_libraries(nprpc
-  PUBLIC
-    Threads::Threads
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    Boost::headers
-    PkgConfig::uring
-  PRIVATE
-    unordered_dense::unordered_dense
-)
+# When using BoringSSL, ssl/crypto are static and must not be re-exported as
+# dynamic NEEDED entries from the shared library — make them PRIVATE.
+if(NPRPC_USE_BORINGSSL)
+  target_link_libraries(nprpc
+    PUBLIC
+      Threads::Threads
+      Boost::headers
+      PkgConfig::uring
+    PRIVATE
+      OpenSSL::SSL
+      OpenSSL::Crypto
+      unordered_dense::unordered_dense
+  )
+  # Re-export BoringSSL's include directory so consumers (npnameserver, etc.)
+  # can find <openssl/...> headers, but suppress dynamic -lssl/-lcrypto entries.
+  target_include_directories(nprpc PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/boringssl/include>
+  )
+else()
+  target_link_libraries(nprpc
+    PUBLIC
+      Threads::Threads
+      OpenSSL::SSL
+      OpenSSL::Crypto
+      Boost::headers
+      PkgConfig::uring
+    PRIVATE
+      unordered_dense::unordered_dense
+  )
+endif()
+
+
 
 # MsQuic linking
 if(NPRPC_ENABLE_QUIC)
@@ -406,11 +460,19 @@ endif()
 # HTTP/3 linking
 if(NPRPC_ENABLE_HTTP3)
   target_compile_definitions(nprpc PUBLIC NPRPC_HTTP3_ENABLED)
-  target_link_libraries(nprpc PRIVATE 
-    ngtcp2_static
-    ngtcp2_crypto_ossl_static
-    nghttp3_static
-  )
+  if(NPRPC_USE_BORINGSSL)
+    target_link_libraries(nprpc PRIVATE
+      ngtcp2_static
+      ngtcp2_crypto_boringssl_static
+      nghttp3_static
+    )
+  else()
+    target_link_libraries(nprpc PRIVATE
+      ngtcp2_static
+      ngtcp2_crypto_ossl_static
+      nghttp3_static
+    )
+  endif()
   target_include_directories(nprpc PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ngtcp2/lib/includes
     ${CMAKE_CURRENT_BINARY_DIR}/third_party/ngtcp2/lib/includes

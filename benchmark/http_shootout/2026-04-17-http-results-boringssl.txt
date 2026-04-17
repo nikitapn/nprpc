@@ -1,6 +1,6 @@
 # Benchmark Environment
 
-- Generated at: 2026-04-17T20:51:15+02:00
+- Generated at: 2026-04-17T22:13:11+02:00
 - Hostname: laptop
 - Kernel: Linux 6.19.6-arch1-1 x86_64 GNU/Linux
 - Architecture: x86_64
@@ -48,17 +48,17 @@
 === 1KB ===
 file                        tool    req      rps        vs_nprpc  avg_ms  p50_ms  p95_ms  p99_ms  success_%  note
 --------------------------  ------  -------  ---------  --------  ------  ------  ------  ------  ---------  ----
-nprpc-http3-1kb.h2load.txt  h2load  3744970  249664.67  baseline  1.270   1.250   1.850   2.270   100.00
-nginx-http3-1kb.h2load.txt  h2load  2524504  168300.27  -33%      1.380   1.420   2.000   2.800   100.00
+nprpc-http3-1kb.h2load.txt  h2load  3718370  247891.33  baseline  1.270   1.230   1.940   2.430   100.00
+nginx-http3-1kb.h2load.txt  h2load  2520032  168002.13  -32%      1.410   1.450   2.060   2.390   100.00
 
 === 64KB ===
 file                         tool    req     rps       vs_nprpc  avg_ms  p50_ms  p95_ms  p99_ms  success_%  note
 ---------------------------  ------  ------  --------  --------  ------  ------  ------  ------  ---------  ----
-nprpc-http3-64kb.h2load.txt  h2load  298319  19887.93  baseline  16.090  16.390  20.800  22.330  100.00
-nginx-http3-64kb.h2load.txt  h2load  370921  24728.47  +24%      12.940  13.250  18.040  22.370  100.00
+nprpc-http3-64kb.h2load.txt  h2load  292937  19529.13  baseline  16.390  16.590  21.180  23.400  100.00
+nginx-http3-64kb.h2load.txt  h2load  376635  25108.60  +29%      12.740  12.990  18.100  22.470  100.00
 
 === 1MB ===
 file                        tool    req    rps      vs_nprpc  avg_ms   p50_ms   p95_ms   p99_ms   success_%  note
 --------------------------  ------  -----  -------  --------  -------  -------  -------  -------  ---------  ----
-nprpc-http3-1mb.h2load.txt  h2load  16941  1129.40  baseline  283.300  282.710  306.110  317.290  100.00
-nginx-http3-1mb.h2load.txt  h2load  23491  1566.47  +39%      204.340  203.030  225.690  237.300  100.00
+nprpc-http3-1mb.h2load.txt  h2load  19663  1310.87  baseline  244.070  243.150  265.850  284.350  100.00
+nginx-http3-1mb.h2load.txt  h2load  24318  1621.67  +24%      197.430  195.890  218.230  229.990  100.00

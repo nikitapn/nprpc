@@ -30,14 +30,11 @@ let package = Package(
                 .unsafeFlags(["-I", "../.build_ubuntu_swift/include"]),
                 // Include Clang 17-built Boost (not system Boost)
                 .unsafeFlags(["-I", "../.build_ubuntu_swift/boost_install/include"]),
-                .unsafeFlags(["-I", "../.build_ubuntu_swift/openssl_install/include"])
+                .unsafeFlags(["-I", "../third_party/boringssl/include"])
             ],
             linkerSettings: [
-                // Link against libnprpc.so
+                // Link against libnprpc.so (BoringSSL is statically absorbed inside it)
                 .linkedLibrary("nprpc"),
-                // Link against OpenSSL (required by NPRPC)
-                .linkedLibrary("ssl"),
-                .linkedLibrary("crypto"),
                 // Add library search path for local development
                 .unsafeFlags(["-L", "../.build_ubuntu_swift"]),
                 // Add rpath for runtime
@@ -63,6 +60,17 @@ let package = Package(
             exclude: [ ],
             swiftSettings: [
                 .interoperabilityMode(.Cxx)
+            ],
+            linkerSettings: [
+                // BoringSSL is built with -fvisibility=hidden so ERR_* symbols
+                // are not exported from libnprpc.so. Link the static archives
+                // directly here so the test binary resolves them at link time.
+                // This only affects the test binary — consumer packages (which
+                // link libnprpc.so and don't include ssl/impl/error.ipp directly)
+                // are unaffected since test targets don't propagate linker settings.
+                .unsafeFlags(["-L", "../.build_ubuntu_swift/third_party/boringssl"]),
+                .linkedLibrary("ssl"),
+                .linkedLibrary("crypto"),
             ]
         ),
     ],
