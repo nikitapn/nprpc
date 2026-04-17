@@ -112,6 +112,7 @@ public:
                   .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                        "/home/nikita/projects/nprpc/certs/out/localhost.key")
                   .enable_http3()
+                  .http3_workers(8)
                 .build();
 
       rpc->start_thread_pool(1);
