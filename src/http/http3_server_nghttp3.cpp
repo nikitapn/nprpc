@@ -146,7 +146,6 @@ constexpr std::size_t kMaxUdpGsoSegments = MAX_PKTS_BURST;
 
 size_t default_http3_worker_count() noexcept
 {
-  return 1;
   const auto hw = std::thread::hardware_concurrency();
   if (hw == 0) {
     return 1;
@@ -459,6 +458,10 @@ public:
 
   // Called by server when write is possible
   void signal_write();
+
+  // Called by server during graceful shutdown — sends HTTP/3 GOAWAY notice
+  // then initiates a QUIC closing period. Must be called on the strand.
+  void initiate_shutdown();
 
   auto get_executor() { return socket_.get_executor(); }
   void queue_raw_stream_write(int64_t stream_id, flat_buffer&& data);
@@ -1812,6 +1815,29 @@ void Http3Connection::signal_write()
     if (!self->closed_) {
       self->on_write();
     }
+  });
+}
+
+void Http3Connection::initiate_shutdown()
+{
+  // Post onto our strand so this is safe to call from any thread
+  // (Http3Server::stop dispatches to ioc_, connections live on strands).
+  boost::asio::post(strand_, [self = shared_from_this()]() {
+    if (self->closed_) return;
+
+    // Phase 1: send GOAWAY with max stream ID so the client stops opening new
+    // requests while we finish in-flight ones (RFC 9114 §5.2).
+    if (self->httpconn_) {
+      int rv = nghttp3_conn_submit_shutdown_notice(self->httpconn_);
+      if (rv != 0) {
+        NPRPC_HTTP3_ERROR("nghttp3_conn_submit_shutdown_notice: {}",
+                          nghttp3_strerror(rv));
+      }
+    }
+
+    // Flush the GOAWAY frame and move to the QUIC closing period.
+    self->on_write();
+    self->start_closing_period();
   });
 }
 
@@ -3915,6 +3941,23 @@ void Http3Server::stop()
 {
   if (!running_.exchange(false, std::memory_order_acq_rel)) {
     return;
+  }
+
+  // Graceful shutdown: send HTTP/3 GOAWAY to every open connection so clients
+  // know which requests were accepted and can retry any that weren't.
+  // We dispatch onto the io_context (not the individual strands) because stop()
+  // is called from outside; each initiate_shutdown() posts to its own strand
+  // internally via on_write/start_closing_period.
+  {
+    std::promise<void> shutdown_notices_sent;
+    auto wait_for_notices = shutdown_notices_sent.get_future();
+    boost::asio::dispatch(ioc_, [this, &shutdown_notices_sent]() {
+      for (auto& [key, conn] : connections_) {
+        conn->initiate_shutdown();
+      }
+      shutdown_notices_sent.set_value();
+    });
+    wait_for_notices.wait();
   }
 
   boost::system::error_code ec;
