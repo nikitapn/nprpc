@@ -582,6 +582,12 @@ if(NPRPC_BUILD_NODE_ADDON)
   add_subdirectory(nprpc_node)
 endif()
 
+# SNI-based QUIC+TLS reverse proxy
+option(NPRPC_BUILD_ROUTER "Build npquicrouter SNI proxy" ${NPRPC_IS_TOPLEVEL_PROJECT})
+if(NPRPC_BUILD_ROUTER)
+  add_subdirectory(npquicrouter)
+endif()
+
 # Installation
 if(NPRPC_INSTALL)
   include(GNUInstallDirs)
