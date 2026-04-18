@@ -1,0 +1,64 @@
+# Benchmark Environment
+
+- Generated at: 2026-04-18T18:20:35+02:00
+- Hostname: laptop
+- Kernel: Linux 6.19.6-arch1-1 x86_64 GNU/Linux
+- Architecture: x86_64
+- CPU model: AMD Ryzen 7 5800H with Radeon Graphics
+- Logical CPUs: 16
+- Sockets: 1
+- Cores per socket: 8
+- Threads per core: 2
+- NUMA nodes: 1
+- CPU max MHz: 4465.2612
+- CPU min MHz: 403.4880
+- Virtualization: AMD-V
+- Memory: 38.54 GiB
+- Current clocksource: tsc
+- Available clocksources: tsc hpet acpi_pm
+- CPU scaling governor: powersave
+- CPU scaling driver: amd-pstate-epp
+
+## Harness
+
+- Build dir: /home/nikita/projects/nprpc/.build_release
+- Benchmark host: localhost
+- Payload sizes: 1kb 64kb 1mb
+- H2LOAD_BIN: /home/nikita/projects/nprpc/third_party/nghttp2/build/src/h2load
+- h2load version: h2load nghttp2/1.68.90
+- OHA_BIN: oha
+- oha version: oha 1.14.0
+- nginx mode: auto
+- nginx resolved mode: system
+- nginx version: nginx version: nginx/1.28.2
+- nginx HTTP/3 capable: 1
+- caddy mode: auto
+- caddy resolved mode: system
+- caddy version: v2.10.2
+- SKIP_HTTP1: 1
+- SKIP_CADDY: 1
+[http_shootout] Skipping HTTP/1.1 benchmarks as SKIP_HTTP1=1
+[http_shootout] Running h2load for nprpc-http3-1kb
+[http_shootout] Running h2load for nginx-http3-1kb
+[http_shootout] Running h2load for nprpc-http3-64kb
+[http_shootout] Running h2load for nginx-http3-64kb
+[http_shootout] Running h2load for nprpc-http3-1mb
+[http_shootout] Running h2load for nginx-http3-1mb
+[http_shootout] Results written to /home/nikita/projects/nprpc/benchmark/http_shootout/results
+=== 1KB ===
+file                        tool    req      rps        vs_nprpc  avg_ms  p50_ms  p95_ms  p99_ms  success_%  note
+--------------------------  ------  -------  ---------  --------  ------  ------  ------  ------  ---------  ----
+nprpc-http3-1kb.h2load.txt  h2load  4147270  276484.67  baseline  1.160   1.240   1.670   1.980   100.00
+nginx-http3-1kb.h2load.txt  h2load  2529220  168614.67  -39%      1.400   1.430   1.970   2.360   100.00
+
+=== 64KB ===
+file                         tool    req     rps       vs_nprpc  avg_ms  p50_ms  p95_ms  p99_ms  success_%  note
+---------------------------  ------  ------  --------  --------  ------  ------  ------  ------  ---------  ----
+nprpc-http3-64kb.h2load.txt  h2load  296033  19735.53  baseline  16.210  16.640  20.900  22.460  100.00
+nginx-http3-64kb.h2load.txt  h2load  365345  24354.47  +23%      13.140  13.340  18.580  22.970  100.00
+
+=== 1MB ===
+file                        tool    req    rps      vs_nprpc  avg_ms   p50_ms   p95_ms   p99_ms   success_%  note
+--------------------------  ------  -----  -------  --------  -------  -------  -------  -------  ---------  ----
+nprpc-http3-1mb.h2load.txt  h2load  19111  1274.07  baseline  251.320  247.600  286.390  302.720  100.00
+nginx-http3-1mb.h2load.txt  h2load  22929  1527.40  +20%      209.470  207.850  232.920  245.840  100.00

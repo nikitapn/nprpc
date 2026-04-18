@@ -10,6 +10,9 @@
 #include <algorithm>
 #include <charconv>
 #include <filesystem>
+#include <mutex>
+#include <shared_mutex>
+#include <ankerl/unordered_dense.h>
 
 namespace nprpc::impl {
 
@@ -111,12 +114,34 @@ resolve_http_doc_root_path(std::string_view doc_root,
     return std::nullopt;
   }
 
-  std::error_code ec;
-  const fs::path canonical_root = fs::weakly_canonical(fs::path(doc_root), ec);
-  if (ec || canonical_root.empty()) {
+  // Cache canonical_root — doc_root is set once at startup and never changes.
+  static fs::path s_canonical_root;
+  static std::string s_cached_doc_root;
+  static std::once_flag s_root_once;
+  std::call_once(s_root_once, [&]() {
+    std::error_code ec;
+    s_canonical_root = fs::weakly_canonical(fs::path(doc_root), ec);
+    if (!ec) s_cached_doc_root = doc_root;
+  });
+
+  if (s_canonical_root.empty() || s_cached_doc_root != doc_root) {
     return std::nullopt;
   }
 
+  // Fast path: look up previously resolved path.
+  // Uses shared_mutex so concurrent reads don't block each other.
+  static std::shared_mutex s_cache_mutex;
+  static ankerl::unordered_dense::map<std::string, fs::path> s_path_cache;
+
+  {
+    std::shared_lock lock(s_cache_mutex);
+    auto it = s_path_cache.find(std::string(target_path));
+    if (it != s_path_cache.end()) {
+      return it->second;
+    }
+  }
+
+  // Slow path: resolve and insert.
   const fs::path raw_target_path(target_path);
   for (const auto& component : raw_target_path) {
     if (component == "..") {
@@ -137,11 +162,17 @@ resolve_http_doc_root_path(std::string_view doc_root,
     relative_path /= component;
   }
 
+  std::error_code ec;
   const fs::path resolved_path =
-      fs::weakly_canonical(canonical_root / relative_path, ec);
+      fs::weakly_canonical(s_canonical_root / relative_path, ec);
   if (ec || resolved_path.empty() ||
-      !path_is_within_root(canonical_root, resolved_path)) {
+      !path_is_within_root(s_canonical_root, resolved_path)) {
     return std::nullopt;
+  }
+
+  {
+    std::unique_lock lock(s_cache_mutex);
+    s_path_cache.emplace(target_path, resolved_path);
   }
 
   return resolved_path;

@@ -58,6 +58,7 @@
 #include <mutex>
 #include <optional>
 #include <map>
+#include <memory_resource>
 #include <span>
 #include <thread>
 #include <string_view>
@@ -316,7 +317,20 @@ enum class RawWritePriority : uint8_t {
 };
 
 struct PreparedResponseHeaders {
-  std::vector<nghttp3_nv> headers;
+  // Fixed-size inline array — no heap allocation for response header vectors.
+  // Max observed: 9 entries (status + server + content-type + content-length +
+  //   access-control-allow-origin + access-control-allow-credentials + vary +
+  //   access-control-allow-methods + access-control-allow-headers).
+  struct NvArray {
+    std::array<nghttp3_nv, 9> storage{};
+    size_t count = 0;
+    void clear() noexcept { count = 0; }
+    void reserve(size_t) noexcept {}
+    void push_back(nghttp3_nv nv) noexcept { storage[count++] = nv; }
+    nghttp3_nv* data() noexcept { return storage.data(); }
+    const nghttp3_nv* data() const noexcept { return storage.data(); }
+    size_t size() const noexcept { return count; }
+  } headers;
   std::string status;
   std::string content_length;
   std::string content_type;
@@ -349,15 +363,23 @@ struct PendingSendPacket {
 };
 
 struct Http3Stream {
+  // Per-request PMR arena — all string and vector allocations come from here.
+  // 2 KB covers typical request headers with zero heap traffic per request.
+  alignas(std::max_align_t) std::byte arena_[2048];
+  std::pmr::monotonic_buffer_resource mr_{arena_, sizeof(arena_)};
+  std::pmr::polymorphic_allocator<> alloc_{&mr_};
+
   int64_t stream_id = -1;
-  std::string method;
-  std::string path;
-  std::string authority;
-  std::string scheme;
-  std::string protocol;
-  std::string content_type;
-  std::string accept;                         // Accept header for SSR detection
-  std::map<std::string, std::string> headers; // All headers for SSR
+  std::pmr::string method{alloc_};
+  std::pmr::string path{alloc_};
+  std::pmr::string authority{alloc_};
+  std::pmr::string scheme{alloc_};
+  std::pmr::string protocol{alloc_};
+  std::pmr::string content_type{alloc_};
+  std::pmr::string accept{alloc_};
+  // Flat vector — O(1) amortised insertion, linear scan is faster than tree
+  // traversal for ≤~20 headers due to cache locality.
+  std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>> headers{alloc_};
   size_t content_length = 0;
   bool malformed_content_length = false;
   flat_buffer request_body;
@@ -385,7 +407,7 @@ struct Http3Stream {
   // For static responses: response_data points to body data
   // For dynamic responses: use a string to hold the body
   flat_buffer dynamic_body;
-  std::string response_content_type; // Store response content-type for lifetime
+  std::pmr::string response_content_type{alloc_}; // Store response content-type for lifetime
   PreparedResponseHeaders response_headers;
   CachedFileGuard cached_file;
   const uint8_t* response_data = nullptr;
@@ -395,6 +417,18 @@ struct Http3Stream {
   bool body_complete = false;
   bool fin_sent = false;
 };
+
+// Lookup a header by name in the flat per-request headers vector.
+// Returns a pointer to the value string, or nullptr if not found.
+static const std::pmr::string*
+find_stream_header(
+    const std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>>& hdrs,
+    std::string_view name) noexcept
+{
+  for (const auto& [k, v] : hdrs)
+    if (k == name) return &v;
+  return nullptr;
+}
 
 void log_http3_response_submit(std::string_view kind,
                                const Http3Stream* stream,
@@ -1178,6 +1212,8 @@ private:
 
   std::shared_ptr<Http3Connection> find_connection(const ngtcp2_cid* dcid);
 
+  static constexpr std::size_t cache_line_size = std::hardware_destructive_interference_size;
+
   boost::asio::io_context& ioc_;
   std::string cert_file_;
   std::string key_file_;
@@ -1202,9 +1238,6 @@ private:
   std::vector<std::unique_ptr<PendingSendPacket[]>> send_packet_storage_;
   std::vector<std::unique_ptr<PendingSendPacketPayload[]>>
       send_packet_payload_storage_;
-  std::atomic<PendingSendPacket*> send_pool_head_{nullptr};
-  std::atomic<PendingSendPacket*> send_inbox_head_{nullptr};
-  std::atomic<bool> send_in_progress_{false};
 #if !defined(_WIN32) && defined(UDP_SEGMENT)
   bool udp_gso_supported_ = true;
 #endif
@@ -1216,6 +1249,11 @@ private:
   uint64_t sanity_established_packets_ = 0;
 #endif
 
+  // All four are accessed only from the single ioc_ thread, except running_
+  // which is written by stop() from an external thread.
+  PendingSendPacket* send_pool_head_{nullptr};
+  PendingSendPacket* send_inbox_head_{nullptr};
+  bool send_in_progress_{false};
   std::atomic<bool> running_{false};
 };
 
@@ -2092,38 +2130,41 @@ void Http3Connection::http_recv_header(Http3Stream* stream,
   auto v = nghttp3_rcbuf_get_buf(value);
   auto n = nghttp3_rcbuf_get_buf(name);
 
-  // Store all headers for SSR
-  std::string header_name(reinterpret_cast<const char*>(n.base), n.len);
-  std::string header_value(reinterpret_cast<const char*>(v.base), v.len);
-  stream->headers[header_name] = header_value;
+  const auto n_sv = std::string_view(reinterpret_cast<const char*>(n.base), n.len);
+  const auto v_sv = std::string_view(reinterpret_cast<const char*>(v.base), v.len);
+
+  // Store all headers in the arena-backed flat vector.
+  stream->headers.emplace_back(
+      std::pmr::string(n_sv, stream->alloc_),
+      std::pmr::string(v_sv, stream->alloc_));
 
   switch (token) {
   case NGHTTP3_QPACK_TOKEN__PATH:
-    stream->path = std::move(header_value);
+    stream->path = v_sv;
     break;
   case NGHTTP3_QPACK_TOKEN__METHOD:
-    stream->method = std::move(header_value);
+    stream->method = v_sv;
     break;
   case NGHTTP3_QPACK_TOKEN__AUTHORITY:
-    stream->authority = std::move(header_value);
+    stream->authority = v_sv;
     break;
   default:
-    if (header_name == ":scheme") {
-      stream->scheme = header_value;
-    } else if (header_name == ":protocol") {
-      stream->protocol = header_value;
+    if (n_sv == ":scheme") {
+      stream->scheme = v_sv;
+    } else if (n_sv == ":protocol") {
+      stream->protocol = v_sv;
     }
     break;
   case NGHTTP3_QPACK_TOKEN_CONTENT_TYPE:
-    stream->content_type = std::move(header_value);
+    stream->content_type = v_sv;
     break;
   case NGHTTP3_QPACK_TOKEN_CONTENT_LENGTH: {
-    const auto parsed = parse_http_content_length(header_value);
+    const auto parsed = parse_http_content_length(v_sv);
     if (!parsed) {
       stream->malformed_content_length = true;
       NPRPC_HTTP3_ERROR(
           "Rejecting malformed Content-Length stream_id={} path='{}' value='{}'",
-          stream->stream_id, stream->path, header_value);
+          stream->stream_id, stream->path, v_sv);
       break;
     }
 
@@ -2131,7 +2172,7 @@ void Http3Connection::http_recv_header(Http3Stream* stream,
     break;
   }
   case NGHTTP3_QPACK_TOKEN_ACCEPT:
-    stream->accept = std::move(header_value);
+    stream->accept = v_sv;
     break;
   }
 
@@ -2223,8 +2264,12 @@ int Http3Connection::start_response(Http3Stream* stream)
   if (stream->method == "CONNECT" && stream->path == k_webtransport_path &&
       (stream->protocol == "webtransport-h3" ||
        stream->protocol == "webtransport")) {
-    NPRPC_HTTP3_TRACE("Received WebTransport CONNECT stream_id={} authority='{}' scheme='{}' origin='{}'",
-                      stream->stream_id, stream->authority, stream->scheme, stream->headers["origin"]);
+    {
+      const auto* _orig = find_stream_header(stream->headers, "origin");
+      NPRPC_HTTP3_TRACE("Received WebTransport CONNECT stream_id={} authority='{}' scheme='{}' origin='{}'",
+                        stream->stream_id, stream->authority, stream->scheme,
+                        _orig ? std::string_view{*_orig} : std::string_view{});
+    }
     return handle_webtransport_connect(stream);
   }
 
@@ -2239,20 +2284,20 @@ int Http3Connection::start_response(Http3Stream* stream)
 
       // Build full URL
       std::string url =
-          std::string("https://") + stream->authority + stream->path;
+          std::string("https://") + stream->authority.c_str() + stream->path.c_str();
 
       // Filter out HTTP/2 pseudo-headers (start with ':') for Web API
       // compatibility
       std::map<std::string, std::string> filtered_headers;
       for (const auto& [key, value] : stream->headers) {
         if (!key.empty() && key[0] != ':') {
-          filtered_headers[key] = value;
+          filtered_headers[std::string(key)] = std::string(value);
         }
       }
 
       // Forward to SSR (synchronous call)
       auto ssr_response =
-          nprpc::impl::forward_to_ssr(stream->method, url, filtered_headers,
+          nprpc::impl::forward_to_ssr(std::string_view(stream->method), url, filtered_headers,
                                       "", // No body for GET/HEAD
                                       remote_ep_.address().to_string());
 
@@ -2280,7 +2325,7 @@ int Http3Connection::start_response(Http3Stream* stream)
 #endif
 
     // Serve static file
-    std::string request_path = stream->path;
+    std::string request_path(stream->path);
 
     // Check if path is a directory or handle index.html
     if (request_path == "/" || request_path.empty()) {
@@ -2342,13 +2387,13 @@ int Http3Connection::start_response(Http3Stream* stream)
 
       // Build full URL
       std::string url =
-          std::string("https://") + stream->authority + stream->path;
+          std::string("https://") + stream->authority.c_str() + stream->path.c_str();
 
       // Filter out HTTP/2 pseudo-headers
       std::map<std::string, std::string> filtered_headers;
       for (const auto& [key, value] : stream->headers) {
         if (!key.empty() && key[0] != ':') {
-          filtered_headers[key] = value;
+          filtered_headers[std::string(key)] = std::string(value);
         }
       }
 
@@ -2440,7 +2485,7 @@ int Http3Connection::handle_rpc_request(Http3Stream* stream)
   if (!server_->allow_rpc_request(remote_ep_)) {
     NPRPC_LOG_ERROR(
         "[HTTP/3] Rejecting throttled RPC request from {} path='{}'",
-        remote_ep_.address().to_string(), stream ? stream->path : std::string{});
+        remote_ep_.address().to_string(), stream ? std::string_view(stream->path) : std::string_view{});
     return send_static_response(stream, 429, "text/plain", "Too Many Requests");
   }
 
@@ -2541,10 +2586,10 @@ Http3Connection::make_response_headers(Http3Stream* stream,
   }
 
   if (include_cors) {
-    const auto origin_it = stream->headers.find("origin");
+    const auto* origin_hdr = find_stream_header(stream->headers, "origin");
     const auto allowed_origin =
-      origin_it != stream->headers.end()
-        ? get_allowed_http_origin(origin_it->second)
+      origin_hdr
+        ? get_allowed_http_origin(*origin_hdr)
         : std::optional<std::string_view>{};
 
     if (allowed_origin) {
@@ -2579,10 +2624,10 @@ Http3Connection::make_response_headers(Http3Stream* stream,
 
 int Http3Connection::send_cors_preflight(Http3Stream* stream)
 {
-  const auto origin_it = stream->headers.find("origin");
+  const auto* origin_hdr = find_stream_header(stream->headers, "origin");
   const auto allowed_origin =
-      origin_it != stream->headers.end()
-          ? get_allowed_http_origin(origin_it->second)
+      origin_hdr
+          ? get_allowed_http_origin(*origin_hdr)
           : std::optional<std::string_view>{};
   if (!allowed_origin) {
     return send_static_response(stream, 403, "text/plain", "CORS origin denied");
@@ -2664,10 +2709,10 @@ int Http3Connection::send_webtransport_connect_response(Http3Stream* stream)
       .flags = NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE,
   });
 
-      const auto origin_it = stream->headers.find("origin");
+      const auto* origin_hdr = find_stream_header(stream->headers, "origin");
       const auto allowed_origin =
-        origin_it != stream->headers.end()
-          ? get_allowed_http_origin(origin_it->second)
+        origin_hdr
+          ? get_allowed_http_origin(*origin_hdr)
           : std::optional<std::string_view>{};
       if (allowed_origin) {
       headers.allow_origin = std::string(*allowed_origin);
@@ -2709,10 +2754,11 @@ int Http3Connection::send_webtransport_connect_response(Http3Stream* stream)
 int Http3Connection::handle_webtransport_connect(Http3Stream* stream)
 {
   if (!server_->allow_webtransport_connect(remote_ep_)) {
+    const auto* _oh = find_stream_header(stream->headers, "origin");
     NPRPC_HTTP3_ERROR(
         "Rejecting throttled WebTransport CONNECT stream_id={} origin='{}' authority='{}'",
         stream->stream_id,
-        stream->headers.contains("origin") ? stream->headers.at("origin") : "",
+        _oh ? std::string_view{*_oh} : std::string_view{},
         stream->authority);
     return send_static_response(stream, 429, "text/plain", "Too Many Requests");
   }
@@ -2724,10 +2770,9 @@ int Http3Connection::handle_webtransport_connect(Http3Stream* stream)
                                 "Invalid WebTransport CONNECT request");
   }
 
-  const auto origin_it = stream->headers.find("origin");
+  const auto* origin_hdr = find_stream_header(stream->headers, "origin");
   const auto origin =
-      origin_it != stream->headers.end() ? std::string_view{origin_it->second}
-                                         : std::string_view{};
+      origin_hdr ? std::string_view{*origin_hdr} : std::string_view{};
   if (!is_allowed_browser_origin(origin, stream->scheme, stream->authority)) {
     NPRPC_HTTP3_ERROR(
         "Rejecting WebTransport CONNECT stream_id={} origin='{}' authority='{}'",
@@ -2743,8 +2788,7 @@ int Http3Connection::handle_webtransport_connect(Http3Stream* stream)
   NPRPC_HTTP3_DEBUG(
       "conn={} wt_connect_accept stream_id={} authority='{}' scheme='{}' protocol='{}' origin='{}'",
       debug_id(), stream->stream_id, stream->authority, stream->scheme,
-      stream->protocol,
-      stream->headers.contains("origin") ? stream->headers.at("origin") : "");
+      stream->protocol, origin);
 
   return send_webtransport_connect_response(stream);
 }
@@ -2869,8 +2913,7 @@ int Http3Connection::send_dynamic_response(Http3Stream* stream,
 {
   // Store response data in stream to keep it alive
   stream->dynamic_body = std::move(body);
-  stream->response_content_type =
-      std::string(content_type); // Store content-type for lifetime
+  stream->response_content_type = content_type; // Store content-type for lifetime
     stream->response_data = stream->dynamic_body.data_ptr();
   stream->response_len = stream->dynamic_body.size();
   stream->response_offset = 0;
@@ -3967,11 +4010,11 @@ void Http3Server::stop()
   auto wait_for_clear = connections_cleared.get_future();
   boost::asio::dispatch(ioc_, [this, &connections_cleared]() {
     connections_.clear();
+    send_inbox_head_ = nullptr;
+    send_in_progress_ = false;
     connections_cleared.set_value();
   });
   wait_for_clear.wait();
-
-  send_in_progress_.store(false, std::memory_order_release);
 
   if (ssl_ctx_) {
     SSL_CTX_free(ssl_ctx_);
@@ -4010,13 +4053,11 @@ int Http3Server::send_packet(PendingSendPacket* packet)
     return -1;
   }
 
-  packet->next_send = send_inbox_head_.load(std::memory_order_acquire);
-  while (!send_inbox_head_.compare_exchange_weak(packet->next_send, packet,
-                                                 std::memory_order_acq_rel,
-                                                 std::memory_order_acquire)) {
-  }
+  packet->next_send = send_inbox_head_;
+  send_inbox_head_ = packet;
 
-  if (!send_in_progress_.exchange(true, std::memory_order_acq_rel)) {
+  if (!send_in_progress_) {
+    send_in_progress_ = true;
     boost::asio::dispatch(ioc_, [this]() { do_send(); });
   }
 
@@ -4025,16 +4066,11 @@ int Http3Server::send_packet(PendingSendPacket* packet)
 
 PendingSendPacket* Http3Server::acquire_send_packet()
 {
-  auto* head = send_pool_head_.load(std::memory_order_acquire);
-  while (head) {
-    auto* next = head->next_free;
-    if (send_pool_head_.compare_exchange_weak(head, next,
-                                              std::memory_order_acq_rel,
-                                              std::memory_order_acquire)) {
-      head->next_free = nullptr;
-        head->next_send = nullptr;
-      return head;
-    }
+  if (auto* head = send_pool_head_) {
+    send_pool_head_ = head->next_free;
+    head->next_free = nullptr;
+    head->next_send = nullptr;
+    return head;
   }
 
   std::lock_guard lock(send_storage_mutex_);
@@ -4066,17 +4102,13 @@ void Http3Server::recycle_send_packet(PendingSendPacket* packet)
   packet->payload_len = 0;
   packet->gso_segment_size = 0;
   packet->next_send = nullptr;
-  auto* head = send_pool_head_.load(std::memory_order_acquire);
-  do {
-    packet->next_free = head;
-  } while (!send_pool_head_.compare_exchange_weak(head, packet,
-                                                  std::memory_order_acq_rel,
-                                                  std::memory_order_acquire));
+  packet->next_free = send_pool_head_;
+  send_pool_head_ = packet;
 }
 
 void Http3Server::drain_send_inbox()
 {
-  auto* list = send_inbox_head_.exchange(nullptr, std::memory_order_acq_rel);
+  auto* list = std::exchange(send_inbox_head_, nullptr);
   if (!list) {
     return;
   }
@@ -4393,18 +4425,18 @@ void Http3Server::do_send()
     send_ready_head_ = nullptr;
     send_ready_tail_ = nullptr;
     send_ready_size_ = 0;
-    send_inbox_head_.store(nullptr, std::memory_order_release);
-    send_in_progress_.store(false, std::memory_order_release);
+    send_inbox_head_ = nullptr;
+    send_in_progress_ = false;
     return;
   }
 
   if (!send_ready_head_) {
-    send_in_progress_.store(false, std::memory_order_release);
+    send_in_progress_ = false;
     drain_send_inbox();
-    if (!send_ready_head_ ||
-        send_in_progress_.exchange(true, std::memory_order_acq_rel)) {
+    if (!send_ready_head_) {
       return;
     }
+    send_in_progress_ = true;
   }
 
   packet = send_ready_head_;
@@ -4428,8 +4460,8 @@ void Http3Server::do_send()
           send_ready_head_ = nullptr;
           send_ready_tail_ = nullptr;
           send_ready_size_ = 0;
-          send_inbox_head_.store(nullptr, std::memory_order_release);
-          send_in_progress_.store(false, std::memory_order_release);
+          send_inbox_head_ = nullptr;
+          send_in_progress_ = false;
           return;
         }
 
@@ -4442,12 +4474,12 @@ void Http3Server::do_send()
         drain_send_inbox();
 
         if (!send_ready_head_) {
-          send_in_progress_.store(false, std::memory_order_release);
+          send_in_progress_ = false;
           drain_send_inbox();
-          if (!send_ready_head_ ||
-              send_in_progress_.exchange(true, std::memory_order_acq_rel)) {
+          if (!send_ready_head_) {
             return;
           }
+          send_in_progress_ = true;
         }
 
         do_send();
