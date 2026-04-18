@@ -50,7 +50,9 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <cstring>
+#include <filesystem>
 #include <deque>
 #include <format>
 #include <future>
@@ -318,11 +320,13 @@ enum class RawWritePriority : uint8_t {
 
 struct PreparedResponseHeaders {
   // Fixed-size inline array — no heap allocation for response header vectors.
-  // Max observed: 9 entries (status + server + content-type + content-length +
-  //   access-control-allow-origin + access-control-allow-credentials + vary +
-  //   access-control-allow-methods + access-control-allow-headers).
+  // Max entries: 12 — CORS RPC (9) or static file + cache headers (7):
+  //   status, server, content-type, content-length,
+  //   cache-control, etag, last-modified,
+  //   access-control-allow-origin, access-control-allow-credentials,
+  //   vary, access-control-allow-methods, access-control-allow-headers.
   struct NvArray {
-    std::array<nghttp3_nv, 9> storage{};
+    std::array<nghttp3_nv, 12> storage{};
     size_t count = 0;
     void clear() noexcept { count = 0; }
     void reserve(size_t) noexcept {}
@@ -335,6 +339,8 @@ struct PreparedResponseHeaders {
   std::string content_length;
   std::string content_type;
   std::string allow_origin;
+  std::string etag;          // strong ETag, e.g. "\"1a2b3c\""
+  std::string last_modified; // HTTP-date, e.g. "Mon, 18 Apr 2026 12:00:00 GMT"
 };
 
 struct PendingSendPacketPayload {
@@ -363,10 +369,18 @@ struct PendingSendPacket {
 };
 
 struct Http3Stream {
-  // Per-request PMR arena — all string and vector allocations come from here.
-  // 2 KB covers typical request headers with zero heap traffic per request.
-  alignas(std::max_align_t) std::byte arena_[2048];
+  // Per-request PMR arena. 4 KB covers typical request headers
+  // (≤20 headers × ~64 B/pair + long strings like path/authority) with zero
+  // heap traffic. Overflow falls back to the system heap silently (the default
+  // upstream is new_delete_resource). In debug builds the upstream is wired to
+  // null_memory_resource() so any overflow throws std::bad_alloc immediately.
+  alignas(std::max_align_t) std::byte arena_[4096];
+#if !defined(NDEBUG)
+  std::pmr::monotonic_buffer_resource mr_{arena_, sizeof(arena_),
+                                          std::pmr::null_memory_resource()};
+#else
   std::pmr::monotonic_buffer_resource mr_{arena_, sizeof(arena_)};
+#endif
   std::pmr::polymorphic_allocator<> alloc_{&mr_};
 
   int64_t stream_id = -1;
@@ -428,6 +442,43 @@ find_stream_header(
   for (const auto& [k, v] : hdrs)
     if (k == name) return &v;
   return nullptr;
+}
+
+// Generate a strong ETag from the file modification time (hex of tick count,
+// wrapped in double quotes per RFC 7232).
+static std::string etag_from_mtime(std::filesystem::file_time_type mtime)
+{
+  char buf[20];
+  snprintf(buf, sizeof(buf), "\"%llx\"",
+           static_cast<unsigned long long>(mtime.time_since_epoch().count()));
+  return buf;
+}
+
+// Format a file_time_type as an HTTP-date string (RFC 7231 §7.1.1.1).
+static std::string http_date(std::filesystem::file_time_type mtime)
+{
+  auto sys = std::chrono::clock_cast<std::chrono::system_clock>(mtime);
+  time_t tt = std::chrono::system_clock::to_time_t(sys);
+  struct tm gmt{};
+  gmtime_r(&tt, &gmt);
+  char buf[32];
+  strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &gmt);
+  return buf;
+}
+
+// Parse an HTTP-date (RFC 7231 preferred format) into a file_time_type.
+// Returns nullopt if the string cannot be parsed.
+static std::optional<std::filesystem::file_time_type>
+parse_http_date(std::string_view s) noexcept
+{
+  std::string str(s);
+  struct tm tm{};
+  const char* end = strptime(str.c_str(), "%a, %d %b %Y %H:%M:%S GMT", &tm);
+  if (!end || *end != '\0') return std::nullopt;
+  time_t tt = timegm(&tm);
+  if (tt == static_cast<time_t>(-1)) return std::nullopt;
+  auto sys = std::chrono::sys_seconds{std::chrono::seconds{tt}};
+  return std::chrono::clock_cast<std::filesystem::file_time_type::clock>(sys);
 }
 
 void log_http3_response_submit(std::string_view kind,
@@ -558,6 +609,9 @@ private:
                             std::string_view content_type,
                             flat_buffer&& body);
   int send_cors_preflight(Http3Stream* stream);
+  int send_not_modified(Http3Stream* stream,
+                        std::string_view etag,
+                        std::filesystem::file_time_type mtime);
   int send_webtransport_connect_response(Http3Stream* stream);
 
   // RPC Handling
@@ -2357,6 +2411,26 @@ int Http3Connection::start_response(Http3Stream* stream)
 
     NPRPC_HTTP3_TRACE("File size: {} (from cache)", cached_file->size());
 
+    // Conditional GET: If-None-Match takes precedence over If-Modified-Since
+    // (RFC 7232 §6).
+    {
+      const auto etag = etag_from_mtime(cached_file->mtime());
+      const auto* inm = find_stream_header(stream->headers, "if-none-match");
+      if (inm) {
+        if (std::string_view{*inm} == etag) {
+          return send_not_modified(stream, etag, cached_file->mtime());
+        }
+      } else {
+        const auto* ims = find_stream_header(stream->headers, "if-modified-since");
+        if (ims) {
+          auto req_time = parse_http_date(*ims);
+          if (req_time && cached_file->mtime() <= *req_time) {
+            return send_not_modified(stream, etag, cached_file->mtime());
+          }
+        }
+      }
+    }
+
     // For HEAD requests, we still need headers but no body
     if (stream->method == "HEAD") {
       // Create empty body response with correct content-length from cache
@@ -2457,6 +2531,27 @@ int Http3Connection::send_cached_response(Http3Stream* stream,
     auto& headers = make_response_headers(stream, status_code,
                       stream->cached_file->content_type(),
                       stream->response_len, false);
+
+  // Add cache-validation headers for static assets.
+  headers.etag = etag_from_mtime(stream->cached_file->mtime());
+  headers.last_modified = http_date(stream->cached_file->mtime());
+  constexpr uint8_t ncnv =
+      NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE;
+  headers.headers.push_back({
+      .name    = reinterpret_cast<uint8_t*>(const_cast<char*>("cache-control")),
+      .value   = reinterpret_cast<uint8_t*>(const_cast<char*>("public, max-age=3600")),
+      .namelen  = 13, .valuelen = 20, .flags = ncnv,
+  });
+  headers.headers.push_back({
+      .name    = reinterpret_cast<uint8_t*>(const_cast<char*>("etag")),
+      .value   = reinterpret_cast<uint8_t*>(headers.etag.data()),
+      .namelen  = 4, .valuelen = headers.etag.size(), .flags = ncnv,
+  });
+  headers.headers.push_back({
+      .name    = reinterpret_cast<uint8_t*>(const_cast<char*>("last-modified")),
+      .value   = reinterpret_cast<uint8_t*>(headers.last_modified.data()),
+      .namelen  = 13, .valuelen = headers.last_modified.size(), .flags = ncnv,
+  });
 
   nghttp3_data_reader dr{
       .read_data = http_read_data_cb,
@@ -2644,6 +2739,45 @@ int Http3Connection::send_cors_preflight(Http3Stream* stream)
     return -1;
   }
 
+  return 0;
+}
+
+int Http3Connection::send_not_modified(Http3Stream* stream,
+                                       std::string_view etag,
+                                       std::filesystem::file_time_type mtime)
+{
+  auto& prepared = stream->response_headers;
+  prepared.headers.clear();
+  prepared.status = "304";
+  prepared.etag = std::string(etag);
+  prepared.last_modified = http_date(mtime);
+
+  constexpr uint8_t ncnv =
+      NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE;
+  auto add = [&](const char* name, size_t nl, std::string_view val, uint8_t flags) {
+    prepared.headers.push_back({
+        .name    = reinterpret_cast<uint8_t*>(const_cast<char*>(name)),
+        .value   = reinterpret_cast<uint8_t*>(const_cast<char*>(val.data())),
+        .namelen  = nl,
+        .valuelen = val.size(),
+        .flags    = flags,
+    });
+  };
+
+  add(":status",       7,  prepared.status,        ncnv);
+  add("etag",          4,  prepared.etag,           ncnv);
+  add("cache-control", 13, "public, max-age=3600",  ncnv); // literal → safe
+  add("last-modified", 13, prepared.last_modified,  ncnv);
+
+  log_http3_response_submit("not_modified", stream, 304, "", 0);
+
+  int rv = nghttp3_conn_submit_response(httpconn_, stream->stream_id,
+                                        prepared.headers.data(),
+                                        prepared.headers.size(), nullptr);
+  if (rv != 0) {
+    NPRPC_HTTP3_ERROR("nghttp3_conn_submit_response (304): {}", nghttp3_strerror(rv));
+    return -1;
+  }
   return 0;
 }
 

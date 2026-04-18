@@ -245,6 +245,9 @@ profile_http3() {
 
   cat "/tmp/h2load_output.txt" > "$OUTPUT_PATH"
   perf report --stdio -i /home/nikita/projects/nprpc/perf-http3-1mb.data --no-children -g graph,0.5,caller >> "$OUTPUT_PATH"
+
+  # echo "Server still running (PID=$SERVER_PID). Press Enter to shut down."
+  # read -r _
 }
 
 case "${1:-profile}" in
