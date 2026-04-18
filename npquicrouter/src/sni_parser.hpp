@@ -63,25 +63,28 @@ sni_from_client_hello_body(std::span<const uint8_t> hello) noexcept
 
 // Extract SNI from a raw TLS record on the wire (starts with 0x16 0x03 ...).
 // Returns a string_view backed by `data` — valid as long as `data` lives.
+//
+// NOTE: `data` may be a partial peek buffer smaller than the full TLS record.
+// A modern TLS 1.3 ClientHello is 600–900 bytes; the SNI extension is always
+// in the first ~200 bytes of extensions, so we work with whatever we have.
+// The body parser's avail() checks prevent out-of-bounds access.
 inline std::string_view
 sni_from_tls_record(std::span<const uint8_t> data) noexcept
 {
-  // TLS record: content_type(1) + legacy_version(2) + length(2) + fragment
+  // TLS record header: content_type(1) + legacy_version(2) + length(2)
   if (data.size() < 9u) return {};
-  if (data[0] != 0x16u) return {}; // must be Handshake
+  if (data[0] != 0x16u) return {}; // must be Handshake (0x16)
 
-  const size_t record_len = (size_t(data[3]) << 8) | data[4];
-  if (data.size() < 5u + record_len) return {};
+  // Don't verify data.size() >= 5 + record_len: the peek buffer may be
+  // smaller than the full record. The body parser handles partial data.
+  const auto hs = data.subspan(5u);
 
-  // Handshake: msg_type(1) + length(3) + body
-  const auto hs = data.subspan(5u, record_len);
+  // Handshake header: msg_type(1) + length(3) + body
   if (hs.size() < 4u) return {};
   if (hs[0] != 0x01u) return {}; // must be ClientHello
 
-  const size_t hello_len = (size_t(hs[1]) << 16) | (size_t(hs[2]) << 8) | hs[3];
-  if (hs.size() < 4u + hello_len) return {};
-
-  return sni_from_client_hello_body(hs.subspan(4u, hello_len));
+  // Pass whatever we have of the body — avail() guards prevent overrun.
+  return sni_from_client_hello_body(hs.subspan(4u));
 }
 
 // Extract SNI from a QUIC CRYPTO frame payload.

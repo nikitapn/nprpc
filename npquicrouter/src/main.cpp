@@ -170,7 +170,7 @@ static RouteTable build_route_table(const Config& cfg, asio::io_context& ioc)
 //==============================================================================
 
 class TcpSession : public std::enable_shared_from_this<TcpSession> {
-    static constexpr size_t kPeekBufSize = 512;
+    static constexpr size_t kPeekBufSize = 2048; // covers TLS 1.3 ClientHellos up to ~900 bytes
     static constexpr size_t kSpliceBufSize = 32768;
 
     tcp::socket client_;
