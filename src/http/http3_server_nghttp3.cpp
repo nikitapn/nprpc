@@ -339,8 +339,6 @@ struct PreparedResponseHeaders {
   std::string content_length;
   std::string content_type;
   std::string allow_origin;
-  std::string etag;          // strong ETag, e.g. "\"1a2b3c\""
-  std::string last_modified; // HTTP-date, e.g. "Mon, 18 Apr 2026 12:00:00 GMT"
 };
 
 struct PendingSendPacketPayload {
@@ -444,30 +442,7 @@ find_stream_header(
   return nullptr;
 }
 
-// Generate a strong ETag from the file modification time (hex of tick count,
-// wrapped in double quotes per RFC 7232).
-static std::string etag_from_mtime(std::filesystem::file_time_type mtime)
-{
-  char buf[20];
-  snprintf(buf, sizeof(buf), "\"%llx\"",
-           static_cast<unsigned long long>(mtime.time_since_epoch().count()));
-  return buf;
-}
-
-// Format a file_time_type as an HTTP-date string (RFC 7231 §7.1.1.1).
-static std::string http_date(std::filesystem::file_time_type mtime)
-{
-  auto sys = std::chrono::clock_cast<std::chrono::system_clock>(mtime);
-  time_t tt = std::chrono::system_clock::to_time_t(sys);
-  struct tm gmt{};
-  gmtime_r(&tt, &gmt);
-  char buf[32];
-  strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &gmt);
-  return buf;
-}
-
-// Parse an HTTP-date (RFC 7231 preferred format) into a file_time_type.
-// Returns nullopt if the string cannot be parsed.
+// Parse an HTTP-date (RFC 7231 preferred format) into a file_time_type.\n// Returns nullopt if the string cannot be parsed.
 static std::optional<std::filesystem::file_time_type>
 parse_http_date(std::string_view s) noexcept
 {
@@ -609,9 +584,7 @@ private:
                             std::string_view content_type,
                             flat_buffer&& body);
   int send_cors_preflight(Http3Stream* stream);
-  int send_not_modified(Http3Stream* stream,
-                        std::string_view etag,
-                        std::filesystem::file_time_type mtime);
+  int send_not_modified(Http3Stream* stream, CachedFileGuard cached_file);
   int send_webtransport_connect_response(Http3Stream* stream);
 
   // RPC Handling
@@ -2412,20 +2385,20 @@ int Http3Connection::start_response(Http3Stream* stream)
     NPRPC_HTTP3_TRACE("File size: {} (from cache)", cached_file->size());
 
     // Conditional GET: If-None-Match takes precedence over If-Modified-Since
-    // (RFC 7232 §6).
+    // (RFC 7232 §6). Both etag and last_modified_str are pre-computed in
+    // CachedFile — zero per-request string allocation.
     {
-      const auto etag = etag_from_mtime(cached_file->mtime());
       const auto* inm = find_stream_header(stream->headers, "if-none-match");
       if (inm) {
-        if (std::string_view{*inm} == etag) {
-          return send_not_modified(stream, etag, cached_file->mtime());
+        if (std::string_view{*inm} == cached_file->etag()) {
+          return send_not_modified(stream, std::move(cached_file));
         }
       } else {
         const auto* ims = find_stream_header(stream->headers, "if-modified-since");
         if (ims) {
           auto req_time = parse_http_date(*ims);
           if (req_time && cached_file->mtime() <= *req_time) {
-            return send_not_modified(stream, etag, cached_file->mtime());
+            return send_not_modified(stream, std::move(cached_file));
           }
         }
       }
@@ -2532,9 +2505,8 @@ int Http3Connection::send_cached_response(Http3Stream* stream,
                       stream->cached_file->content_type(),
                       stream->response_len, false);
 
-  // Add cache-validation headers for static assets.
-  headers.etag = etag_from_mtime(stream->cached_file->mtime());
-  headers.last_modified = http_date(stream->cached_file->mtime());
+  // Add cache-validation headers — point directly into CachedFile's
+  // pre-computed strings. No per-request allocation.
   constexpr uint8_t ncnv =
       NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE;
   headers.headers.push_back({
@@ -2544,13 +2516,13 @@ int Http3Connection::send_cached_response(Http3Stream* stream,
   });
   headers.headers.push_back({
       .name    = reinterpret_cast<uint8_t*>(const_cast<char*>("etag")),
-      .value   = reinterpret_cast<uint8_t*>(headers.etag.data()),
-      .namelen  = 4, .valuelen = headers.etag.size(), .flags = ncnv,
+      .value   = reinterpret_cast<uint8_t*>(const_cast<char*>(stream->cached_file->etag().data())),
+      .namelen  = 4, .valuelen = stream->cached_file->etag().size(), .flags = ncnv,
   });
   headers.headers.push_back({
       .name    = reinterpret_cast<uint8_t*>(const_cast<char*>("last-modified")),
-      .value   = reinterpret_cast<uint8_t*>(headers.last_modified.data()),
-      .namelen  = 13, .valuelen = headers.last_modified.size(), .flags = ncnv,
+      .value   = reinterpret_cast<uint8_t*>(const_cast<char*>(stream->cached_file->last_modified_str().data())),
+      .namelen  = 13, .valuelen = stream->cached_file->last_modified_str().size(), .flags = ncnv,
   });
 
   nghttp3_data_reader dr{
@@ -2743,31 +2715,32 @@ int Http3Connection::send_cors_preflight(Http3Stream* stream)
 }
 
 int Http3Connection::send_not_modified(Http3Stream* stream,
-                                       std::string_view etag,
-                                       std::filesystem::file_time_type mtime)
+                                       CachedFileGuard cached_file)
 {
+  // Pin the file in the stream so its pre-computed strings stay alive until
+  // nghttp3 finishes draining the 304 headers (stream close).
+  stream->cached_file = std::move(cached_file);
+
   auto& prepared = stream->response_headers;
   prepared.headers.clear();
   prepared.status = "304";
-  prepared.etag = std::string(etag);
-  prepared.last_modified = http_date(mtime);
 
   constexpr uint8_t ncnv =
       NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE;
-  auto add = [&](const char* name, size_t nl, std::string_view val, uint8_t flags) {
+  auto add_sv = [&](const char* name, size_t nl, std::string_view val) {
     prepared.headers.push_back({
-        .name    = reinterpret_cast<uint8_t*>(const_cast<char*>(name)),
-        .value   = reinterpret_cast<uint8_t*>(const_cast<char*>(val.data())),
+        .name     = reinterpret_cast<uint8_t*>(const_cast<char*>(name)),
+        .value    = reinterpret_cast<uint8_t*>(const_cast<char*>(val.data())),
         .namelen  = nl,
         .valuelen = val.size(),
-        .flags    = flags,
+        .flags    = ncnv,
     });
   };
 
-  add(":status",       7,  prepared.status,        ncnv);
-  add("etag",          4,  prepared.etag,           ncnv);
-  add("cache-control", 13, "public, max-age=3600",  ncnv); // literal → safe
-  add("last-modified", 13, prepared.last_modified,  ncnv);
+  add_sv(":status",       7,  prepared.status);
+  add_sv("etag",          4,  stream->cached_file->etag());
+  add_sv("cache-control", 13, "public, max-age=3600");
+  add_sv("last-modified", 13, stream->cached_file->last_modified_str());
 
   log_http3_response_submit("not_modified", stream, 304, "", 0);
 

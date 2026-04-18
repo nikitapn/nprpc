@@ -5,6 +5,9 @@
 #include <nprpc/impl/http_utils.hpp>
 
 #include <cassert>
+#include <chrono>
+#include <ctime>
+#include <cstdio>
 #include <fstream>
 #include <mutex>
 #include <thread>
@@ -31,6 +34,8 @@ CachedFile::CachedFile(CachedFile&& other) noexcept
     , size_(other.size_)
     , content_type_(other.content_type_)
     , mtime_(other.mtime_)
+    , etag_(std::move(other.etag_))
+    , last_modified_str_(std::move(other.last_modified_str_))
     , heap_data_(std::move(other.heap_data_))
     , mmap_addr_(other.mmap_addr_)
     , mmap_len_(other.mmap_len_)
@@ -51,6 +56,8 @@ CachedFile& CachedFile::operator=(CachedFile&& other) noexcept
     size_ = other.size_;
     content_type_ = other.content_type_;
     mtime_ = other.mtime_;
+    etag_ = std::move(other.etag_);
+    last_modified_str_ = std::move(other.last_modified_str_);
     heap_data_ = std::move(other.heap_data_);
     mmap_addr_ = other.mmap_addr_;
     mmap_len_ = other.mmap_len_;
@@ -98,6 +105,22 @@ bool CachedFile::load(const std::filesystem::path& path, size_t mmap_threshold)
   }
 
   content_type_ = mime_type(path.string());
+
+  // Pre-compute cache-validation strings once — zero per-request overhead.
+  {
+    char buf[20];
+    snprintf(buf, sizeof(buf), "\"%llx\"",
+             static_cast<unsigned long long>(mtime_.time_since_epoch().count()));
+    etag_ = buf;
+
+    auto sys = std::chrono::clock_cast<std::chrono::system_clock>(mtime_);
+    time_t tt = std::chrono::system_clock::to_time_t(sys);
+    struct tm gmt{};
+    gmtime_r(&tt, &gmt);
+    char date_buf[32];
+    strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", &gmt);
+    last_modified_str_ = date_buf;
+  }
 
   if (file_size == 0) {
     // Empty file - just set size to 0, data_ remains nullptr

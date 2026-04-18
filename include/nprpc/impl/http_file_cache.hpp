@@ -44,6 +44,14 @@ public:
   /// File modification time for staleness checking
   std::filesystem::file_time_type mtime() const noexcept { return mtime_; }
 
+  /// Pre-computed ETag string (strong, quoted hex of mtime tick count).
+  /// Computed once on load — zero cost to serve.
+  std::string_view etag() const noexcept { return etag_; }
+
+  /// Pre-computed Last-Modified HTTP-date string.
+  /// Computed once on load — zero cost to serve.
+  std::string_view last_modified_str() const noexcept { return last_modified_str_; }
+
   /// Memory usage for cache accounting
   size_t memory_usage() const noexcept;
 
@@ -70,6 +78,10 @@ private:
   size_t size_ = 0;
   std::string_view content_type_;
   std::filesystem::file_time_type mtime_{};
+
+  // Pre-computed cache-validation strings (computed once in load())
+  std::string etag_;           // e.g. "\"1a2b3c\""
+  std::string last_modified_str_; // e.g. "Mon, 18 Apr 2026 12:00:00 GMT"
 
   // For heap-allocated small files
   std::vector<uint8_t> heap_data_;
