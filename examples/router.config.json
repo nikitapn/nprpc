@@ -1,0 +1,9 @@
+{
+  "routes": [
+    {
+      "sni": "calculator.lan",
+      "tcp_backend": "127.0.0.1:8443",
+      "udp_backend": "127.0.0.1:8433"
+    }
+  ]
+}

@@ -1,5 +1,19 @@
 cmake_minimum_required(VERSION 3.15)
 
+# Support standalone builds (e.g. Docker for VPS deployment).
+# When included via add_subdirectory() from the nprpc root, these
+# find_package calls are already handled by the parent CMakeLists.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  project(npquicrouter CXX)
+  find_package(Threads REQUIRED)
+  find_package(OpenSSL REQUIRED)
+  find_package(Boost REQUIRED)
+  # CMake FindBoost module < 3.19 may not expose Boost::headers; patch it.
+  if(NOT TARGET Boost::headers AND TARGET Boost::boost)
+    add_library(Boost::headers ALIAS Boost::boost)
+  endif()
+endif()
+
 add_executable(npquicrouter
   src/main.cpp
 )

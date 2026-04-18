@@ -1,0 +1,57 @@
+# Multi-stage Dockerfile for building npquicrouter on Debian 12 (Bookworm).
+# Produces a binary compatible with a Debian 12 VPS (OpenSSL 3.0.x).
+#
+# Build from the nprpc repo root:
+#   docker build -f npquicrouter/Dockerfile.debian12 -t npquicrouter:debian12 .
+#
+# Or use the convenience script which also extracts the binary:
+#   ./npquicrouter/build-vps.sh
+
+# ============================================================================
+# Stage 1: build
+# ============================================================================
+FROM debian:12 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    ninja-build \
+    wget \
+    ca-certificates \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Debian 12 ships Boost 1.74 which has a missing <utility> include in
+# awaitable.hpp under C++23. Download 1.89.0 headers instead (no build
+# needed — npquicrouter only uses header-only Boost.Asio).
+RUN wget https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz \
+    && tar -xzf boost_1_89_0.tar.gz \
+    && mv boost_1_89_0 /opt/boost \
+    && rm boost_1_89_0.tar.gz
+
+WORKDIR /src
+
+# Copy only the files needed for npquicrouter (keeps context small).
+COPY third_party/glaze /src/third_party/glaze
+COPY npquicrouter      /src/npquicrouter
+
+RUN cmake -G Ninja \
+      -S /src/npquicrouter \
+      -B /src/build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DBOOST_ROOT=/opt/boost \
+      -DBoost_NO_SYSTEM_PATHS=ON \
+    && cmake --build /src/build -j$(nproc)
+
+# ============================================================================
+# Stage 2: minimal runtime image
+# ============================================================================
+FROM debian:12-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/build/npquicrouter /usr/local/bin/npquicrouter
+
+ENTRYPOINT ["/usr/local/bin/npquicrouter"]
