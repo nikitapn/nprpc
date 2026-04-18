@@ -28,19 +28,20 @@ sni_from_client_hello_body(std::span<const uint8_t> hello) noexcept
 
   // SessionID (1-byte length + data)
   if (!avail(1)) return {};
-  off += 1u + rd8();
+  { const size_t n = rd8(); if (!avail(n)) return {}; off += n; }
 
   // CipherSuites (2-byte length + data)
   if (!avail(2)) return {};
-  off += 2u + rd16be();
+  { const size_t n = rd16be(); if (!avail(n)) return {}; off += n; }
 
   // CompressionMethods (1-byte length + data)
   if (!avail(1)) return {};
-  off += 1u + rd8();
+  { const size_t n = rd8(); if (!avail(n)) return {}; off += n; }
 
-  // Extensions total length
+  // Extensions total length — read length first, then compute ext_end from
+  // the already-advanced offset (rd16be advances off, then we add ext_len).
   if (!avail(2)) return {};
-  const size_t ext_end = off + 2u + rd16be();
+  const size_t ext_end = [&]{ const size_t n = rd16be(); return off + n; }();
 
   while (off + 4u <= ext_end && off + 4u <= hello.size()) {
     const uint16_t type = rd16be();
