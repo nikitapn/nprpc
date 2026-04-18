@@ -50,7 +50,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <ctime>
 #include <cstring>
 #include <filesystem>
 #include <deque>
@@ -442,17 +441,93 @@ find_stream_header(
   return nullptr;
 }
 
-// Parse an HTTP-date (RFC 7231 preferred format) into a file_time_type.\n// Returns nullopt if the string cannot be parsed.
+// Parse an HTTP-date (RFC 7231 preferred format) into a file_time_type.
+// Returns nullopt if the string cannot be parsed.
+// No heap allocation, no C function calls.
 static std::optional<std::filesystem::file_time_type>
 parse_http_date(std::string_view s) noexcept
 {
-  std::string str(s);
-  struct tm tm{};
-  const char* end = strptime(str.c_str(), "%a, %d %b %Y %H:%M:%S GMT", &tm);
-  if (!end || *end != '\0') return std::nullopt;
-  time_t tt = timegm(&tm);
-  if (tt == static_cast<time_t>(-1)) return std::nullopt;
-  auto sys = std::chrono::sys_seconds{std::chrono::seconds{tt}};
+  // "Mon, 18 Apr 2026 12:34:56 GMT" — fixed 29 bytes.
+  //  0         1         2
+  //  0123456789012345678901234567890
+  if (s.size() != 29) return std::nullopt;
+
+  // Validate all fixed separators and GMT suffix up front.
+  if (s[3] != ',' || s[4] != ' ' || s[7] != ' ' || s[11] != ' ' ||
+      s[16] != ' ' || s[19] != ':' || s[22] != ':' || s[25] != ' ' ||
+      s[26] != 'G' || s[27] != 'M' || s[28] != 'T')
+    return std::nullopt;
+
+  // Parse fixed-width decimal. Uses unsigned subtraction — wraps on non-digit.
+  auto parse_int = [&](int pos, int len) noexcept -> int {
+    int val = 0;
+    for (int i = 0; i < len; ++i) {
+      const unsigned c =
+          static_cast<unsigned>(static_cast<unsigned char>(s[pos + i])) - '0';
+      if (c > 9) return -1;
+      val = val * 10 + static_cast<int>(c);
+    }
+    return val;
+  };
+
+  // Month: pack s[8..10] into a uint32_t with a single 4-byte load.
+  // s[11]==' ' is already validated above, so reading 4 bytes is safe.
+  // Masking the high byte yields the same 3-char key as the constexpr table.
+  static constexpr auto m3 = [](char a, char b, char c) constexpr -> uint32_t {
+    return uint32_t(uint8_t(a)) | (uint32_t(uint8_t(b)) << 8)
+           | (uint32_t(uint8_t(c)) << 16);
+  };
+  static constexpr uint32_t month_keys[12] = {
+      m3('J','a','n'), m3('F','e','b'), m3('M','a','r'), m3('A','p','r'),
+      m3('M','a','y'), m3('J','u','n'), m3('J','u','l'), m3('A','u','g'),
+      m3('S','e','p'), m3('O','c','t'), m3('N','o','v'), m3('D','e','c'),
+  };
+  uint32_t mon;
+  std::memcpy(&mon, s.data() + 8, 4); // single MOV r32; s[11]==' ' is valid
+  mon &= 0x00FF'FFFFu;
+
+  int month = -1;
+  for (int i = 0; i < 12; ++i) {
+    if (mon == month_keys[i]) { month = i; break; }
+  }
+  if (month == -1) return std::nullopt;
+
+  const int day  = parse_int(5, 2);
+  const int year = parse_int(12, 4);
+  const int hour = parse_int(17, 2);
+  const int min  = parse_int(20, 2);
+  const int sec  = parse_int(23, 2);
+
+  if (day < 1 || day > 31) return std::nullopt;
+  if (year < 1970)         return std::nullopt;
+  if (hour > 23)           return std::nullopt;
+  if (min  > 59)           return std::nullopt;
+  if (sec  > 60)           return std::nullopt; // 60 = leap second
+
+  // Compute seconds since Unix epoch directly — no timegm, no struct tm.
+  //
+  // Leap days since 1970 up to but not including `year`:
+  //   floor((y-1)/4) - floor((y-1)/100) + floor((y-1)/400) - 477
+  //   (477 = same expression evaluated at y=1970)
+  static constexpr int days_before_month[12] = {
+      0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
+  };
+  const bool leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+  const int leap_days = (year - 1) / 4 - (year - 1) / 100 + (year - 1) / 400
+                        - 477;
+
+  const int64_t days = static_cast<int64_t>(year - 1970) * 365
+                       + leap_days
+                       + days_before_month[month]
+                       + (month > 1 && leap ? 1 : 0)
+                       + (day - 1);
+
+  const int64_t epoch_sec = days * 86400
+                            + static_cast<int64_t>(hour) * 3600
+                            + min * 60
+                            + sec;
+
+  auto sys = std::chrono::sys_seconds{std::chrono::seconds{epoch_sec}};
   return std::chrono::clock_cast<std::filesystem::file_time_type::clock>(sys);
 }
 
