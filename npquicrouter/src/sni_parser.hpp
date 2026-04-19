@@ -91,14 +91,14 @@ sni_from_tls_record(std::span<const uint8_t> data) noexcept
 // In QUIC the CRYPTO frame carries the TLS Handshake message directly
 // (no TLS record framing): msg_type(1) + length(3) + ClientHello body.
 // Returns a string_view backed by `data`.
+//
+// NOTE: data may be a reassembled partial buffer — we don't require the full
+// ClientHello. The body parser's avail() checks prevent out-of-bounds access.
 inline std::string_view
 sni_from_quic_crypto_data(std::span<const uint8_t> data) noexcept
 {
   if (data.size() < 4u) return {};
   if (data[0] != 0x01u) return {}; // must be ClientHello
-
-  const size_t hello_len = (size_t(data[1]) << 16) | (size_t(data[2]) << 8) | data[3];
-  if (data.size() < 4u + hello_len) return {};
-
-  return sni_from_client_hello_body(data.subspan(4u, hello_len));
+  // Don't guard on declared hello_len — partial data is fine; avail() protects.
+  return sni_from_client_hello_body(data.subspan(4u));
 }

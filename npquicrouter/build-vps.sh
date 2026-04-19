@@ -34,7 +34,25 @@ echo "    $(file "$OUT")"
 if [[ "${1:-}" != "" ]]; then
   DEST="$1"
   echo "==> Deploying to $DEST ..."
-  scp "$OUT" "$DEST:/usr/local/bin/npquicrouter"
+
+  ssh "$DEST" "cat > /tmp/npquicrouter.service" <<EOF
+# /etc/systemd/system/npquicrouter.service
+[Unit]
+Description=NPRPC QUIC/TLS Router
+After=network.target
+
+[Service]
+User=www-data
+ExecStart=/usr/local/bin/npquicrouter /etc/npquicrouter/config.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  scp "$OUT" "$DEST:/tmp/npquicrouter"
+  ssh "$DEST" "sudo mv /tmp/npquicrouter /usr/local/bin/ && sudo mv /tmp/npquicrouter.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable npquicrouter"
   # Allow binding port 443 without root
   ssh "$DEST" "sudo setcap cap_net_bind_service+ep /usr/local/bin/npquicrouter"
   echo "==> Done. Restart the service on the VPS."

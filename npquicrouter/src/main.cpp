@@ -12,7 +12,9 @@
 #include <csignal>
 #include <cstdint>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <span>
 #include <sstream>
@@ -27,6 +29,8 @@
 
 #include "quic_initial.hpp"
 #include "sni_parser.hpp"
+
+#define QUIC_DBG_PLAIN(msg) do { if (quic_debug_enabled) std::cerr << "[QUIC]" << msg << "\n"; } while(0)
 
 namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
@@ -46,6 +50,7 @@ struct Config {
     std::string  listen_address        = "0.0.0.0";
     uint16_t     listen_tcp_port       = 443;
     uint16_t     listen_udp_port       = 443;
+    uint16_t     http_redirect_port    = 0;    // 0 = disabled; 80 = redirect HTTP→HTTPS
     std::string  default_tcp_backend;  // fallback if no SNI match
     std::string  default_udp_backend;
     int          udp_session_timeout_sec = 120;
@@ -69,6 +74,7 @@ struct glz::meta<Config> {
         "listen_address",          &T::listen_address,
         "listen_tcp_port",         &T::listen_tcp_port,
         "listen_udp_port",         &T::listen_udp_port,
+        "http_redirect_port",      &T::http_redirect_port,
         "default_tcp_backend",     &T::default_tcp_backend,
         "default_udp_backend",     &T::default_udp_backend,
         "udp_session_timeout_sec", &T::udp_session_timeout_sec,
@@ -276,6 +282,124 @@ private:
 };
 
 //==============================================================================
+// HTTP→HTTPS redirect (plain port 80)
+//==============================================================================
+
+// Reads the first line of the HTTP request to extract the Host header,
+// then sends a 301 redirect to https://<host><path>.
+class HttpRedirectSession : public std::enable_shared_from_this<HttpRedirectSession> {
+    static constexpr size_t kBufSize = 4096;
+    tcp::socket sock_;
+    std::array<char, kBufSize> buf_{};
+    size_t len_ = 0;
+
+public:
+    explicit HttpRedirectSession(tcp::socket s) : sock_(std::move(s)) {}
+
+    void start() { read_more(); }
+
+private:
+    void read_more() {
+        sock_.async_read_some(
+            asio::buffer(buf_.data() + len_, buf_.size() - len_),
+            [self = shared_from_this()](boost::system::error_code ec, size_t n) {
+                if (ec) return;
+                self->len_ += n;
+                self->try_respond();
+            });
+    }
+
+    void try_respond() {
+        const std::string_view data(buf_.data(), len_);
+
+        // Need at least the request line and headers (double CRLF)
+        const auto header_end = data.find("\r\n\r\n");
+        if (header_end == std::string_view::npos) {
+            if (len_ < buf_.size()) { read_more(); return; } // need more data
+            // Buffer full with no complete headers — just redirect to /
+        }
+
+        // Extract path from first request line: "GET /path HTTP/1.x"
+        std::string path = "/";
+        const auto line_end = data.find("\r\n");
+        if (line_end != std::string_view::npos) {
+            const auto first_line = data.substr(0, line_end);
+            const auto sp1 = first_line.find(' ');
+            if (sp1 != std::string_view::npos) {
+                const auto sp2 = first_line.find(' ', sp1 + 1);
+                if (sp2 != std::string_view::npos)
+                    path = std::string(first_line.substr(sp1 + 1, sp2 - sp1 - 1));
+            }
+        }
+
+        // Extract Host header
+        std::string host;
+        const auto search = data.substr(0, header_end == std::string_view::npos ? len_ : header_end);
+        for (size_t pos = 0;;) {
+            const auto crlf = search.find("\r\n", pos);
+            const auto line = search.substr(pos, crlf == std::string_view::npos ? std::string_view::npos : crlf - pos);
+            if (line.size() >= 6) {
+                std::string lower(line.substr(0, 5));
+                for (auto& c : lower) c = (char)std::tolower((unsigned char)c);
+                if (lower == "host:") {
+                    size_t vs = 5;
+                    while (vs < line.size() && line[vs] == ' ') ++vs;
+                    host = std::string(line.substr(vs));
+                    // strip port if present (we're redirecting to default 443)
+                    const auto colon = host.rfind(':');
+                    if (colon != std::string::npos) host = host.substr(0, colon);
+                    break;
+                }
+            }
+            if (crlf == std::string_view::npos) break;
+            pos = crlf + 2;
+        }
+
+        const std::string location = "https://" + host + path;
+        const std::string resp =
+            "HTTP/1.1 301 Moved Permanently\r\n"
+            "Location: " + location + "\r\n"
+            "Content-Length: 0\r\n"
+            "Connection: close\r\n"
+            "\r\n";
+
+        auto buf = std::make_shared<std::string>(resp);
+        asio::async_write(
+            sock_,
+            asio::buffer(*buf),
+            [self = shared_from_this(), buf](boost::system::error_code, size_t) {
+                self->sock_.close();
+            });
+    }
+};
+
+class HttpRedirectRouter {
+    tcp::acceptor acceptor_;
+
+public:
+    HttpRedirectRouter(asio::io_context& ioc, const Config& cfg)
+        : acceptor_(ioc,
+                    tcp::endpoint(asio::ip::make_address(cfg.listen_address),
+                                  cfg.http_redirect_port))
+    {
+        acceptor_.set_option(tcp::acceptor::reuse_address(true));
+    }
+
+    void start() { accept(); }
+
+private:
+    void accept() {
+        acceptor_.async_accept(
+            [this](boost::system::error_code ec, tcp::socket sock) {
+                if (!ec)
+                    std::make_shared<HttpRedirectSession>(std::move(sock))->start();
+                if (ec != asio::error::operation_aborted)
+                    accept();
+            });
+    }
+};
+
+//==============================================================================
 // TCP acceptor
 //==============================================================================
 
@@ -312,6 +436,52 @@ private:
 //==============================================================================
 // UDP router — QUIC SNI routing via per-session ephemeral sockets
 //==============================================================================
+
+// Pending QUIC connection: buffer CRYPTO fragments until SNI is extractable.
+struct PendingQuicSession {
+    udp::endpoint        client_ep;     // who to route back to once SNI is known
+    std::vector<uint8_t> initial_dcid;  // client's original DCID (for diagnostics)
+    // CRYPTO stream fragments keyed by stream offset.
+    std::map<uint64_t, std::vector<uint8_t>> crypto_frags;
+    // Raw UDP datagrams queued for replay once we route the session.
+    std::vector<std::vector<uint8_t>> queued_pkts;
+    std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
+};
+
+// Try to extract SNI by reassembling contiguous CRYPTO fragments from offset 0.
+// Returns nullopt if there is still a gap starting at offset 0.
+static std::optional<std::string>
+try_assemble_sni(const std::map<uint64_t, std::vector<uint8_t>>& frags)
+{
+    if (frags.empty() || frags.begin()->first != 0) return std::nullopt;
+
+    // Build a contiguous buffer from offset 0, stopping at the first gap.
+    std::vector<uint8_t> assembled;
+    uint64_t expected = 0;
+    for (const auto& [off, data] : frags) {
+        if (off > expected) break;                          // gap — need more packets
+        const size_t skip = (size_t)(expected - off);      // handle overlaps
+        if (skip >= data.size()) continue;
+        assembled.insert(assembled.end(), data.begin() + (ptrdiff_t)skip, data.end());
+        expected = off + data.size();
+    }
+
+    if (assembled.empty()) return std::nullopt;
+
+    if (quic_debug_enabled) {
+        std::cerr << "[QUIC] assembled " << assembled.size() << " bytes, hex:\n";
+        for (size_t i = 0; i < std::min(assembled.size(), size_t{256}); ++i) {
+            std::cerr << std::hex << std::setw(2) << std::setfill('0') << (int)assembled[i];
+            if ((i & 15) == 15) std::cerr << '\n'; else std::cerr << ' ';
+        }
+        std::cerr << std::dec << '\n';
+    }
+
+    const auto sv = sni_from_quic_crypto_data(
+        std::span<const uint8_t>(assembled.data(), assembled.size()));
+    if (sv.empty()) return std::nullopt;                    // not enough data yet
+    return std::string(sv);
+}
 
 // One per active QUIC client-→-backend mapping.
 struct UdpSession {
@@ -353,6 +523,14 @@ class UdpRouter {
         }
     };
     std::unordered_map<udp::endpoint, std::shared_ptr<UdpSession>, EpHash> sessions_;
+    // Key: DCID bytes as std::string (binary). Each connection attempt has a unique
+    // DCID so mixing fragments from different curl retries is impossible.
+    std::unordered_map<std::string, PendingQuicSession>   pending_;
+    // ep_to_dcid_ removed: DCID-keying is sufficient since each new connection
+    // attempt picks a fresh random DCID. ep_to_dcid_ was causing stream_off=0
+    // fragments to be stored under stale DCID keys from previous attempts.
+    static constexpr size_t kMaxPendingPackets = 32;
+    static constexpr auto   kPendingTimeout    = std::chrono::seconds(5);
 
     asio::steady_timer gc_timer_;
 
@@ -383,40 +561,106 @@ private:
     }
 
     void on_packet(size_t n) {
-        const auto pkt = std::span<const uint8_t>(recv_buf_.data(), n);
-        const auto it  = sessions_.find(sender_ep_);
+        const auto datagram = std::span<const uint8_t>(recv_buf_.data(), n);
+        const auto it       = sessions_.find(sender_ep_);
+
+        if (quic_debug_enabled && it == sessions_.end()) {
+            // Log every new-session datagram: size and first few bytes.
+            std::cerr << "[QUIC] datagram n=" << n << " from " << sender_ep_
+                      << " bytes[0..3]=";
+            for (size_t i = 0; i < std::min(n, size_t{4}); ++i)
+                std::cerr << std::hex << std::setw(2) << std::setfill('0')
+                          << (int)recv_buf_[i] << ' ';
+            std::cerr << std::dec << '\n';
+        }
 
         if (it != sessions_.end()) {
             // Existing session — forward without decryption
             it->second->last_seen = std::chrono::steady_clock::now();
             it->second->backend_sock.async_send(
-                asio::buffer(pkt.data(), pkt.size()),
+                asio::buffer(datagram.data(), datagram.size()),
                 [](boost::system::error_code, size_t) {});
             return;
         }
 
-        // New client — try to extract SNI from QUIC v1 Initial
-        const std::string sni = sni_from_quic_initial(pkt);
+        // Walk all coalesced QUIC Initial packets in this UDP datagram.
+        // RFC 9000 §12.2: multiple QUIC packets may be concatenated in one UDP datagram.
+        // The fragment containing stream_off=0 may be in the 2nd or later packet.
+        size_t pkt_off = 0;
+        bool   any_frag = false;
+        std::string route_dcid_key;
+
+        while (pkt_off < n) {
+            const auto pkt_span = std::span<const uint8_t>(recv_buf_.data() + pkt_off, n - pkt_off);
+
+            // Compute packet boundary without decrypting (for coalesced-packet skipping).
+            const size_t pkt_len = quic_initial_packet_len(pkt_span);
+
+            QUIC_DBG_PLAIN("  [pkt] off=" << pkt_off << " pkt_len=" << pkt_len
+                           << " first_byte=0x" << std::hex << (pkt_span.empty() ? 0 : (int)pkt_span[0]) << std::dec);
+
+            auto frags = quic_extract_crypto(pkt_span);
+            for (auto& frag : frags) {
+                const std::string dcid_key(frag.dcid.begin(), frag.dcid.end());
+                if (!any_frag) route_dcid_key = dcid_key;
+                any_frag = true;
+
+                auto& pend = pending_[dcid_key];
+                if (pend.client_ep == udp::endpoint{}) {
+                    pend.client_ep    = sender_ep_;
+                    pend.initial_dcid = frag.dcid;
+                }
+                if (quic_debug_enabled) {
+                    std::cerr << "[QUIC] dcid=";
+                    for (auto b : frag.dcid)
+                        std::cerr << std::hex << std::setw(2) << std::setfill('0') << (int)b;
+                    std::cerr << std::dec
+                        << " off=" << frag.stream_offset
+                        << " frags=" << (pend.crypto_frags.size()+1) << "\n";
+                }
+                pend.crypto_frags[frag.stream_offset] = std::move(frag.data);
+            }
+
+            if (pkt_len == 0 || pkt_off + pkt_len > n) break; // not QUIC Initial or malformed
+            pkt_off += pkt_len;
+        }
+
+        if (!any_frag) return; // no QUIC Initial packets in this datagram
+
+        // Queue the whole datagram under the first DCID found.
+        auto& pend = pending_[route_dcid_key];
+        if (pend.queued_pkts.size() < kMaxPendingPackets)
+            pend.queued_pkts.emplace_back(recv_buf_.data(), recv_buf_.data() + n);
+
+        // Try to assemble a contiguous CRYPTO buffer starting at offset 0.
+        auto sni_opt = try_assemble_sni(pend.crypto_frags);
+        if (!sni_opt) return; // need more fragments
+
+        const std::string& sni = *sni_opt;
         const udp::endpoint* ep = routes_.lookup_udp(sni);
         if (!ep) {
-            std::cerr << "[UDP] No route for SNI '" << sni
-                      << "' — dropping\n";
+            std::cerr << "[UDP] No route for SNI '" << sni << "' — dropping\n";
+
+            pending_.erase(route_dcid_key);
             return;
         }
-        if (!sni.empty())
-            std::clog << "[UDP] SNI='" << sni << "' → " << *ep << "\n";
+        std::clog << "[UDP] SNI='" << sni << "' → " << *ep << "\n";
 
-        // Create session
-        auto sess = std::make_shared<UdpSession>(ioc_, sender_ep_, *ep);
+        // Create the session and replay all queued packets.
+        auto sess = std::make_shared<UdpSession>(ioc_, pend.client_ep, *ep);
         sess->backend_sock.connect(*ep);
-        sessions_.emplace(sender_ep_, sess);
+        sessions_.emplace(pend.client_ep, sess);
 
-        // Forward the Initial packet to backend
-        sess->backend_sock.async_send(
-            asio::buffer(pkt.data(), pkt.size()),
-            [](boost::system::error_code, size_t) {});
+        auto queued = std::move(pend.queued_pkts);
+        pending_.erase(route_dcid_key);
 
-        // Start receiving return traffic from backend
+        for (auto& qpkt : queued) {
+            auto buf = std::make_shared<std::vector<uint8_t>>(std::move(qpkt));
+            sess->backend_sock.async_send(
+                asio::buffer(*buf),
+                [buf](boost::system::error_code, size_t) {});
+        }
+
         recv_from_backend(sess);
     }
 
@@ -446,6 +690,13 @@ private:
                 else
                     ++it;
             }
+            // Evict stale pending reassembly entries (typically < 5 s old)
+            for (auto it = pending_.begin(); it != pending_.end(); ) {
+                if (now - it->second.created_at > kPendingTimeout)
+                    it = pending_.erase(it);
+                else
+                    ++it;
+            }
             schedule_gc();
         });
     }
@@ -457,13 +708,24 @@ private:
 
 int main(int argc, char* argv[])
 {
-    if (argc < 2) {
-        std::cerr << "Usage: npquicrouter <config.json>\n"
+    // Parse flags: optional --debug / -d before the config path
+    bool debug = false;
+    int  config_arg = 1;
+    for (int i = 1; i < argc; ++i) {
+        std::string_view a(argv[i]);
+        if (a == "--debug" || a == "-d") { debug = true; config_arg = i + 1; }
+        else { config_arg = i; break; }
+    }
+    quic_debug_enabled = debug;
+
+    if (config_arg >= argc) {
+        std::cerr << "Usage: npquicrouter [--debug] <config.json>\n"
                   << "\nExample config.json:\n"
                   << R"({
   "listen_address": "0.0.0.0",
   "listen_tcp_port": 443,
   "listen_udp_port": 443,
+  "http_redirect_port": 80,
   "default_tcp_backend": "127.0.0.1:8443",
   "default_udp_backend": "127.0.0.1:4433",
   "udp_session_timeout_sec": 120,
@@ -476,7 +738,7 @@ int main(int argc, char* argv[])
     }
 
     // Load config
-    std::ifstream f(argv[1]);
+    std::ifstream f(argv[config_arg]);
     if (!f) {
         std::cerr << "Cannot open config: " << argv[1] << "\n";
         return 1;
@@ -508,10 +770,18 @@ int main(int argc, char* argv[])
     tcp_router.start();
     udp_router.start();
 
+    std::unique_ptr<HttpRedirectRouter> http_redirect;
+    if (cfg.http_redirect_port != 0) {
+        http_redirect = std::make_unique<HttpRedirectRouter>(ioc, cfg);
+        http_redirect->start();
+    }
+
     std::clog << "npquicrouter listening — TCP "
               << cfg.listen_address << ":" << cfg.listen_tcp_port
-              << "  UDP " << cfg.listen_address << ":" << cfg.listen_udp_port
-              << "\n";
+              << "  UDP " << cfg.listen_address << ":" << cfg.listen_udp_port;
+    if (cfg.http_redirect_port != 0)
+        std::clog << "  HTTP(redirect) " << cfg.listen_address << ":" << cfg.http_redirect_port;
+    std::clog << "\n";
 
     // SIGINT/SIGTERM → stop io_context
     asio::signal_set signals(ioc, SIGINT, SIGTERM);
