@@ -32,8 +32,18 @@ RUN wget https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz \
 WORKDIR /src
 
 # Copy only the files needed for npquicrouter (keeps context small).
-COPY third_party/glaze /src/third_party/glaze
-COPY npquicrouter      /src/npquicrouter
+COPY third_party/glaze                         /src/third_party/glaze
+COPY npquicrouter                              /src/npquicrouter
+
+# LockFreeRingBuffer + logging — compiled directly into npquicrouter so that
+# it can drain the SHM egress ring without linking the full libnprpc.
+# CMakeLists.txt looks for these under nprpc_src/ / nprpc_include/ when the
+# parent src/ / include/ directories are absent (standalone build).
+COPY src/shm/lock_free_ring_buffer.cpp         /src/npquicrouter/nprpc_src/lock_free_ring_buffer.cpp
+COPY src/logging.hpp                           /src/npquicrouter/nprpc_src/logging.hpp
+COPY src/logging.cpp                           /src/npquicrouter/nprpc_src/logging.cpp
+COPY src/thread_identity.cpp                   /src/npquicrouter/nprpc_src/thread_identity.cpp
+COPY include                                   /src/npquicrouter/nprpc_include
 
 RUN cmake -G Ninja \
       -S /src/npquicrouter \

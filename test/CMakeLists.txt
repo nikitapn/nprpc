@@ -131,17 +131,24 @@ add_custom_target(run_nprpc_tests_verbose
 # Test executable for lock-free ring buffer
 add_executable(test_lock_free_ring_buffer
   src/test_lock_free_ring_buffer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/thread_identity.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/logging.cpp
 )
 
 target_include_directories(test_lock_free_ring_buffer
   PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 
 target_link_libraries(test_lock_free_ring_buffer
-  PRIVATE 
-    nprpc::nprpc
+  PRIVATE
+    Boost::headers
     GTest::gtest
+    rt
+    pthread
+    ssl
+    crypto
 )
 
 add_test(NAME LockFreeRingBuffer COMMAND test_lock_free_ring_buffer)

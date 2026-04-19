@@ -360,6 +360,13 @@ struct BuildConfig {
   std::string quic_key_file;
   std::string ssl_client_self_signed_cert_path;
 
+  // SHM egress channel for npquicrouter integration.
+  // When non-empty, Http3Server writes GSO batches to the named ring buffer
+  // instead of calling sendmsg directly, allowing npquicrouter to forward
+  // them as a single sendmsg(GSO) call and preserve kernel batching.
+  // Must match the "shm_egress_channel" value in npquicrouter's config.json.
+  std::string http3_shm_egress_channel;
+
   // TCP transport tuning
   bool use_epoll_tcp = false; // Use raw epoll server instead of Asio (Linux only)
   bool use_uring_tcp = false; // Use io_uring server instead of Asio (Linux only)
@@ -622,6 +629,18 @@ public:
   RpcBuilderHttp& watch_files() noexcept
   {
     cfg_.watch_files = true;
+    return *this;
+  }
+
+  /// Enable SHM egress offload via npquicrouter.
+  /// Http3Server will write GSO batches to a LockFreeRingBuffer named
+  /// /nprpc_<channel>_s2c instead of calling sendmsg directly.
+  /// npquicrouter then forwards the batch as a single sendmsg(GSO) call,
+  /// restoring kernel-level batching through the double-UDP-hop.
+  /// Must match the "shm_egress_channel" field in npquicrouter's config.json.
+  RpcBuilderHttp& http3_shm_egress_channel(std::string_view channel) noexcept
+  {
+    cfg_.http3_shm_egress_channel = channel;
     return *this;
   }
 };

@@ -47,6 +47,7 @@ class BuildConfig {
     var httpWebTransportStreamOpensBurst: UInt = 0
     var ssrHandlerDir: String = ""
     var watchFiles: Bool = false
+    var http3ShmEgressChannel: String = ""
 
     // QUIC
     var quicPort: UInt16 = 0
@@ -184,6 +185,7 @@ extension RpcBuilderInternal {
         cxxConfig.http_webtransport_stream_opens_burst = numericCast(config.httpWebTransportStreamOpensBurst)
         cxxConfig.ssr_handler_dir = std.string(config.ssrHandlerDir)
         cxxConfig.watch_files = config.watchFiles
+        cxxConfig.http3_shm_egress_channel = std.string(config.http3ShmEgressChannel)
 
         // QUIC settings
         cxxConfig.quic_cert_file = std.string(config.quicCertFile)
@@ -386,6 +388,13 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
     @discardableResult
     public func watchFiles() -> RpcBuilderHttp {
         config.watchFiles = true
+        return self
+    }
+
+    /// Configure shared memory egress channel for npquicrouter integration.
+    @discardableResult
+    public func http3ShmEgressChannel(_ channelName: String) -> RpcBuilderHttp {
+        config.http3ShmEgressChannel = channelName
         return self
     }
 }

@@ -28,6 +28,7 @@
 #include <glaze/json.hpp>
 
 #include "quic_initial.hpp"
+#include "quic_shm_channel.hpp"
 #include "sni_parser.hpp"
 
 #define QUIC_DBG_PLAIN(msg) do { if (quic_debug_enabled) std::cerr << "[QUIC]" << msg << "\n"; } while(0)
@@ -55,6 +56,12 @@ struct Config {
     std::string  default_udp_backend;
     int          udp_session_timeout_sec = 120;
     std::vector<RouteEntry> routes;
+    // SHM egress channel name (empty = disabled).
+    // When set, npquicrouter creates a LockFreeRingBuffer named
+    // /nprpc_<shm_egress_channel>_s2c that Http3Server writes GSO batches
+    // into.  npquicrouter drains the ring and calls sendmsg(GSO) to preserve
+    // batching across the double-UDP-hop.
+    std::string  shm_egress_channel;
 };
 
 // Glaze reflection
@@ -78,7 +85,8 @@ struct glz::meta<Config> {
         "default_tcp_backend",     &T::default_tcp_backend,
         "default_udp_backend",     &T::default_udp_backend,
         "udp_session_timeout_sec", &T::udp_session_timeout_sec,
-        "routes",                  &T::routes);
+        "routes",                  &T::routes,
+        "shm_egress_channel",      &T::shm_egress_channel);
 };
 
 //==============================================================================
@@ -488,6 +496,7 @@ struct UdpSession {
     udp::endpoint   client_ep;
     udp::endpoint   backend_ep;
     udp::socket     backend_sock;   // unique ephemeral port → backend
+    uint16_t        backend_port = 0; // backend_sock local port (set after connect)
     std::chrono::steady_clock::time_point last_seen;
 
     // Receive buffer for backend → client direction
@@ -534,6 +543,13 @@ class UdpRouter {
 
     asio::steady_timer gc_timer_;
 
+    // SHM egress channel — present when cfg.shm_egress_channel is non-empty.
+    // Owns the ring buffer (creator side) and drains it in a background thread,
+    // calling sendmsg(GSO) directly to QUIC clients without breaking the batch.
+    // port_map_ must be created before shm_egress_ (it's passed in ctor).
+    std::shared_ptr<PortToClientMap> port_map_;
+    std::unique_ptr<ShmEgressReader> shm_egress_;
+
 public:
     UdpRouter(asio::io_context& ioc, const Config& cfg, const RouteTable& rt)
         : ioc_(ioc)
@@ -542,11 +558,24 @@ public:
         , routes_(rt)
         , timeout_sec_(cfg.udp_session_timeout_sec)
         , gc_timer_(ioc)
-    {}
+    {
+        if (!cfg.shm_egress_channel.empty()) {
+            port_map_ = std::make_shared<PortToClientMap>();
+            shm_egress_ = std::make_unique<ShmEgressReader>(
+                cfg.shm_egress_channel,
+                listen_sock_.native_handle(),
+                port_map_);
+        }
+    }
 
     void start() {
         recv();
         schedule_gc();
+        if (shm_egress_) {
+            shm_egress_->start();
+            std::clog << "  SHM egress channel: "
+                      << shm_egress_->ring_name() << "\n";
+        }
     }
 
 private:
@@ -649,6 +678,20 @@ private:
         // Create the session and replay all queued packets.
         auto sess = std::make_shared<UdpSession>(ioc_, pend.client_ep, *ep);
         sess->backend_sock.connect(*ep);
+        // Capture the ephemeral local port used by backend_sock.
+        // Http3Server will see this as the client address — we need it
+        // to translate SHM egress frames back to the real client endpoint.
+        sess->backend_port = sess->backend_sock.local_endpoint().port();
+        std::clog << "[UDP] Session backend_port=" << sess->backend_port
+                  << " client=" << sess->client_ep << "\n";
+        if (port_map_) {
+            const auto& cep = sess->client_ep;
+            const auto ep_data = cep.data();
+            port_map_->insert(sess->backend_port,
+                              static_cast<const sockaddr*>(
+                                  static_cast<const void*>(ep_data)),
+                              static_cast<socklen_t>(cep.size()));
+        }
         sessions_.emplace(pend.client_ep, sess);
 
         auto queued = std::move(pend.queued_pkts);
@@ -685,10 +728,13 @@ private:
             const auto now     = std::chrono::steady_clock::now();
             const auto timeout = std::chrono::seconds(timeout_sec_);
             for (auto it = sessions_.begin(); it != sessions_.end(); ) {
-                if (now - it->second->last_seen > timeout)
+                if (now - it->second->last_seen > timeout) {
+                    if (port_map_ && it->second->backend_port != 0)
+                        port_map_->erase(it->second->backend_port);
                     it = sessions_.erase(it);
-                else
+                } else {
                     ++it;
+                }
             }
             // Evict stale pending reassembly entries (typically < 5 s old)
             for (auto it = pending_.begin(); it != pending_.end(); ) {
@@ -729,6 +775,7 @@ int main(int argc, char* argv[])
   "default_tcp_backend": "127.0.0.1:8443",
   "default_udp_backend": "127.0.0.1:4433",
   "udp_session_timeout_sec": 120,
+  "shm_egress_channel": "",
   "routes": [
     { "sni": "app.example.com",  "tcp_backend": "127.0.0.1:8443", "udp_backend": "127.0.0.1:4433" },
     { "sni": "blog.example.com", "tcp_backend": "127.0.0.1:9443", "udp_backend": "127.0.0.1:4434" }

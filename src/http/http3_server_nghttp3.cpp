@@ -46,6 +46,7 @@
 #endif
 
 #include "../logging.hpp"
+#include <nprpc/impl/lock_free_ring_buffer.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -143,6 +144,21 @@ constexpr std::size_t SEND_PACKET_SLAB_SIZE = 64;
 #if !defined(_WIN32) && defined(UDP_SEGMENT)
 constexpr std::size_t kMaxUdpGsoSegments = MAX_PKTS_BURST;
 #endif
+
+// SHM egress frame header (matches ShmEgressFrame in quic_shm_channel.hpp).
+// npquicrouter reads these and calls sendmsg(GSO) preserving kernel batching.
+#pragma pack(push, 1)
+struct ShmEgressFrame {
+  uint32_t payload_len;
+  uint16_t gso_segment_size;
+  uint8_t  ep_len;
+  uint8_t  _pad;
+  uint8_t  ep_storage[28];
+};
+#pragma pack(pop)
+
+static_assert(sizeof(ShmEgressFrame) == 36,
+              "ShmEgressFrame size mismatch — update quic_shm_channel.hpp");
 
 } // namespace
 
@@ -1357,6 +1373,12 @@ private:
   PendingSendPacket* send_inbox_head_{nullptr};
   bool send_in_progress_{false};
   std::atomic<bool> running_{false};
+
+  // Optional SHM egress ring (writer side, opened from npquicrouter's SHM).
+  // When present, send_aggregated() writes frames here instead of calling
+  // sendmsg(), so that npquicrouter can forward them as a single
+  // sendmsg(GSO) batch to the QUIC client.
+  std::unique_ptr<nprpc::impl::LockFreeRingBuffer> egress_ring_;
 };
 
 //==============================================================================
@@ -4156,6 +4178,30 @@ bool Http3Server::start()
   NPRPC_HTTP3_TRACE("Server listening on port {} (nghttp3/ngtcp2 backend)",
                     port_);
 
+  // Open SHM egress ring created by npquicrouter (if configured).
+  if (!g_cfg.http3_shm_egress_channel.empty()) {
+    const auto ring_name =
+        nprpc::impl::make_shm_name(g_cfg.http3_shm_egress_channel, "s2c");
+    // Retry a few times — npquicrouter may start slightly after nprpc.
+    for (int attempt = 0; attempt < 50; ++attempt) {
+      try {
+        egress_ring_ = nprpc::impl::LockFreeRingBuffer::open(ring_name);
+        NPRPC_LOG_INFO("Http3Server: opened SHM egress ring '{}'", ring_name);
+        break;
+      } catch (...) {
+        if (attempt == 49) {
+          NPRPC_LOG_WARN(
+              "Http3Server: SHM egress ring '{}' not found after retries — "
+              "falling back to direct sendmsg",
+              ring_name);
+        } else {
+          struct timespec ts = {0, 100'000'000}; // 100 ms
+          nanosleep(&ts, nullptr);
+        }
+      }
+    }
+  }
+
   // Start receiving
   do_receive();
 
@@ -4524,6 +4570,31 @@ void Http3Server::send_aggregated(
   }
 
 #if !defined(_WIN32)
+  // ── SHM egress path ──────────────────────────────────────────────────────
+  // Write the payload + routing header to the ring buffer so npquicrouter can
+  // forward it with a single sendmsg(GSO) call, preserving kernel batching.
+  if (egress_ring_) {
+    const size_t msg_size = sizeof(ShmEgressFrame) + len;
+    auto rsv = egress_ring_->try_reserve_write(msg_size);
+    if (rsv) {
+      ShmEgressFrame hdr{};
+      hdr.payload_len      = static_cast<uint32_t>(len);
+      hdr.gso_segment_size = static_cast<uint16_t>(
+          (gso_size && len > gso_size) ? gso_size : 0);
+      const auto ep_size   = remote_ep.size();
+      hdr.ep_len           = static_cast<uint8_t>(ep_size);
+      std::memcpy(hdr.ep_storage, remote_ep.data(), ep_size);
+
+      std::memcpy(rsv.data,                   &hdr, sizeof(hdr));
+      std::memcpy(rsv.data + sizeof(hdr), data, len);
+      egress_ring_->commit_write(rsv, msg_size);
+      return;
+    }
+    // Ring full — fall through to direct sendmsg as best-effort.
+    NPRPC_HTTP3_TRACE("send_aggregated: SHM ring full, falling back to sendmsg");
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   iovec msg_iov{};
   msg_iov.iov_base = const_cast<uint8_t*>(data);
   msg_iov.iov_len = len;

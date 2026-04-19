@@ -289,6 +289,7 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   g_cfg.watch_files = cfg_.watch_files;
   g_cfg.quic_cert_file = cfg_.quic_cert_file;
   g_cfg.quic_key_file = cfg_.quic_key_file;
+  g_cfg.http3_shm_egress_channel = cfg_.http3_shm_egress_channel;
 
   impl::g_rpc = new impl::RpcImpl();
   return impl::g_rpc;
