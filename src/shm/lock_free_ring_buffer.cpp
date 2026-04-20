@@ -532,8 +532,20 @@ LockFreeRingBuffer::ReadView LockFreeRingBuffer::try_read_view()
   if (commit_idx == write_idx)
     return {}; // Nothing claimed yet
 
-  // claimed_size tells us how large this slot is so we can find the next one
-  // even before actual_size is committed.
+  // Spin on actual_size FIRST.  The producer writes claimed_size before
+  // actual_size (with release semantics), so once actual_size != 0 the
+  // claimed_size field is guaranteed to be visible.  Reading claimed_size
+  // before this spin would race with an MPSC producer that has already
+  // advanced write_idx but hasn't written the slot header yet, producing
+  // a spurious claimed_size == 0 error.
+  auto* actual_slot = reinterpret_cast<std::atomic<uint32_t>*>(
+      data_region_ +
+      (commit_idx + sizeof(uint32_t)) % header_->buffer_size);
+  uint32_t actual_size;
+  while ((actual_size = actual_slot->load(std::memory_order_acquire)) == 0)
+    std::this_thread::yield();
+
+  // claimed_size is now visible (written before actual_size).
   uint32_t claimed_size = 0;
   std::memcpy(&claimed_size,
               data_region_ + commit_idx, sizeof(uint32_t));
@@ -542,16 +554,6 @@ LockFreeRingBuffer::ReadView LockFreeRingBuffer::try_read_view()
     NPRPC_LOG_ERROR("Corrupt claimed_size in read_view: {}", claimed_size);
     return {};
   }
-
-  // Spin until the producer commits by storing a non-zero actual_size.
-  // This is a bounded spin: producers write actual_size immediately after
-  // filling the data bytes, so the window is at most one memcpy wide.
-  auto* actual_slot = reinterpret_cast<std::atomic<uint32_t>*>(
-      data_region_ +
-      (commit_idx + sizeof(uint32_t)) % header_->buffer_size);
-  uint32_t actual_size;
-  while ((actual_size = actual_slot->load(std::memory_order_acquire)) == 0)
-    std::this_thread::yield();
 
   if (actual_size > claimed_size) {
     NPRPC_LOG_ERROR("actual_size {} > claimed_size {} in read_view",

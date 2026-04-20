@@ -1269,10 +1269,13 @@ struct Http3ReusePortSanitySnapshot {
 };
 #endif
 
+class Http3ServerRuntime; // forward declaration for friend
+
 class Http3Server
 {
 public:
   friend class Http3Connection;
+  friend class Http3ServerRuntime;
 
   Http3Server(boost::asio::io_context& ioc,
               const std::string& cert_file,
@@ -1287,6 +1290,7 @@ public:
   boost::asio::io_context& io_context() { return ioc_; }
   boost::asio::ip::udp::socket& socket() { return socket_; }
   uint8_t worker_id() const noexcept { return worker_id_; }
+  bool    running()   const noexcept { return running_.load(std::memory_order_acquire); }
 
   // Send packet to remote endpoint
   int send_packet(const boost::asio::ip::udp::endpoint& remote_ep,
@@ -1328,7 +1332,6 @@ private:
   void on_connection_accepted(const boost::asio::ip::udp::endpoint& remote_ep);
   void do_send();
   void do_receive();
-  void ingress_loop();
   static boost::asio::ip::udp::endpoint decode_ingress_ep(const ShmIngressFrame& hdr);
   void handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
                      const uint8_t* data,
@@ -1398,14 +1401,7 @@ private:
   // sendmsg(GSO) batch to the QUIC client.
   std::unique_ptr<nprpc::impl::LockFreeRingBuffer> egress_ring_;
 
-  // Optional SHM ingress ring (reader side, opened from npquicrouter's SHM).
-  // When present, a background thread drains the c2s ring and posts each
-  // datagram to ioc_ — replacing async_receive_from on the UDP socket.
-  // The real client endpoint is carried in every ShmIngressFrame so
-  // Http3Connection::remote_ep_ always holds the true client address.
-  std::unique_ptr<nprpc::impl::LockFreeRingBuffer> ingress_ring_;
-  std::thread                                      ingress_thread_;
-  std::atomic<bool>                                ingress_running_{false};
+
 };
 
 //==============================================================================
@@ -4209,22 +4205,19 @@ bool Http3Server::start()
   if (!g_cfg.http3_shm_egress_channel.empty()) {
     const auto egress_name =
         nprpc::impl::make_shm_name(g_cfg.http3_shm_egress_channel, "s2c");
-    const auto ingress_name =
-        nprpc::impl::make_shm_name(g_cfg.http3_shm_egress_channel, "c2s");
     // Retry a few times — npquicrouter may start slightly after nprpc.
     for (int attempt = 0; attempt < 50; ++attempt) {
       try {
         egress_ring_  = nprpc::impl::LockFreeRingBuffer::open(egress_name);
-        ingress_ring_ = nprpc::impl::LockFreeRingBuffer::open(ingress_name);
-        NPRPC_LOG_INFO("Http3Server: opened SHM egress '{}' ingress '{}'",
-                       egress_name, ingress_name);
+        NPRPC_LOG_INFO("Http3Server[{}]: opened SHM egress '{}'",
+                       worker_id_, egress_name);
         break;
       } catch (...) {
         if (attempt == 49) {
           NPRPC_LOG_WARN(
-              "Http3Server: SHM rings not found after retries — "
-              "falling back to direct sendmsg / UDP receive",
-              egress_name);
+              "Http3Server[{}]: SHM egress ring '{}' not found after retries — "
+              "falling back to direct sendmsg",
+              worker_id_, egress_name);
         } else {
           struct timespec ts = {0, 100'000'000}; // 100 ms
           nanosleep(&ts, nullptr);
@@ -4233,14 +4226,16 @@ bool Http3Server::start()
     }
   }
 
-  if (ingress_ring_) {
-    // SHM ingress mode: background thread feeds packets to ioc_.
-    ingress_running_.store(true, std::memory_order_release);
-    ingress_thread_ = std::thread(&Http3Server::ingress_loop, this);
-  } else {
+  // SHM ingress (c2s ring) is owned by Http3ServerRuntime — a single reader
+  // thread dispatches packets to each worker's ioc_.  Individual workers only
+  // use async_receive_from when NOT in SHM mode.
+  if (!egress_ring_) {
     // UDP ingress mode: standard async_receive_from loop.
     do_receive();
   }
+  // (In SHM mode Http3ServerRuntime::start() will call do_receive() for us
+  //  once the ingress dispatch thread is running, if needed. Currently the
+  //  socket is kept open for egress sendmsg fallback only.)
 
   return true;
 }
@@ -4249,11 +4244,6 @@ void Http3Server::stop()
 {
   if (!running_.exchange(false, std::memory_order_acq_rel)) {
     return;
-  }
-
-  // Stop the SHM ingress reader thread before closing the socket.
-  if (ingress_running_.exchange(false, std::memory_order_acq_rel)) {
-    if (ingress_thread_.joinable()) ingress_thread_.join();
   }
 
   // Graceful shutdown: send HTTP/3 GOAWAY to every open connection so clients
@@ -4855,44 +4845,6 @@ Http3Server::decode_ingress_ep(const ShmIngressFrame& hdr)
   }
 }
 
-void Http3Server::ingress_loop()
-{
-  while (ingress_running_.load(std::memory_order_acquire)) {
-    auto view = ingress_ring_->try_read_view();
-    if (!view) {
-      struct timespec ts = {0, 50'000}; // 50 µs
-      nanosleep(&ts, nullptr);
-      continue;
-    }
-
-    if (view.size < sizeof(ShmIngressFrame)) {
-      ingress_ring_->commit_read(view);
-      continue;
-    }
-
-    ShmIngressFrame hdr{};
-    std::memcpy(&hdr, view.data, sizeof(hdr));
-
-    if (view.size < sizeof(ShmIngressFrame) + hdr.payload_len ||
-        hdr.ep_len == 0 || hdr.ep_len > sizeof(hdr.ep_storage)) {
-      ingress_ring_->commit_read(view);
-      continue;
-    }
-
-    // Copy payload before releasing the ring slot.
-    std::vector<uint8_t> pkt(view.data + sizeof(ShmIngressFrame),
-                             view.data + sizeof(ShmIngressFrame) + hdr.payload_len);
-    const auto ep = decode_ingress_ep(hdr);
-    ingress_ring_->commit_read(view);
-
-    // Post to the ioc_ thread so handle_packet runs with proper thread safety.
-    boost::asio::post(ioc_, [this, ep, pkt = std::move(pkt)]() {
-      if (!running_.load(std::memory_order_acquire)) return;
-      handle_packet(ep, pkt.data(), pkt.size());
-    });
-  }
-}
-
 void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
                                 const uint8_t* data,
                                 size_t len)
@@ -5161,11 +5113,44 @@ public:
 
     NPRPC_LOG_INFO("[HTTP/3] Started {} dedicated worker(s) on UDP port {}",
                    worker_count, port);
+
+    // Start the single SHM ingress reader (if configured).
+    if (!g_cfg.http3_shm_egress_channel.empty()) {
+      const auto ingress_name =
+          nprpc::impl::make_shm_name(g_cfg.http3_shm_egress_channel, "c2s");
+      for (int attempt = 0; attempt < 50; ++attempt) {
+        try {
+          ingress_ring_ = nprpc::impl::LockFreeRingBuffer::open(ingress_name);
+          NPRPC_LOG_INFO("[HTTP/3] Opened SHM ingress ring '{}'", ingress_name);
+          break;
+        } catch (...) {
+          if (attempt == 49) {
+            NPRPC_LOG_WARN("[HTTP/3] SHM ingress ring '{}' not found — "
+                           "falling back to UDP receive", ingress_name);
+          } else {
+            struct timespec ts = {0, 100'000'000};
+            nanosleep(&ts, nullptr);
+          }
+        }
+      }
+      if (ingress_ring_) {
+        ingress_running_.store(true, std::memory_order_release);
+        ingress_thread_ = std::thread(&Http3ServerRuntime::ingress_loop_impl, this);
+      }
+    }
+
     return true;
   }
 
   void stop() noexcept
   {
+    // Stop ingress reader before shutting down workers so no new packets
+    // are posted after workers' connections_ are cleared.
+    if (ingress_running_.exchange(false, std::memory_order_acq_rel)) {
+      if (ingress_thread_.joinable()) ingress_thread_.join();
+    }
+    ingress_ring_.reset();
+
     for (auto& worker : workers_) {
       if (worker->server) {
         worker->server->stop();
@@ -5283,7 +5268,91 @@ private:
     defined(SO_ATTACH_REUSEPORT_EBPF)
   std::unique_ptr<Http3ReusePortBpfProgram> reuseport_bpf_;
 #endif
-};
+
+  // Single SHM ingress reader — replaces per-worker ingress_thread_.
+  // Reads the c2s ring, parses DCID, and dispatches each packet to the
+  // correct worker's ioc_ so that handle_packet() always runs on the
+  // thread that owns the corresponding Http3Connection.
+  std::unique_ptr<nprpc::impl::LockFreeRingBuffer> ingress_ring_;
+  std::thread                                      ingress_thread_;
+  std::atomic<bool>                                ingress_running_{false};
+
+  // Dispatch a packet payload to the correct worker by DCID routing,
+  // mirroring the BPF program's logic:
+  //   short-header: pkt[1] = dcid[0] = embedded worker_id
+  //   long-header:  FNV-1a of first 4 DCID bytes % worker_count
+  void dispatch_ingress_packet(const boost::asio::ip::udp::endpoint& ep,
+                               std::vector<uint8_t> pkt)
+  {
+    const size_t n = workers_.size();
+    size_t target  = 0;
+
+    if (n > 1 && pkt.size() >= 2) {
+      if (pkt[0] & 0x80) {
+        // Long-header: DCID starts at byte 6 for QUIC v1
+        // Layout: first_byte(1) + version(4) + dcid_len(1) + dcid(...)
+        if (pkt.size() >= 6) {
+          const uint8_t dcid_len = pkt[5];
+          if (dcid_len >= 4 && pkt.size() >= size_t(6 + dcid_len)) {
+            // FNV-1a over first 4 DCID bytes (matches BPF program)
+            uint32_t h = 2166136261u;
+            for (int i = 0; i < 4; ++i) {
+              h ^= pkt[6 + i];
+              h *= 16777619u;
+            }
+            target = h % n;
+          }
+        }
+      } else {
+        // Short-header: pkt[1] = dcid[0] = worker_id
+        target = pkt[1] % n;
+      }
+    }
+
+    auto* server = workers_[target]->server.get();
+    boost::asio::post(workers_[target]->ioc,
+                      [server, ep, pkt = std::move(pkt)]() mutable {
+                        if (!server->running()) return;
+                        server->handle_packet(ep, pkt.data(), pkt.size());
+                      });
+  }
+
+  void ingress_loop_impl()
+  {
+    nprpc::impl::set_thread_name("h3_ingress");
+    while (ingress_running_.load(std::memory_order_acquire)) {
+      auto view = ingress_ring_->try_read_view();
+      if (!view) {
+        struct timespec ts = {0, 50'000}; // 50 µs
+        nanosleep(&ts, nullptr);
+        continue;
+      }
+
+      if (view.size < sizeof(ShmIngressFrame)) {
+        ingress_ring_->commit_read(view);
+        continue;
+      }
+
+      ShmIngressFrame hdr{};
+      std::memcpy(&hdr, view.data, sizeof(hdr));
+
+      if (view.size < sizeof(ShmIngressFrame) + hdr.payload_len ||
+          hdr.ep_len == 0 || hdr.ep_len > sizeof(hdr.ep_storage)) {
+        ingress_ring_->commit_read(view);
+        continue;
+      }
+
+      // Copy payload before releasing the ring slot.
+      std::vector<uint8_t> pkt(
+          view.data + sizeof(ShmIngressFrame),
+          view.data + sizeof(ShmIngressFrame) + hdr.payload_len);
+      const auto ep = Http3Server::decode_ingress_ep(hdr);
+      ingress_ring_->commit_read(view);
+
+      dispatch_ingress_packet(ep, std::move(pkt));
+    }
+  }
+}; // end Http3ServerRuntime
 
 //==============================================================================
 // Global HTTP/3 Server Instance
