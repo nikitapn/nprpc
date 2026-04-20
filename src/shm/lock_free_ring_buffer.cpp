@@ -74,16 +74,7 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size)
           "Header doesn't fit in first page - increase page reservation");
     }
 
-    // 4) Data region starts exactly at page_size offset (page-aligned)
-    // We don't use Boost's construct because we need precise control over
-    // placement
-    uint8_t* data_region = shm_base + page_size;
-
-    // Store data offset in header for open() to find it
-    // (We're repurposing unused space or adding a field if needed)
-    // Actually, we can calculate it: data always starts at page_size offset
-
-    // 5) Ring window is exactly buffer_size (rounded up to page)
+    // 4) Ring window is exactly buffer_size (rounded up to page)
     size_t ring_window = (buffer_size + page_size - 1) & ~(page_size - 1);
 
     // Reserve 2x ring window for mirrored mapping
@@ -94,7 +85,7 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size)
           "Failed to reserve virtual address space for mirrored mapping");
     }
 
-    // 6) Open the POSIX shm object to get an fd
+    // 5) Open the POSIX shm object to get an fd
     std::string posix_name = name;
     if (posix_name.empty() || posix_name[0] != '/')
       posix_name.insert(posix_name.begin(), '/');
@@ -106,7 +97,7 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size)
                                strerror(errno));
     }
 
-    // 7) Map only the DATA region (starting from page_size offset), not the
+    // 6) Map only the DATA region (starting from page_size offset), not the
     // header!
     void* first_map = mmap(reserved, ring_window, PROT_READ | PROT_WRITE,
                            MAP_SHARED | MAP_FIXED, fd, page_size);
@@ -133,7 +124,7 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size)
 
     close(fd);
 
-    // 8) Mirrored data region pointer - points to start of reserved area
+    // 7) Mirrored data region pointer - points to start of reserved area
     uint8_t* mirrored_data_region = static_cast<uint8_t*>(reserved);
 
     NPRPC_LOG_INFO("Created ring buffer '{}': {} bytes with mirrored "

@@ -1,5 +1,6 @@
 {
   "shm_egress_channel": "quic_edge",
+  "num_workers": 8,
   "routes": [
     {
       "sni": "calculator.lan",

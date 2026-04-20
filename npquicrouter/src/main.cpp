@@ -11,6 +11,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -19,6 +20,7 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -31,11 +33,22 @@
 #include "quic_shm_channel.hpp"
 #include "sni_parser.hpp"
 
+#if defined(NPRPC_ROUTER_REUSEPORT_BPF_ENABLED) && defined(SO_ATTACH_REUSEPORT_EBPF)
+# include <bpf/bpf.h>
+# include <bpf/libbpf.h>
+# include "quic_reuseport_router_bpf.inc"
+#endif
+
 #define QUIC_DBG_PLAIN(msg) do { if (quic_debug_enabled) std::cerr << "[QUIC]" << msg << "\n"; } while(0)
 
 namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
 using udp = asio::ip::udp;
+
+// Must match SCID_LEN in http3_server_nghttp3.cpp.
+// The backend embeds worker_id in cid->data[0] of every SCID it generates,
+// enabling the router BPF to route 1-RTT short-header packets by data[1].
+static constexpr size_t kQuicServerScidLen = 18;
 
 //==============================================================================
 // Config
@@ -62,6 +75,7 @@ struct Config {
     // into.  npquicrouter drains the ring and calls sendmsg(GSO) to preserve
     // batching across the double-UDP-hop.
     std::string  shm_egress_channel;
+    int          num_workers          = 1;     // UDP worker threads (1 = single-threaded)
 };
 
 // Glaze reflection
@@ -86,7 +100,8 @@ struct glz::meta<Config> {
         "default_udp_backend",     &T::default_udp_backend,
         "udp_session_timeout_sec", &T::udp_session_timeout_sec,
         "routes",                  &T::routes,
-        "shm_egress_channel",      &T::shm_egress_channel);
+        "shm_egress_channel",      &T::shm_egress_channel,
+        "num_workers",             &T::num_workers);
 };
 
 //==============================================================================
@@ -178,6 +193,156 @@ static RouteTable build_route_table(const Config& cfg, asio::io_context& ioc)
     }
     return rt;
 }
+
+//==============================================================================
+// QuicRouterReusePortBpf — optional SO_REUSEPORT eBPF dispatcher
+//==============================================================================
+
+#if defined(NPRPC_ROUTER_REUSEPORT_BPF_ENABLED) && defined(SO_ATTACH_REUSEPORT_EBPF)
+
+class QuicRouterReusePortBpf
+{
+public:
+  // Load and configure the BPF program for worker_count sockets.
+  // scid_len must match the server's SCID_LEN (18); controls short-header routing.
+  bool load(size_t worker_count, size_t scid_len)
+  {
+    const uint32_t key = 0;
+    struct { uint32_t worker_count; uint32_t scid_len; }
+        cfg_val{ static_cast<uint32_t>(worker_count),
+                 static_cast<uint32_t>(scid_len) };
+
+    object_.reset(bpf_object__open_mem(nprpc_quic_reuseport_router_bpf_obj,
+                                       nprpc_quic_reuseport_router_bpf_obj_len,
+                                       nullptr));
+    if (!object_) {
+      std::cerr << "[BPF] Failed to open router reuseport BPF object\n";
+      return false;
+    }
+
+    if (bpf_object__load(object_.get()) != 0) {
+      std::cerr << "[BPF] Failed to load router reuseport BPF object\n";
+      return false;
+    }
+
+    auto* prog = bpf_object__find_program_by_name(object_.get(),
+                                                  "quic_select_reuseport");
+    if (!prog) {
+      std::cerr << "[BPF] Program 'quic_select_reuseport' not found\n";
+      return false;
+    }
+
+    prog_fd_ = bpf_program__fd(prog);
+    if (prog_fd_ < 0) {
+      std::cerr << "[BPF] Invalid program fd\n";
+      return false;
+    }
+
+    auto* config_map = bpf_object__find_map_by_name(object_.get(), "config_map");
+    if (!config_map) {
+      std::cerr << "[BPF] config_map not found\n";
+      return false;
+    }
+
+    if (bpf_map_update_elem(bpf_map__fd(config_map), &key, &cfg_val, BPF_ANY) != 0) {
+      std::cerr << "[BPF] Failed to set config: "
+                << std::strerror(errno) << "\n";
+      return false;
+    }
+
+    auto* sockarray = bpf_object__find_map_by_name(object_.get(),
+                                                   "reuseport_array");
+    if (!sockarray) {
+      std::cerr << "[BPF] reuseport_array not found\n";
+      return false;
+    }
+
+    sockarray_fd_ = bpf_map__fd(sockarray);
+    if (sockarray_fd_ < 0) {
+      std::cerr << "[BPF] Invalid sockarray fd\n";
+      return false;
+    }
+
+    auto* wc_map = bpf_object__find_map_by_name(object_.get(), "worker_counters");
+    if (wc_map) worker_counters_fd_ = bpf_map__fd(wc_map);
+
+    auto* dc_map = bpf_object__find_map_by_name(object_.get(), "drop_counter");
+    if (dc_map) drop_counter_fd_ = bpf_map__fd(dc_map);
+
+    return true;
+  }
+
+  // Print per-worker packet distribution and drop count to stdout.
+  // Reads PERCPU_ARRAY maps and sums across all CPUs.
+  void print_metrics(size_t worker_count) const
+  {
+    int ncpus = libbpf_num_possible_cpus();
+    if (ncpus <= 0 || worker_counters_fd_ < 0) return;
+
+    std::vector<uint64_t> per_cpu(static_cast<size_t>(ncpus));
+    uint64_t total = 0;
+
+    std::cout << "[BPF] Router packet distribution:\n";
+    for (uint32_t i = 0; i < static_cast<uint32_t>(worker_count); ++i) {
+      if (bpf_map_lookup_elem(worker_counters_fd_, &i, per_cpu.data()) != 0)
+        continue;
+      uint64_t sum = 0;
+      for (int c = 0; c < ncpus; ++c) sum += per_cpu[c];
+      total += sum;
+      std::cout << "  worker[" << i << "]: " << sum << "\n";
+    }
+    std::cout << "  total routed: " << total << "\n";
+
+    if (drop_counter_fd_ >= 0) {
+      const uint32_t key = 0;
+      if (bpf_map_lookup_elem(drop_counter_fd_, &key, per_cpu.data()) == 0) {
+        uint64_t drops = 0;
+        for (int c = 0; c < ncpus; ++c) drops += per_cpu[c];
+        std::cout << "  dropped:      " << drops << "\n";
+      }
+    }
+  }
+
+  // Register a worker socket fd at the given index in the reuseport array.
+  bool register_socket(uint32_t index, int socket_fd)
+  {
+    if (sockarray_fd_ < 0) return false;
+    uint64_t fd_val = static_cast<uint64_t>(socket_fd);
+    if (bpf_map_update_elem(sockarray_fd_, &index, &fd_val, BPF_ANY) != 0) {
+      std::cerr << "[BPF] Failed to register socket " << socket_fd
+                << " at index " << index << ": "
+                << std::strerror(errno) << "\n";
+      return false;
+    }
+    return true;
+  }
+
+  // Attach the BPF program to the first socket in the reuseport group.
+  // Only needs to be called once; the kernel applies it to the whole group.
+  bool attach(int socket_fd) const
+  {
+    if (prog_fd_ < 0) return false;
+    if (::setsockopt(socket_fd, SOL_SOCKET, SO_ATTACH_REUSEPORT_EBPF,
+                     &prog_fd_, sizeof(prog_fd_)) != 0) {
+      std::cerr << "[BPF] Failed to attach: " << std::strerror(errno) << "\n";
+      return false;
+    }
+    return true;
+  }
+
+private:
+  struct BpfObjectDeleter {
+    void operator()(bpf_object* o) const { bpf_object__close(o); }
+  };
+
+  std::unique_ptr<bpf_object, BpfObjectDeleter> object_;
+  int prog_fd_          = -1;
+  int sockarray_fd_     = -1;
+  int worker_counters_fd_ = -1;
+  int drop_counter_fd_  = -1;
+};
+
+#endif // NPRPC_ROUTER_REUSEPORT_BPF_ENABLED
 
 //==============================================================================
 // TCP proxy — one object per accepted connection
@@ -566,6 +731,7 @@ class UdpRouter {
     std::unique_ptr<ShmEgressReader>  shm_egress_;
 
 public:
+    // Single-worker constructor: creates and binds the socket internally.
     UdpRouter(asio::io_context& ioc, const Config& cfg, const RouteTable& rt)
         : ioc_(ioc)
         , listen_sock_(ioc, udp::endpoint(asio::ip::make_address(cfg.listen_address),
@@ -574,24 +740,54 @@ public:
         , timeout_sec_(cfg.udp_session_timeout_sec)
         , gc_timer_(ioc)
     {
-        if (!cfg.shm_egress_channel.empty()) {
-            shm_ingress_ = std::make_unique<ShmIngressWriter>(cfg.shm_egress_channel);
-            shm_egress_  = std::make_unique<ShmEgressReader>(
-                cfg.shm_egress_channel, listen_sock_.native_handle());
-        }
+        init_shm(cfg, /*worker_index=*/0, /*is_primary=*/true);
     }
+
+    // Multi-worker constructor: accepts a pre-created SO_REUSEPORT socket.
+    // @param socket       Already opened and bound UDP socket (SO_REUSEPORT).
+    // @param worker_index Worker index (0 = primary, creates/owns the rings).
+    // @param is_primary   Only the primary worker starts ShmEgressReader.
+    UdpRouter(asio::io_context& ioc, const Config& cfg, const RouteTable& rt,
+              udp::socket socket, size_t worker_index, bool is_primary)
+        : ioc_(ioc)
+        , listen_sock_(std::move(socket))
+        , routes_(rt)
+        , timeout_sec_(cfg.udp_session_timeout_sec)
+        , gc_timer_(ioc)
+    {
+        init_shm(cfg, worker_index, is_primary);
+    }
+
+    int socket_fd() noexcept { return listen_sock_.native_handle(); }
 
     void start() {
         recv();
         schedule_gc();
         if (shm_ingress_) {
-            shm_egress_->start();
+            if (shm_egress_) {
+                shm_egress_->start();
+                std::clog << "  SHM egress  channel: " << shm_egress_->ring_name() << "\n";
+            }
             std::clog << "  SHM ingress channel: " << shm_ingress_->ring_name() << "\n";
-            std::clog << "  SHM egress  channel: " << shm_egress_->ring_name()  << "\n";
         }
     }
 
 private:
+    void init_shm(const Config& cfg, size_t worker_index, bool is_primary) {
+        if (!cfg.shm_egress_channel.empty()) {
+            // Worker 0 creates both SHM rings; workers 1..N-1 open the existing
+            // c2s ring (MPSC: multiple producers are safe).
+            const bool creates_rings = (worker_index == 0);
+            shm_ingress_ = std::make_unique<ShmIngressWriter>(
+                cfg.shm_egress_channel, creates_rings);
+            // Only the primary (worker 0) drains the s2c ring.
+            if (is_primary) {
+                shm_egress_ = std::make_unique<ShmEgressReader>(
+                    cfg.shm_egress_channel, listen_sock_.native_handle());
+            }
+        }
+    }
+
     void recv() {
         listen_sock_.async_receive_from(
             asio::buffer(recv_buf_),
@@ -801,6 +997,7 @@ int main(int argc, char* argv[])
   "default_udp_backend": "127.0.0.1:4433",
   "udp_session_timeout_sec": 120,
   "shm_egress_channel": "",
+  "num_workers": 4,
   "routes": [
     { "sni": "app.example.com",  "tcp_backend": "127.0.0.1:8443", "udp_backend": "127.0.0.1:4433" },
     { "sni": "blog.example.com", "tcp_backend": "127.0.0.1:9443", "udp_backend": "127.0.0.1:4434" }
@@ -835,12 +1032,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // Start TCP and UDP routers
+    // TCP router + HTTP redirect always run on the main io_context.
     TcpRouter tcp_router(ioc, cfg, routes);
-    UdpRouter udp_router(ioc, cfg, routes);
-
     tcp_router.start();
-    udp_router.start();
 
     std::unique_ptr<HttpRedirectRouter> http_redirect;
     if (cfg.http_redirect_port != 0) {
@@ -848,20 +1042,114 @@ int main(int argc, char* argv[])
         http_redirect->start();
     }
 
+    // ── UDP router setup ──────────────────────────────────────────────────────
+    const size_t num_workers = static_cast<size_t>(std::max(1, cfg.num_workers));
+
+    // Single-worker path: reuse main ioc (backward-compatible, zero overhead).
+    std::unique_ptr<UdpRouter> single_udp_router;
+
+    // Multi-worker path: each worker gets its own io_context + socket.
+    struct UdpWorker {
+        asio::io_context                                           ioc;
+        asio::executor_work_guard<asio::io_context::executor_type> work_guard{
+            asio::make_work_guard(ioc)};
+        std::unique_ptr<UdpRouter>                                 router;
+        std::thread                                                thread;
+    };
+    std::vector<std::unique_ptr<UdpWorker>> udp_workers;
+
+#if defined(NPRPC_ROUTER_REUSEPORT_BPF_ENABLED) && defined(SO_ATTACH_REUSEPORT_EBPF)
+    std::unique_ptr<QuicRouterReusePortBpf> reuseport_bpf;
+#endif
+
+    if (num_workers == 1) {
+        single_udp_router = std::make_unique<UdpRouter>(ioc, cfg, routes);
+        single_udp_router->start();
+    } else {
+#if !defined(SO_REUSEPORT)
+        std::cerr << "[UDP] SO_REUSEPORT not available on this platform; "
+                     "falling back to single worker\n";
+        single_udp_router = std::make_unique<UdpRouter>(ioc, cfg, routes);
+        single_udp_router->start();
+#else
+        using reuse_port_opt =
+            boost::asio::detail::socket_option::boolean<SOL_SOCKET, SO_REUSEPORT>;
+
+        const auto ep = udp::endpoint(asio::ip::make_address(cfg.listen_address),
+                                      cfg.listen_udp_port);
+
+        for (size_t i = 0; i < num_workers; ++i) {
+            auto w = std::make_unique<UdpWorker>();
+            udp::socket sock(w->ioc);
+            sock.open(ep.protocol());
+            sock.set_option(reuse_port_opt{true});
+            sock.bind(ep);
+            w->router = std::make_unique<UdpRouter>(
+                w->ioc, cfg, routes, std::move(sock), i, /*is_primary=*/i == 0);
+            udp_workers.push_back(std::move(w));
+        }
+
+#if defined(NPRPC_ROUTER_REUSEPORT_BPF_ENABLED) && defined(SO_ATTACH_REUSEPORT_EBPF)
+        reuseport_bpf = std::make_unique<QuicRouterReusePortBpf>();
+        if (reuseport_bpf->load(num_workers, kQuicServerScidLen)) {
+            bool bpf_ok = true;
+            for (size_t i = 0; i < num_workers; ++i)
+                bpf_ok &= reuseport_bpf->register_socket(
+                    static_cast<uint32_t>(i), udp_workers[i]->router->socket_fd());
+            if (bpf_ok)
+                bpf_ok = reuseport_bpf->attach(udp_workers[0]->router->socket_fd());
+            if (!bpf_ok) {
+                std::cerr << "[UDP] Warning: eBPF attach failed — "
+                             "packet distribution across workers not guaranteed\n";
+                reuseport_bpf.reset();
+            }
+        } else {
+            std::cerr << "[UDP] Warning: eBPF load failed — "
+                         "packet distribution across workers not guaranteed\n";
+            reuseport_bpf.reset();
+        }
+#endif // NPRPC_ROUTER_REUSEPORT_BPF_ENABLED
+
+        for (auto& w : udp_workers) {
+            w->router->start();
+            w->thread = std::thread([ioc = &w->ioc]() { ioc->run(); });
+        }
+#endif // SO_REUSEPORT
+    }
+
     std::clog << "npquicrouter listening — TCP "
               << cfg.listen_address << ":" << cfg.listen_tcp_port
               << "  UDP " << cfg.listen_address << ":" << cfg.listen_udp_port;
     if (cfg.http_redirect_port != 0)
         std::clog << "  HTTP(redirect) " << cfg.listen_address << ":" << cfg.http_redirect_port;
+    if (num_workers > 1) {
+        std::clog << "  UDP-workers=" << num_workers;
+#if defined(NPRPC_ROUTER_REUSEPORT_BPF_ENABLED) && defined(SO_ATTACH_REUSEPORT_EBPF)
+        std::clog << (reuseport_bpf ? " (eBPF routing)" : " (no eBPF)");
+#endif
+    }
     std::clog << "\n";
 
-    // SIGINT/SIGTERM → stop io_context
+    // SIGINT/SIGTERM → stop all io_contexts
     asio::signal_set signals(ioc, SIGINT, SIGTERM);
     signals.async_wait([&](boost::system::error_code, int sig) {
         std::clog << "\nSignal " << sig << " received — shutting down\n";
+        for (auto& w : udp_workers) {
+            w->work_guard.reset();
+            w->ioc.stop();
+        }
         ioc.stop();
     });
 
-    ioc.run();
+    ioc.run();  // main thread: TCP + signals (+ UDP in single-worker mode)
+
+    for (auto& w : udp_workers) {
+        if (w->thread.joinable()) w->thread.join();
+    }
+
+#if defined(NPRPC_ROUTER_REUSEPORT_BPF_ENABLED) && defined(SO_ATTACH_REUSEPORT_EBPF)
+    if (reuseport_bpf) reuseport_bpf->print_metrics(num_workers);
+#endif
+
     return 0;
 }

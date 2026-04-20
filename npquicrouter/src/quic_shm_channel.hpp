@@ -97,12 +97,18 @@ static constexpr size_t kShmEgressRingSize  = 32 * 1024 * 1024;
 class ShmIngressWriter
 {
 public:
-  explicit ShmIngressWriter(const std::string& channel_name)
+  explicit ShmIngressWriter(const std::string& channel_name,
+                            bool create_ring = true)
       : ring_name_(nprpc::impl::make_shm_name(channel_name, "c2s"))
   {
-    nprpc::impl::LockFreeRingBuffer::remove(ring_name_);
-    ring_ = nprpc::impl::LockFreeRingBuffer::create(ring_name_,
-                                                    kShmIngressRingSize);
+    if (create_ring) {
+      nprpc::impl::LockFreeRingBuffer::remove(ring_name_);
+      ring_ = nprpc::impl::LockFreeRingBuffer::create(ring_name_,
+                                                      kShmIngressRingSize);
+    } else {
+      // Secondary producer: open the ring already created by the primary.
+      ring_ = nprpc::impl::LockFreeRingBuffer::open(ring_name_);
+    }
   }
 
   ShmIngressWriter(const ShmIngressWriter&) = delete;

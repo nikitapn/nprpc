@@ -12,6 +12,20 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   if(NOT TARGET Boost::headers AND TARGET Boost::boost)
     add_library(Boost::headers ALIAS Boost::boost)
   endif()
+
+  # BPF support for SO_REUSEPORT multi-worker routing (standalone build).
+  if(UNIX AND NOT WIN32)
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+      pkg_check_modules(libbpf QUIET IMPORTED_TARGET libbpf)
+    endif()
+    if(NOT CLANG_EXECUTABLE)
+      find_program(CLANG_EXECUTABLE NAMES clang)
+    endif()
+    if(NOT XXD_EXECUTABLE)
+      find_program(XXD_EXECUTABLE NAMES xxd)
+    endif()
+  endif()
 endif()
 
 # ── LockFreeRingBuffer / logging sources ─────────────────────────────────────
@@ -63,4 +77,64 @@ if(UNIX)
   target_compile_options(npquicrouter PRIVATE
     -Wall -Wextra -fno-omit-frame-pointer
   )
+endif()
+
+# ── SO_REUSEPORT eBPF multi-worker routing (optional) ────────────────────────
+# Requires: clang (to compile the BPF C source), xxd (to embed the object as
+# a C header), and libbpf (runtime BPF loader used by npquicrouter).
+if(UNIX AND NOT WIN32)
+  # In parent-project builds the find_program/pkg_check calls were already
+  # done in the root CMakeLists.  In standalone builds they are done above.
+  if(TARGET PkgConfig::libbpf AND CLANG_EXECUTABLE AND XXD_EXECUTABLE)
+    set(NPRPC_ROUTER_REUSEPORT_BPF_OBJECT
+      ${CMAKE_CURRENT_BINARY_DIR}/generated/quic_reuseport_router.bpf.o)
+    set(NPRPC_ROUTER_REUSEPORT_BPF_HEADER
+      ${CMAKE_CURRENT_BINARY_DIR}/generated/quic_reuseport_router_bpf.inc)
+
+    add_custom_command(
+      OUTPUT
+        ${NPRPC_ROUTER_REUSEPORT_BPF_OBJECT}
+        ${NPRPC_ROUTER_REUSEPORT_BPF_HEADER}
+      COMMAND ${CMAKE_COMMAND} -E make_directory
+        ${CMAKE_CURRENT_BINARY_DIR}/generated
+      COMMAND ${CLANG_EXECUTABLE}
+        -target bpf
+        -O2
+        -g
+        -c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/quic_reuseport_router.bpf.c
+        -o ${NPRPC_ROUTER_REUSEPORT_BPF_OBJECT}
+      COMMAND ${XXD_EXECUTABLE}
+        -i
+        -n nprpc_quic_reuseport_router_bpf_obj
+        ${NPRPC_ROUTER_REUSEPORT_BPF_OBJECT}
+        ${NPRPC_ROUTER_REUSEPORT_BPF_HEADER}
+      DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/quic_reuseport_router.bpf.c
+      COMMENT "Compiling npquicrouter QUIC reuseport eBPF program"
+      VERBATIM
+    )
+
+    add_custom_target(npquicrouter_reuseport_bpf_gen
+      DEPENDS
+        ${NPRPC_ROUTER_REUSEPORT_BPF_OBJECT}
+        ${NPRPC_ROUTER_REUSEPORT_BPF_HEADER}
+    )
+
+    add_dependencies(npquicrouter npquicrouter_reuseport_bpf_gen)
+
+    target_include_directories(npquicrouter PRIVATE
+      ${CMAKE_CURRENT_BINARY_DIR}/generated
+    )
+
+    target_link_libraries(npquicrouter PRIVATE PkgConfig::libbpf)
+
+    target_compile_definitions(npquicrouter PRIVATE
+      NPRPC_ROUTER_REUSEPORT_BPF_ENABLED=1
+    )
+
+    message(STATUS "npquicrouter: SO_REUSEPORT eBPF multi-worker routing enabled")
+  else()
+    message(STATUS "npquicrouter: SO_REUSEPORT eBPF disabled (clang, xxd, or libbpf not found)")
+  endif()
 endif()
