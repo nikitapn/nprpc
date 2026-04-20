@@ -40,6 +40,7 @@
 #  include <bpf/bpf.h>
 #  include <bpf/libbpf.h>
 # endif
+# include <netinet/in.h>
 # include <netinet/udp.h>
 # include <sys/socket.h>
 # include <sys/uio.h>
@@ -159,6 +160,21 @@ struct ShmEgressFrame {
 
 static_assert(sizeof(ShmEgressFrame) == 36,
               "ShmEgressFrame size mismatch — update quic_shm_channel.hpp");
+
+// SHM ingress frame header (matches ShmIngressFrame in quic_shm_channel.hpp).
+// npquicrouter writes the real client endpoint + raw datagram here.
+// Http3Server reads these via ingress_loop() and calls handle_packet().
+#pragma pack(push, 1)
+struct ShmIngressFrame {
+  uint32_t payload_len;
+  uint8_t  ep_len;
+  uint8_t  _pad[3];
+  uint8_t  ep_storage[28];
+};
+#pragma pack(pop)
+
+static_assert(sizeof(ShmIngressFrame) == 36,
+              "ShmIngressFrame size mismatch — update quic_shm_channel.hpp");
 
 } // namespace
 
@@ -1312,6 +1328,8 @@ private:
   void on_connection_accepted(const boost::asio::ip::udp::endpoint& remote_ep);
   void do_send();
   void do_receive();
+  void ingress_loop();
+  static boost::asio::ip::udp::endpoint decode_ingress_ep(const ShmIngressFrame& hdr);
   void handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
                      const uint8_t* data,
                      size_t len);
@@ -1379,6 +1397,15 @@ private:
   // sendmsg(), so that npquicrouter can forward them as a single
   // sendmsg(GSO) batch to the QUIC client.
   std::unique_ptr<nprpc::impl::LockFreeRingBuffer> egress_ring_;
+
+  // Optional SHM ingress ring (reader side, opened from npquicrouter's SHM).
+  // When present, a background thread drains the c2s ring and posts each
+  // datagram to ioc_ — replacing async_receive_from on the UDP socket.
+  // The real client endpoint is carried in every ShmIngressFrame so
+  // Http3Connection::remote_ep_ always holds the true client address.
+  std::unique_ptr<nprpc::impl::LockFreeRingBuffer> ingress_ring_;
+  std::thread                                      ingress_thread_;
+  std::atomic<bool>                                ingress_running_{false};
 };
 
 //==============================================================================
@@ -4178,22 +4205,26 @@ bool Http3Server::start()
   NPRPC_HTTP3_TRACE("Server listening on port {} (nghttp3/ngtcp2 backend)",
                     port_);
 
-  // Open SHM egress ring created by npquicrouter (if configured).
+  // Open SHM rings created by npquicrouter (if configured).
   if (!g_cfg.http3_shm_egress_channel.empty()) {
-    const auto ring_name =
+    const auto egress_name =
         nprpc::impl::make_shm_name(g_cfg.http3_shm_egress_channel, "s2c");
+    const auto ingress_name =
+        nprpc::impl::make_shm_name(g_cfg.http3_shm_egress_channel, "c2s");
     // Retry a few times — npquicrouter may start slightly after nprpc.
     for (int attempt = 0; attempt < 50; ++attempt) {
       try {
-        egress_ring_ = nprpc::impl::LockFreeRingBuffer::open(ring_name);
-        NPRPC_LOG_INFO("Http3Server: opened SHM egress ring '{}'", ring_name);
+        egress_ring_  = nprpc::impl::LockFreeRingBuffer::open(egress_name);
+        ingress_ring_ = nprpc::impl::LockFreeRingBuffer::open(ingress_name);
+        NPRPC_LOG_INFO("Http3Server: opened SHM egress '{}' ingress '{}'",
+                       egress_name, ingress_name);
         break;
       } catch (...) {
         if (attempt == 49) {
           NPRPC_LOG_WARN(
-              "Http3Server: SHM egress ring '{}' not found after retries — "
-              "falling back to direct sendmsg",
-              ring_name);
+              "Http3Server: SHM rings not found after retries — "
+              "falling back to direct sendmsg / UDP receive",
+              egress_name);
         } else {
           struct timespec ts = {0, 100'000'000}; // 100 ms
           nanosleep(&ts, nullptr);
@@ -4202,8 +4233,14 @@ bool Http3Server::start()
     }
   }
 
-  // Start receiving
-  do_receive();
+  if (ingress_ring_) {
+    // SHM ingress mode: background thread feeds packets to ioc_.
+    ingress_running_.store(true, std::memory_order_release);
+    ingress_thread_ = std::thread(&Http3Server::ingress_loop, this);
+  } else {
+    // UDP ingress mode: standard async_receive_from loop.
+    do_receive();
+  }
 
   return true;
 }
@@ -4212,6 +4249,11 @@ void Http3Server::stop()
 {
   if (!running_.exchange(false, std::memory_order_acq_rel)) {
     return;
+  }
+
+  // Stop the SHM ingress reader thread before closing the socket.
+  if (ingress_running_.exchange(false, std::memory_order_acq_rel)) {
+    if (ingress_thread_.joinable()) ingress_thread_.join();
   }
 
   // Graceful shutdown: send HTTP/3 GOAWAY to every open connection so clients
@@ -4789,6 +4831,66 @@ void Http3Server::do_receive()
           do_receive();
         }
       });
+}
+
+// static
+boost::asio::ip::udp::endpoint
+Http3Server::decode_ingress_ep(const ShmIngressFrame& hdr)
+{
+  namespace ip = boost::asio::ip;
+  if (hdr.ep_len == sizeof(sockaddr_in)) {
+    sockaddr_in sin{};
+    std::memcpy(&sin, hdr.ep_storage, sizeof(sin));
+    return ip::udp::endpoint(
+        ip::address_v4(ntohl(sin.sin_addr.s_addr)),
+        ntohs(sin.sin_port));
+  } else {
+    sockaddr_in6 sin6{};
+    std::memcpy(&sin6, hdr.ep_storage, sizeof(sin6));
+    ip::address_v6::bytes_type bytes{};
+    std::memcpy(bytes.data(), sin6.sin6_addr.s6_addr, 16);
+    return ip::udp::endpoint(
+        ip::address_v6(bytes, sin6.sin6_scope_id),
+        ntohs(sin6.sin6_port));
+  }
+}
+
+void Http3Server::ingress_loop()
+{
+  while (ingress_running_.load(std::memory_order_acquire)) {
+    auto view = ingress_ring_->try_read_view();
+    if (!view) {
+      struct timespec ts = {0, 50'000}; // 50 µs
+      nanosleep(&ts, nullptr);
+      continue;
+    }
+
+    if (view.size < sizeof(ShmIngressFrame)) {
+      ingress_ring_->commit_read(view);
+      continue;
+    }
+
+    ShmIngressFrame hdr{};
+    std::memcpy(&hdr, view.data, sizeof(hdr));
+
+    if (view.size < sizeof(ShmIngressFrame) + hdr.payload_len ||
+        hdr.ep_len == 0 || hdr.ep_len > sizeof(hdr.ep_storage)) {
+      ingress_ring_->commit_read(view);
+      continue;
+    }
+
+    // Copy payload before releasing the ring slot.
+    std::vector<uint8_t> pkt(view.data + sizeof(ShmIngressFrame),
+                             view.data + sizeof(ShmIngressFrame) + hdr.payload_len);
+    const auto ep = decode_ingress_ep(hdr);
+    ingress_ring_->commit_read(view);
+
+    // Post to the ioc_ thread so handle_packet runs with proper thread safety.
+    boost::asio::post(ioc_, [this, ep, pkt = std::move(pkt)]() {
+      if (!running_.load(std::memory_order_acquire)) return;
+      handle_packet(ep, pkt.data(), pkt.size());
+    });
+  }
 }
 
 void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,

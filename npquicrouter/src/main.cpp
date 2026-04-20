@@ -492,22 +492,37 @@ try_assemble_sni(const std::map<uint64_t, std::vector<uint8_t>>& frags)
 }
 
 // One per active QUIC client-→-backend mapping.
+//
+// SHM mode (shm_ingress_ is set in UdpRouter):
+//   Packets are written directly to the c2s SHM ring.  No backend_sock
+//   is created; back_buf and backend_port are unused.
+//
+// UDP mode (shm_ingress_ is null):
+//   A per-session ephemeral UDP socket forwards packets to the backend.
 struct UdpSession {
     udp::endpoint   client_ep;
     udp::endpoint   backend_ep;
-    udp::socket     backend_sock;   // unique ephemeral port → backend
-    uint16_t        backend_port = 0; // backend_sock local port (set after connect)
+    // UDP-mode only — null in SHM mode.
+    std::unique_ptr<udp::socket> backend_sock;
+    uint16_t        backend_port = 0;
     std::chrono::steady_clock::time_point last_seen;
-
-    // Receive buffer for backend → client direction
     std::array<uint8_t, 65536> back_buf{};
 
+    // SHM mode: only client/backend endpoints are tracked.
+    UdpSession(udp::endpoint cep, udp::endpoint bep)
+        : client_ep(std::move(cep))
+        , backend_ep(std::move(bep))
+        , last_seen(std::chrono::steady_clock::now())
+    {}
+
+    // UDP mode: also create an ephemeral backend socket.
     UdpSession(asio::io_context& ioc,
                udp::endpoint cep,
                udp::endpoint bep)
         : client_ep(std::move(cep))
         , backend_ep(std::move(bep))
-        , backend_sock(ioc, udp::endpoint(udp::v4(), 0)) // ephemeral port
+        , backend_sock(std::make_unique<udp::socket>(
+              ioc, udp::endpoint(udp::v4(), 0)))
         , last_seen(std::chrono::steady_clock::now())
     {}
 };
@@ -543,12 +558,12 @@ class UdpRouter {
 
     asio::steady_timer gc_timer_;
 
-    // SHM egress channel — present when cfg.shm_egress_channel is non-empty.
-    // Owns the ring buffer (creator side) and drains it in a background thread,
-    // calling sendmsg(GSO) directly to QUIC clients without breaking the batch.
-    // port_map_ must be created before shm_egress_ (it's passed in ctor).
-    std::shared_ptr<PortToClientMap> port_map_;
-    std::unique_ptr<ShmEgressReader> shm_egress_;
+    // SHM channel (present when cfg.shm_egress_channel is non-empty):
+    //   shm_ingress_  — c2s ring, writes incoming client packets to Http3Server.
+    //   shm_egress_   — s2c ring, reads packets from Http3Server and sendmsg to client.
+    // When the channel is empty, per-session UDP backend_sock is used instead.
+    std::unique_ptr<ShmIngressWriter> shm_ingress_;
+    std::unique_ptr<ShmEgressReader>  shm_egress_;
 
 public:
     UdpRouter(asio::io_context& ioc, const Config& cfg, const RouteTable& rt)
@@ -560,21 +575,19 @@ public:
         , gc_timer_(ioc)
     {
         if (!cfg.shm_egress_channel.empty()) {
-            port_map_ = std::make_shared<PortToClientMap>();
-            shm_egress_ = std::make_unique<ShmEgressReader>(
-                cfg.shm_egress_channel,
-                listen_sock_.native_handle(),
-                port_map_);
+            shm_ingress_ = std::make_unique<ShmIngressWriter>(cfg.shm_egress_channel);
+            shm_egress_  = std::make_unique<ShmEgressReader>(
+                cfg.shm_egress_channel, listen_sock_.native_handle());
         }
     }
 
     void start() {
         recv();
         schedule_gc();
-        if (shm_egress_) {
+        if (shm_ingress_) {
             shm_egress_->start();
-            std::clog << "  SHM egress channel: "
-                      << shm_egress_->ring_name() << "\n";
+            std::clog << "  SHM ingress channel: " << shm_ingress_->ring_name() << "\n";
+            std::clog << "  SHM egress  channel: " << shm_egress_->ring_name()  << "\n";
         }
     }
 
@@ -604,11 +617,20 @@ private:
         }
 
         if (it != sessions_.end()) {
-            // Existing session — forward without decryption
+            // Existing session — forward to backend.
             it->second->last_seen = std::chrono::steady_clock::now();
-            it->second->backend_sock.async_send(
-                asio::buffer(datagram.data(), datagram.size()),
-                [](boost::system::error_code, size_t) {});
+            if (shm_ingress_) {
+                // SHM mode: write to ingress ring with real client endpoint.
+                const auto ep_data = sender_ep_.data();
+                shm_ingress_->write_packet(
+                    static_cast<const sockaddr*>(static_cast<const void*>(ep_data)),
+                    static_cast<socklen_t>(sender_ep_.size()),
+                    datagram.data(), datagram.size());
+            } else {
+                it->second->backend_sock->async_send(
+                    asio::buffer(datagram.data(), datagram.size()),
+                    [](boost::system::error_code, size_t) {});
+            }
             return;
         }
 
@@ -676,39 +698,45 @@ private:
         std::clog << "[UDP] SNI='" << sni << "' → " << *ep << "\n";
 
         // Create the session and replay all queued packets.
-        auto sess = std::make_shared<UdpSession>(ioc_, pend.client_ep, *ep);
-        sess->backend_sock.connect(*ep);
-        // Capture the ephemeral local port used by backend_sock.
-        // Http3Server will see this as the client address — we need it
-        // to translate SHM egress frames back to the real client endpoint.
-        sess->backend_port = sess->backend_sock.local_endpoint().port();
-        std::clog << "[UDP] Session backend_port=" << sess->backend_port
-                  << " client=" << sess->client_ep << "\n";
-        if (port_map_) {
-            const auto& cep = sess->client_ep;
-            const auto ep_data = cep.data();
-            port_map_->insert(sess->backend_port,
-                              static_cast<const sockaddr*>(
-                                  static_cast<const void*>(ep_data)),
-                              static_cast<socklen_t>(cep.size()));
+        std::shared_ptr<UdpSession> sess;
+        if (shm_ingress_) {
+            // SHM mode: no backend socket needed.
+            sess = std::make_shared<UdpSession>(pend.client_ep, *ep);
+        } else {
+            // UDP mode: create ephemeral socket and connect to backend.
+            sess = std::make_shared<UdpSession>(ioc_, pend.client_ep, *ep);
+            sess->backend_sock->connect(*ep);
+            sess->backend_port = sess->backend_sock->local_endpoint().port();
+            std::clog << "[UDP] Session backend_port=" << sess->backend_port
+                      << " client=" << sess->client_ep << "\n";
         }
         sessions_.emplace(pend.client_ep, sess);
 
         auto queued = std::move(pend.queued_pkts);
         pending_.erase(route_dcid_key);
 
-        for (auto& qpkt : queued) {
-            auto buf = std::make_shared<std::vector<uint8_t>>(std::move(qpkt));
-            sess->backend_sock.async_send(
-                asio::buffer(*buf),
-                [buf](boost::system::error_code, size_t) {});
+        if (shm_ingress_) {
+            // Write all queued packets to the ingress ring.
+            const auto& cep      = sess->client_ep;
+            const auto  ep_data  = cep.data();
+            const auto  ep_sa    = static_cast<const sockaddr*>(
+                static_cast<const void*>(ep_data));
+            const auto  ep_len   = static_cast<socklen_t>(cep.size());
+            for (auto& qpkt : queued)
+                shm_ingress_->write_packet(ep_sa, ep_len, qpkt.data(), qpkt.size());
+        } else {
+            for (auto& qpkt : queued) {
+                auto buf = std::make_shared<std::vector<uint8_t>>(std::move(qpkt));
+                sess->backend_sock->async_send(
+                    asio::buffer(*buf),
+                    [buf](boost::system::error_code, size_t) {});
+            }
+            recv_from_backend(sess);
         }
-
-        recv_from_backend(sess);
     }
 
     void recv_from_backend(std::shared_ptr<UdpSession> sess) {
-        sess->backend_sock.async_receive(
+        sess->backend_sock->async_receive(
             asio::buffer(sess->back_buf),
             [this, sess](boost::system::error_code ec, size_t n) {
                 if (ec) return; // session torn down
@@ -728,13 +756,10 @@ private:
             const auto now     = std::chrono::steady_clock::now();
             const auto timeout = std::chrono::seconds(timeout_sec_);
             for (auto it = sessions_.begin(); it != sessions_.end(); ) {
-                if (now - it->second->last_seen > timeout) {
-                    if (port_map_ && it->second->backend_port != 0)
-                        port_map_->erase(it->second->backend_port);
+                if (now - it->second->last_seen > timeout)
                     it = sessions_.erase(it);
-                } else {
+                else
                     ++it;
-                }
             }
             // Evict stale pending reassembly entries (typically < 5 s old)
             for (auto it = pending_.begin(); it != pending_.end(); ) {

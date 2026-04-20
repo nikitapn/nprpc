@@ -1,24 +1,28 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 //
-// SHM-based QUIC egress channel.
+// SHM-based QUIC bidirectional channel between npquicrouter and Http3Server.
 //
-// Http3Server (backend) writes ShmEgressFrame entries to the ring buffer.
-// ShmEgressReader (npquicrouter) reads them and calls sendmsg(GSO) to send
-// QUIC packets to the actual UDP client — restoring the GSO batch that would
-// otherwise be broken by the double-UDP-hop.
+// Two rings per channel:
+//   c2s  (client→server / ingress):  npquicrouter writes, Http3Server reads.
+//   s2c  (server→client / egress):   Http3Server writes, npquicrouter reads.
 //
-// Frame layout (header followed by payload_len bytes):
+// With both rings active, no per-session UDP socket is needed between the
+// router and the backend: the real client endpoint is carried verbatim inside
+// each ShmIngressFrame, so Http3Server always sees the true remote address in
+// remote_ep_.  Egress frames therefore also carry the real client endpoint,
+// letting ShmEgressReader call sendmsg() directly — no port translation.
 //
-//   [ShmEgressFrame header - 36 bytes]
-//   [payload bytes]
+// Frame layout for both directions:
+//   [ShmIngressFrame / ShmEgressFrame header — 36 bytes]
+//   [payload_len bytes of QUIC data]
 //
-// Ring buffer ownership: npquicrouter creates (creator=true), Http3Server
-// opens (creator=false). The ring is cleaned up when npquicrouter exits.
+// Ring ownership: npquicrouter creates both rings; Http3Server opens them.
+// Both rings are removed on npquicrouter startup to clear stale state.
 //
 // SHM name convention:
+//   make_shm_name(channel_name, "c2s") → /nprpc_<channel_name>_c2s
 //   make_shm_name(channel_name, "s2c") → /nprpc_<channel_name>_s2c
-//   e.g. "quic_edge" → /nprpc_quic_edge_s2c
 
 #pragma once
 
@@ -42,15 +46,29 @@
 #include <cerrno>
 #include <cstring>       // strerror
 
-#include <shared_mutex>
-#include <unordered_map>
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Wire format
+// Wire format (shared between both directions)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Header that precedes the payload bytes inside each ring buffer message.
-// Written by Http3Server, read by ShmEgressReader.
+// Ingress frame (c2s): written by npquicrouter, read by Http3Server.
+// ep_storage carries the REAL client sockaddr so Http3Server uses it
+// directly as remote_ep_ — no port translation needed.
+#pragma pack(push, 1)
+struct ShmIngressFrame {
+  uint32_t payload_len;    // Total bytes of QUIC payload that follow.
+  uint8_t  ep_len;         // Length of the sockaddr in ep_storage.
+  uint8_t  _pad[3];        // Reserved, must be 0.
+  uint8_t  ep_storage[28]; // sockaddr_in (16 B) or sockaddr_in6 (28 B).
+};
+#pragma pack(pop)
+
+static_assert(sizeof(ShmIngressFrame) == 36,
+              "ShmIngressFrame layout changed — update Http3Server reader");
+
+// Egress frame (s2c): written by Http3Server, read by ShmEgressReader.
+// Because Http3Server now sees the real client endpoint via ShmIngressFrame,
+// remote_ep_ (and thus ep_storage here) always holds the real client address.
+// ShmEgressReader uses it directly for sendmsg() — no lookup required.
 #pragma pack(push, 1)
 struct ShmEgressFrame {
   uint32_t payload_len;      // Total bytes of QUIC payload that follow.
@@ -64,107 +82,85 @@ struct ShmEgressFrame {
 static_assert(sizeof(ShmEgressFrame) == 36,
               "ShmEgressFrame layout changed — update Http3Server writer");
 
-// Total size of a ring message for a given payload.
-inline constexpr size_t shm_egress_msg_size(size_t payload_len)
-{
-  return sizeof(ShmEgressFrame) + payload_len;
-}
-
-// Default egress ring buffer size: 32 MB — enough for many GSO bursts in
-// flight simultaneously.
-static constexpr size_t kShmEgressRingSize = 32 * 1024 * 1024;
+// Default ring buffer sizes.
+static constexpr size_t kShmIngressRingSize = 32 * 1024 * 1024;
+static constexpr size_t kShmEgressRingSize  = 32 * 1024 * 1024;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PortToClientMap
+// ShmIngressWriter  (npquicrouter side, c2s ring)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Http3Server sees each QUIC client as 127.0.0.1:<backend_sock_ephemeral_port>.
-// The SHM egress frame therefore contains that loopback address as the
-// destination.  This map translates backend_sock local port → real client
-// sockaddr so that ShmEgressReader can call sendmsg with the correct dest.
-//
-// Lifecycle: populated by UdpRouter (Asio thread), read by ShmEgressReader
-// (background thread) — protected by a shared_mutex.
+// Owns the ingress ring buffer (creator side).  UdpRouter calls write_packet()
+// for every UDP datagram received from a QUIC client.  Http3Server opens the
+// ring from the other side and feeds packets to its QUIC engine.
 
-class PortToClientMap
+class ShmIngressWriter
 {
 public:
-  void insert(uint16_t backend_port,
-              const sockaddr* client_addr,
-              socklen_t       client_addrlen)
+  explicit ShmIngressWriter(const std::string& channel_name)
+      : ring_name_(nprpc::impl::make_shm_name(channel_name, "c2s"))
   {
-    Entry e{};
-    e.addrlen = client_addrlen;
-    std::memcpy(&e.addr, client_addr, client_addrlen);
-    std::unique_lock lock(mu_);
-    map_[backend_port] = e;
+    nprpc::impl::LockFreeRingBuffer::remove(ring_name_);
+    ring_ = nprpc::impl::LockFreeRingBuffer::create(ring_name_,
+                                                    kShmIngressRingSize);
   }
 
-  void erase(uint16_t backend_port)
-  {
-    std::unique_lock lock(mu_);
-    map_.erase(backend_port);
-  }
+  ShmIngressWriter(const ShmIngressWriter&) = delete;
+  ShmIngressWriter& operator=(const ShmIngressWriter&) = delete;
 
-  // Returns true and fills addr_out/len_out when found.
-  bool lookup(uint16_t        backend_port,
-              sockaddr_storage& addr_out,
-              socklen_t&        len_out) const
+  // Write one UDP datagram with its real client sockaddr to the ring.
+  // Returns false (and drops the datagram) if the ring is full.
+  bool write_packet(const sockaddr* client_addr,
+                    socklen_t       client_addrlen,
+                    const uint8_t*  data,
+                    size_t          len)
   {
-    std::shared_lock lock(mu_);
-    auto it = map_.find(backend_port);
-    if (it == map_.end()) return false;
-    std::memcpy(&addr_out, &it->second.addr, it->second.addrlen);
-    len_out = it->second.addrlen;
+    if (client_addrlen > sizeof(ShmIngressFrame::ep_storage)) return false;
+    const size_t msg_size = sizeof(ShmIngressFrame) + len;
+    auto rsv = ring_->try_reserve_write(msg_size);
+    if (!rsv) return false;
+    ShmIngressFrame hdr{};
+    hdr.payload_len = static_cast<uint32_t>(len);
+    hdr.ep_len      = static_cast<uint8_t>(client_addrlen);
+    std::memcpy(hdr.ep_storage, client_addr, client_addrlen);
+    std::memcpy(rsv.data,                &hdr,  sizeof(hdr));
+    std::memcpy(rsv.data + sizeof(hdr),  data,  len);
+    ring_->commit_write(rsv, msg_size);
     return true;
   }
 
+  const std::string& ring_name() const noexcept { return ring_name_; }
+
 private:
-  struct Entry {
-    sockaddr_storage addr{};
-    socklen_t        addrlen = 0;
-  };
-  mutable std::shared_mutex                     mu_;
-  std::unordered_map<uint16_t, Entry>           map_;
+  std::string                                       ring_name_;
+  std::unique_ptr<nprpc::impl::LockFreeRingBuffer>  ring_;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ShmEgressReader
+// ShmEgressReader  (npquicrouter side, s2c ring)
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Owns the egress ring buffer (creator side) and drains it in a background
 // thread, forwarding each frame to the UDP client via sendmsg(GSO).
-//
-// Usage:
-//   ShmEgressReader reader("quic_edge", listen_sock_fd);
-//   reader.start();
-//   // ... run until shutdown ...
-//   // reader destructor calls stop() and joins the thread
+// Because Http3Server now sees the real client endpoint via ShmIngressFrame,
+// ep_storage in every egress frame already holds the real destination —
+// no port-to-client translation is needed.
 
 class ShmEgressReader
 {
 public:
   // @param channel_name  Config name, e.g. "quic_edge".
-  //                      Ring SHM name will be make_shm_name(channel_name,"s2c").
-  // @param send_sock_fd  The file descriptor of npquicrouter's listening UDP
-  //                      socket.  sendmsg is called on this fd.
-  // @param port_map      Shared port→client translation table populated by
-  //                      UdpRouter as sessions are created/destroyed.
-  ShmEgressReader(const std::string&               channel_name,
-                  int                              send_sock_fd,
-                  std::shared_ptr<PortToClientMap> port_map)
+  // @param send_sock_fd  npquicrouter's listening UDP socket fd.
+  ShmEgressReader(const std::string& channel_name, int send_sock_fd)
       : sock_fd_(send_sock_fd)
       , ring_name_(nprpc::impl::make_shm_name(channel_name, "s2c"))
-      , port_map_(std::move(port_map))
   {
-    // Remove any stale SHM from a previous crash before creating.
     nprpc::impl::LockFreeRingBuffer::remove(ring_name_);
     ring_ = nprpc::impl::LockFreeRingBuffer::create(ring_name_, kShmEgressRingSize);
   }
 
   ~ShmEgressReader() { stop(); }
 
-  // Non-copyable / non-movable (owns a thread and a raw fd reference).
   ShmEgressReader(const ShmEgressReader&) = delete;
   ShmEgressReader& operator=(const ShmEgressReader&) = delete;
 
@@ -180,7 +176,6 @@ public:
     if (thread_.joinable()) thread_.join();
   }
 
-  nprpc::impl::LockFreeRingBuffer& ring() noexcept { return *ring_; }
   const std::string& ring_name() const noexcept { return ring_name_; }
 
 private:
@@ -189,24 +184,19 @@ private:
     while (running_.load(std::memory_order_acquire)) {
       auto view = ring_->try_read_view();
       if (!view) {
-        // Ring is empty — yield briefly before polling again.
-        // A future version can use the ring's eventfd for blocking wait.
         struct timespec ts = {0, 50'000}; // 50 µs
         nanosleep(&ts, nullptr);
         continue;
       }
 
       if (view.size < sizeof(ShmEgressFrame)) {
-        // Corrupt frame — skip it.
         ring_->commit_read(view);
         continue;
       }
 
       ShmEgressFrame hdr;
       std::memcpy(&hdr, view.data, sizeof(hdr));
-
-      const uint8_t* payload = view.data + sizeof(ShmEgressFrame);
-      size_t payload_len = hdr.payload_len;
+      const size_t payload_len = hdr.payload_len;
 
       if (view.size < sizeof(ShmEgressFrame) + payload_len ||
           hdr.ep_len == 0 || hdr.ep_len > sizeof(hdr.ep_storage)) {
@@ -214,10 +204,7 @@ private:
         continue;
       }
 
-      std::cerr << "[SHM Egress] Sending " << payload_len
-                << " bytes to client (GSO segment size: " << hdr.gso_segment_size
-                << ")\n";
-
+      const uint8_t* payload = view.data + sizeof(ShmEgressFrame);
       send_frame(hdr, payload, payload_len);
       ring_->commit_read(view);
     }
@@ -227,30 +214,10 @@ private:
                   const uint8_t*        payload,
                   size_t                payload_len)
   {
-    // Http3Server's remote_ep_ is 127.0.0.1:<backend_sock_port>.
-    // We need to translate that to the real client endpoint using port_map_.
+    // ep_storage carries the real client endpoint written by Http3Server.
     sockaddr_storage dest_addr{};
-    socklen_t        dest_len = 0;
-
-    uint16_t backend_port = 0;
-    if (hdr.ep_len == sizeof(sockaddr_in)) {
-      const sockaddr_in* sin =
-          reinterpret_cast<const sockaddr_in*>(hdr.ep_storage);
-      backend_port = ntohs(sin->sin_port);
-    } else if (hdr.ep_len == sizeof(sockaddr_in6)) {
-      const sockaddr_in6* sin6 =
-          reinterpret_cast<const sockaddr_in6*>(hdr.ep_storage);
-      backend_port = ntohs(sin6->sin6_port);
-    } else {
-      std::cerr << "[SHM Egress] unknown ep_len=" << (int)hdr.ep_len << "\n";
-      return;
-    }
-
-    if (!port_map_->lookup(backend_port, dest_addr, dest_len)) {
-      std::cerr << "[SHM Egress] no client found for backend_port=" << backend_port
-                << " — session torn down?\n";
-      return;
-    }
+    std::memcpy(&dest_addr, hdr.ep_storage, hdr.ep_len);
+    const socklen_t dest_len = static_cast<socklen_t>(hdr.ep_len);
 
     iovec iov{};
     iov.iov_base = const_cast<uint8_t*>(payload);
@@ -279,7 +246,6 @@ private:
     const auto ret = ::sendmsg(sock_fd_, &msg, MSG_DONTWAIT);
     if (ret < 0) {
       const int err = errno;
-      // Format the resolved destination for the error message.
       char addr_buf[INET6_ADDRSTRLEN] = {};
       uint16_t dest_port = 0;
       if (dest_addr.ss_family == AF_INET) {
@@ -299,7 +265,6 @@ private:
 
   int                                               sock_fd_;
   std::string                                       ring_name_;
-  std::shared_ptr<PortToClientMap>                  port_map_;
   std::unique_ptr<nprpc::impl::LockFreeRingBuffer>  ring_;
   std::thread                                       thread_;
   std::atomic<bool>                                 running_{false};
