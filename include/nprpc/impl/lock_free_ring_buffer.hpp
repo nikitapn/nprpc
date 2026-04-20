@@ -129,6 +129,7 @@ public:
     const uint8_t* data; // Pointer to message data (after size header)
     size_t size;         // Message size in bytes
     size_t read_idx;     // Internal: next read position after this message
+    size_t slot_start;   // Internal: byte offset of [claimed_size] for this slot
     bool valid;          // true if read succeeded
 
     explicit operator bool() const { return valid; }

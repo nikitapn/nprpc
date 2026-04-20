@@ -567,10 +567,11 @@ LockFreeRingBuffer::ReadView LockFreeRingBuffer::try_read_view()
   header_->commit_idx.store(next_commit, std::memory_order_relaxed);
 
   ReadView result;
-  result.data      = data_region_ + data_start;
-  result.size      = actual_size;
-  result.read_idx  = next_commit;
-  result.valid     = true;
+  result.data       = data_region_ + data_start;
+  result.size       = actual_size;
+  result.read_idx   = next_commit;
+  result.slot_start = commit_idx;
+  result.valid      = true;
   return result;
 }
 
@@ -581,14 +582,25 @@ void LockFreeRingBuffer::commit_read(const ReadView& view)
     return;
   }
 
-  // size_t old_read = header_->read_idx.load(std::memory_order_acquire);
-  // size_t write = header_->write_idx.load(std::memory_order_acquire);
+  // Zero the actual_size field of the consumed slot BEFORE advancing read_idx.
+  // This prevents the ring-slot ABA reuse race:
+  //   1. Consumer release-zeroes actual_size at slot_start+4 (relaxed store is
+  //      enough here — the release on read_idx below provides the fence).
+  //   2. Consumer release-stores read_idx — any producer whose acquire-load of
+  //      read_idx synchronizes with this store will see actual_size == 0.
+  //   3. Producer claims the slot, writes claimed_size, writes data, then
+  //      release-stores actual_size != 0.
+  //   4. Consumer's spin (while actual_size == 0) correctly waits for step 3.
+  // Without this zeroing, actual_size retains the old value from the previous
+  // occupant and the consumer's spin exits prematurely — before claimed_size
+  // or data are written — producing corrupt reads.
+  auto* actual_slot = reinterpret_cast<std::atomic<uint32_t>*>(
+      data_region_ +
+      (view.slot_start + sizeof(uint32_t)) % header_->buffer_size);
+  actual_slot->store(0, std::memory_order_relaxed);
 
-  // std::cout << "[D] commit_read: old=" << old_read << " new=" <<
-  // view.read_idx
-  //           << " write=" << write << std::endl;
-
-  // Update read index with release semantics
+  // Now release read_idx — producers' acquire on read_idx synchronizes-with
+  // this and therefore observe the zero above.
   header_->read_idx.store(view.read_idx, std::memory_order_release);
 }
 
