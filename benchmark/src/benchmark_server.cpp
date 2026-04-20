@@ -32,6 +32,8 @@ public:
     } else if (nameserver_pid == 0) {
       // Child process - run the nameserver
       // Try to find npnameserver in the build directory
+      execl("/home/nikita/projects/nprpc/.build_release/npnameserver",
+            "npnameserver", nullptr);
       execl("/home/nikita/projects/nprpc/.build_relwith_debinfo/npnameserver",
             "npnameserver", nullptr);
       execl("/home/nikita/projects/nprpc/.build_debug/npnameserver",
@@ -97,23 +99,39 @@ public:
       const bool use_epoll = ::getenv("NPRPC_EPOLL") != nullptr;
       const bool use_uring  = ::getenv("NPRPC_URING")  != nullptr;
       const char* http_root_dir = ::getenv("NPRPC_HTTP_ROOT_DIR");
-      rpc = nprpc::RpcBuilder()
+      const char* shm_egress_env = ::getenv("NPRPC_BENCH_SHM_EGRESS");
+
+      auto parse_port = [](const char* env, uint16_t fallback) -> uint16_t {
+        if (env && *env) {
+          long v = std::strtol(env, nullptr, 10);
+          if (v > 0 && v < 65536) return static_cast<uint16_t>(v);
+        }
+        return fallback;
+      };
+      const uint16_t http_port = parse_port(::getenv("NPRPC_BENCH_HTTP_PORT"), 22223);
+      const uint16_t quic_port = parse_port(::getenv("NPRPC_BENCH_QUIC_PORT"), 22225);
+
+      auto builder = nprpc::RpcBuilder()
                 .set_log_level(nprpc::LogLevel::error)
                 .with_hostname("localhost")
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
                 .with_tcp(22222).with_epoll_if(use_epoll).with_uring_if(use_uring)
-                .with_quic(22225)
+                .with_quic(quic_port)
                   .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                        "/home/nikita/projects/nprpc/certs/out/localhost.key")
-                .with_http(22223)
+                .with_http(http_port)
                   .root_dir(http_root_dir && *http_root_dir
                         ? http_root_dir
                         : "/home/nikita/projects/nprpc/test/http")
                   .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                        "/home/nikita/projects/nprpc/certs/out/localhost.key")
                   .enable_http3()
-                  .http3_workers(8)
-                .build();
+                  .http3_workers(8);
+
+      if (shm_egress_env && *shm_egress_env)
+        builder.http3_shm_egress_channel(shm_egress_env);
+
+      rpc = builder.build();
 
       rpc->start_thread_pool(1);
 

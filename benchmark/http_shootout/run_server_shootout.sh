@@ -22,7 +22,14 @@ fi
 
 NPRPC_DO_NOT_START_SERVER="${NPRPC_DO_NOT_START_SERVER:-0}"
 NPRPC_HTTP_PORT="${NPRPC_HTTP_PORT:-22223}"
-NPRPC_QUIC_PORT="${NPRPC_QUIC_PORT:-22225}"
+
+# Router variant: npquicrouter listens on these public ports, forwards to
+# the backend on NPRPC_ROUTER_BACKEND_* ports via the SHM egress channel.
+NPRPC_ROUTER_HTTP_PORT="${NPRPC_ROUTER_HTTP_PORT:-22233}"
+NPRPC_ROUTER_BACKEND_HTTP_PORT="${NPRPC_ROUTER_BACKEND_HTTP_PORT:-22243}"
+NPRPC_ROUTER_NUM_WORKERS="${NPRPC_ROUTER_NUM_WORKERS:-4}"
+NPRPC_ROUTER_BIN="${NPRPC_ROUTER_BIN:-$BUILD_DIR/npquicrouter/npquicrouter}"
+NPRPC_ROUTER_SHM_CHANNEL="bench_quic_edge"
 NGINX_HTTP_PORT="${NGINX_HTTP_PORT:-28080}"
 NGINX_HTTPS_PORT="${NGINX_HTTPS_PORT:-28443}"
 CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-29080}"
@@ -35,6 +42,8 @@ OHA_BIN="${OHA_BIN:-oha}"
 H2LOAD_BIN="${H2LOAD_BIN:-$LOCAL_H2LOAD_BIN}"
 
 NPRPC_PID=""
+NPRPC_ROUTER_PID=""
+NPRPC_ROUTER_BACKEND_PID=""
 NGINX_PID=""
 CADDY_PID=""
 NGINX_CID=""
@@ -91,6 +100,14 @@ cleanup() {
   if [[ -n "$NPRPC_PID" ]] && kill -0 "$NPRPC_PID" 2>/dev/null; then
     kill -INT "$NPRPC_PID" 2>/dev/null || true
     wait "$NPRPC_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$NPRPC_ROUTER_PID" ]] && kill -0 "$NPRPC_ROUTER_PID" 2>/dev/null; then
+    kill -INT "$NPRPC_ROUTER_PID" 2>/dev/null || true
+    wait "$NPRPC_ROUTER_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$NPRPC_ROUTER_BACKEND_PID" ]] && kill -0 "$NPRPC_ROUTER_BACKEND_PID" 2>/dev/null; then
+    kill -INT "$NPRPC_ROUTER_BACKEND_PID" 2>/dev/null || true
+    wait "$NPRPC_ROUTER_BACKEND_PID" 2>/dev/null || true
   fi
   if [[ -n "$NGINX_PID" ]] && kill -0 "$NGINX_PID" 2>/dev/null; then
     kill -TERM "$NGINX_PID" 2>/dev/null || true
@@ -168,6 +185,32 @@ PY
 build_benchmark_server() {
   log "Building benchmark server"
   cmake --build "$BUILD_DIR" --target benchmark_server -j"$(nproc)"
+}
+
+build_router() {
+  log "Building npquicrouter"
+  cmake --build "$BUILD_DIR" --target npquicrouter -j"$(nproc)"
+}
+
+ensure_router_bpf_capabilities() {
+  local binary="$NPRPC_ROUTER_BIN"
+  require_cmd getcap
+  require_cmd setcap
+  if [[ ! -x "$binary" ]]; then
+    log "npquicrouter not found or not executable: $binary"
+    exit 1
+  fi
+  local current_caps
+  current_caps="$(getcap "$binary" 2>/dev/null || true)"
+  if [[ "$current_caps" == *"cap_net_admin"* && "$current_caps" == *"cap_bpf"* ]]; then
+    return 0
+  fi
+  log "Granting cap_net_admin,cap_bpf to npquicrouter for SO_REUSEPORT eBPF routing"
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    setcap cap_net_admin,cap_bpf+ep "$binary"
+  else
+    sudo setcap cap_net_admin,cap_bpf+ep "$binary"
+  fi
 }
 
 nginx_supports_http3() {
@@ -404,6 +447,102 @@ run_h2load() {
     > "$RESULTS_DIR/${name}.h2load.txt"
 }
 
+# ---------------------------------------------------------------------------
+# Router-variant helpers
+# ---------------------------------------------------------------------------
+
+# Write a temporary npquicrouter config that puts the router on
+# NPRPC_ROUTER_HTTP_PORT and proxies to the backend
+# on NPRPC_ROUTER_BACKEND_* via SHM.
+generate_router_config() {
+  cat > "$TMP_DIR/router.config.json" <<EOF
+{
+  "listen_address": "127.0.0.1",
+  "listen_tcp_port": ${NPRPC_ROUTER_HTTP_PORT},
+  "listen_udp_port": ${NPRPC_ROUTER_HTTP_PORT},
+  "shm_egress_channel": "${NPRPC_ROUTER_SHM_CHANNEL}",
+  "num_workers": ${NPRPC_ROUTER_NUM_WORKERS},
+  "routes": [
+    {
+      "sni": "localhost",
+      "tcp_backend": "127.0.0.1:${NPRPC_ROUTER_BACKEND_HTTP_PORT}",
+      "udp_backend": "127.0.0.1:${NPRPC_ROUTER_BACKEND_HTTP_PORT}"
+    }
+  ]
+}
+EOF
+}
+
+wait_for_router() {
+  require_cmd curl
+  local url="https://localhost:${NPRPC_ROUTER_HTTP_PORT}/1kb.bin"
+  for _ in $(seq 1 50); do
+    if curl -ksS --http1.1 "$url" -o /dev/null >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  log "npquicrouter did not become ready; see $TMP_DIR/router.log"
+  return 1
+}
+
+start_nprpc_via_router() {
+  ensure_router_bpf_capabilities
+  ensure_nprpc_bpf_capabilities
+  generate_router_config
+
+  killall -9 npquicrouter 2>/dev/null || true
+  sleep 0.1
+
+  log "Starting npquicrouter (workers=${NPRPC_ROUTER_NUM_WORKERS})"
+  (
+    cd "$ROOT_DIR"
+    exec "$NPRPC_ROUTER_BIN" "$TMP_DIR/router.config.json"
+  ) >"$TMP_DIR/router.log" 2>&1 &
+  NPRPC_ROUTER_PID=$!
+
+  # Give router a moment to create SHM rings before backend opens them
+  sleep 1
+
+  log "Starting NPRPC backend (router mode) on port (tcp/udp) ${NPRPC_ROUTER_BACKEND_HTTP_PORT}"
+  (
+    cd "$ROOT_DIR"
+    exec env \
+      "NPRPC_HTTP_ROOT_DIR=$WWW_DIR" \
+      "NPRPC_BENCH_ENABLE_HTTP3=1" \
+      "NPRPC_BENCH_HTTP_PORT=${NPRPC_ROUTER_BACKEND_HTTP_PORT}" \
+      "NPRPC_BENCH_SHM_EGRESS=${NPRPC_ROUTER_SHM_CHANNEL}" \
+      "$BUILD_DIR/benchmark/benchmark_server"
+  ) >"$TMP_DIR/nprpc_backend_router.log" 2>&1 &
+  NPRPC_ROUTER_BACKEND_PID=$!
+
+  sleep 1
+
+  wait_for_router
+  log "npquicrouter PID=$NPRPC_ROUTER_PID backend PID=$NPRPC_ROUTER_BACKEND_PID"
+}
+
+run_suite_with_router() {
+  local results_suffix="${1:-router}"
+  local orig_results_dir="$RESULTS_DIR"
+  RESULTS_DIR="$orig_results_dir/$results_suffix"
+  mkdir -p "$RESULTS_DIR"
+
+  prepare_assets
+  build_benchmark_server
+  build_router
+  start_nprpc_via_router
+
+  capture_environment_report
+
+  for size in "${PAYLOAD_SIZES[@]}"; do
+    run_h2load "nprpc-router-http3-${size}" "$BENCH_HOST" "$NPRPC_ROUTER_HTTP_PORT" "/${size}.bin"
+  done
+
+  log "Router-variant results written to $RESULTS_DIR"
+  RESULTS_DIR="$orig_results_dir"
+}
+
 capture_environment_report() {
   local report="$RESULTS_DIR/ENVIRONMENT.md"
   local resolved_nginx_mode="auto"
@@ -603,7 +742,7 @@ run_suite() {
 
 usage() {
   cat <<EOF
-Usage: $0 [prepare-assets|build|build-h2load|capture-environment|start-nprpc|run|view]
+Usage: $0 [prepare-assets|build|build-h2load|capture-environment|start-nprpc|run|run-router|compare|view]
 
 Commands:
   prepare-assets  Create shared static files for all servers.
@@ -612,6 +751,8 @@ Commands:
   capture-environment  Write ENVIRONMENT.md and refresh README.md in the results directory.
   start-nprpc     Start only the NPRPC benchmark server with HTTP/3 enabled.
   run             Run the full shootout suite against NPRPC, nginx, and Caddy.
+  run-router      Run HTTP/3 benchmark with nprpc behind npquicrouter (SHM + multi-worker eBPF).
+  compare         Run both 'run' and 'run-router' back to back then view results.
   view            Summarize result files in benchmark/http_shootout/results.
 
 Requirements:
@@ -623,6 +764,8 @@ Environment:
   - NGINX_MODE=auto|system|docker (default: auto)
   - CADDY_MODE=auto|system|docker (default: auto)
   - BENCH_HOST=localhost|127.0.0.1 (default: localhost)
+  - NPRPC_ROUTER_NUM_WORKERS=N (default: 4) router UDP worker threads
+  - NPRPC_ROUTER_BIN=path (default: BUILD_DIR/npquicrouter/npquicrouter)
 EOF
 }
 
@@ -648,6 +791,14 @@ case "${1:-run}" in
     ;;
   run)
     run_suite
+    ;;
+  run-router)
+    run_suite_with_router
+    ;;
+  compare)
+    run_suite
+    run_suite_with_router
+    python3 "$ROOT_DIR/benchmark/http_shootout/view_results.py" "$RESULTS_DIR"
     ;;
   view)
     python3 "$ROOT_DIR/benchmark/http_shootout/view_results.py" "$RESULTS_DIR"

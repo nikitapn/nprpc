@@ -34,12 +34,12 @@ void log_build_info_once()
 } // namespace
 
 NPRPC_API RpcBuilder::RpcBuilder()
-    : impl::RpcBuilderBase(cfg_)
+    : impl::RpcBuilderBase(std::make_shared<impl::BuildConfig>())
 {
   log_build_info_once();
 
   auto& uuid = impl::SharedUUID::instance().get();
-  memcpy(cfg_.uuid.data(), &uuid, 16);
+  memcpy(cfg_->uuid.data(), &uuid, 16);
 
   if (1) {
     std::string buf(36, '0');

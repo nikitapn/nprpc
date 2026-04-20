@@ -53,7 +53,7 @@ EOF
 
   scp "$OUT" "$DEST:/tmp/npquicrouter"
   ssh "$DEST" "sudo mv /tmp/npquicrouter /usr/local/bin/ && sudo mv /tmp/npquicrouter.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable npquicrouter"
-  # Allow binding port 443 without root
-  ssh "$DEST" "sudo setcap cap_net_bind_service+ep /usr/local/bin/npquicrouter"
+  # Allow binding port 443 without root and allow BPF
+  ssh "$DEST" "sudo setcap cap_net_bind_service,cap_bpf+ep /usr/local/bin/npquicrouter"
   echo "==> Done. Restart the service on the VPS."
 fi

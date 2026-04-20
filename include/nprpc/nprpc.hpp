@@ -379,33 +379,33 @@ class RpcBuilderTcp;
 class RpcBuilderBase
 {
 protected:
-  BuildConfig& cfg_;
-  RpcBuilderBase(impl::BuildConfig& cfg)
-      : cfg_(cfg) {};
+  std::shared_ptr<BuildConfig> cfg_;
+  RpcBuilderBase(std::shared_ptr<impl::BuildConfig> cfg)
+      : cfg_(std::move(cfg)) {};
 
 public:
   RpcBuilderBase& set_log_level(::nprpc::LogLevel level) noexcept
   {
-    cfg_.log_level = level;
+    cfg_->log_level = level;
     return *this;
   }
 
   RpcBuilderBase& with_hostname(std::string_view hostname) noexcept
   {
-    cfg_.hostname = hostname;
+    cfg_->hostname = hostname;
     return *this;
   }
 
   RpcBuilderBase&
   enable_ssl_client_self_signed_cert(std::string_view cert_path) noexcept
   {
-    cfg_.ssl_client_self_signed_cert_path = cert_path;
+    cfg_->ssl_client_self_signed_cert_path = cert_path;
     return *this;
   }
 
   RpcBuilderBase& disable_ssl_client_verification() noexcept
   {
-    cfg_.http_ssl_client_disable_verification = true;
+    cfg_->http_ssl_client_disable_verification = true;
     return *this;
   }
 
@@ -419,8 +419,8 @@ public:
 class RpcBuilderTcp : public RpcBuilderBase
 {
 public:
-  explicit RpcBuilderTcp(impl::BuildConfig& cfg)
-      : RpcBuilderBase(cfg)
+  explicit RpcBuilderTcp(std::shared_ptr<impl::BuildConfig> cfg)
+      : RpcBuilderBase(std::move(cfg))
   {
   }
 
@@ -429,28 +429,28 @@ public:
   /// Linux only.  Default: off.
   RpcBuilderTcp& with_epoll() noexcept
   {
-    cfg_.use_epoll_tcp = true;
+    cfg_->use_epoll_tcp = true;
     return *this;
   }
 
   /// Conditionally enable the epoll server.
   RpcBuilderTcp& with_epoll_if(bool condition) noexcept
   {
-    if (condition) cfg_.use_epoll_tcp = true;
+    if (condition) cfg_->use_epoll_tcp = true;
     return *this;
   }
 
   /// Use a raw io_uring I/O loop for incoming TCP connections (Linux only).
   RpcBuilderTcp& with_uring() noexcept
   {
-    cfg_.use_uring_tcp = true;
+    cfg_->use_uring_tcp = true;
     return *this;
   }
 
   /// Conditionally enable the io_uring server.
   RpcBuilderTcp& with_uring_if(bool condition) noexcept
   {
-    if (condition) cfg_.use_uring_tcp = true;
+    if (condition) cfg_->use_uring_tcp = true;
     return *this;
   }
 };
@@ -458,8 +458,8 @@ public:
 class RpcBuilderHttp : public RpcBuilderBase
 {
 public:
-  explicit RpcBuilderHttp(impl::BuildConfig& cfg)
-      : RpcBuilderBase(cfg)
+  explicit RpcBuilderHttp(std::shared_ptr<impl::BuildConfig> cfg)
+      : RpcBuilderBase(std::move(cfg))
   {
   }
 
@@ -467,67 +467,67 @@ public:
                       std::string_view key_file,
                       std::string_view dhparams_file = "") noexcept
   {
-    cfg_.http_ssl_enabled = true;
-    cfg_.http_cert_file = cert_file;
-    cfg_.http_key_file = key_file;
-    cfg_.http_dhparams_file = dhparams_file;
+    cfg_->http_ssl_enabled = true;
+    cfg_->http_cert_file = cert_file;
+    cfg_->http_key_file = key_file;
+    cfg_->http_dhparams_file = dhparams_file;
     return *this;
   }
 
   RpcBuilderHttp& enable_if_http3(bool condition) noexcept
   {
-    if (condition) cfg_.http3_enabled = true;
+    if (condition) cfg_->http3_enabled = true;
     return *this;
   }
 
   RpcBuilderHttp& enable_http3() noexcept
   {
-    cfg_.http3_enabled = true;
+    cfg_->http3_enabled = true;
     return *this;
   }
 
   RpcBuilderHttp& enable_ssr(std::string_view handler_dir = "") noexcept
   {
-    cfg_.ssr_enabled = true;
+    cfg_->ssr_enabled = true;
     if (!handler_dir.empty()) {
-      cfg_.ssr_handler_dir = handler_dir;
+      cfg_->ssr_handler_dir = handler_dir;
     }
     return *this;
   }
 
   RpcBuilderHttp& root_dir(std::string_view root_dir) noexcept
   {
-    cfg_.http_root_dir = root_dir;
+    cfg_->http_root_dir = root_dir;
     return *this;
   }
 
   RpcBuilderHttp& max_request_body_size(size_t bytes) noexcept
   {
-    cfg_.http_max_request_body_size = bytes;
+    cfg_->http_max_request_body_size = bytes;
     return *this;
   }
 
   RpcBuilderHttp& websocket_compression(bool enabled = true) noexcept
   {
-    cfg_.http_websocket_compression_enabled = enabled;
+    cfg_->http_websocket_compression_enabled = enabled;
     return *this;
   }
 
   RpcBuilderHttp& max_websocket_message_size(size_t bytes) noexcept
   {
-    cfg_.http_websocket_max_message_size = bytes;
+    cfg_->http_websocket_max_message_size = bytes;
     return *this;
   }
 
   RpcBuilderHttp& max_webtransport_message_size(size_t bytes) noexcept
   {
-    cfg_.http_webtransport_max_message_size = bytes;
+    cfg_->http_webtransport_max_message_size = bytes;
     return *this;
   }
 
   RpcBuilderHttp& max_websocket_sessions_per_ip(size_t count) noexcept
   {
-    cfg_.http_websocket_max_active_sessions_per_ip = count;
+    cfg_->http_websocket_max_active_sessions_per_ip = count;
     return *this;
   }
 
@@ -535,8 +535,8 @@ public:
       size_t rate,
       size_t burst = 0) noexcept
   {
-    cfg_.http_websocket_upgrades_per_ip_per_second = rate;
-    cfg_.http_websocket_upgrades_burst = burst;
+    cfg_->http_websocket_upgrades_per_ip_per_second = rate;
+    cfg_->http_websocket_upgrades_burst = burst;
     return *this;
   }
 
@@ -544,8 +544,8 @@ public:
       size_t rate,
       size_t burst = 0) noexcept
   {
-    cfg_.http_websocket_requests_per_session_per_second = rate;
-    cfg_.http_websocket_requests_burst = burst;
+    cfg_->http_websocket_requests_per_session_per_second = rate;
+    cfg_->http_websocket_requests_burst = burst;
     return *this;
   }
 
@@ -553,13 +553,13 @@ public:
   /// Pass 0 to auto-size from hardware concurrency; default: 4.
   RpcBuilderHttp& http3_workers(size_t count) noexcept
   {
-    cfg_.http3_worker_count = count;
+    cfg_->http3_worker_count = count;
     return *this;
   }
 
   RpcBuilderHttp& max_http3_connections_per_ip(size_t count) noexcept
   {
-    cfg_.http3_max_active_connections_per_ip = count;
+    cfg_->http3_max_active_connections_per_ip = count;
     return *this;
   }
 
@@ -567,8 +567,8 @@ public:
       size_t rate,
       size_t burst = 0) noexcept
   {
-    cfg_.http3_max_new_connections_per_ip_per_second = rate;
-    cfg_.http3_max_new_connections_burst = burst;
+    cfg_->http3_max_new_connections_per_ip_per_second = rate;
+    cfg_->http3_max_new_connections_burst = burst;
     return *this;
   }
 
@@ -576,8 +576,8 @@ public:
       size_t rate,
       size_t burst = 0) noexcept
   {
-    cfg_.http_rpc_max_requests_per_ip_per_second = rate;
-    cfg_.http_rpc_max_requests_burst = burst;
+    cfg_->http_rpc_max_requests_per_ip_per_second = rate;
+    cfg_->http_rpc_max_requests_burst = burst;
     return *this;
   }
 
@@ -585,8 +585,8 @@ public:
       size_t rate,
       size_t burst = 0) noexcept
   {
-    cfg_.http_webtransport_connects_per_ip_per_second = rate;
-    cfg_.http_webtransport_connects_burst = burst;
+    cfg_->http_webtransport_connects_per_ip_per_second = rate;
+    cfg_->http_webtransport_connects_burst = burst;
     return *this;
   }
 
@@ -594,8 +594,8 @@ public:
       size_t rate,
       size_t burst = 0) noexcept
   {
-    cfg_.http_webtransport_requests_per_session_per_second = rate;
-    cfg_.http_webtransport_requests_burst = burst;
+    cfg_->http_webtransport_requests_per_session_per_second = rate;
+    cfg_->http_webtransport_requests_burst = burst;
     return *this;
   }
 
@@ -603,19 +603,19 @@ public:
       size_t rate,
       size_t burst = 0) noexcept
   {
-    cfg_.http_webtransport_stream_opens_per_session_per_second = rate;
-    cfg_.http_webtransport_stream_opens_burst = burst;
+    cfg_->http_webtransport_stream_opens_per_session_per_second = rate;
+    cfg_->http_webtransport_stream_opens_burst = burst;
     return *this;
   }
 
   RpcBuilderHttp&
   allow_origins(std::initializer_list<std::string_view> origins) noexcept
   {
-    cfg_.http_allowed_origins.clear();
-    cfg_.http_allowed_origins.reserve(origins.size());
+    cfg_->http_allowed_origins.clear();
+    cfg_->http_allowed_origins.reserve(origins.size());
 
     for (auto origin : origins) {
-      cfg_.http_allowed_origins.emplace_back(origin);
+      cfg_->http_allowed_origins.emplace_back(origin);
     }
 
     return *this;
@@ -628,7 +628,7 @@ public:
   /// On non-Linux platforms this is a no-op; mtime polling handles staleness.
   RpcBuilderHttp& watch_files() noexcept
   {
-    cfg_.watch_files = true;
+    cfg_->watch_files = true;
     return *this;
   }
 
@@ -640,7 +640,7 @@ public:
   /// Must match the "shm_egress_channel" field in npquicrouter's config.json.
   RpcBuilderHttp& http3_shm_egress_channel(std::string_view channel) noexcept
   {
-    cfg_.http3_shm_egress_channel = channel;
+    cfg_->http3_shm_egress_channel = channel;
     return *this;
   }
 };
@@ -648,44 +648,46 @@ public:
 class RpcBuilderQuic : public RpcBuilderBase
 {
 public:
-  explicit RpcBuilderQuic(impl::BuildConfig& cfg)
-      : RpcBuilderBase(cfg)
+  explicit RpcBuilderQuic(std::shared_ptr<impl::BuildConfig> cfg)
+      : RpcBuilderBase(std::move(cfg))
   {
   }
 
   RpcBuilderQuic& ssl(std::string_view cert_file,
                       std::string_view key_file) noexcept
   {
-    cfg_.quic_cert_file = cert_file;
-    cfg_.quic_key_file = key_file;
+    cfg_->quic_cert_file = cert_file;
+    cfg_->quic_key_file = key_file;
     return *this;
   }
 };
 
 inline RpcBuilderTcp RpcBuilderBase::with_tcp(uint16_t port) noexcept
 {
-  cfg_.tcp_port = port;
+  cfg_->tcp_port = port;
   return RpcBuilderTcp(cfg_);
 }
 
 inline RpcBuilderHttp RpcBuilderBase::with_http(uint16_t port) noexcept
 {
-  cfg_.http_port = port;
+  cfg_->http_port = port;
   return RpcBuilderHttp(cfg_);
 }
 
 inline RpcBuilderQuic RpcBuilderBase::with_quic(uint16_t port) noexcept
 {
-  cfg_.quic_port = port;
+  cfg_->quic_port = port;
   return RpcBuilderQuic(cfg_);
 }
+// Note: with_* return sub-builders by value but they all share the same
+// shared_ptr<BuildConfig>, so calling build() on a stored sub-builder
+// (e.g. auto b = builder.with_http(...); b.http3_shm_egress_channel(...); b.build();)
+// is safe regardless of the original RpcBuilder's lifetime.
 
 } // namespace impl
 
 class RpcBuilder : public impl::RpcBuilderBase
 {
-  impl::BuildConfig cfg_;
-
 public:
   NPRPC_API RpcBuilder();
 };

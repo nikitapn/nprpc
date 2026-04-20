@@ -220,20 +220,18 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.http3_shm_egress_channel = config->http3_shm_egress_channel;
 
         // Build Rpc using the provided config
-        // Store config and use a pointer to it to avoid initialization order issues
-        auto stored_config = std::make_unique<nprpc::impl::BuildConfig>(std::move(cxxConfig));
-
         class RpcSwiftBuilder : public nprpc::impl::RpcBuilderBase {
         public:
-            explicit RpcSwiftBuilder(nprpc::impl::BuildConfig& cfg)
-                : nprpc::impl::RpcBuilderBase(cfg) {}
+            explicit RpcSwiftBuilder(std::shared_ptr<nprpc::impl::BuildConfig> cfg)
+                : nprpc::impl::RpcBuilderBase(std::move(cfg)) {}
 
             nprpc::Rpc* build() {
                 return nprpc::impl::RpcBuilderBase::build();
             }
         };
 
-        impl->rpc_instance = RpcSwiftBuilder(*stored_config).build();
+        impl->rpc_instance = RpcSwiftBuilder(
+            std::make_shared<nprpc::impl::BuildConfig>(std::move(cxxConfig))).build();
 
         initialized_ = true;
         return true;

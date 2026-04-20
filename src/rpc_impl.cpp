@@ -127,36 +127,36 @@ NPRPC_API Rpc* RpcBuilderBase::build()
     throw Exception("NPRPC has been previously initialized");
 
   // First check if the configuration is valid
-  if (cfg_.http_ssl_enabled) {
-    if (cfg_.http_cert_file.empty() || cfg_.http_key_file.empty()) {
+  if (cfg_->http_ssl_enabled) {
+    if (cfg_->http_cert_file.empty() || cfg_->http_key_file.empty()) {
       throw Exception(
           "HTTP SSL enabled but certificate or key file not specified");
     }
   }
 
-  if (cfg_.http3_enabled) {
-    if (cfg_.http_cert_file.empty() || cfg_.http_key_file.empty()) {
+  if (cfg_->http3_enabled) {
+    if (cfg_->http_cert_file.empty() || cfg_->http_key_file.empty()) {
       throw Exception(
           "HTTP/3 enabled but certificate or key file not specified");
     }
-    if (cfg_.http_root_dir.empty()) {
+    if (cfg_->http_root_dir.empty()) {
       throw Exception("HTTP/3 enabled but root directory not specified");
     }
   }
 
-  if (cfg_.http_port != 0 && cfg_.http_root_dir.empty()) {
+  if (cfg_->http_port != 0 && cfg_->http_root_dir.empty()) {
     NPRPC_LOG_INFO(
         "[nprpc][I] HTTP root directory not specified, only upgrading to "
         "WebSocket will be available.");
   }
 
-  if (cfg_.quic_port != 0) {
-    if (cfg_.quic_cert_file.empty() || cfg_.quic_key_file.empty()) {
+  if (cfg_->quic_port != 0) {
+    if (cfg_->quic_cert_file.empty() || cfg_->quic_key_file.empty()) {
       throw Exception("QUIC enabled but certificate or key file not specified");
     }
   }
 
-  if (cfg_.http_ssl_enabled) {
+  if (cfg_->http_ssl_enabled) {
     auto read_file_to_string = [](std::string const file) {
       std::ifstream is(file, std::ios_base::in);
       if (!is) {
@@ -167,8 +167,8 @@ NPRPC_API Rpc* RpcBuilderBase::build()
                          std::istreambuf_iterator<char>());
     };
 
-    std::string const cert = read_file_to_string(cfg_.http_cert_file);
-    std::string const key = read_file_to_string(cfg_.http_key_file);
+    std::string const cert = read_file_to_string(cfg_->http_cert_file);
+    std::string const key = read_file_to_string(cfg_->http_key_file);
 
     // ctx.set_password_callback(
     //     [](std::size_t, ssl::context_base::password_purpose) {
@@ -192,15 +192,15 @@ NPRPC_API Rpc* RpcBuilderBase::build()
         boost::asio::buffer(key.data(), key.size()),
         boost::asio::ssl::context::file_format::pem);
 
-    if (cfg_.http_dhparams_file.size() > 0) {
-      std::string const dh = read_file_to_string(cfg_.http_dhparams_file);
+    if (cfg_->http_dhparams_file.size() > 0) {
+      std::string const dh = read_file_to_string(cfg_->http_dhparams_file);
       g_cfg.ssl_context_server.use_tmp_dh(
           boost::asio::buffer(dh.data(), dh.size()));
     }
   }
 
   // Configure SSL client settings based on RpcBuilder options
-  if (cfg_.http_ssl_client_disable_verification) {
+  if (cfg_->http_ssl_client_disable_verification) {
     NPRPC_LOG_INFO("SSL client verification disabled (for testing only)");
     g_cfg.ssl_context_client.set_verify_mode(ssl::verify_none);
   } else {
@@ -219,12 +219,12 @@ NPRPC_API Rpc* RpcBuilderBase::build()
       NPRPC_LOG_INFO("SSL client verification paths set successfully.");
     }
 #endif // _WIN32
-    if (!cfg_.ssl_client_self_signed_cert_path.empty()) {
+    if (!cfg_->ssl_client_self_signed_cert_path.empty()) {
       try {
         g_cfg.ssl_context_client.load_verify_file(
-            cfg_.ssl_client_self_signed_cert_path);
+            cfg_->ssl_client_self_signed_cert_path);
         NPRPC_LOG_INFO("Loaded self-signed certificate for SSL client: {}",
-                       cfg_.ssl_client_self_signed_cert_path);
+                       cfg_->ssl_client_self_signed_cert_path);
       } catch (const std::exception& ex) {
         NPRPC_LOG_WARN("Warning: Failed to load self-signed certificate: {}",
                        ex.what());
@@ -234,62 +234,62 @@ NPRPC_API Rpc* RpcBuilderBase::build()
     g_cfg.ssl_context_client.set_verify_mode(ssl::verify_peer);
   }
 
-  nprpc::impl::get_logger()->set_level(cfg_.log_level);
+  nprpc::impl::get_logger()->set_level(cfg_->log_level);
 
   // Copy builder config to global config
-  g_cfg.hostname = cfg_.hostname;
-  g_cfg.listen_tcp_port = cfg_.tcp_port;
-  g_cfg.listen_http_port = cfg_.http_port;
-  g_cfg.listen_quic_port = cfg_.quic_port;
-  g_cfg.http3_enabled = cfg_.http3_enabled;
-  g_cfg.ssr_enabled = cfg_.ssr_enabled;
-  g_cfg.use_epoll_tcp = cfg_.use_epoll_tcp;
-  g_cfg.use_uring_tcp = cfg_.use_uring_tcp;
-  g_cfg.http_cert_file = cfg_.http_cert_file;
-  g_cfg.http_key_file = cfg_.http_key_file;
-  g_cfg.http_root_dir = cfg_.http_root_dir;
-  g_cfg.http_allowed_origins = cfg_.http_allowed_origins;
-  g_cfg.http_max_request_body_size = cfg_.http_max_request_body_size;
-  g_cfg.http_websocket_max_message_size = cfg_.http_websocket_max_message_size;
+  g_cfg.hostname = cfg_->hostname;
+  g_cfg.listen_tcp_port = cfg_->tcp_port;
+  g_cfg.listen_http_port = cfg_->http_port;
+  g_cfg.listen_quic_port = cfg_->quic_port;
+  g_cfg.http3_enabled = cfg_->http3_enabled;
+  g_cfg.ssr_enabled = cfg_->ssr_enabled;
+  g_cfg.use_epoll_tcp = cfg_->use_epoll_tcp;
+  g_cfg.use_uring_tcp = cfg_->use_uring_tcp;
+  g_cfg.http_cert_file = cfg_->http_cert_file;
+  g_cfg.http_key_file = cfg_->http_key_file;
+  g_cfg.http_root_dir = cfg_->http_root_dir;
+  g_cfg.http_allowed_origins = cfg_->http_allowed_origins;
+  g_cfg.http_max_request_body_size = cfg_->http_max_request_body_size;
+  g_cfg.http_websocket_max_message_size = cfg_->http_websocket_max_message_size;
   g_cfg.http_webtransport_max_message_size =
-      cfg_.http_webtransport_max_message_size;
+      cfg_->http_webtransport_max_message_size;
   g_cfg.http_websocket_max_active_sessions_per_ip =
-      cfg_.http_websocket_max_active_sessions_per_ip;
+      cfg_->http_websocket_max_active_sessions_per_ip;
   g_cfg.http_websocket_upgrades_per_ip_per_second =
-      cfg_.http_websocket_upgrades_per_ip_per_second;
+      cfg_->http_websocket_upgrades_per_ip_per_second;
   g_cfg.http_websocket_upgrades_burst =
-      cfg_.http_websocket_upgrades_burst;
+      cfg_->http_websocket_upgrades_burst;
   g_cfg.http_websocket_requests_per_session_per_second =
-      cfg_.http_websocket_requests_per_session_per_second;
+      cfg_->http_websocket_requests_per_session_per_second;
   g_cfg.http_websocket_requests_burst =
-      cfg_.http_websocket_requests_burst;
-    g_cfg.http3_worker_count = cfg_.http3_worker_count;
+      cfg_->http_websocket_requests_burst;
+    g_cfg.http3_worker_count = cfg_->http3_worker_count;
   g_cfg.http3_max_active_connections_per_ip =
-      cfg_.http3_max_active_connections_per_ip;
+      cfg_->http3_max_active_connections_per_ip;
   g_cfg.http3_max_new_connections_per_ip_per_second =
-      cfg_.http3_max_new_connections_per_ip_per_second;
-  g_cfg.http3_max_new_connections_burst = cfg_.http3_max_new_connections_burst;
+      cfg_->http3_max_new_connections_per_ip_per_second;
+  g_cfg.http3_max_new_connections_burst = cfg_->http3_max_new_connections_burst;
   g_cfg.http_rpc_max_requests_per_ip_per_second =
-      cfg_.http_rpc_max_requests_per_ip_per_second;
-    g_cfg.http_rpc_max_requests_burst = cfg_.http_rpc_max_requests_burst;
+      cfg_->http_rpc_max_requests_per_ip_per_second;
+    g_cfg.http_rpc_max_requests_burst = cfg_->http_rpc_max_requests_burst;
     g_cfg.http_webtransport_connects_per_ip_per_second =
-      cfg_.http_webtransport_connects_per_ip_per_second;
+      cfg_->http_webtransport_connects_per_ip_per_second;
     g_cfg.http_webtransport_connects_burst =
-      cfg_.http_webtransport_connects_burst;
+      cfg_->http_webtransport_connects_burst;
     g_cfg.http_webtransport_requests_per_session_per_second =
-      cfg_.http_webtransport_requests_per_session_per_second;
+      cfg_->http_webtransport_requests_per_session_per_second;
     g_cfg.http_webtransport_requests_burst =
-      cfg_.http_webtransport_requests_burst;
+      cfg_->http_webtransport_requests_burst;
     g_cfg.http_webtransport_stream_opens_per_session_per_second =
-      cfg_.http_webtransport_stream_opens_per_session_per_second;
+      cfg_->http_webtransport_stream_opens_per_session_per_second;
     g_cfg.http_webtransport_stream_opens_burst =
-      cfg_.http_webtransport_stream_opens_burst;
+      cfg_->http_webtransport_stream_opens_burst;
   g_cfg.ssr_handler_dir =
-      cfg_.ssr_handler_dir.empty() ? cfg_.http_root_dir : cfg_.ssr_handler_dir;
-  g_cfg.watch_files = cfg_.watch_files;
-  g_cfg.quic_cert_file = cfg_.quic_cert_file;
-  g_cfg.quic_key_file = cfg_.quic_key_file;
-  g_cfg.http3_shm_egress_channel = cfg_.http3_shm_egress_channel;
+      cfg_->ssr_handler_dir.empty() ? cfg_->http_root_dir : cfg_->ssr_handler_dir;
+  g_cfg.watch_files = cfg_->watch_files;
+  g_cfg.quic_cert_file = cfg_->quic_cert_file;
+  g_cfg.quic_key_file = cfg_->quic_key_file;
+  g_cfg.http3_shm_egress_channel = cfg_->http3_shm_egress_channel;
 
   impl::g_rpc = new impl::RpcImpl();
   return impl::g_rpc;
