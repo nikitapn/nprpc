@@ -307,14 +307,21 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size)
     if (used + total + 1 > header_->buffer_size)
       return false; // Buffer full
     new_idx = (old_idx + total) % header_->buffer_size;
+
+    // Zero actual_size before CAS — same ordering argument as try_reserve_write.
+    auto* actual_pre = reinterpret_cast<std::atomic<uint32_t>*>(
+        data_region_ + (old_idx + sizeof(uint32_t)) % header_->buffer_size);
+    actual_pre->store(0, std::memory_order_relaxed);
+
   } while (!header_->write_idx.compare_exchange_weak(
                old_idx, new_idx,
                std::memory_order_acq_rel,
                std::memory_order_relaxed));
 
   // Write claimed_size (navigation header for consumer)
-  uint32_t claimed32 = static_cast<uint32_t>(size);
-  std::memcpy(data_region_ + old_idx, &claimed32, sizeof(uint32_t));
+  auto* claimed_slot_w = reinterpret_cast<std::atomic<uint32_t>*>(
+      data_region_ + old_idx);
+  claimed_slot_w->store(static_cast<uint32_t>(size), std::memory_order_relaxed);
 
   // Write data (mirrored mapping: single memcpy always safe)
   size_t data_start = (old_idx + kHdr) % header_->buffer_size;
@@ -324,7 +331,7 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size)
   // Commit: store actual_size with release — this is the consumer's signal.
   auto* actual_slot = reinterpret_cast<std::atomic<uint32_t>*>(
       data_region_ + (old_idx + sizeof(uint32_t)) % header_->buffer_size);
-  actual_slot->store(claimed32, std::memory_order_release);
+  actual_slot->store(static_cast<uint32_t>(size), std::memory_order_release);
 
   // Notify waiting readers
   {
@@ -467,19 +474,26 @@ LockFreeRingBuffer::try_reserve_write(size_t min_size)
     if (used + total + 1 > header_->buffer_size)
       return {}; // Not enough space
     new_idx = (old_idx + total) % header_->buffer_size;
+
+    // Zero actual_size at the candidate slot BEFORE the CAS.
+    // The CAS is acq_rel; the consumer's acquire on write_idx synchronizes-with
+    // the CAS release.  Therefore all stores done before the CAS (including this
+    // zero) are visible to the consumer after it observes write_idx advanced.
+    // If the CAS fails another producer took this slot — the zero is harmless.
+    auto* actual_pre = reinterpret_cast<std::atomic<uint32_t>*>(
+        data_region_ + (old_idx + sizeof(uint32_t)) % header_->buffer_size);
+    actual_pre->store(0, std::memory_order_relaxed);
+
   } while (!header_->write_idx.compare_exchange_weak(
                old_idx, new_idx,
                std::memory_order_acq_rel,
                std::memory_order_relaxed));
 
   // Slot [old_idx, old_idx + total) is now exclusively ours.
-  // Write claimed_size immediately so the consumer can find the next slot.
-  uint32_t claimed32 = static_cast<uint32_t>(min_size);
-  std::memcpy(data_region_ + old_idx, &claimed32, sizeof(uint32_t));
-  // Zero actual_size — consumer spins on this until commit_write fires.
-  uint32_t zero = 0;
-  std::memcpy(data_region_ + (old_idx + sizeof(uint32_t)) % header_->buffer_size,
-              &zero, sizeof(uint32_t));
+  // Write claimed_size after the CAS (visible via the acq_rel fence above).
+  auto* claimed_slot = reinterpret_cast<std::atomic<uint32_t>*>(
+      data_region_ + old_idx);
+  claimed_slot->store(static_cast<uint32_t>(min_size), std::memory_order_relaxed);
 
   WriteReservation result;
   result.write_idx = old_idx;
@@ -597,9 +611,11 @@ void LockFreeRingBuffer::commit_read(const ReadView& view)
   auto* actual_slot = reinterpret_cast<std::atomic<uint32_t>*>(
       data_region_ +
       (view.slot_start + sizeof(uint32_t)) % header_->buffer_size);
-  actual_slot->store(0, std::memory_order_relaxed);
+  // Zero actual_size with release so the zeroing is ordered before read_idx
+  // release below.  A producer that acquire-loads read_idx will see both.
+  actual_slot->store(0, std::memory_order_release);
 
-  // Now release read_idx — producers' acquire on read_idx synchronizes-with
+  // Release read_idx — producers' acquire on read_idx synchronizes-with
   // this and therefore observe the zero above.
   header_->read_idx.store(view.read_idx, std::memory_order_release);
 }
