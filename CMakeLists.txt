@@ -549,6 +549,8 @@ if(NPRPC_BUILD_TOOLS)
   target_link_libraries(npnameserver
     PRIVATE
       nprpc::nprpc
+      OpenSSL::SSL
+      OpenSSL::Crypto
     )
 
   if(TARGET npidl)

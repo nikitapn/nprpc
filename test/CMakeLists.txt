@@ -46,6 +46,8 @@ target_link_libraries(nprpc_test
   PRIVATE
     GTest::gtest_main
     nprpc::nprpc
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 
 target_compile_definitions(nprpc_test
@@ -72,6 +74,8 @@ target_include_directories(nprpc_server_test
 target_link_libraries(nprpc_server_test
   PRIVATE
     nprpc::nprpc
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 
 # Add JavaScript tests if enabled
@@ -208,15 +212,17 @@ add_executable(test_shared_memory_listener
 )
 
 target_include_directories(test_shared_memory_listener 
-  PRIVATE 
+  PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
 )
 
 target_link_libraries(test_shared_memory_listener 
-  PRIVATE 
-    nprpc::nprpc 
+  PRIVATE
+    nprpc::nprpc
     GTest::gtest
     Threads::Threads
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 
 add_test(NAME SharedMemoryListener COMMAND test_shared_memory_listener)
@@ -230,12 +236,15 @@ add_executable(test_http_utils
 target_include_directories(test_http_utils
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_SOURCE_DIR}/third_party/unordered_dense/include
 )
 
 target_link_libraries(test_http_utils
   PRIVATE
     nprpc::nprpc
     GTest::gtest
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 
 add_test(NAME HttpUtils COMMAND test_http_utils)
@@ -248,7 +257,7 @@ if(NPRPC_ENABLE_HTTP3)
     ${CMAKE_CURRENT_BINARY_DIR}/test_http3_rpc.sh
     COPYONLY
   )
-  
+
   # Create a test wrapper script
   file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/run_http3_tests.sh
 "#!/bin/bash

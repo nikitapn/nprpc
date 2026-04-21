@@ -307,12 +307,6 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size)
     if (used + total + 1 > header_->buffer_size)
       return false; // Buffer full
     new_idx = (old_idx + total) % header_->buffer_size;
-
-    // Zero actual_size before CAS — same ordering argument as try_reserve_write.
-    auto* actual_pre = reinterpret_cast<std::atomic<uint32_t>*>(
-        data_region_ + (old_idx + sizeof(uint32_t)) % header_->buffer_size);
-    actual_pre->store(0, std::memory_order_relaxed);
-
   } while (!header_->write_idx.compare_exchange_weak(
                old_idx, new_idx,
                std::memory_order_acq_rel,
@@ -322,6 +316,15 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size)
   auto* claimed_slot_w = reinterpret_cast<std::atomic<uint32_t>*>(
       data_region_ + old_idx);
   claimed_slot_w->store(static_cast<uint32_t>(size), std::memory_order_relaxed);
+
+  // Zero actual_size after the CAS — slot is exclusively ours now.
+  // commit_read() already guarantees it's 0 via the read_idx release/acquire
+  // chain, but an explicit release-store here ensures the consumer's spin
+  // (which acquire-loads actual_size) cannot observe a stale non-zero value
+  // from a prior occupant if the consumer somehow races ahead.
+  auto* actual_zero_w = reinterpret_cast<std::atomic<uint32_t>*>(
+      data_region_ + (old_idx + sizeof(uint32_t)) % header_->buffer_size);
+  actual_zero_w->store(0, std::memory_order_release);
 
   // Write data (mirrored mapping: single memcpy always safe)
   size_t data_start = (old_idx + kHdr) % header_->buffer_size;
@@ -353,6 +356,15 @@ size_t LockFreeRingBuffer::try_read(void* buffer, size_t buffer_size)
   if (commit_idx == write_idx)
     return 0; // Empty
 
+  // Spin on actual_size FIRST (same ordering fix as try_read_view).
+  auto* actual_slot = reinterpret_cast<std::atomic<uint32_t>*>(
+      data_region_ +
+      (commit_idx + sizeof(uint32_t)) % header_->buffer_size);
+  uint32_t actual_size;
+  while ((actual_size = actual_slot->load(std::memory_order_acquire)) == 0)
+    std::this_thread::yield();
+
+  // claimed_size is now visible (written before actual_size by the producer).
   uint32_t claimed_size = 0;
   std::memcpy(&claimed_size, data_region_ + commit_idx, sizeof(uint32_t));
 
@@ -360,14 +372,6 @@ size_t LockFreeRingBuffer::try_read(void* buffer, size_t buffer_size)
     NPRPC_LOG_ERROR("Corrupt claimed_size: {}", claimed_size);
     return 0;
   }
-
-  // Spin until committed
-  auto* actual_slot = reinterpret_cast<std::atomic<uint32_t>*>(
-      data_region_ +
-      (commit_idx + sizeof(uint32_t)) % header_->buffer_size);
-  uint32_t actual_size;
-  while ((actual_size = actual_slot->load(std::memory_order_acquire)) == 0)
-    std::this_thread::yield();
 
   if (actual_size > buffer_size) {
     NPRPC_LOG_ERROR("Buffer too small: message={}, buffer={}",
@@ -474,26 +478,25 @@ LockFreeRingBuffer::try_reserve_write(size_t min_size)
     if (used + total + 1 > header_->buffer_size)
       return {}; // Not enough space
     new_idx = (old_idx + total) % header_->buffer_size;
-
-    // Zero actual_size at the candidate slot BEFORE the CAS.
-    // The CAS is acq_rel; the consumer's acquire on write_idx synchronizes-with
-    // the CAS release.  Therefore all stores done before the CAS (including this
-    // zero) are visible to the consumer after it observes write_idx advanced.
-    // If the CAS fails another producer took this slot — the zero is harmless.
-    auto* actual_pre = reinterpret_cast<std::atomic<uint32_t>*>(
-        data_region_ + (old_idx + sizeof(uint32_t)) % header_->buffer_size);
-    actual_pre->store(0, std::memory_order_relaxed);
-
   } while (!header_->write_idx.compare_exchange_weak(
                old_idx, new_idx,
                std::memory_order_acq_rel,
                std::memory_order_relaxed));
 
   // Slot [old_idx, old_idx + total) is now exclusively ours.
-  // Write claimed_size after the CAS (visible via the acq_rel fence above).
+  // Write claimed_size so the consumer can navigate to the next slot boundary.
   auto* claimed_slot = reinterpret_cast<std::atomic<uint32_t>*>(
       data_region_ + old_idx);
   claimed_slot->store(static_cast<uint32_t>(min_size), std::memory_order_relaxed);
+
+  // Zero actual_size with release after the CAS.  This is safe because the
+  // slot is exclusively ours; commit_read() already guarantees it is 0 via
+  // the read_idx release/acquire chain, but an explicit release-store here
+  // creates a happens-before edge so the consumer's acquire-load of
+  // actual_size in try_read_view() cannot observe a stale non-zero value.
+  auto* actual_slot_w = reinterpret_cast<std::atomic<uint32_t>*>(
+      data_region_ + (old_idx + sizeof(uint32_t)) % header_->buffer_size);
+  actual_slot_w->store(0, std::memory_order_release);
 
   WriteReservation result;
   result.write_idx = old_idx;
