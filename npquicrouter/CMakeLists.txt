@@ -43,7 +43,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../src/shm/lock_free_ring_buffer.cpp")
 else()
   # Standalone / Docker build: files copied alongside this CMakeLists.txt.
   set(NPRPC_SHM_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/nprpc_src/lock_free_ring_buffer.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/nprpc_src/shm/lock_free_ring_buffer.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/nprpc_src/logging.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/nprpc_src/thread_identity.cpp"
   )

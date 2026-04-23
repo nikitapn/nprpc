@@ -5,6 +5,8 @@
 
 // Internal logging header - do not expose in public API
 
+#if __cpp_lib_format
+
 #include <chrono>
 #include <ctime>
 #include <format>
@@ -161,9 +163,20 @@ NPRPC_API std::shared_ptr<SimpleLogger>& get_logger();
 } // namespace nprpc::impl
 
 // Internal logging macros - same interface as before
-#define NPRPC_LOG_DEBUG(...) nprpc::impl::get_logger()->debug(__VA_ARGS__)
-#define NPRPC_LOG_TRACE(...) nprpc::impl::get_logger()->trace(__VA_ARGS__)
-#define NPRPC_LOG_INFO(...) nprpc::impl::get_logger()->info(__VA_ARGS__)
-#define NPRPC_LOG_WARN(...) nprpc::impl::get_logger()->warn(__VA_ARGS__)
-#define NPRPC_LOG_ERROR(...) nprpc::impl::get_logger()->error(__VA_ARGS__)
+#define NPRPC_LOG_DEBUG(...)    nprpc::impl::get_logger()->debug(__VA_ARGS__)
+#define NPRPC_LOG_TRACE(...)    nprpc::impl::get_logger()->trace(__VA_ARGS__)
+#define NPRPC_LOG_INFO(...)     nprpc::impl::get_logger()->info(__VA_ARGS__)
+#define NPRPC_LOG_WARN(...)     nprpc::impl::get_logger()->warn(__VA_ARGS__)
+#define NPRPC_LOG_ERROR(...)    nprpc::impl::get_logger()->error(__VA_ARGS__)
 #define NPRPC_LOG_CRITICAL(...) nprpc::impl::get_logger()->critical(__VA_ARGS__)
+
+#else // !__cpp_lib_format
+
+#define NPRPC_LOG_DEBUG(...)    ((void)0)
+#define NPRPC_LOG_TRACE(...)    ((void)0)
+#define NPRPC_LOG_INFO(...)     ((void)0)
+#define NPRPC_LOG_WARN(...)     ((void)0)
+#define NPRPC_LOG_ERROR(...)    ((void)0)
+#define NPRPC_LOG_CRITICAL(...) ((void)0)
+
+#endif // __cpp_lib_format

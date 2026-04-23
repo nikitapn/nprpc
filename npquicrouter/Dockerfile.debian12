@@ -39,7 +39,7 @@ COPY npquicrouter                              /src/npquicrouter
 # it can drain the SHM egress ring without linking the full libnprpc.
 # CMakeLists.txt looks for these under nprpc_src/ / nprpc_include/ when the
 # parent src/ / include/ directories are absent (standalone build).
-COPY src/shm/lock_free_ring_buffer.cpp         /src/npquicrouter/nprpc_src/lock_free_ring_buffer.cpp
+COPY src/shm/lock_free_ring_buffer.cpp         /src/npquicrouter/nprpc_src/shm/lock_free_ring_buffer.cpp
 COPY src/logging.hpp                           /src/npquicrouter/nprpc_src/logging.hpp
 COPY src/logging.cpp                           /src/npquicrouter/nprpc_src/logging.cpp
 COPY src/thread_identity.cpp                   /src/npquicrouter/nprpc_src/thread_identity.cpp

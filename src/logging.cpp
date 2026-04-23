@@ -3,6 +3,8 @@
 
 #include "logging.hpp"
 
+#if __cpp_lib_format
+
 namespace nprpc::impl {
 
 NPRPC_API std::shared_ptr<SimpleLogger>& get_logger()
@@ -13,3 +15,5 @@ NPRPC_API std::shared_ptr<SimpleLogger>& get_logger()
 }
 
 } // namespace nprpc::impl
+
+#endif // __cpp_lib_format
