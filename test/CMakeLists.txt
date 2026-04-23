@@ -46,8 +46,6 @@ target_link_libraries(nprpc_test
   PRIVATE
     GTest::gtest_main
     nprpc::nprpc
-    OpenSSL::SSL
-    OpenSSL::Crypto
 )
 
 target_compile_definitions(nprpc_test
@@ -74,8 +72,6 @@ target_include_directories(nprpc_server_test
 target_link_libraries(nprpc_server_test
   PRIVATE
     nprpc::nprpc
-    OpenSSL::SSL
-    OpenSSL::Crypto
 )
 
 # Add JavaScript tests if enabled
@@ -179,8 +175,6 @@ target_link_libraries(test_variant
   PRIVATE
     nprpc::nprpc
     GTest::gtest_main
-    OpenSSL::SSL
-    OpenSSL::Crypto
 )
 
 gtest_discover_tests(test_variant
@@ -223,8 +217,6 @@ target_link_libraries(test_shared_memory_listener
     nprpc::nprpc
     GTest::gtest
     Threads::Threads
-    OpenSSL::SSL
-    OpenSSL::Crypto
 )
 
 add_test(NAME SharedMemoryListener COMMAND test_shared_memory_listener)
@@ -245,8 +237,6 @@ target_link_libraries(test_http_utils
   PRIVATE
     nprpc::nprpc
     GTest::gtest
-    OpenSSL::SSL
-    OpenSSL::Crypto
 )
 
 add_test(NAME HttpUtils COMMAND test_http_utils)

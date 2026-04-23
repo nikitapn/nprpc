@@ -429,9 +429,24 @@ if(NPRPC_USE_BORINGSSL)
       unordered_dense::unordered_dense
   )
   # Re-export BoringSSL's include directory so consumers (npnameserver, etc.)
-  # can find <openssl/...> headers, but suppress dynamic -lssl/-lcrypto entries.
+  # can find <openssl/...> headers.
   target_include_directories(nprpc PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/boringssl/include>
+  )
+  # BoringSSL is built with -fvisibility=hidden, so ERR_* and other OpenSSL
+  # symbols are NOT exported from libnprpc.so.  Any consumer that directly
+  # instantiates Boost.Asio SSL headers (e.g. boost/asio/ssl/impl/error.ipp)
+  # must therefore also link the BoringSSL static archives directly.
+  #
+  # CMake deduplicates ALIAS/target-based dependencies when it knows the target
+  # is already a PRIVATE dep of a shared library, so the explicit
+  # "OpenSSL::SSL / OpenSSL::Crypto" entries in downstream targets' link lists
+  # are silently dropped.  Using $<TARGET_FILE:...> produces a raw path that
+  # bypasses that deduplication and always lands in the consumer's link command.
+  # $<BUILD_INTERFACE:...> keeps it out of the installed-package targets file.
+  target_link_libraries(nprpc INTERFACE
+    $<BUILD_INTERFACE:$<TARGET_FILE:ssl>>
+    $<BUILD_INTERFACE:$<TARGET_FILE:crypto>>
   )
 else()
   target_link_libraries(nprpc
@@ -549,8 +564,6 @@ if(NPRPC_BUILD_TOOLS)
   target_link_libraries(npnameserver
     PRIVATE
       nprpc::nprpc
-      OpenSSL::SSL
-      OpenSSL::Crypto
     )
 
   if(TARGET npidl)
