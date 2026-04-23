@@ -18,7 +18,7 @@ NPRPC_API void flat_buffer::commit_read_if_needed()
     impl::LockFreeRingBuffer::ReadView view;
     view.data = view_base_;
     view.size = view_size_;
-    view.read_idx = read_view_read_idx_;
+    view.slot_idx = read_view_slot_idx_;
     view.valid = true;
 
     ring->commit_read(view);
@@ -26,7 +26,7 @@ NPRPC_API void flat_buffer::commit_read_if_needed()
 
   // Clear the tracking
   ring_buffer_ = nullptr;
-  read_view_read_idx_ = 0;
+  read_view_slot_idx_ = 0;
   has_read_view_ = false;
 }
 

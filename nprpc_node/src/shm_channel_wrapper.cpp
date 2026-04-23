@@ -288,7 +288,7 @@ ShmChannelWrapper::TryReceiveSSRRequest(const Napi::CallbackInfo& info)
   buf.set_view_from_read(
       read_view.data, read_view.size,
       channel_->get_recv_ring(), // Pass ring buffer pointer for commit
-      read_view.read_idx);
+      read_view.slot_idx);
 
   return nprpc_node::ToJS(env, nprpc::node::flat::SSRRequest_Direct(buf, 0));
 }
@@ -323,7 +323,7 @@ Napi::Value ShmChannelWrapper::SendSSRResponse(const Napi::CallbackInfo& info)
   // Build flat buffer
   nprpc::flat_buffer fb;
   fb.set_view(reservation.data, sizeof(nprpc::node::flat::SSRResponse),
-              reservation.max_size, nullptr, reservation.write_idx, true);
+              reservation.max_size, nullptr, reservation.slot_idx, true);
 
   auto resp = nprpc::node::flat::SSRResponse_Direct(fb, 0);
   nprpc_node::FromJS(env, respObj, resp);

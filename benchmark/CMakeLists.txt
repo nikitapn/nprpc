@@ -143,6 +143,8 @@ target_include_directories(benchmark_server
 target_link_libraries(benchmark_server
   PRIVATE
     nprpc::nprpc
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 
 # gRPC benchmark server (if gRPC is available)

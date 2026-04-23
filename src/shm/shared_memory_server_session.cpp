@@ -85,7 +85,7 @@ public:
         LockFreeRingBuffer::WriteReservation reservation;
         reservation.data = tx_buffer.data_ptr();
         reservation.max_size = tx_buffer.max_size();
-        reservation.write_idx = tx_buffer.reservation_write_idx();
+        reservation.slot_idx = tx_buffer.reservation_write_idx();
         reservation.valid = true;
 
         // std::cout << "[nprpc][D] SERVER committing zero-copy

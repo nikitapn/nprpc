@@ -305,7 +305,7 @@ NodeWorkerManager::forward_request(const SsrRequest& request,
   // Allocate the root object
   nprpc::flat_buffer fb;
   fb.set_view(reservation.data, sizeof(nprpc::node::flat::SSRRequest),
-              reservation.max_size, nullptr, reservation.write_idx, true);
+              reservation.max_size, nullptr, reservation.slot_idx, true);
   auto req_builder = nprpc::node::flat::SSRRequest_Direct(fb, 0);
 
   // Set fields
@@ -473,7 +473,7 @@ void NodeWorkerManager::handle_response(
     fb.set_view_from_read(
         view.data, view.size,
         channel_->get_recv_ring(), // Pass ring buffer pointer for commit
-        view.read_idx);
+        view.slot_idx);
 
     // Read the root object
     auto resp_reader = nprpc::node::flat::SSRResponse_Direct(fb, 0);

@@ -91,15 +91,15 @@ private:
   const EndPoint* endpoint_ = nullptr;
 
   // For shared memory zero-copy writes: stores the write_idx from
-  // WriteReservation Used to reconstruct the reservation for commit_write()
-  std::size_t reservation_write_idx_ = 0;
+  // WriteReservation: slot_idx to reconstruct reservation for commit_write()
+  uint64_t reservation_write_idx_ = 0;
   bool has_reservation_ = false;
 
   // For shared memory zero-copy reads: stores the ReadView for commit_read()
   // When set, flat_buffer will automatically commit the read when needed
   void* ring_buffer_ =
       nullptr; // LockFreeRingBuffer* (opaque to avoid circular dependency)
-  std::size_t read_view_read_idx_ = 0;
+  uint64_t read_view_slot_idx_ = 0;
   bool has_read_view_ = false;
 
   // Optional bump arena for sync-call request serialization.
@@ -512,7 +512,7 @@ public:
     view_size_ = size;
     view_max_size_ = max_size;
     endpoint_ = endpoint;
-    reservation_write_idx_ = write_idx;
+    reservation_write_idx_ = static_cast<uint64_t>(write_idx);
     has_reservation_ = has_reservation;
   }
 
@@ -543,7 +543,7 @@ public:
 
     // Track ReadView for commit_read
     ring_buffer_ = ring_buffer;
-    read_view_read_idx_ = read_idx;
+    read_view_slot_idx_ = static_cast<uint64_t>(read_idx);
     has_read_view_ = true;
   }
 
@@ -613,8 +613,8 @@ public:
   /// Check if this buffer has a pending write reservation
   bool has_write_reservation() const noexcept { return has_reservation_; }
 
-  /// Get the write_idx for reconstructing WriteReservation
-  std::size_t reservation_write_idx() const noexcept
+  /// Get the slot_idx for reconstructing WriteReservation
+  uint64_t reservation_write_idx() const noexcept
   {
     return reservation_write_idx_;
   }
@@ -643,7 +643,7 @@ public:
     swap(a.reservation_write_idx_, b.reservation_write_idx_);
     swap(a.has_reservation_, b.has_reservation_);
     swap(a.ring_buffer_, b.ring_buffer_);
-    swap(a.read_view_read_idx_, b.read_view_read_idx_);
+    swap(a.read_view_slot_idx_, b.read_view_slot_idx_);
     swap(a.has_read_view_, b.has_read_view_);
   }
 

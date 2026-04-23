@@ -11,64 +11,80 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <stdexcept>
 
 namespace nprpc::impl {
 
 // Lock-free ring buffer for multiple producers, single consumer (MPSC).
-// Uses memory-mapped shared memory with a mirrored mapping for true zero-copy IPC.
+// Uses memory-mapped shared memory with a mirrored payload mapping for
+// true zero-copy IPC.
 //
-// Slot format (8-byte header per message):
-// +------------------+
-// | RingBufferHeader | (metadata: write_idx, commit_idx, read_idx, ...)
-// +------------------+
-// | Continuous Buffer| (circular byte array for variable-sized messages)
-// | [uint32_t claimed_size] | <- reserved at try_reserve_write / try_write
-// | [uint32_t actual_size]  | <- written at commit; reader spins until != 0
-// | [data bytes]            |
-// | ...                     |
-// +------------------+
+// Two-ring design:
+//
+// SHM layout:
+// +-----------------------------------------+
+// | RingBufferHeader  (page 0, metadata)    |
+// +-----------------------------------------+
+// | SlotHeader[N]     (fixed-size, no mirror)|  <- header ring
+// +-----------------------------------------+
+// | Payload ring × 2  (mirrored mapping)    |  <- variable-length data
+// +-----------------------------------------+
+//
+// SlotHeader lives at a stable virtual address: headers[seq % N].
+// actual_size is always at the same offset within SlotHeader, so consumer
+// can zero it reliably regardless of payload size — the root correctness
+// problem of the previous single-ring design.
 //
 // Producer protocol (try_reserve_write + commit_write):
-//   1. CAS-claim a slot: write_idx advances by (8 + claimed_size).
-//   2. Write claimed_size and zero out actual_size immediately.
-//   3. Fill data bytes.
-//   4. atomic-store actual_size with release — this is the commit signal.
-//
-// Non-zero-copy path (try_write):
-//   Performs steps 1-4 in one shot: claims, writes data, then stores actual_size.
+//   1. CAS write_slot_idx  → claims header slot s = old % N.
+//   2. CAS write_payload_idx → claims claimed_size payload bytes at payload_off.
+//   3. Zero headers[s].actual_size (release) — stable address, always correct.
+//   4. Store headers[s].claimed_size, headers[s].payload_off.
+//   5. Fill data at payload_region + payload_off.
+//   6. Release-store headers[s].actual_size != 0 — commit signal.
 //
 // Consumer protocol (try_read_view):
-//   Reads commit_idx (the "safe to read up to" frontier), then spins on
-//   actual_size at commit_idx until non-zero, then returns the data view.
-//   commit_idx advances slot-by-slot in order, so the consumer always sees
-//   messages in the order producers claimed slots.
-//
-// ABA note: the CAS on write_idx is not ABA-proof without a generation counter.
-//   In practice ABA requires producers to lap the entire ring between a single
-//   thread's load and its CAS — extremely unlikely with a 16 MB buffer.
+//   1. Spin on headers[read_slot_idx % N].actual_size != 0.
+//   2. Read claimed_size / payload_off from header.
+//   3. Return ReadView pointing into payload ring.
+//   4. commit_read() zeros actual_size (release), bumps read_slot_idx and
+//      read_payload_idx.
 //
 // Synchronization:
-// - write_idx: claimed by producers via CAS (acq_rel).
-// - actual_size: zero-initialized at claim, written at commit (release).
-// - commit_idx: consumer's scan cursor, advanced in order (relaxed store OK,
-//   single writer).
-// - read_idx: advanced after the caller is done with the view (release).
-// - For blocking reads: condition variable + mutex.
+// - write_slot_idx: claimed via CAS (acq_rel); monotonically increasing.
+// - write_payload_idx: claimed via CAS (acq_rel); monotonically increasing.
+// - actual_size: zero at init, release-zeroed by consumer, release-set by
+//   producer.
+// - read_slot_idx / read_payload_idx: single-consumer, relaxed store OK but
+//   release used so producers' acquire on read_payload_idx sees both.
+
+// Number of header slots.  Must be a power of two.
+static constexpr uint32_t kRingSlots = 1024;
+
+// Per-slot metadata stored in the fixed-size header ring.
+// Each instance lives at headers[seq % kRingSlots] — a stable address
+// independent of payload size.
+struct alignas(16) SlotHeader {
+  std::atomic<uint32_t> actual_size{0};  // 0 = empty; commit signal
+  uint32_t              claimed_size{0}; // payload bytes reserved
+  uint64_t              payload_off{0};  // byte offset into payload ring
+};
+static_assert(sizeof(SlotHeader) == 16, "SlotHeader must be 16 bytes");
 
 struct alignas(64) RingBufferHeader {
-  // write_idx: next byte position to claim (advanced by producers via CAS)
-  alignas(64) std::atomic<size_t> write_idx{0};
-  // commit_idx: next slot the consumer will inspect (single-consumer, no CAS)
-  alignas(64) std::atomic<size_t> commit_idx{0};
-  alignas(64) std::atomic<size_t> read_idx{0};  // Next byte position to read
+  // Slot-index cursors (monotonically increasing, wrap mod kRingSlots via %)
+  alignas(64) std::atomic<uint64_t> write_slot_idx{0};
+  alignas(64) std::atomic<uint64_t> read_slot_idx{0};
+
+  // Payload-byte cursors (monotonically increasing, wrap mod buffer_size)
+  alignas(64) std::atomic<size_t> write_payload_idx{0};
+  alignas(64) std::atomic<size_t> read_payload_idx{0};
 
   // Fixed at creation
-  size_t buffer_size;        // Total buffer size in bytes
-  uint32_t max_message_size; // Maximum message size
+  size_t   buffer_size;        // Payload ring size in bytes
+  uint32_t max_message_size;   // Maximum single message size
 
-  // For blocking reads (optional - can still be lock-free with timed_wait)
-  boost::interprocess::interprocess_mutex mutex;
+  // For blocking reads
+  boost::interprocess::interprocess_mutex   mutex;
   boost::interprocess::interprocess_condition data_available;
 
   RingBufferHeader(size_t buf_size, uint32_t max_msg_sz)
@@ -82,9 +98,8 @@ class LockFreeRingBuffer
 {
 public:
   // Configuration for continuous circular buffer (variable-sized messages)
-  static constexpr size_t DEFAULT_BUFFER_SIZE = 16 * 1024 * 1024; // 16MB total
-  static constexpr uint32_t MAX_MESSAGE_SIZE =
-      32 * 1024 * 1024; // 32MB max message
+  static constexpr size_t DEFAULT_BUFFER_SIZE = 16 * 1024 * 1024;
+  static constexpr uint32_t MAX_MESSAGE_SIZE = 8 * 1024 * 1024;
 
   // Create new ring buffer in shared memory
   static std::unique_ptr<LockFreeRingBuffer>
@@ -117,20 +132,19 @@ public:
   //--------------------------------------------------------------------------
 
   struct WriteReservation {
-    uint8_t* data;    // Pointer to write data (after size header)
-    size_t max_size;  // Maximum bytes that can be written
-    size_t write_idx; // Internal: position where size header was written
-    bool valid;       // true if reservation succeeded
+    uint8_t* data;       // Pointer to write data (into payload ring)
+    size_t   max_size;   // Maximum bytes that can be written (== reserved size)
+    uint64_t slot_idx;   // Internal: header ring index (write_slot_idx before CAS)
+    bool     valid;      // true if reservation succeeded
 
     explicit operator bool() const { return valid; }
   };
 
   struct ReadView {
-    const uint8_t* data; // Pointer to message data (after size header)
-    size_t size;         // Message size in bytes
-    size_t read_idx;     // Internal: next read position after this message
-    size_t slot_start;   // Internal: byte offset of [claimed_size] for this slot
-    bool valid;          // true if read succeeded
+    const uint8_t* data;     // Pointer to message data (into payload ring)
+    size_t         size;     // Message size in bytes
+    uint64_t       slot_idx; // Internal: header slot index (read_slot_idx)
+    bool           valid;    // true if read succeeded
 
     explicit operator bool() const { return valid; }
   };
@@ -167,24 +181,26 @@ private:
   LockFreeRingBuffer(const std::string& name,
                      boost::interprocess::managed_shared_memory&& shm,
                      RingBufferHeader* header,
-                     uint8_t* data_region,
-                     void* mirror_base,
-                     size_t ring_window,
-                     bool is_creator);
+                     SlotHeader*       slot_headers,
+                     uint8_t*          payload_region,
+                     void*             mirror_base,
+                     size_t            ring_window,
+                     bool              is_creator);
 
   // Calculate total shared memory size needed
   static size_t calculate_shm_size(size_t buffer_size);
 
-  // Helper to calculate used bytes
-  size_t used_bytes() const;
+  // Helper to calculate used payload bytes
+  size_t used_payload_bytes() const;
 
   std::string name_;
   boost::interprocess::managed_shared_memory shm_;
   RingBufferHeader* header_;
-  uint8_t* data_region_; // Points to start of mirrored data region
-  void* mirror_base_;    // Base address for munmap
-  size_t ring_window_;   // Size of each mapped window (page-aligned)
-  bool is_creator_;      // Should we remove shm on destruction?
+  SlotHeader*       slot_headers_; // Fixed-size header ring (kRingSlots entries)
+  uint8_t*          payload_region_; // Points to start of mirrored payload region
+  void*             mirror_base_;    // Base address for munmap
+  size_t            ring_window_;    // Size of each mapped window (page-aligned)
+  bool              is_creator_;     // Should we remove shm on destruction?
 };
 
 // Helper: Generate unique names for shared memory regions

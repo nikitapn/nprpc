@@ -179,6 +179,8 @@ target_link_libraries(test_variant
   PRIVATE
     nprpc::nprpc
     GTest::gtest_main
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 
 gtest_discover_tests(test_variant

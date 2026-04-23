@@ -303,12 +303,13 @@ TEST(LockFreeRingBuffer, ZeroCopyShmEgressFrameLayout)
 // checks ordering and data integrity.
 TEST(LockFreeRingBuffer, ZeroCopyConcurrentMPSC)
 {
-  constexpr size_t kMessages       = 2000;
+  constexpr size_t kMessages       = 20000000;
   constexpr size_t kPayload        = 128;
   constexpr size_t kProducerCount  = 4;
   constexpr size_t kMsgsPerProd    = kMessages / kProducerCount;
 
-  auto ring = LockFreeRingBuffer::create("test_zc_mpsc", 4 * 1024 * 1024);
+  LockFreeRingBuffer::remove("test_zc_mpsc"); // Clean up from previous runs
+  auto ring = LockFreeRingBuffer::create("test_zc_mpsc", 128 * 1024 * 1024);
   ASSERT_NE(ring, nullptr);
 
   std::atomic<size_t> consumed{0};
