@@ -70,7 +70,20 @@ ARG NPRPC_THIRD_PARTY_GIT_COMMITS
 
 # Build NPRPC C++ library and tools
 # BoringSSL is built automatically via -DNPRPC_USE_BORINGSSL=ON (third_party/boringssl submodule)
+#
+# The build cache (id=nprpc-build) is keyed by the clang version so that an
+# upgrade of the swift base image (which ships its own clang) automatically
+# discards stale cmake/ninja artifacts that were generated for the old
+# toolchain.  Without this guard the old Ubuntu 22.04 / clang-17 cmake cache
+# would be reused on Ubuntu 24.04 / clang-21, causing "stdlib.h not found"
+# errors during the first compile.
 RUN --mount=type=cache,id=nprpc-build,target=/workspace/.build_relwith_debinfo \
+  CLANG_VER=$(clang++ --version | head -1) && \
+  CACHED_VER=$(cat /workspace/.build_relwith_debinfo/.clang_version 2>/dev/null || true) && \
+  if [ "$CLANG_VER" != "$CACHED_VER" ]; then \
+    echo "Toolchain changed (${CACHED_VER:-none} -> ${CLANG_VER}), clearing cmake cache..." && \
+    find /workspace/.build_relwith_debinfo -mindepth 1 -delete; \
+  fi && \
   cmake -G Ninja \
     -S . \
     -B .build_relwith_debinfo \
@@ -93,7 +106,8 @@ RUN --mount=type=cache,id=nprpc-build,target=/workspace/.build_relwith_debinfo \
     && cmake --install .build_relwith_debinfo \
     && cp .build_relwith_debinfo/third_party/boringssl/libssl.a /opt/nprpc/lib/ \
     && cp .build_relwith_debinfo/third_party/boringssl/libcrypto.a /opt/nprpc/lib/ \
-    && cp -r third_party/boringssl/include/openssl /opt/nprpc/include/openssl
+    && cp -r third_party/boringssl/include/openssl /opt/nprpc/include/openssl \
+    && echo "$CLANG_VER" > /workspace/.build_relwith_debinfo/.clang_version
 
 # ============================================================================
 # Stage 3: Build Swift bindings
