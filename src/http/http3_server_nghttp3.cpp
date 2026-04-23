@@ -4202,9 +4202,9 @@ bool Http3Server::start()
                     port_);
 
   // Open SHM rings created by npquicrouter (if configured).
-  if (!g_cfg.http3_shm_egress_channel.empty()) {
+  if (!g_cfg.shm_egress_channel.empty()) {
     const auto egress_name =
-        nprpc::impl::make_shm_name(g_cfg.http3_shm_egress_channel, "s2c");
+        nprpc::impl::make_shm_name(g_cfg.shm_egress_channel, "s2c");
     // Retry a few times — npquicrouter may start slightly after nprpc.
     for (int attempt = 0; attempt < 50; ++attempt) {
       try {
@@ -5115,9 +5115,9 @@ public:
                    worker_count, port);
 
     // Start the single SHM ingress reader (if configured).
-    if (!g_cfg.http3_shm_egress_channel.empty()) {
+    if (!g_cfg.shm_ingress_channel.empty()) {
       const auto ingress_name =
-          nprpc::impl::make_shm_name(g_cfg.http3_shm_egress_channel, "c2s");
+          nprpc::impl::make_shm_name(g_cfg.shm_ingress_channel, "c2s");
       for (int attempt = 0; attempt < 50; ++attempt) {
         try {
           ingress_ring_ = nprpc::impl::LockFreeRingBuffer::open(ingress_name);

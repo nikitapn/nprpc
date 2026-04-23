@@ -86,6 +86,9 @@ struct alignas(64) RingBufferHeader {
   // For blocking reads
   boost::interprocess::interprocess_mutex   mutex;
   boost::interprocess::interprocess_condition data_available;
+  // Number of threads currently sleeping in read_with_timeout().
+  // Producers check this before acquiring the mutex: if 0, skip the notify.
+  std::atomic<uint32_t> waiting_readers{0};
 
   RingBufferHeader(size_t buf_size, uint32_t max_msg_sz)
       : buffer_size(buf_size)
@@ -99,11 +102,11 @@ class LockFreeRingBuffer
 public:
   // Configuration for continuous circular buffer (variable-sized messages)
   static constexpr size_t DEFAULT_BUFFER_SIZE = 16 * 1024 * 1024;
-  static constexpr uint32_t MAX_MESSAGE_SIZE = 8 * 1024 * 1024;
+  static constexpr uint32_t MAX_MESSAGE_SIZE = 12 * 1024 * 1024;
 
   // Create new ring buffer in shared memory
   static std::unique_ptr<LockFreeRingBuffer>
-  create(const std::string& name, size_t buffer_size = DEFAULT_BUFFER_SIZE);
+  create(const std::string& name, size_t buffer_size = DEFAULT_BUFFER_SIZE, size_t max_message_size = MAX_MESSAGE_SIZE);
 
   // Open existing ring buffer
   static std::unique_ptr<LockFreeRingBuffer> open(const std::string& name);
@@ -126,6 +129,13 @@ public:
   size_t read_with_timeout(void* buffer,
                            size_t buffer_size,
                            std::chrono::milliseconds timeout);
+
+  // Block until the ring is non-empty or timeout expires.
+  // Spins briefly (yield-based) before falling asleep via the condvar so the
+  // fast path (data arrives quickly) pays zero syscall cost.
+  // Safe to call from a spinning consumer thread to eliminate the nanosleep
+  // pattern while remaining correct for cross-process signaling.
+  void wait_for_readable(std::chrono::milliseconds timeout = std::chrono::milliseconds(10));
 
   //--------------------------------------------------------------------------
   // Zero-copy API for direct buffer access

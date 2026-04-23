@@ -217,7 +217,8 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.quic_cert_file = config->quic_cert_file;
         cxxConfig.quic_key_file = config->quic_key_file;
         cxxConfig.ssl_client_self_signed_cert_path = config->ssl_client_self_signed_cert_path;
-        cxxConfig.http3_shm_egress_channel = config->http3_shm_egress_channel;
+        cxxConfig.shm_egress_channel  = config->shm_egress_channel;
+        cxxConfig.shm_ingress_channel = config->shm_ingress_channel;
 
         // Build Rpc using the provided config
         class RpcSwiftBuilder : public nprpc::impl::RpcBuilderBase {

@@ -28,7 +28,7 @@ Both paths route transparently without terminating TLS or QUIC — the backend p
 - **HTTP → HTTPS redirect** — optional plaintext HTTP listener that returns `301` to `https://`
 - **QUIC multi-worker** — multiple UDP worker threads with `SO_REUSEPORT` for parallel packet processing
 - **eBPF QUIC dispatcher** — optional `SO_ATTACH_REUSEPORT_EBPF` program that pins Initial packets by DCID hash and short-header packets by the worker ID embedded in the server's SCID; ensures all packets of a connection stay on the same worker
-- **SHM fast path** — when co-deployed with an NPRPC HTTP/3 backend on the same machine, packets are exchanged over a shared-memory lock-free ring buffer instead of a loopback UDP socket, preserving GSO batch metadata across the double-hop
+- **SHM fast path** — when co-deployed with NPRPC HTTP/3 backends on the same machine, packets are exchanged over per-backend shared-memory lock-free ring buffers instead of loopback UDP sockets, preserving GSO batch metadata across the double-hop
 - **Zero external config format** — single JSON file parsed with [glaze](https://github.com/stephenberry/glaze)
 - **No TLS library dependency** — SNI extraction is pure byte parsing; QUIC Initial decryption uses OpenSSL EVP directly (no ngtcp2)
 - **Graceful shutdown** — `SIGINT`/`SIGTERM` drain all io_contexts and join worker threads cleanly
@@ -52,7 +52,8 @@ All settings live in a single JSON file passed as the sole command-line argument
     {
       "sni":         "app.example.com",
       "tcp_backend": "127.0.0.1:8443",
-      "udp_backend": "127.0.0.1:4433"
+      "udp_backend": "127.0.0.1:4433",
+      "shm_ingress_channel": "app_quic"
     },
     {
       "sni":         "blog.example.com",
@@ -72,11 +73,20 @@ All settings live in a single JSON file passed as the sole command-line argument
 | `default_tcp_backend` | string | `""` | Fallback TCP backend (`host:port`) when no route matches the SNI. If empty, unmatched connections are dropped. |
 | `default_udp_backend` | string | `""` | Fallback UDP backend (`host:port`). Same rules as `default_tcp_backend`. |
 | `udp_session_timeout_sec` | int | `120` | Idle timeout for UDP sessions. Sessions idle longer than this are garbage-collected. |
-| `shm_egress_channel` | string | `""` | Shared-memory channel name for co-deployed NPRPC HTTP/3 backend (see [SHM Fast Path](#shm-fast-path)). Empty disables SHM mode. |
+| `shm_egress_channel` | string | `""` | Shared-memory channel name for the egress (server→client) ring. See [SHM Fast Path](#shm-fast-path). Empty disables SHM egress. |
 | `num_workers` | int | `1` | Number of UDP worker threads. Values > 1 require `SO_REUSEPORT` support (Linux 3.9+). With eBPF enabled, each worker gets its own socket and the BPF program routes packets deterministically. |
-| `routes` | array | `[]` | Ordered list of SNI → backend mappings. Each entry has `sni`, and optionally `tcp_backend` and/or `udp_backend`. |
+| `routes` | array | `[]` | Ordered list of SNI → backend mappings. Each entry has `sni`, and optionally `tcp_backend`, `udp_backend`, and `shm_ingress_channel`. |
 
 Routes are matched by exact string comparison against the SNI. The first match wins. If no route matches, the `default_*_backend` is used; if that is also unset, the connection/datagram is dropped.
+
+Route fields:
+
+| Field | Description |
+|---|---|
+| `sni` | Hostname to match (exact string). |
+| `tcp_backend` | TCP backend (`host:port`). Optional — omit if the route is UDP-only. |
+| `udp_backend` | UDP/QUIC backend (`host:port`). Optional — omit if the route is TCP-only. |
+| `shm_ingress_channel` | SHM ingress channel name for this UDP backend (see [SHM Fast Path](#shm-fast-path)). Empty or absent = UDP mode for this route. |
 
 ## Usage
 
@@ -119,20 +129,41 @@ At shutdown, npquicrouter prints per-worker packet distribution and drop counts 
 
 ## SHM Fast Path
 
-When npquicrouter and an NPRPC HTTP/3 backend run on the same machine, set `shm_egress_channel` to a channel name (e.g. `"quic_edge"`). This enables two shared-memory lock-free ring buffers instead of a loopback UDP socket:
+When npquicrouter and one or more NPRPC HTTP/3 backends run on the same machine, configure SHM channels to replace loopback UDP sockets with shared-memory lock-free ring buffers.
 
-| Ring | Direction | SHM name | Created by |
+Two ring types are used:
+
+| Ring | Direction | SHM name | Configured by |
 |---|---|---|---|
-| c2s (ingress) | npquicrouter → backend | `/nprpc_<channel>_c2s` | npquicrouter (worker 0) |
-| s2c (egress) | backend → npquicrouter | `/nprpc_<channel>_s2c` | npquicrouter (worker 0) |
+| c2s (ingress) | npquicrouter → backend | `/nprpc_<route.shm_ingress_channel>_c2s` | `shm_ingress_channel` per route |
+| s2c (egress) | backend → npquicrouter | `/nprpc_<shm_egress_channel>_s2c` | `shm_egress_channel` at top level |
 
-Each ingress frame carries the real client `sockaddr` alongside the QUIC payload, so the backend always sees the true remote endpoint and can populate egress frames with the correct destination — no port-to-client translation table is needed.
+Each UDP route that names a `shm_ingress_channel` gets its own independent ingress ring, so multiple backends on the same machine are all supported simultaneously. Routes without a `shm_ingress_channel` fall back to the normal per-session UDP socket path.
 
-Egress frames carry a `gso_segment_size` field. When set, npquicrouter's egress reader calls `sendmsg()` with a `UDP_SEGMENT` cmsg, preserving the GSO batch assembled by the backend across the double-hop. This eliminates the per-packet syscall cost that a loopback UDP socket would impose.
+The egress ring is shared across all backends: backends write packets tagged with the real client `sockaddr`, so npquicrouter's egress reader can call `sendmsg()` directly without any lookup.
 
-With multiple workers enabled, workers 1..N-1 open the existing ingress ring as additional MPSC producers. Only worker 0 (the primary) drains the egress ring.
+All rings are created by npquicrouter worker 0 at startup (stale rings from a previous run are removed first). With multiple UDP workers, workers 1..N-1 open the existing ingress rings as additional MPSC producers (multiple worker threads → one backend consumer per ring). Only worker 0 drains the egress ring.
+
+Egress frames carry a `gso_segment_size` field. When set, the egress reader issues `sendmsg()` with a `UDP_SEGMENT` cmsg, preserving the GSO batch assembled by the backend across the double-hop and avoiding per-packet syscall overhead.
 
 Default ring sizes: 32 MiB each (configurable via `kShmIngressRingSize` / `kShmEgressRingSize` in `quic_shm_channel.hpp`).
+
+### Example: two backends, both using SHM
+
+```json
+{
+  "shm_egress_channel": "quic_edge",
+  "routes": [
+    { "sni": "app.example.com", "udp_backend": "127.0.0.1:4433", "shm_ingress_channel": "app_quic" },
+    { "sni": "api.example.com", "udp_backend": "127.0.0.1:4434", "shm_ingress_channel": "api_quic" }
+  ]
+}
+```
+
+This creates three rings:
+- `/nprpc_app_quic_c2s` — ingress for the `app` backend
+- `/nprpc_api_quic_c2s` — ingress for the `api` backend
+- `/nprpc_quic_edge_s2c` — shared egress from both backends back to clients
 
 ## Building
 

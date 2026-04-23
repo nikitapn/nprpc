@@ -73,8 +73,9 @@ struct Config {
   size_t http_webtransport_stream_opens_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_BURST;
   std::string ssr_handler_dir; // Path to SSR handler (index.js)
   bool watch_files = NPRPC_DEFAULT_WATCH_FILES;   // Enable inotify-based cache invalidation (dev mode)
-  // SHM egress channel for npquicrouter integration (see BuildConfig).
-  std::string http3_shm_egress_channel;
+  // SHM channels for npquicrouter integration (see BuildConfig).
+  std::string shm_egress_channel;
+  std::string shm_ingress_channel;
   ssl::context ssl_context_server{ssl::context::tlsv13_server};
   ssl::context ssl_context_client{ssl::context::tlsv13_client};
 };

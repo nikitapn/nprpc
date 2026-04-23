@@ -94,7 +94,8 @@ struct RpcBuildConfig {
     std::string quic_key_file;
     std::string ssl_client_self_signed_cert_path;
 
-    std::string http3_shm_egress_channel;
+    std::string shm_egress_channel;
+    std::string shm_ingress_channel;
 };
 
 // ============================================================================

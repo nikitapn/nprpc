@@ -114,7 +114,7 @@ size_t LockFreeRingBuffer::calculate_shm_size(size_t buffer_size)
 }
 
 std::unique_ptr<LockFreeRingBuffer>
-LockFreeRingBuffer::create(const std::string& name, size_t buffer_size)
+LockFreeRingBuffer::create(const std::string& name, size_t buffer_size, size_t max_message_size)
 {
   try {
     size_t page_size   = get_page_size();
@@ -125,7 +125,7 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size)
     boost::interprocess::managed_shared_memory shm(
         boost::interprocess::create_only, name.c_str(), total_size);
 
-    auto* header = shm.construct<RingBufferHeader>("header")(buffer_size, MAX_MESSAGE_SIZE);
+    auto* header = shm.construct<RingBufferHeader>("header")(buffer_size, max_message_size);
     if (!header)
       throw std::runtime_error("Failed to construct RingBufferHeader");
 
@@ -328,7 +328,7 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size)
   // Commit: consumer's spin signal.
   sh.actual_size.store(static_cast<uint32_t>(size), std::memory_order_release);
 
-  {
+  if (header_->waiting_readers.load(std::memory_order_seq_cst) > 0) {
     boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex>
         lock(header_->mutex);
     header_->data_available.notify_one();
@@ -388,13 +388,19 @@ size_t LockFreeRingBuffer::read_with_timeout(void* buffer,
   auto deadline = boost::posix_time::microsec_clock::universal_time() +
                   boost::posix_time::milliseconds(timeout.count());
 
+  header_->waiting_readers.fetch_add(1, std::memory_order_seq_cst);
   while (is_empty()) {
     auto now = boost::posix_time::microsec_clock::universal_time();
-    if (now >= deadline)
+    if (now >= deadline) {
+      header_->waiting_readers.fetch_sub(1, std::memory_order_relaxed);
       return 0;
-    if (!header_->data_available.timed_wait(lock, deadline))
+    }
+    if (!header_->data_available.timed_wait(lock, deadline)) {
+      header_->waiting_readers.fetch_sub(1, std::memory_order_relaxed);
       return 0;
+    }
   }
+  header_->waiting_readers.fetch_sub(1, std::memory_order_relaxed);
 
   lock.unlock();
   return try_read(buffer, buffer_size);
@@ -496,7 +502,7 @@ void LockFreeRingBuffer::commit_write(const WriteReservation& reservation,
   sh.actual_size.store(static_cast<uint32_t>(actual_size),
                        std::memory_order_release);
 
-  {
+  if (header_->waiting_readers.load(std::memory_order_seq_cst) > 0) {
     boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex>
         lock(header_->mutex);
     header_->data_available.notify_one();
@@ -560,5 +566,32 @@ void LockFreeRingBuffer::commit_read(const ReadView& view)
   header_->read_slot_idx.store(view.slot_idx + 1, std::memory_order_release);
 }
 
+
+void LockFreeRingBuffer::wait_for_readable(std::chrono::milliseconds timeout)
+{
+  // Spin phase: yield-based, ~1-5 µs on a modern CPU under light contention.
+  // This covers the common case where a burst of packets is in flight.
+  for (int i = 0; i < 500 && is_empty(); ++i)
+    std::this_thread::yield();
+
+  if (!is_empty())
+    return;
+
+  // Sleep phase: fall back to condvar.
+  // seq_cst on fetch_add pairs with seq_cst on the producer's load:
+  // either the producer sees waiting_readers > 0 and signals us, or it
+  // wrote the slot index (acq_rel CAS) before our is_empty() recheck and
+  // we see data without sleeping at all — no lost wakeup is possible.
+  boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex>
+      lock(header_->mutex);
+
+  header_->waiting_readers.fetch_add(1, std::memory_order_seq_cst);
+  if (is_empty()) {
+    auto deadline = boost::posix_time::microsec_clock::universal_time() +
+                    boost::posix_time::milliseconds(timeout.count());
+    header_->data_available.timed_wait(lock, deadline);
+  }
+  header_->waiting_readers.fetch_sub(1, std::memory_order_relaxed);
+}
 
 } // namespace nprpc::impl

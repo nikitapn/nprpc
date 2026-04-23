@@ -5,6 +5,8 @@
 
 // Internal logging header - do not expose in public API
 
+#include <version>
+
 #if __cpp_lib_format
 
 #include <chrono>

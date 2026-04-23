@@ -258,6 +258,7 @@ int main(int argc, char** argv)
   g_rpc = nprpc::RpcBuilder()
     .set_log_level(nprpc::LogLevel::error)
     .with_tcp(0).with_uring_if(use_uring_client)
+    .with_http(0).max_websocket_message_size(12 * 1024 * 1024)
     .build();
 
   g_rpc->start_thread_pool(16);

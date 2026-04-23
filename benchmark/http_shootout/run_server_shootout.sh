@@ -29,7 +29,7 @@ NPRPC_ROUTER_HTTP_PORT="${NPRPC_ROUTER_HTTP_PORT:-22233}"
 NPRPC_ROUTER_BACKEND_HTTP_PORT="${NPRPC_ROUTER_BACKEND_HTTP_PORT:-22243}"
 NPRPC_ROUTER_NUM_WORKERS="${NPRPC_ROUTER_NUM_WORKERS:-4}"
 NPRPC_ROUTER_BIN="${NPRPC_ROUTER_BIN:-$BUILD_DIR/npquicrouter/npquicrouter}"
-NPRPC_ROUTER_SHM_CHANNEL="bench_quic_edge"
+NPRPC_ROUTER_SHM_CHANNEL="bench_quic_edge" # Use same name for ingress and egress for simplicity in this benchmark setup
 NGINX_HTTP_PORT="${NGINX_HTTP_PORT:-28080}"
 NGINX_HTTPS_PORT="${NGINX_HTTPS_PORT:-28443}"
 CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-29080}"
@@ -466,7 +466,8 @@ generate_router_config() {
     {
       "sni": "localhost",
       "tcp_backend": "127.0.0.1:${NPRPC_ROUTER_BACKEND_HTTP_PORT}",
-      "udp_backend": "127.0.0.1:${NPRPC_ROUTER_BACKEND_HTTP_PORT}"
+      "udp_backend": "127.0.0.1:${NPRPC_ROUTER_BACKEND_HTTP_PORT}",
+      "shm_ingress_channel": "${NPRPC_ROUTER_SHM_CHANNEL}"
     }
   ]
 }
@@ -512,6 +513,7 @@ start_nprpc_via_router() {
       "NPRPC_BENCH_ENABLE_HTTP3=1" \
       "NPRPC_BENCH_HTTP_PORT=${NPRPC_ROUTER_BACKEND_HTTP_PORT}" \
       "NPRPC_BENCH_SHM_EGRESS=${NPRPC_ROUTER_SHM_CHANNEL}" \
+      "NPRPC_BENCH_SHM_INGRESS=${NPRPC_ROUTER_SHM_CHANNEL}" \
       "$BUILD_DIR/benchmark/benchmark_server"
   ) >"$TMP_DIR/nprpc_backend_router.log" 2>&1 &
   NPRPC_ROUTER_BACKEND_PID=$!

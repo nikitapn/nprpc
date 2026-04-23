@@ -56,8 +56,9 @@ static constexpr size_t kQuicServerScidLen = 18;
 
 struct RouteEntry {
     std::string sni;
-    std::string tcp_backend; // "ip:port"
-    std::string udp_backend; // "ip:port"
+    std::string tcp_backend;  // "ip:port"
+    std::string udp_backend;  // "ip:port"
+    std::string shm_ingress_channel;  // ingress SHM channel name for this UDP backend (empty = UDP mode)
 };
 
 struct Config {
@@ -69,11 +70,12 @@ struct Config {
     std::string  default_udp_backend;
     int          udp_session_timeout_sec = 120;
     std::vector<RouteEntry> routes;
-    // SHM egress channel name (empty = disabled).
+    // Egress SHM channel name (empty = disabled).
     // When set, npquicrouter creates a LockFreeRingBuffer named
     // /nprpc_<shm_egress_channel>_s2c that Http3Server writes GSO batches
     // into.  npquicrouter drains the ring and calls sendmsg(GSO) to preserve
     // batching across the double-UDP-hop.
+    // Per-backend ingress channels are configured per-route via RouteEntry::shm_ingress_channel.
     std::string  shm_egress_channel;
     int          num_workers          = 1;     // UDP worker threads (1 = single-threaded)
 };
@@ -85,7 +87,8 @@ struct glz::meta<RouteEntry> {
     static constexpr auto value = glz::object(
         "sni",         &T::sni,
         "tcp_backend", &T::tcp_backend,
-        "udp_backend", &T::udp_backend);
+        "udp_backend", &T::udp_backend,
+        "shm_ingress_channel", &T::shm_ingress_channel);
 };
 
 template <>
@@ -100,7 +103,7 @@ struct glz::meta<Config> {
         "default_udp_backend",     &T::default_udp_backend,
         "udp_session_timeout_sec", &T::udp_session_timeout_sec,
         "routes",                  &T::routes,
-        "shm_egress_channel",      &T::shm_egress_channel,
+        "shm_egress_channel",       &T::shm_egress_channel,
         "num_workers",             &T::num_workers);
 };
 
@@ -145,14 +148,14 @@ struct ResolvedRoute {
     udp::endpoint   udp_ep;
     bool            has_tcp = false;
     bool            has_udp = false;
+    std::string     shm_ingress_channel; // empty = UDP mode for this route
 };
 
 struct RouteTable {
     std::vector<ResolvedRoute> routes;
     tcp::endpoint              default_tcp;
-    udp::endpoint              default_udp;
     bool                       has_default_tcp = false;
-    bool                       has_default_udp = false;
+    ResolvedRoute              default_udp_route; // has_udp indicates if set
 
     const tcp::endpoint* lookup_tcp(std::string_view sni) const noexcept {
         for (const auto& r : routes)
@@ -160,10 +163,10 @@ struct RouteTable {
         return has_default_tcp ? &default_tcp : nullptr;
     }
 
-    const udp::endpoint* lookup_udp(std::string_view sni) const noexcept {
+    const ResolvedRoute* lookup_udp(std::string_view sni) const noexcept {
         for (const auto& r : routes)
-            if (r.has_udp && r.sni == sni) return &r.udp_ep;
-        return has_default_udp ? &default_udp : nullptr;
+            if (r.has_udp && r.sni == sni) return &r;
+        return default_udp_route.has_udp ? &default_udp_route : nullptr;
     }
 };
 
@@ -172,7 +175,8 @@ static RouteTable build_route_table(const Config& cfg, asio::io_context& ioc)
     RouteTable rt;
     for (const auto& r : cfg.routes) {
         ResolvedRoute rr;
-        rr.sni = r.sni;
+        rr.sni        = r.sni;
+        rr.shm_ingress_channel = r.shm_ingress_channel;
         if (!r.tcp_backend.empty()) {
             rr.tcp_ep  = parse_tcp_endpoint(r.tcp_backend, ioc);
             rr.has_tcp = true;
@@ -188,8 +192,9 @@ static RouteTable build_route_table(const Config& cfg, asio::io_context& ioc)
         rt.has_default_tcp = true;
     }
     if (!cfg.default_udp_backend.empty()) {
-        rt.default_udp     = parse_udp_endpoint(cfg.default_udp_backend, ioc);
-        rt.has_default_udp = true;
+        rt.default_udp_route.udp_ep  = parse_udp_endpoint(cfg.default_udp_backend, ioc);
+        rt.default_udp_route.has_udp = true;
+        // default backend has no shm_ingress_channel — always uses UDP mode
     }
     return rt;
 }
@@ -658,11 +663,11 @@ try_assemble_sni(const std::map<uint64_t, std::vector<uint8_t>>& frags)
 
 // One per active QUIC client-→-backend mapping.
 //
-// SHM mode (shm_ingress_ is set in UdpRouter):
-//   Packets are written directly to the c2s SHM ring.  No backend_sock
-//   is created; back_buf and backend_port are unused.
+// SHM mode (UdpSession::shm_ingress is non-null):
+//   Packets are written directly to the per-backend c2s SHM ring.  No
+//   backend_sock is created; back_buf and backend_port are unused.
 //
-// UDP mode (shm_ingress_ is null):
+// UDP mode (UdpSession::shm_ingress is null):
 //   A per-session ephemeral UDP socket forwards packets to the backend.
 struct UdpSession {
     udp::endpoint   client_ep;
@@ -672,6 +677,8 @@ struct UdpSession {
     uint16_t        backend_port = 0;
     std::chrono::steady_clock::time_point last_seen;
     std::array<uint8_t, 65536> back_buf{};
+    // SHM mode only — non-owning pointer into UdpRouter::shm_ingress_map_.
+    ShmIngressWriter* shm_ingress = nullptr;
 
     // SHM mode: only client/backend endpoints are tracked.
     UdpSession(udp::endpoint cep, udp::endpoint bep)
@@ -723,11 +730,12 @@ class UdpRouter {
 
     asio::steady_timer gc_timer_;
 
-    // SHM channel (present when cfg.shm_egress_channel is non-empty):
-    //   shm_ingress_  — c2s ring, writes incoming client packets to Http3Server.
-    //   shm_egress_   — s2c ring, reads packets from Http3Server and sendmsg to client.
-    // When the channel is empty, per-session UDP backend_sock is used instead.
-    std::unique_ptr<ShmIngressWriter> shm_ingress_;
+    // SHM channels (populated from cfg.routes entries with non-empty shm_ingress_channel):
+    //   shm_ingress_map_  — one c2s ring per backend, keyed by channel name.
+    //   shm_egress_       — single s2c ring driven by cfg.shm_egress_channel;
+    //                       reads packets from Http3Server and sendmsg to client.
+    // When a route has no shm_ingress_channel, a per-session UDP backend_sock is used.
+    std::unordered_map<std::string, std::unique_ptr<ShmIngressWriter>> shm_ingress_map_;
     std::unique_ptr<ShmEgressReader>  shm_egress_;
 
 public:
@@ -763,28 +771,33 @@ public:
     void start() {
         recv();
         schedule_gc();
-        if (shm_ingress_) {
-            if (shm_egress_) {
-                shm_egress_->start();
-                std::clog << "  SHM egress  channel: " << shm_egress_->ring_name() << "\n";
-            }
-            std::clog << "  SHM ingress channel: " << shm_ingress_->ring_name() << "\n";
+        for (const auto& [name, writer] : shm_ingress_map_)
+            std::clog << "  SHM ingress channel: " << writer->ring_name() << "\n";
+        if (shm_egress_) {
+            shm_egress_->start();
+            std::clog << "  SHM egress  channel: " << shm_egress_->ring_name() << "\n";
         }
     }
 
 private:
     void init_shm(const Config& cfg, size_t worker_index, bool is_primary) {
-        if (!cfg.shm_egress_channel.empty()) {
-            // Worker 0 creates both SHM rings; workers 1..N-1 open the existing
-            // c2s ring (MPSC: multiple producers are safe).
-            const bool creates_rings = (worker_index == 0);
-            shm_ingress_ = std::make_unique<ShmIngressWriter>(
-                cfg.shm_egress_channel, creates_rings);
-            // Only the primary (worker 0) drains the s2c ring.
-            if (is_primary) {
-                shm_egress_ = std::make_unique<ShmEgressReader>(
-                    cfg.shm_egress_channel, listen_sock_.native_handle());
+        const bool creates_rings = (worker_index == 0);
+        // Create one ingress ring per route that names a SHM channel.
+        // Worker 0 creates each ring; workers 1..N-1 open the existing ring
+        // (MPSC: multiple UDP worker threads are safe producers).
+        for (const auto& r : cfg.routes) {
+            if (!r.shm_ingress_channel.empty() && !r.udp_backend.empty()) {
+                if (shm_ingress_map_.find(r.shm_ingress_channel) == shm_ingress_map_.end()) {
+                    shm_ingress_map_.emplace(r.shm_ingress_channel,
+                        std::make_unique<ShmIngressWriter>(r.shm_ingress_channel, creates_rings));
+                }
             }
+        }
+        // Create the single egress ring (s2c) from the top-level channel name.
+        // Only the primary worker (worker 0) drains it.
+        if (!cfg.shm_egress_channel.empty() && is_primary) {
+            shm_egress_ = std::make_unique<ShmEgressReader>(
+                cfg.shm_egress_channel, listen_sock_.native_handle());
         }
     }
 
@@ -815,10 +828,10 @@ private:
         if (it != sessions_.end()) {
             // Existing session — forward to backend.
             it->second->last_seen = std::chrono::steady_clock::now();
-            if (shm_ingress_) {
-                // SHM mode: write to ingress ring with real client endpoint.
+            if (it->second->shm_ingress) {
+                // SHM mode: write to this session's ingress ring.
                 const auto ep_data = sender_ep_.data();
-                shm_ingress_->write_packet(
+                it->second->shm_ingress->write_packet(
                     static_cast<const sockaddr*>(static_cast<const void*>(ep_data)),
                     static_cast<socklen_t>(sender_ep_.size()),
                     datagram.data(), datagram.size());
@@ -884,24 +897,33 @@ private:
         if (!sni_opt) return; // need more fragments
 
         const std::string& sni = *sni_opt;
-        const udp::endpoint* ep = routes_.lookup_udp(sni);
-        if (!ep) {
+        const ResolvedRoute* route = routes_.lookup_udp(sni);
+        if (!route) {
             std::cerr << "[UDP] No route for SNI '" << sni << "' — dropping\n";
 
             pending_.erase(route_dcid_key);
             return;
         }
-        std::clog << "[UDP] SNI='" << sni << "' → " << *ep << "\n";
+        std::clog << "[UDP] SNI='" << sni << "' → " << route->udp_ep << "\n";
+
+        // Resolve the SHM ingress writer for this route (null = UDP mode).
+        ShmIngressWriter* shm_writer = nullptr;
+        if (!route->shm_ingress_channel.empty()) {
+            auto sit = shm_ingress_map_.find(route->shm_ingress_channel);
+            if (sit != shm_ingress_map_.end())
+                shm_writer = sit->second.get();
+        }
 
         // Create the session and replay all queued packets.
         std::shared_ptr<UdpSession> sess;
-        if (shm_ingress_) {
+        if (shm_writer) {
             // SHM mode: no backend socket needed.
-            sess = std::make_shared<UdpSession>(pend.client_ep, *ep);
+            sess = std::make_shared<UdpSession>(pend.client_ep, route->udp_ep);
+            sess->shm_ingress = shm_writer;
         } else {
             // UDP mode: create ephemeral socket and connect to backend.
-            sess = std::make_shared<UdpSession>(ioc_, pend.client_ep, *ep);
-            sess->backend_sock->connect(*ep);
+            sess = std::make_shared<UdpSession>(ioc_, pend.client_ep, route->udp_ep);
+            sess->backend_sock->connect(route->udp_ep);
             sess->backend_port = sess->backend_sock->local_endpoint().port();
             std::clog << "[UDP] Session backend_port=" << sess->backend_port
                       << " client=" << sess->client_ep << "\n";
@@ -911,15 +933,15 @@ private:
         auto queued = std::move(pend.queued_pkts);
         pending_.erase(route_dcid_key);
 
-        if (shm_ingress_) {
-            // Write all queued packets to the ingress ring.
+        if (shm_writer) {
+            // Write all queued packets to the backend's ingress ring.
             const auto& cep      = sess->client_ep;
             const auto  ep_data  = cep.data();
             const auto  ep_sa    = static_cast<const sockaddr*>(
                 static_cast<const void*>(ep_data));
             const auto  ep_len   = static_cast<socklen_t>(cep.size());
             for (auto& qpkt : queued)
-                shm_ingress_->write_packet(ep_sa, ep_len, qpkt.data(), qpkt.size());
+                shm_writer->write_packet(ep_sa, ep_len, qpkt.data(), qpkt.size());
         } else {
             for (auto& qpkt : queued) {
                 auto buf = std::make_shared<std::vector<uint8_t>>(std::move(qpkt));
@@ -999,8 +1021,8 @@ int main(int argc, char* argv[])
   "shm_egress_channel": "",
   "num_workers": 4,
   "routes": [
-    { "sni": "app.example.com",  "tcp_backend": "127.0.0.1:8443", "udp_backend": "127.0.0.1:4433" },
-    { "sni": "blog.example.com", "tcp_backend": "127.0.0.1:9443", "udp_backend": "127.0.0.1:4434" }
+    { "sni": "app.example.com",  "tcp_backend": "127.0.0.1:8443", "udp_backend": "127.0.0.1:4433", "shm_ingress_channel": "app_quic" },
+    { "sni": "blog.example.com", "tcp_backend": "127.0.0.1:9443", "udp_backend": "127.0.0.1:4434", "shm_ingress_channel": "blog_quic" }
   ]
 })" << "\n";
         return 1;

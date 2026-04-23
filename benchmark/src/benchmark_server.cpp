@@ -126,10 +126,13 @@ public:
                   .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                        "/home/nikita/projects/nprpc/certs/out/localhost.key")
                   .enable_http3()
-                  .http3_workers(8);
+                  .http3_workers(8)
+                  .max_websocket_message_size(12 * 1024 * 1024);
 
+      const char* shm_ingress_env = ::getenv("NPRPC_BENCH_SHM_INGRESS");
       if (shm_egress_env && *shm_egress_env)
-        builder.http3_shm_egress_channel(shm_egress_env);
+        builder.shm_egress_channel(shm_egress_env,
+                                   shm_ingress_env ? shm_ingress_env : shm_egress_env);
 
       rpc = builder.build();
 

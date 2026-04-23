@@ -154,26 +154,8 @@ void SharedMemoryChannel::read_loop()
     try {
       // Try zero-copy read first if callback is set
       if (on_data_received_view) {
-        // std::cout << "Attempting zero-copy read" << std::endl;
-        // Wait for data with timeout
-        {
-          boost::interprocess::scoped_lock<
-              boost::interprocess::interprocess_mutex>
-              lock(recv_ring_->header()->mutex);
+        recv_ring_->wait_for_readable(std::chrono::milliseconds(100));
 
-          auto deadline =
-              std::chrono::system_clock::now() + std::chrono::milliseconds(100);
-
-          while (recv_ring_->is_empty() && running_) {
-            auto now = std::chrono::system_clock::now();
-            if (now >= deadline) {
-              break; // Timeout, check running_ and try again
-            }
-            recv_ring_->header()->data_available.timed_wait(lock, deadline);
-          }
-        }
-
-        // Try to get a view into the ring buffer
         auto view = recv_ring_->try_read_view();
         // std::cout << "Zero-copy read view attempt returned valid=" <<
         // view.valid << std::endl;

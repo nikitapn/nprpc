@@ -360,12 +360,17 @@ struct BuildConfig {
   std::string quic_key_file;
   std::string ssl_client_self_signed_cert_path;
 
-  // SHM egress channel for npquicrouter integration.
-  // When non-empty, Http3Server writes GSO batches to the named ring buffer
-  // instead of calling sendmsg directly, allowing npquicrouter to forward
-  // them as a single sendmsg(GSO) call and preserve kernel batching.
-  // Must match the "shm_egress_channel" value in npquicrouter's config.json.
-  std::string http3_shm_egress_channel;
+  // SHM channels for npquicrouter integration.
+  // shm_egress_channel — Http3Server writes GSO batches to /nprpc_<name>_s2c
+  //   instead of calling sendmsg directly.  npquicrouter drains the ring and
+  //   forwards as a single sendmsg(GSO) call, preserving kernel batching.
+  //   Matches "http3_shm_channel" in npquicrouter's config.json.
+  // shm_ingress_channel — Http3Server reads incoming QUIC datagrams from
+  //   /nprpc_<name>_c2s written by npquicrouter instead of recvmsg.
+  //   Matches "shm_channel" of the corresponding route entry in
+  //   npquicrouter's config.json.
+  std::string shm_egress_channel;
+  std::string shm_ingress_channel;
 
   // TCP transport tuning
   bool use_epoll_tcp = false; // Use raw epoll server instead of Asio (Linux only)
@@ -632,15 +637,18 @@ public:
     return *this;
   }
 
-  /// Enable SHM egress offload via npquicrouter.
-  /// Http3Server will write GSO batches to a LockFreeRingBuffer named
-  /// /nprpc_<channel>_s2c instead of calling sendmsg directly.
-  /// npquicrouter then forwards the batch as a single sendmsg(GSO) call,
-  /// restoring kernel-level batching through the double-UDP-hop.
-  /// Must match the "shm_egress_channel" field in npquicrouter's config.json.
-  RpcBuilderHttp& http3_shm_egress_channel(std::string_view channel) noexcept
+  /// Enable SHM channel offload via npquicrouter.
+  /// @param egress_channel  Name used to open /nprpc_<name>_s2c — Http3Server
+  ///   writes GSO batches there instead of calling sendmsg directly.
+  ///   Must match "http3_shm_channel" in npquicrouter's config.json.
+  /// @param ingress_channel Name used to open /nprpc_<name>_c2s — Http3Server
+  ///   reads incoming QUIC datagrams from there instead of recvmsg.
+  ///   Must match the route's "shm_channel" in npquicrouter's config.json.
+  RpcBuilderHttp& shm_egress_channel(std::string_view egress_channel,
+                                     std::string_view ingress_channel) noexcept
   {
-    cfg_->http3_shm_egress_channel = channel;
+    cfg_->shm_egress_channel  = egress_channel;
+    cfg_->shm_ingress_channel = ingress_channel;
     return *this;
   }
 };
@@ -681,7 +689,7 @@ inline RpcBuilderQuic RpcBuilderBase::with_quic(uint16_t port) noexcept
 }
 // Note: with_* return sub-builders by value but they all share the same
 // shared_ptr<BuildConfig>, so calling build() on a stored sub-builder
-// (e.g. auto b = builder.with_http(...); b.http3_shm_egress_channel(...); b.build();)
+// (e.g. auto b = builder.with_http(...); b.shm_egress_channel(...); b.build();)
 // is safe regardless of the original RpcBuilder's lifetime.
 
 } // namespace impl

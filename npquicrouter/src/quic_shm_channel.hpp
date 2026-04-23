@@ -190,8 +190,9 @@ private:
     while (running_.load(std::memory_order_acquire)) {
       auto view = ring_->try_read_view();
       if (!view) {
-        struct timespec ts = {0, 50'000}; // 50 µs
-        nanosleep(&ts, nullptr);
+        // Spin briefly then sleep via condvar; zero cost for the producer
+        // (no mutex/syscall) unless we actually go to sleep.
+        ring_->wait_for_readable(std::chrono::milliseconds(10));
         continue;
       }
 

@@ -34,13 +34,8 @@ namespace nprpc::impl {
 class NPRPC_API SharedMemoryChannel
 {
 public:
-  static constexpr size_t MAX_MESSAGE_SIZE =
-      32 * 1024 * 1024; // 32MB (same as TCP/WebSocket)
-  static constexpr size_t RING_BUFFER_SIZE =
-      16 * 1024 * 1024; // 16MB per ring buffer (variable-sized messages)
-  // Total per connection: 32MB (16MB × 2 directions) vs 256MB with fixed
-  // slots
-  // - 8x reduction!
+  static constexpr size_t RING_BUFFER_SIZE = 16 * 1024 * 1024;
+  static constexpr size_t MAX_MESSAGE_SIZE = 12 * 1024 * 1024;
 
 private:
   std::string channel_id_;

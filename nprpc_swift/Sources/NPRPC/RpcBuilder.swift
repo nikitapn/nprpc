@@ -48,6 +48,7 @@ class BuildConfig {
     var ssrHandlerDir: String = ""
     var watchFiles: Bool = false
     var http3ShmEgressChannel: String = ""
+    var http3ShmIngressChannel: String = ""
 
     // QUIC
     var quicPort: UInt16 = 0
@@ -185,7 +186,8 @@ extension RpcBuilderInternal {
         cxxConfig.http_webtransport_stream_opens_burst = numericCast(config.httpWebTransportStreamOpensBurst)
         cxxConfig.ssr_handler_dir = std.string(config.ssrHandlerDir)
         cxxConfig.watch_files = config.watchFiles
-        cxxConfig.http3_shm_egress_channel = std.string(config.http3ShmEgressChannel)
+        cxxConfig.shm_egress_channel  = std.string(config.http3ShmEgressChannel)
+        cxxConfig.shm_ingress_channel = std.string(config.http3ShmIngressChannel)
 
         // QUIC settings
         cxxConfig.quic_cert_file = std.string(config.quicCertFile)
@@ -391,10 +393,14 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
         return self
     }
 
-    /// Configure shared memory egress channel for npquicrouter integration.
+    /// Configure shared memory channels for npquicrouter integration.
+    /// - Parameter egressChannel:  Matches "http3_shm_channel" in npquicrouter's config.json.
+    /// - Parameter ingressChannel: Matches the route's "shm_channel" in npquicrouter's config.json.
     @discardableResult
-    public func http3ShmEgressChannel(_ channelName: String) -> RpcBuilderHttp {
-        config.http3ShmEgressChannel = channelName
+    public func http3ShmChannels(egress egressChannel: String,
+                                 ingress ingressChannel: String) -> RpcBuilderHttp {
+        config.http3ShmEgressChannel  = egressChannel
+        config.http3ShmIngressChannel = ingressChannel
         return self
     }
 }
