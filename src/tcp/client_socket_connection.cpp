@@ -44,7 +44,8 @@ namespace net = boost::asio;
 // ---------------------------------------------------------------------------
 // do_rpc — write request, then park until read_loop delivers the response.
 // ---------------------------------------------------------------------------
-net::awaitable<void> SocketConnection::do_rpc(flat_buffer& buf)
+net::awaitable<void> SocketConnection::do_rpc(flat_buffer& buf,
+                                               uint32_t     timeout_ms)
 {
   auto [ec1, _] = co_await net::async_write(
       socket_, buf.cdata(), net::as_tuple(net::use_awaitable));
@@ -54,13 +55,28 @@ net::awaitable<void> SocketConnection::do_rpc(flat_buffer& buf)
   }
 
   // Park on a timer; read_loop() cancels it once the response arrives.
-  net::steady_timer timer(socket_.get_executor(),
-                          net::steady_timer::time_point::max());
+  // timeout_ms == 0 → wait forever (time_point::max()).
+  auto expiry = timeout_ms
+      ? net::steady_timer::clock_type::now() +
+            std::chrono::milliseconds(timeout_ms)
+      : net::steady_timer::time_point::max();
+
+  net::steady_timer timer(socket_.get_executor(), expiry);
   pending_rpc_.buf_out = &buf;
   pending_rpc_.wakeup  = &timer;
   pending_rpc_.error   = false;
 
   co_await timer.async_wait(net::as_tuple(net::use_awaitable));
+
+  // read_loop clears pending_rpc_.wakeup when it delivers a response or
+  // signals a comm error.  If wakeup is still set here the timer fired
+  // naturally → timeout.  Cancel the socket so read_loop exits cleanly.
+  if (pending_rpc_.wakeup) {
+    pending_rpc_ = {};
+    boost::system::error_code ec;
+    socket_.cancel(ec);
+    throw nprpc::ExceptionTimeout();
+  }
 
   const bool had_error = pending_rpc_.error;
   pending_rpc_ = {};
@@ -168,7 +184,7 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 {
   std::unique_lock<std::mutex> lk(rpc_mutex_);
   try {
-    net::co_spawn(socket_.get_executor(), do_rpc(buffer), net::use_future)
+    net::co_spawn(socket_.get_executor(), do_rpc(buffer, timeout_ms), net::use_future)
         .get();
   } catch (const nprpc::ExceptionCommFailure&) {
     throw;
@@ -188,6 +204,7 @@ nprpc::Task<> SocketConnection::send_receive_coro(flat_buffer&   buffer,
   struct Awaiter {
     SocketConnection& self;
     flat_buffer&      buf;
+    uint32_t          timeout_ms;
     std::exception_ptr ep;
 
     bool await_ready() noexcept { return false; }
@@ -196,11 +213,10 @@ nprpc::Task<> SocketConnection::send_receive_coro(flat_buffer&   buffer,
     {
       net::co_spawn(
           self.socket_.get_executor(),
-          self.do_rpc(buf),
-          [&self = self, h, &ep = ep](std::exception_ptr e) mutable {
+          self.do_rpc(buf, timeout_ms),
+          [h, &ep = ep](std::exception_ptr e) mutable {
             ep = std::move(e);
-            // Resume the nprpc::Task<> continuation on the strand.
-            net::post(self.socket_.get_executor(), [h]() { h.resume(); });
+            h.resume();
           });
     }
 
@@ -210,7 +226,7 @@ nprpc::Task<> SocketConnection::send_receive_coro(flat_buffer&   buffer,
     }
   };
 
-  co_await Awaiter{*this, buffer};
+  co_await Awaiter{*this, buffer, timeout_ms};
 }
 
 // ---------------------------------------------------------------------------
@@ -245,9 +261,9 @@ void SocketConnection::send_receive_async(
 
   net::co_spawn(
       socket_.get_executor(),
-      [self = shared_from_this(), buf, hdl]() -> net::awaitable<void> {
+      [self = shared_from_this(), buf, hdl, timeout_ms]() -> net::awaitable<void> {
         try {
-          co_await self->do_rpc(*buf);
+          co_await self->do_rpc(*buf, timeout_ms);
           (*hdl)(boost::system::error_code{}, *buf);
         } catch (...) {
           (*hdl)(boost::asio::error::connection_reset, *buf);

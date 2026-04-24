@@ -153,7 +153,8 @@ class SocketConnection : public Session,
 
   // Read one complete message, write it, then wait for the response.
   // Runs on the socket strand as part of a co_spawn (or directly awaited).
-  boost::asio::awaitable<void> do_rpc(flat_buffer& buf);
+  // timeout_ms == 0 means no timeout (wait forever).
+  boost::asio::awaitable<void> do_rpc(flat_buffer& buf, uint32_t timeout_ms);
 
   // Continuous reader — routes responses to pending_rpc_ and stream messages
   // to ctx_.stream_manager.  Spawned with detached on construction.
