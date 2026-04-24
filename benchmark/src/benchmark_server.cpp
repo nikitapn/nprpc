@@ -1,6 +1,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <fcntl.h>
 #include <iostream>
 #include <signal.h>
 #include <sys/wait.h>
@@ -31,10 +32,18 @@ public:
       return false;
     } else if (nameserver_pid == 0) {
       // Child process - run the nameserver
+      int log_fd = open("/tmp/npnameserver_out_err.log",
+                        O_WRONLY | O_CREAT | O_TRUNC, 0644);
+      if (log_fd >= 0) {
+        dup2(log_fd, STDOUT_FILENO);
+        dup2(log_fd, STDERR_FILENO);
+        close(log_fd);
+      }
+
       // Try to find npnameserver in the build directory
-      execl("/home/nikita/projects/nprpc/.build_release/npnameserver",
-            "npnameserver", nullptr);
       execl("/home/nikita/projects/nprpc/.build_relwith_debinfo/npnameserver",
+            "npnameserver", nullptr);
+      execl("/home/nikita/projects/nprpc/.build_release/npnameserver",
             "npnameserver", nullptr);
       execl("/home/nikita/projects/nprpc/.build_debug/npnameserver",
             "npnameserver", nullptr);

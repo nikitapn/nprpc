@@ -143,22 +143,23 @@ class SocketConnection : public Session,
   // so only one RPC may be in flight at a time per connection.
   std::mutex rpc_mutex_;
 
-  // Single pending RPC slot — the client is sequential (one RPC at a time).
-  // Accessed only on the socket strand; no mutex needed.
+  // Single pending RPC slot — only one RPC in flight at a time (serialized by
+  // rpc_mutex_). Accessed only on the socket strand inside do_rpc/read_response.
   struct PendingRpc {
-    flat_buffer*                    buf_out = nullptr; // caller's buffer
-    boost::asio::steady_timer*      wakeup  = nullptr; // cancelled on response
-    bool                            error   = false;
+    flat_buffer* buf_out   = nullptr; // caller's buffer, filled on success
+    bool         error     = false;   // set by read_response on comm failure
+    bool         timed_out = false;   // set by timer callback before cancel
   } pending_rpc_;
 
-  // Read one complete message, write it, then wait for the response.
-  // Runs on the socket strand as part of a co_spawn (or directly awaited).
-  // timeout_ms == 0 means no timeout (wait forever).
+  // Write request then read exactly one RPC reply (stream messages are routed
+  // inline and the read continues until the reply arrives or an error occurs).
+  // timeout_ms == 0 means no timeout.
   boost::asio::awaitable<void> do_rpc(flat_buffer& buf, uint32_t timeout_ms);
 
-  // Continuous reader — routes responses to pending_rpc_ and stream messages
-  // to ctx_.stream_manager.  Spawned with detached on construction.
-  boost::asio::awaitable<void> read_loop();
+  // Reads one complete message off the socket. Stream messages are routed to
+  // ctx_.stream_manager and the read continues; RPC responses fill
+  // pending_rpc_.buf_out. Sets pending_rpc_.error on any comm failure.
+  boost::asio::awaitable<void> read_response();
 
 protected:
   virtual void timeout_action() final
