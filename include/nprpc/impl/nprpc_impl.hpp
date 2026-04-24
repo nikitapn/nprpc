@@ -4,8 +4,10 @@
 #pragma once
 
 #include <atomic>
+#include <boost/asio/awaitable.hpp>
 #include <boost/asio/deadline_timer.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/core/exchange.hpp>
 #include <cassert>
@@ -132,16 +134,30 @@ protected:
 };
 
 class SocketConnection : public Session,
-                         public CommonConnection<SocketConnection>,
                          public std::enable_shared_from_this<SocketConnection>
 {
-  // this endpoint is used to reconnect
-  // if the connection is lost
-  boost::asio::ip::tcp::endpoint endpoint_;
-  boost::asio::ip::tcp::socket socket_;
-  uint32_t rx_size_ = 0;
+  boost::asio::ip::tcp::endpoint endpoint_; // for reconnect
+  boost::asio::ip::tcp::socket   socket_;
 
-  void reconnect();
+  // Serializes concurrent send_receive() callers — TCP has no request IDs,
+  // so only one RPC may be in flight at a time per connection.
+  std::mutex rpc_mutex_;
+
+  // Single pending RPC slot — the client is sequential (one RPC at a time).
+  // Accessed only on the socket strand; no mutex needed.
+  struct PendingRpc {
+    flat_buffer*                    buf_out = nullptr; // caller's buffer
+    boost::asio::steady_timer*      wakeup  = nullptr; // cancelled on response
+    bool                            error   = false;
+  } pending_rpc_;
+
+  // Read one complete message, write it, then wait for the response.
+  // Runs on the socket strand as part of a co_spawn (or directly awaited).
+  boost::asio::awaitable<void> do_rpc(flat_buffer& buf);
+
+  // Continuous reader — routes responses to pending_rpc_ and stream messages
+  // to ctx_.stream_manager.  Spawned with detached on construction.
+  boost::asio::awaitable<void> read_loop();
 
 protected:
   virtual void timeout_action() final
@@ -157,24 +173,15 @@ public:
 
   void send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
 
+  nprpc::Task<> send_receive_coro(flat_buffer& buffer,
+                                   uint32_t timeout_ms,
+                                   std::stop_token st = {}) override;
+
   void send_receive_async(
       flat_buffer&& buffer,
       std::optional<std::function<void(const boost::system::error_code&,
                                        flat_buffer&)>>&& completion_handler,
       uint32_t timeout_ms) override;
-
-  void on_read_size(const boost::system::error_code& ec, size_t len);
-  void on_read_body(const boost::system::error_code& ec, size_t len);
-  void do_read_size();
-  void do_read_body();
-
-  template <typename WriteHandler>
-  void write_async(const flat_buffer& buf, WriteHandler&& handler)
-  {
-    timeout_timer_.expires_after(timeout_);
-    boost::asio::async_write(socket_, buf.cdata(),
-                             std::forward<WriteHandler>(handler));
-  }
 
   // UNTESTED
   void shutdown() override

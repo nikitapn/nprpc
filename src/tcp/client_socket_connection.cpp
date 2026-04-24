@@ -1,7 +1,33 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
+//
+// Coroutine-based ASIO TCP client connection.
+//
+// Design:
+//  read_loop()  — spawned with detached on construction; runs forever on the
+//                 socket strand, routing each message either to the single
+//                 pending_rpc_ slot (RPC responses) or to ctx_.stream_manager
+//                 (streaming messages).
+//
+//  do_rpc()     — awaitable<void> that (1) async_writes the request, then
+//                 (2) parks on a strand-local steady_timer until read_loop()
+//                 cancels it after placing the response in pending_rpc_.buf_out.
+//                 All operations run on the socket strand, so pending_rpc_ is
+//                 accessed without any mutex.
+//
+//  send_receive()        — bridges the blocking caller via co_spawn+use_future.
+//  send_receive_coro()   — custom awaiter that co_spawns do_rpc and resumes the
+//                          nprpc::Task<> continuation when it finishes.
+//  send_receive_async()  — fire-and-forget: posts async_write; with a handler,
+//                          spawns do_rpc and invokes the handler on completion.
 
+#include <boost/asio/as_tuple.hpp>
+#include <boost/asio/awaitable.hpp>
+#include <boost/asio/co_spawn.hpp>
 #include <boost/asio/read.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/asio/use_awaitable.hpp>
+#include <boost/asio/use_future.hpp>
 #include <boost/asio/write.hpp>
 
 #include <nprpc/common.hpp>
@@ -9,310 +35,253 @@
 #include <nprpc/impl/stream_manager.hpp>
 
 #include "helper.hpp"
+#include "../logging.hpp"
 
 namespace nprpc::impl {
 
-void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
+namespace net = boost::asio;
+
+// ---------------------------------------------------------------------------
+// do_rpc — write request, then park until read_loop delivers the response.
+// ---------------------------------------------------------------------------
+net::awaitable<void> SocketConnection::do_rpc(flat_buffer& buf)
 {
-  struct WorkImpl : IOWork {
-    flat_buffer& buf;
-    SocketConnection& this_;
-    uint32_t timeout_ms;
-
-    std::atomic_bool done{false};
-    boost::system::error_code result;
-
-    void operator()() noexcept override
-    {
-      this_.set_timeout(timeout_ms);
-      this_.write_async(buf, [&](const boost::system::error_code& ec,
-                                 size_t bytes_transferred) {
-        boost::ignore_unused(bytes_transferred);
-        if (ec) {
-          on_failed(ec);
-          this_.pop_and_execute_next_task();
-          return;
-        }
-        this_.do_read_size();
-      });
-    }
-
-    void on_failed(const boost::system::error_code& ec) noexcept override
-    {
-      result = ec;
-      done.store(true, std::memory_order_release);
-      done.notify_one();
-    }
-
-    void on_executed() noexcept override
-    {
-      result = boost::system::error_code{};
-      done.store(true, std::memory_order_release);
-      done.notify_one();
-    }
-
-    flat_buffer& buffer() noexcept override { return buf; };
-
-    boost::system::error_code wait()
-    {
-      done.wait(false);
-      return result;
-    }
-
-    WorkImpl(flat_buffer& _buf, SocketConnection& _this_, uint32_t _timeout_ms)
-        : buf(_buf)
-        , this_(_this_)
-        , timeout_ms(_timeout_ms)
-    {
-    }
-  };
-
-  // Post work and wait for completion
-  auto w = std::make_shared<WorkImpl>(buffer, *this, timeout_ms);
-  add_work(w);
-  auto ec = w->wait();
-
-  if (!ec) {
-    // dump_message(buffer, true);
-    return;
+  auto [ec1, _] = co_await net::async_write(
+      socket_, buf.cdata(), net::as_tuple(net::use_awaitable));
+  if (ec1) {
+    fail(ec1, "tcp client: do_rpc write");
+    throw nprpc::ExceptionCommFailure();
   }
 
-  if (ec == boost::asio::error::connection_reset ||
-      ec == boost::asio::error::broken_pipe) {
-    reconnect();
-    auto w = std::make_shared<WorkImpl>(buffer, *this, timeout_ms);
-    add_work(w);
-    auto ec = w->wait();
-    if (ec)
-      close();
-  } else {
-    fail(ec, "send_receive");
-    close();
+  // Park on a timer; read_loop() cancels it once the response arrives.
+  net::steady_timer timer(socket_.get_executor(),
+                          net::steady_timer::time_point::max());
+  pending_rpc_.buf_out = &buf;
+  pending_rpc_.wakeup  = &timer;
+  pending_rpc_.error   = false;
+
+  co_await timer.async_wait(net::as_tuple(net::use_awaitable));
+
+  const bool had_error = pending_rpc_.error;
+  pending_rpc_ = {};
+
+  if (had_error) throw nprpc::ExceptionCommFailure();
+}
+
+// ---------------------------------------------------------------------------
+// read_loop — continuous message reader on the socket strand.
+// ---------------------------------------------------------------------------
+net::awaitable<void> SocketConnection::read_loop()
+{
+  flat_buffer buf{flat_buffer::default_initial_size()};
+
+  for (;;) {
+    buf.consume(buf.size());
+
+    // Read at least the 4-byte size prefix (often the full small header).
+    auto [ec, n] = co_await socket_.async_read_some(
+        buf.prepare(1024), net::as_tuple(net::use_awaitable));
+    if (ec || n < 4) break;
+    buf.commit(n);
+
+    uint32_t msg_size;
+    std::memcpy(&msg_size, buf.data_ptr(), sizeof(uint32_t));
+    if (msg_size > max_message_size) {
+      NPRPC_LOG_ERROR("tcp client: oversized message {} bytes, closing",
+                      msg_size);
+      break;
+    }
+
+    // Read the remainder of the body if it hasn't arrived yet.
+    if (buf.size() < msg_size) {
+      auto [ec2, n2] = co_await net::async_read(
+          socket_,
+          buf.prepare(msg_size - buf.size()),
+          net::as_tuple(net::use_awaitable));
+      if (ec2) {
+        fail(ec2, "tcp client: read_loop body");
+        break;
+      }
+      buf.commit(n2);
+    }
+
+    auto* header = reinterpret_cast<const flat::Header*>(buf.data_ptr());
+    const auto msg_id = header->msg_id;
+
+    // Stream messages from the server: route to stream_manager.
+    if (msg_id == MessageId::StreamDataChunk    ||
+        msg_id == MessageId::StreamCompletion   ||
+        msg_id == MessageId::StreamError        ||
+        msg_id == MessageId::StreamCancellation ||
+        msg_id == MessageId::StreamWindowUpdate) {
+      if (ctx_.stream_manager) {
+        if (msg_id == MessageId::StreamDataChunk) {
+          flat_buffer chunk;
+          chunk.prepare(buf.size());
+          chunk.commit(buf.size());
+          std::memcpy(chunk.data().data(), buf.data().data(), buf.size());
+          ctx_.stream_manager->on_chunk_received(std::move(chunk));
+        } else if (msg_id == MessageId::StreamCompletion) {
+          flat::StreamComplete_Direct msg(buf, sizeof(flat::Header));
+          ctx_.stream_manager->on_stream_complete(msg.stream_id(),
+                                                   msg.final_sequence());
+        } else if (msg_id == MessageId::StreamError) {
+          flat::StreamError_Direct msg(buf, sizeof(flat::Header));
+          flat_buffer empty;
+          ctx_.stream_manager->on_stream_error(msg.stream_id(),
+                                                msg.error_code(),
+                                                std::move(empty));
+        } else if (msg_id == MessageId::StreamCancellation) {
+          flat::StreamCancel_Direct msg(buf, sizeof(flat::Header));
+          ctx_.stream_manager->on_stream_cancel(msg.stream_id());
+        } else {  // StreamWindowUpdate
+          flat::StreamWindowUpdate_Direct msg(buf, sizeof(flat::Header));
+          ctx_.stream_manager->on_window_update(msg.stream_id(), msg.credits());
+        }
+      }
+      continue;
+    }
+
+    // RPC response: deliver to the pending slot.
+    if (pending_rpc_.buf_out && pending_rpc_.wakeup) {
+      *pending_rpc_.buf_out = std::move(buf);
+      pending_rpc_.wakeup->cancel();
+      pending_rpc_.wakeup = nullptr;
+      buf = flat_buffer{flat_buffer::default_initial_size()};
+    } else {
+      NPRPC_LOG_WARN("tcp client: received unexpected response (no pending RPC)");
+    }
+  }
+
+  // Signal any waiting RPC with an error on connection loss.
+  if (pending_rpc_.wakeup) {
+    pending_rpc_.error = true;
+    pending_rpc_.wakeup->cancel();
+    pending_rpc_.wakeup = nullptr;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// send_receive — blocks the calling (application) thread via co_spawn+use_future.
+// ---------------------------------------------------------------------------
+void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
+{
+  std::unique_lock<std::mutex> lk(rpc_mutex_);
+  try {
+    net::co_spawn(socket_.get_executor(), do_rpc(buffer), net::use_future)
+        .get();
+  } catch (const nprpc::ExceptionCommFailure&) {
+    throw;
+  } catch (...) {
     throw nprpc::ExceptionCommFailure();
   }
 }
 
+// ---------------------------------------------------------------------------
+// send_receive_coro — true coroutine suspension via a custom nprpc::Task<>
+// awaiter that bridges into the Asio awaitable<void> do_rpc().
+// ---------------------------------------------------------------------------
+nprpc::Task<> SocketConnection::send_receive_coro(flat_buffer&   buffer,
+                                                    uint32_t       timeout_ms,
+                                                    std::stop_token /*st*/)
+{
+  struct Awaiter {
+    SocketConnection& self;
+    flat_buffer&      buf;
+    std::exception_ptr ep;
+
+    bool await_ready() noexcept { return false; }
+
+    void await_suspend(std::coroutine_handle<> h) noexcept
+    {
+      net::co_spawn(
+          self.socket_.get_executor(),
+          self.do_rpc(buf),
+          [&self = self, h, &ep = ep](std::exception_ptr e) mutable {
+            ep = std::move(e);
+            // Resume the nprpc::Task<> continuation on the strand.
+            net::post(self.socket_.get_executor(), [h]() { h.resume(); });
+          });
+    }
+
+    void await_resume()
+    {
+      if (ep) std::rethrow_exception(ep);
+    }
+  };
+
+  co_await Awaiter{*this, buffer};
+}
+
+// ---------------------------------------------------------------------------
+// send_receive_async
+// ---------------------------------------------------------------------------
 void SocketConnection::send_receive_async(
     flat_buffer&& buffer,
     std::optional<std::function<void(const boost::system::error_code&,
                                      flat_buffer&)>>&& completion_handler,
     uint32_t timeout_ms)
 {
-  assert(*(uint32_t*)buffer.data().data() == buffer.size());
+  if (!completion_handler) {
+    // Fire-and-forget: write and ignore the outcome.
+    auto buf = std::make_shared<flat_buffer>(std::move(buffer));
+    net::post(socket_.get_executor(),
+              [self = shared_from_this(), buf]() {
+                net::async_write(
+                    self->socket_, buf->cdata(),
+                    [self, buf](boost::system::error_code ec, std::size_t) {
+                      if (ec)
+                        fail(ec, "tcp client: fire-and-forget write");
+                    });
+              });
+    return;
+  }
 
-  struct WorkImpl : IOWork {
-    flat_buffer buf;
-    std::shared_ptr<SocketConnection> this_;
-    uint32_t timeout_ms;
-    std::optional<
-        std::function<void(const boost::system::error_code&, flat_buffer&)>>
-        handler;
+  // Async RPC with a response handler: spawn do_rpc and invoke the handler.
+  auto buf = std::make_shared<flat_buffer>(std::move(buffer));
+  auto hdl = std::make_shared<
+      std::function<void(const boost::system::error_code&, flat_buffer&)>>(
+      std::move(*completion_handler));
 
-    void operator()() noexcept override
-    {
-      this_->set_timeout(timeout_ms);
-      this_->write_async(buf, [&](const boost::system::error_code& ec,
-                                  size_t bytes_transferred) {
-        boost::ignore_unused(bytes_transferred);
-        if (ec) {
-          on_failed(ec);
-          this_->pop_and_execute_next_task();
-          return;
+  net::co_spawn(
+      socket_.get_executor(),
+      [self = shared_from_this(), buf, hdl]() -> net::awaitable<void> {
+        try {
+          co_await self->do_rpc(*buf);
+          (*hdl)(boost::system::error_code{}, *buf);
+        } catch (...) {
+          (*hdl)(boost::asio::error::connection_reset, *buf);
         }
-        if (!handler) {
-          // Fire-and-forget: pop immediately and start streaming listener mode
-          this_->pop_and_execute_next_task();
-          // Continue reading for streaming messages
-          this_->do_read_size();
-        } else {
-          // Normal request-response: wait for reply
-          this_->do_read_size();
-        }
-      });
-    }
-
-    void on_failed(const boost::system::error_code& ec) noexcept override
-    {
-      if (handler)
-        handler.value()(ec, buf);
-    }
-
-    void on_executed() noexcept override
-    {
-      if (handler)
-        handler.value()(boost::system::error_code{}, buf);
-    }
-
-    flat_buffer& buffer() noexcept override { return buf; };
-
-    WorkImpl(flat_buffer&& _buf,
-             std::shared_ptr<SocketConnection> _this_,
-             std::optional<std::function<void(const boost::system::error_code&,
-                                              flat_buffer&)>>&& _handler,
-             uint32_t _timeout_ms)
-        : buf(std::move(_buf))
-        , this_(_this_)
-        , timeout_ms(_timeout_ms)
-        , handler(std::move(_handler))
-    {
-    }
-  };
-
-  add_work(std::make_shared<WorkImpl>(std::move(buffer), shared_from_this(),
-                                      std::move(completion_handler),
-                                      timeout_ms));
+      },
+      net::detached);
 }
 
-void SocketConnection::reconnect()
-{
-  socket_ = std::move(net::ip::tcp::socket(socket_.get_executor()));
-
-  boost::system::error_code ec;
-  socket_.connect(endpoint_, ec);
-
-  if (ec) {
-    close();
-    throw nprpc::ExceptionCommFailure();
-  }
-}
-
-void SocketConnection::do_read_size()
-{
-  auto& buf = current_rx_buffer();
-  buf.consume(buf.size());
-
-  timeout_timer_.expires_after(timeout_);
-  socket_.async_read_some(buf.prepare(1024),
-                           std::bind(&SocketConnection::on_read_size,
-                                     shared_from_this(), std::placeholders::_1,
-                                     std::placeholders::_2));
-}
-
-void SocketConnection::do_read_body()
-{
-  // Set timeout once for the entire body read — NOT per-chunk.
-  // async_read reads exactly rx_size_ bytes in a single composed operation,
-  // avoiding ~2*N timer cancel/reschedule + io_context dispatches (where N is
-  // the number of OS TCP segments for the message body, ~80 for 10MB default).
-  timeout_timer_.expires_after(timeout_);
-  boost::asio::async_read(socket_,
-                          current_rx_buffer().prepare(rx_size_),
-                          std::bind(&SocketConnection::on_read_body,
-                                    shared_from_this(), std::placeholders::_1,
-                                    std::placeholders::_2));
-}
-
-void SocketConnection::on_read_size(const boost::system::error_code& ec,
-                                    size_t len)
-{
-  timeout_timer_.expires_after(std::chrono::system_clock::duration::max());
-
-  if (ec) {
-    fail(ec, "client_socket_session: on_read_size");
-    if (!wq_.empty()) {
-      (*wq_.front()).on_failed(ec);
-      pop_and_execute_next_task();
-    }
-    return;
-  }
-
- if (len < 16) {
-    fail(boost::asio::error::invalid_argument, "read size header");
-    return;
-  }
-
-  auto& buf = current_rx_buffer();
-  uint32_t message_len;
-  std::memcpy(&message_len, buf.data_ptr(), sizeof(uint32_t));
-
-  if (message_len > max_message_size) {
-    fail(boost::asio::error::no_buffer_space, "rx_size_ > max_message_size");
-    if (!wq_.empty()) {
-      (*wq_.front()).on_failed(ec);
-      pop_and_execute_next_task();
-    }
-    return;
-  }
-
-
-  rx_size_ = message_len;
-  on_read_body(boost::system::error_code(), len);
-}
-
-void SocketConnection::on_read_body(const boost::system::error_code& ec,
-                                    size_t len)
-{
-  timeout_timer_.expires_after(std::chrono::system_clock::duration::max());
-
-  if (ec) {
-    fail(ec, "client_socket_session: on_read_body");
-    if (!wq_.empty()) {
-      (*wq_.front()).on_failed(ec);
-      pop_and_execute_next_task();
-    }
-    return;
-  }
-
-  auto& buf = current_rx_buffer();
-
-  buf.commit(len);
-  rx_size_ -= static_cast<uint32_t>(len);
-
-  if (rx_size_ != 0) {
-    do_read_body();
-  } else {
-    // Check if this is a streaming message that should be routed to stream_manager
-    auto* header = reinterpret_cast<const flat::Header*>(buf.data().data());
-    bool is_stream_msg = (header->msg_id == MessageId::StreamDataChunk ||
-                          header->msg_id == MessageId::StreamCompletion ||
-                          header->msg_id == MessageId::StreamError);
-    
-    if (is_stream_msg && ctx_.stream_manager) {
-      // Route to stream_manager instead of treating as RPC response
-      if (header->msg_id == MessageId::StreamDataChunk) {
-        flat_buffer chunk_buf;
-        chunk_buf.prepare(buf.size());
-        chunk_buf.commit(buf.size());
-        std::memcpy(chunk_buf.data().data(), buf.data().data(), buf.size());
-        ctx_.stream_manager->on_chunk_received(std::move(chunk_buf));
-      } else if (header->msg_id == MessageId::StreamCompletion) {
-        flat::StreamComplete_Direct msg(buf, sizeof(flat::Header));
-        ctx_.stream_manager->on_stream_complete(msg.stream_id(), msg.final_sequence());
-      } else if (header->msg_id == MessageId::StreamError) {
-        flat::StreamError_Direct msg(buf, sizeof(flat::Header));
-        flat_buffer error_buf;  // Empty for now
-        ctx_.stream_manager->on_stream_error(msg.stream_id(), msg.error_code(), std::move(error_buf));
-      }
-      // Continue reading for more streaming messages
-      do_read_size();
-    } else if (!wq_.empty()) {
-      // Regular RPC response
-      (*wq_.front()).on_executed();
-      pop_and_execute_next_task();
-    } else {
-      // Unexpected message while in streaming mode - just continue reading
-      do_read_size();
-    }
-  }
-}
-
-SocketConnection::SocketConnection(const EndPoint& endpoint,
+// ---------------------------------------------------------------------------
+// Constructor — sets socket options and spawns the read loop.
+// ---------------------------------------------------------------------------
+SocketConnection::SocketConnection(const EndPoint&                endpoint,
                                    boost::asio::ip::tcp::socket&& socket)
     : Session(socket.get_executor())
     , socket_{std::move(socket)}
 {
   ctx_.remote_endpoint = endpoint;
-  timeout_timer_.expires_after(std::chrono::system_clock::duration::max());
   endpoint_ = sync_socket_connect(endpoint, socket_);
 
-  // Large socket buffers: avoids ~80 TCP-window-fill cycles for 10MB messages.
-  // gRPC uses 4MB by default; without this, auto-tuning takes several RTTs.
   constexpr int kLargeBuf = 4 * 1024 * 1024;
   boost::system::error_code ec;
-  socket_.set_option(boost::asio::socket_base::receive_buffer_size(kLargeBuf), ec);
-  socket_.set_option(boost::asio::socket_base::send_buffer_size(kLargeBuf), ec);
+  socket_.set_option(boost::asio::socket_base::receive_buffer_size(kLargeBuf),
+                     ec);
+  socket_.set_option(boost::asio::socket_base::send_buffer_size(kLargeBuf),
+                     ec);
 
-  start_timeout_timer();
+  // Spawn the continuous read loop on the socket strand.
+  // Note: start_timeout_timer() is intentionally NOT called here.  The new
+  // coroutine design manages each RPC's lifetime inside do_rpc() via a
+  // per-call steady_timer.  Calling start_timeout_timer() would invoke
+  // expires_after(system_clock::duration::max()) whose arithmetic overflows
+  // the system_clock time_point, resulting in an immediate timeout_action()
+  // that cancels the socket and kills read_loop before any RPC is issued.
+  net::co_spawn(socket_.get_executor(), read_loop(), net::detached);
 }
 
 } // namespace nprpc::impl
