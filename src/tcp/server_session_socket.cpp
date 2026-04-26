@@ -90,43 +90,54 @@ class Session_Socket : public nprpc::impl::Session,
   }
 
   // Main read loop: reads one complete message per iteration and dispatches it.
+  //
+  // Key invariant: rx_buffer_ may hold leftover bytes from a previous
+  // async_read_some that fetched more than one message.  We consume exactly
+  // msg_size bytes per iteration so those bytes are preserved for the next pass.
   net::awaitable<void> read_loop()
   {
     for (;;) {
-      rx_buffer_.consume(rx_buffer_.size());
-
-      // Read the first chunk — must include at least the 4-byte size prefix.
-      auto [ec, n] = co_await socket_.async_read_some(
-          rx_buffer_.prepare(1024), net::as_tuple(net::use_awaitable));
-      if (ec || n < 4) break;
-      rx_buffer_.commit(n);
+      // Ensure we have at least the 4-byte size prefix.
+      while (rx_buffer_.size() < sizeof(uint32_t)) {
+        auto [ec, n] = co_await socket_.async_read_some(
+            rx_buffer_.prepare(4096), net::as_tuple(net::use_awaitable));
+        if (ec || n == 0) co_return;
+        rx_buffer_.commit(n);
+      }
 
       uint32_t msg_size;
       std::memcpy(&msg_size, rx_buffer_.data_ptr(), sizeof(uint32_t));
       if (msg_size > max_message_size) {
         NPRPC_LOG_ERROR("tcp server: oversized message {} bytes, closing",
                         msg_size);
-        break;
+        co_return;
       }
 
       // Read the remainder of the message body if it hasn't arrived yet.
       if (rx_buffer_.size() < msg_size) {
-        auto [ec2, n2] = co_await net::async_read(
+        auto [ec, n] = co_await net::async_read(
             socket_,
             rx_buffer_.prepare(msg_size - rx_buffer_.size()),
             net::as_tuple(net::use_awaitable));
-        if (ec2) {
-          fail(ec2, "tcp server: read_loop body");
-          break;
+        if (ec) {
+          fail(ec, "tcp server: read_loop body");
+          co_return;
         }
-        rx_buffer_.commit(n2);
+        rx_buffer_.commit(n);
       }
 
-      // handle_request() routes all message types — including stream messages
-      // (StreamDataChunk, StreamCompletion, StreamError, StreamCancellation,
-      // StreamWindowUpdate) which return needs_reply = false.
+      // Extract exactly msg_size bytes into a fresh buffer so that:
+      //  1. handle_request sees the right size (not size + next messages)
+      //  2. StreamDataChunk can safely std::move() the buffer without
+      //     stealing bytes that belong to subsequent messages.
+      flat_buffer msg_buf;
+      auto dst = msg_buf.prepare(msg_size);
+      std::memcpy(dst.data(), rx_buffer_.data_ptr(), msg_size);
+      msg_buf.commit(msg_size);
+      rx_buffer_.consume(msg_size);
+
       tx_buffer_.consume(tx_buffer_.size());
-      bool needs_reply = handle_request(rx_buffer_, tx_buffer_);
+      bool needs_reply = handle_request(msg_buf, tx_buffer_);
       if (needs_reply)
         enqueue_write(std::move(tx_buffer_));
     }

@@ -7,6 +7,85 @@ import XCTest
 import Foundation
 @testable import NPRPC
 
+// MARK: - Shared servant implementations
+
+private class TestBasicServantImpl: TestBasicServant, @unchecked Sendable {
+    var in_receivedA: UInt32 = 0
+    var in_receivedB: Bool = false
+    var in_receivedC: [UInt8] = []
+    var inStruct_receivedA: AAA = AAA()
+    var inFlatStruct_receivedValue: UInt32 = 0
+    var inFlatStruct_receivedA: FlatStruct = FlatStruct()
+    var outFlatStruct_receivedValue: UInt32 = 0
+    var outScalarWithException_receivedDevAddr: UInt8 = 0
+    var outScalarWithException_receivedAddr: UInt16 = 0
+
+    override func returnBoolean() throws -> Bool { true }
+    override func returnIdArray() throws -> IdArray { [1, 2, 3, 4, 5] }
+    override func returnU32() throws -> UInt32 { 123456789 }
+    override func in_(a: UInt32, b: Bool, c: [UInt8]) throws -> Bool {
+        in_receivedA = a; in_receivedB = b; in_receivedC = c; return true
+    }
+    override func out() throws -> (UInt32, Bool, [UInt8]) { (123456789, true, [1, 2, 3, 4, 5]) }
+    override func inStruct(a: AAA) throws { inStruct_receivedA = a }
+    override func outStruct() throws -> AAA { AAA(a: 1234, b: "Hello world", c: "Another string") }
+    override func inFlatStruct(value: UInt32, a: FlatStruct) throws {
+        inFlatStruct_receivedValue = value; inFlatStruct_receivedA = a
+    }
+    override func outFlatStruct(value: UInt32) throws -> FlatStruct {
+        outFlatStruct_receivedValue = value; return FlatStruct(a: 42, b: 99, c: 1.2)
+    }
+    override func outArrayOfStructs() throws -> [SimpleStruct] {
+        [SimpleStruct(id: 1), SimpleStruct(id: 2), SimpleStruct(id: 3)]
+    }
+    override func inException() throws {
+        throw SimpleException(message: "This is a test exception", code: 42)
+    }
+    override func multipleExceptions(code: UInt32) throws {
+        if code == 0 { throw SimpleException(message: "Simple exception branch", code: 456) }
+        throw AssertionFailed(message: "Assertion failed branch")
+    }
+    override func outScalarWithException(dev_addr: UInt8, addr: UInt16) throws -> UInt8 {
+        outScalarWithException_receivedDevAddr = dev_addr
+        outScalarWithException_receivedAddr = addr
+        return 32
+    }
+    override func returnStringArray(count: UInt32) throws -> [String] {
+        (1...count).map { "String \($0)" }
+    }
+}
+
+private class TestArraysServantImpl: FixedSizeArrayTestServant, @unchecked Sendable {
+    var inFixedArray_receivedA: [UInt32] = []
+    var inFixedArrayOfStructs_receivedA: [SimpleStruct] = []
+
+    override func inFixedArray(a: [UInt32]) throws { inFixedArray_receivedA = a }
+    override func outFixedArray() throws -> [UInt32] {
+        [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+    }
+    override func outTwoFixedArrays() throws -> ([UInt32], [UInt32]) {
+        ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
+    }
+    override func inFixedArrayOfStructs(a: [SimpleStruct]) throws {
+        inFixedArrayOfStructs_receivedA = a
+    }
+    override func outFixedArrayOfStructs() throws -> [SimpleStruct] {
+        [SimpleStruct(id: 10), SimpleStruct(id: 20), SimpleStruct(id: 30),
+         SimpleStruct(id: 40), SimpleStruct(id: 50)]
+    }
+    override func outTwoFixedArraysOfStructs() throws -> ([SimpleStruct], [AAA]) {
+        let array1 = (1...5).map { SimpleStruct(id: UInt32($0)) }
+        let array2 = [
+            AAA(a: 10, b: "a", c: "x"), AAA(a: 20, b: "b", c: "y"),
+            AAA(a: 30, b: "c", c: "z"), AAA(a: 40, b: "d", c: "w"),
+            AAA(a: 50, b: "e", c: "v"),
+        ]
+        return (array1, array2)
+    }
+}
+
+// MARK: - Integration tests
+
 final class IntegrationTests: XCTestCase {
     nonisolated(unsafe) static var rpc: Rpc?
     nonisolated(unsafe) static var poa: Poa?
@@ -258,151 +337,107 @@ final class IntegrationTests: XCTestCase {
         }
     }
 
-    func testBasicTypes() async throws {
-        // nprpc_test.npidl defines a TestBasic interface with methods that use various basic types and arrays.
-        class TestBasicServantImpl: TestBasicServant, @unchecked Sendable {
-            var in_receivedA: UInt32 = 0
-            var in_receivedB: Bool = false
-            var in_receivedC: [UInt8] = []
-            var inStruct_receivedA: AAA = AAA()
-            var inFlatStruct_receivedValue: UInt32 = 0
-            var inFlatStruct_receivedA: FlatStruct = FlatStruct()
-            var outFlatStruct_receivedValue: UInt32 = 0
-            var outScalarWithException_receivedDevAddr: UInt8 = 0
-            var outScalarWithException_receivedAddr: UInt16 = 0
-
-            override func returnBoolean() throws -> Bool {
-                return true
-            }
-
-            override func returnIdArray() throws -> IdArray {
-                return [1, 2, 3, 4, 5]
-            }
-
-            override func returnU32() throws -> UInt32 {
-                return 123456789
-            }
-
-            override func in_(a: UInt32, b: Bool, c: [UInt8]) throws -> Bool {
-                in_receivedA = a
-                in_receivedB = b
-                in_receivedC = c
-                return true
-            }
-
-            override func out() throws -> (UInt32, Bool, [UInt8]) {
-                return (123456789, true, [1, 2, 3, 4, 5])
-            }
-
-            override func inStruct(a: AAA) throws {
-                inStruct_receivedA = a
-            }
-
-            override func outStruct() throws -> AAA {
-                return AAA(a: 1234, b: "Hello world", c: "Another string")
-            }
-
-            override func inFlatStruct(value: UInt32, a: FlatStruct) throws {
-                inFlatStruct_receivedValue = value
-                inFlatStruct_receivedA = a
-            }
-
-            override func outFlatStruct(value: UInt32) throws -> FlatStruct {
-                outFlatStruct_receivedValue = value
-                return FlatStruct(a: 42, b: 99, c: 1.2)
-            }
-
-            override func outArrayOfStructs() throws -> [SimpleStruct] {
-                return [
-                    SimpleStruct(id: 1),
-                    SimpleStruct(id: 2),
-                    SimpleStruct(id: 3)
-                ]
-            }
-
-            override func inException() throws {
-                throw SimpleException(message: "This is a test exception", code: 42)
-            }
-
-            override func multipleExceptions(code: UInt32) throws {
-                if code == 0 {
-                    throw SimpleException(message: "Simple exception branch", code: 456)
-                }
-
-                throw AssertionFailed(message: "Assertion failed branch")
-            }
-
-            override func outScalarWithException(dev_addr: UInt8, addr: UInt16) throws -> UInt8   {
-                outScalarWithException_receivedDevAddr = dev_addr
-                outScalarWithException_receivedAddr = addr
-                return 32
-            }
-
-            override func returnStringArray(count: UInt32) throws -> [String]   {
-                return (1...count).map { "String \($0)" }
-            }
-        }
-
+    func testReturnScalars() async throws {
         let servant = TestBasicServantImpl()
         let oid = try Self.poa!.activateObject(servant, flags: .tcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
-            XCTFail("Failed to create NPRPCObject from ObjectId")
-            return
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
         }
-
         let client = narrow(obj, to: TestBasic.self)!
-        // Returning a boolean value to test basic marshalling of fundamental types
-        let returnedBoolean = try await client.returnBoolean()
-        XCTAssertEqual(returnedBoolean, true)
-        // Returning an IdArray to test marshalling of array types
-        let returnedIdArray = try await client.returnIdArray()
-        XCTAssertEqual(returnedIdArray, [1, 2, 3, 4, 5])
-        // Returning a UInt32 to test marshalling of unsigned integers
-        let returnedU32 = try await client.returnU32()
-        XCTAssertEqual(returnedU32, 123456789)
-        // Testing the in_ method to verify marshalling of input parameters
+
+        let b = try await client.returnBoolean()
+        XCTAssertTrue(b)
+        let ids = try await client.returnIdArray()
+        XCTAssertEqual(ids, [1, 2, 3, 4, 5])
+        let u32 = try await client.returnU32()
+        XCTAssertEqual(u32, 123456789)
+    }
+
+    func testInOutPrimitives() async throws {
+        let servant = TestBasicServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
+        }
+        let client = narrow(obj, to: TestBasic.self)!
+
         let inResult = try await client.in_(a: 123456789, b: true, c: [1, 2, 3, 4, 5])
-        XCTAssertEqual(inResult, true)
-        // Verifying that the servant received the correct input parameters
+        XCTAssertTrue(inResult)
         XCTAssertEqual(servant.in_receivedA, 123456789)
         XCTAssertEqual(servant.in_receivedB, true)
         XCTAssertEqual(servant.in_receivedC, [1, 2, 3, 4, 5])
-        // Testing the out method to verify marshalling of output parameters
+
         let (outA, outB, outC) = try await client.out()
         XCTAssertEqual(outA, 123456789)
-        XCTAssertEqual(outB, true)
+        XCTAssertTrue(outB)
         XCTAssertEqual(outC, [1, 2, 3, 4, 5])
-        // Testing marshalling of input structs
+    }
+
+    func testStructMarshalling() async throws {
+        let servant = TestBasicServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
+        }
+        let client = narrow(obj, to: TestBasic.self)!
+
         let aaa = AAA(a: 1234, b: "Hello world", c: "Another string")
         try await client.inStruct(a: aaa)
         XCTAssertEqual(servant.inStruct_receivedA.a, 1234)
         XCTAssertEqual(servant.inStruct_receivedA.b, "Hello world")
         XCTAssertEqual(servant.inStruct_receivedA.c, "Another string")
-        // Testing marshalling of output structs
+
         let outStruct = try await client.outStruct()
         XCTAssertEqual(outStruct.a, 1234)
         XCTAssertEqual(outStruct.b, "Hello world")
         XCTAssertEqual(outStruct.c, "Another string")
-        // Testing marshalling of input flat structs
-        let flatStruct = FlatStruct(a: 42, b: 99, c: 1.2)
-        try await client.inFlatStruct(value: 123456789, a: flatStruct)
+    }
+
+    func testFlatStructMarshalling() async throws {
+        let servant = TestBasicServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
+        }
+        let client = narrow(obj, to: TestBasic.self)!
+
+        let flat = FlatStruct(a: 42, b: 99, c: 1.2)
+        try await client.inFlatStruct(value: 123456789, a: flat)
         XCTAssertEqual(servant.inFlatStruct_receivedValue, 123456789)
         XCTAssertEqual(servant.inFlatStruct_receivedA.a, 42)
         XCTAssertEqual(servant.inFlatStruct_receivedA.b, 99)
         XCTAssertEqual(servant.inFlatStruct_receivedA.c, 1.2)
-        // Testing marshalling of output flat structs
-        let outFlatStruct = try await client.outFlatStruct(value: 123456789)
+
+        let outFlat = try await client.outFlatStruct(value: 123456789)
         XCTAssertEqual(servant.outFlatStruct_receivedValue, 123456789)
-        XCTAssertEqual(outFlatStruct.a, 42)
-        XCTAssertEqual(outFlatStruct.b, 99)
-        XCTAssertEqual(outFlatStruct.c, 1.2)
-        // Testing marshalling of array of structs
-        let arrayOfStructs = try await client.outArrayOfStructs()
-        XCTAssertEqual(arrayOfStructs.count, 3)
-        XCTAssertEqual(arrayOfStructs[0].id, 1)
-        XCTAssertEqual(arrayOfStructs[1].id, 2)
-        XCTAssertEqual(arrayOfStructs[2].id, 3)
-        // Testing exception handling
+        XCTAssertEqual(outFlat.a, 42)
+        XCTAssertEqual(outFlat.b, 99)
+        XCTAssertEqual(outFlat.c, 1.2)
+    }
+
+    func testOutArrayOfStructs() async throws {
+        let servant = TestBasicServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
+        }
+        let client = narrow(obj, to: TestBasic.self)!
+
+        let arr = try await client.outArrayOfStructs()
+        XCTAssertEqual(arr.count, 3)
+        XCTAssertEqual(arr[0].id, 1)
+        XCTAssertEqual(arr[1].id, 2)
+        XCTAssertEqual(arr[2].id, 3)
+    }
+
+    func testBasicExceptions() async throws {
+        let servant = TestBasicServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
+        }
+        let client = narrow(obj, to: TestBasic.self)!
+
         do {
             try await client.inException()
             XCTFail("Expected SimpleException to be thrown")
@@ -412,6 +447,7 @@ final class IntegrationTests: XCTestCase {
         } catch {
             XCTFail("Expected SimpleException but got: \(error)")
         }
+
         do {
             try await client.multipleExceptions(code: 0)
             XCTFail("Expected SimpleException to be thrown")
@@ -421,6 +457,7 @@ final class IntegrationTests: XCTestCase {
         } catch {
             XCTFail("Expected SimpleException but got: \(error)")
         }
+
         do {
             try await client.multipleExceptions(code: 1)
             XCTFail("Expected AssertionFailed to be thrown")
@@ -429,14 +466,32 @@ final class IntegrationTests: XCTestCase {
         } catch {
             XCTFail("Expected AssertionFailed but got: \(error)")
         }
-        // Testing marshalling of output scalar with exception
+    }
+
+    func testOutScalarWithException() async throws {
+        let servant = TestBasicServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
+        }
+        let client = narrow(obj, to: TestBasic.self)!
+
         let result = try await client.outScalarWithException(dev_addr: 10, addr: 783)
         XCTAssertEqual(servant.outScalarWithException_receivedDevAddr, 10)
         XCTAssertEqual(servant.outScalarWithException_receivedAddr, 783)
         XCTAssertEqual(result, 32)
-        // Testing marshalling of output string array
-        let stringArray = try await client.returnStringArray(count: 3)
-        XCTAssertEqual(stringArray, ["String 1", "String 2", "String 3"])
+    }
+
+    func testReturnStringArray() async throws {
+        let servant = TestBasicServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
+        }
+        let client = narrow(obj, to: TestBasic.self)!
+
+        let arr = try await client.returnStringArray(count: 3)
+        XCTAssertEqual(arr, ["String 1", "String 2", "String 3"])
     }
 
     func testLargeMessage() async throws {
@@ -633,93 +688,41 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(nested.y.y.z, 0xDEADBEEFCAFEBABE)
     }
 
-    func testArrays() async throws {
-        class TestArraysServantImpl: FixedSizeArrayTestServant, @unchecked Sendable {
-            var inFixedArray_receivedA: [UInt32] = []
-            var inFixedArrayOfStructs_receivedA: [SimpleStruct] = []
-
-            override func inFixedArray(a: [UInt32]) throws {
-                inFixedArray_receivedA = a
-             }
-
-            override func outFixedArray() throws -> [UInt32] {
-                return [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
-            }
-
-            override func outTwoFixedArrays() throws -> ([UInt32], [UInt32]) {
-                return ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-                    [10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
-            }
-
-            override func inFixedArrayOfStructs(a: [SimpleStruct]) throws {
-                inFixedArrayOfStructs_receivedA = a
-            }
-
-            override func outFixedArrayOfStructs() throws -> [SimpleStruct] {
-                return [
-                    SimpleStruct(id: 10),
-                    SimpleStruct(id: 20),
-                    SimpleStruct(id: 30),
-                    SimpleStruct(id: 40),
-                    SimpleStruct(id: 50)
-                ]
-            }
-
-            override func outTwoFixedArraysOfStructs() throws -> ([SimpleStruct], [AAA]) {
-                let array1 = [
-                    SimpleStruct(id: 1),
-                    SimpleStruct(id: 2),
-                    SimpleStruct(id: 3),
-                    SimpleStruct(id: 4),
-                    SimpleStruct(id: 5)
-                ]
-                let array2 = [
-                    AAA(a: 10, b: "a", c: "x"),
-                    AAA(a: 20, b: "b", c: "y"),
-                    AAA(a: 30, b: "c", c: "z"),
-                    AAA(a: 40, b: "d", c: "w"),
-                    AAA(a: 50, b: "e", c: "v")
-                ]
-                return (array1, array2)
-            }
-        }
-
+    func testFixedArrayScalars() async throws {
         let servant = TestArraysServantImpl()
         let oid = try Self.poa!.activateObject(servant, flags: .tcp)
         guard let obj = NPRPCObject.fromObjectId(oid) else {
-            XCTFail("Failed to create NPRPCObject from ObjectId")
-            return
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
         }
         let client = narrow(obj, to: FixedSizeArrayTest.self)!
-        // Test InFixedArray
+
         let fixedArray: [UInt32] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         try await client.inFixedArray(a: fixedArray)
         XCTAssertEqual(servant.inFixedArray_receivedA, fixedArray)
 
-        // Test OutFixedArray
         let outArray = try await client.outFixedArray()
         XCTAssertEqual(outArray, [10, 20, 30, 40, 50, 60, 70, 80, 90, 100])
 
-        // Test OutTwoFixedArrays
         let (outArray1, outArray2) = try await client.outTwoFixedArrays()
         XCTAssertEqual(outArray1, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
         XCTAssertEqual(outArray2, [10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
+    }
 
-        // Test InFixedArrayOfStructs
-        let structArray = [
-            SimpleStruct(id: 1),
-            SimpleStruct(id: 2),
-            SimpleStruct(id: 3),
-            SimpleStruct(id: 4),
-            SimpleStruct(id: 5)
-        ]
+    func testFixedArrayStructs() async throws {
+        let servant = TestArraysServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
+        }
+        let client = narrow(obj, to: FixedSizeArrayTest.self)!
+
+        let structArray = (1...5).map { SimpleStruct(id: UInt32($0)) }
         try await client.inFixedArrayOfStructs(a: structArray)
         XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA.count, structArray.count)
         for i in 0..<structArray.count {
             XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[i].id, structArray[i].id)
         }
 
-        // Test OutFixedArrayOfStructs
         let outStructArray = try await client.outFixedArrayOfStructs()
         XCTAssertEqual(outStructArray.count, 5)
         XCTAssertEqual(outStructArray[0].id, 10)
@@ -728,77 +731,60 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(outStructArray[3].id, 40)
         XCTAssertEqual(outStructArray[4].id, 50)
 
-        // Test OutTwoFixedArraysOfStructs
         let (outStructArray1, outStructArray2) = try await client.outTwoFixedArraysOfStructs()
         XCTAssertEqual(outStructArray1.count, 5)
-        XCTAssertEqual(outStructArray1[0].id, 1)
-        XCTAssertEqual(outStructArray1[1].id, 2)
-        XCTAssertEqual(outStructArray1[2].id, 3)
-        XCTAssertEqual(outStructArray1[3].id, 4)
-        XCTAssertEqual(outStructArray1[4].id, 5)
+        for i in 0..<5 {
+            XCTAssertEqual(outStructArray1[i].id, UInt32(i + 1))
+        }
         XCTAssertEqual(outStructArray2.count, 5)
-        XCTAssertEqual(outStructArray2[0].a, 10)
-        XCTAssertEqual(outStructArray2[0].b, "a")
-        XCTAssertEqual(outStructArray2[0].c, "x")
-        XCTAssertEqual(outStructArray2[1].a, 20)
-        XCTAssertEqual(outStructArray2[1].b, "b")
-        XCTAssertEqual(outStructArray2[1].c, "y")
-        XCTAssertEqual(outStructArray2[2].a, 30)
-        XCTAssertEqual(outStructArray2[2].b, "c")
-        XCTAssertEqual(outStructArray2[2].c, "z")
-        XCTAssertEqual(outStructArray2[3].a, 40)
-        XCTAssertEqual(outStructArray2[3].b, "d")
-        XCTAssertEqual(outStructArray2[3].c, "w")
-        XCTAssertEqual(outStructArray2[4].a, 50)
-        XCTAssertEqual(outStructArray2[4].b, "e")
-        XCTAssertEqual(outStructArray2[4].c, "v")
+        XCTAssertEqual(outStructArray2[0].a, 10); XCTAssertEqual(outStructArray2[0].b, "a"); XCTAssertEqual(outStructArray2[0].c, "x")
+        XCTAssertEqual(outStructArray2[1].a, 20); XCTAssertEqual(outStructArray2[1].b, "b"); XCTAssertEqual(outStructArray2[1].c, "y")
+        XCTAssertEqual(outStructArray2[2].a, 30); XCTAssertEqual(outStructArray2[2].b, "c"); XCTAssertEqual(outStructArray2[2].c, "z")
+        XCTAssertEqual(outStructArray2[3].a, 40); XCTAssertEqual(outStructArray2[3].b, "d"); XCTAssertEqual(outStructArray2[3].c, "w")
+        XCTAssertEqual(outStructArray2[4].a, 50); XCTAssertEqual(outStructArray2[4].b, "e"); XCTAssertEqual(outStructArray2[4].c, "v")
+    }
 
-        // Tests that the servant correctly handles receiving arrays of the expected fixed size, and that it correctly returns arrays of the expected fixed size.
-        // The test also verifies that the contents of the arrays are correctly transmitted and received, ensuring that the marshalling and unmarshalling of fixed-size arrays works as intended.
+    func testFixedArrayScalarSizeMismatch() async throws {
+        let servant = TestArraysServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
+        }
+        let client = narrow(obj, to: FixedSizeArrayTest.self)!
 
-        // Test 1: Send array with FEWER elements than expected (3 instead of 10)
-        // Should print warning and copy only 3 elements
-        let smallArray: [UInt32] = [100, 200, 300]
-        try await client.inFixedArray(a: smallArray)
-        XCTAssertEqual(servant.inFixedArray_receivedA.count, 10, "Should receive 5 elements sent")
+        // Send fewer elements than expected (3 instead of 10)
+        try await client.inFixedArray(a: [100, 200, 300])
+        XCTAssertEqual(servant.inFixedArray_receivedA.count, 10)
         XCTAssertEqual(servant.inFixedArray_receivedA[0], 100)
         XCTAssertEqual(servant.inFixedArray_receivedA[1], 200)
         XCTAssertEqual(servant.inFixedArray_receivedA[2], 300)
 
-        // Test 2: Send array with MORE elements than expected (12 instead of 10)
-        // Should print warning and copy only first 10 elements
-        let largeArray: [UInt32] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-        try await client.inFixedArray(a: largeArray)
-        XCTAssertEqual(servant.inFixedArray_receivedA.count, 10, "Should receive only 10 elements (max size)")
+        // Send more elements than expected (12 instead of 10)
+        try await client.inFixedArray(a: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+        XCTAssertEqual(servant.inFixedArray_receivedA.count, 10)
         for i in 0..<10 {
             XCTAssertEqual(servant.inFixedArray_receivedA[i], UInt32(i + 1), "Element \(i) should be \(i + 1)")
         }
+    }
 
-        // Test 3: Send struct array with fewer elements (3 instead of 10)
-        let smallStructArray = [
-            SimpleStruct(id: 42),
-            SimpleStruct(id: 43),
-            SimpleStruct(id: 44)
-        ]
-        try await client.inFixedArrayOfStructs(a: smallStructArray)
-        XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA.count, 5, "Should receive 5 struct elements sent")
-        // The first 3 elements should be from the sent array, and the remaining should be garbage/default values (since the servant's array is fixed size 5)
+    func testFixedArrayStructSizeMismatch() async throws {
+        let servant = TestArraysServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
+        }
+        let client = narrow(obj, to: FixedSizeArrayTest.self)!
+
+        // Send fewer struct elements (3 instead of 5)
+        try await client.inFixedArrayOfStructs(a: [SimpleStruct(id: 42), SimpleStruct(id: 43), SimpleStruct(id: 44)])
+        XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA.count, 5)
         XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[0].id, 42)
         XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[1].id, 43)
         XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[2].id, 44)
 
-        // Test 4: Send struct array with more elements (7 instead of 5)
-        let largeStructArray = [
-            SimpleStruct(id: 1),
-            SimpleStruct(id: 2),
-            SimpleStruct(id: 3),
-            SimpleStruct(id: 4),
-            SimpleStruct(id: 5),
-            SimpleStruct(id: 6),
-            SimpleStruct(id: 7),
-        ]
-        try await client.inFixedArrayOfStructs(a: largeStructArray)
-        XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA.count, 5, "Should receive only 5 struct elements (max size)")
+        // Send more struct elements (7 instead of 5)
+        try await client.inFixedArrayOfStructs(a: (1...7).map { SimpleStruct(id: UInt32($0)) })
+        XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA.count, 5)
         for i in 0..<5 {
             XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[i].id, UInt32(i + 1), "Element \(i) should be \(i + 1)")
         }
@@ -976,25 +962,33 @@ final class IntegrationTests: XCTestCase {
         }
         let client = narrow(obj, to: AsyncTest.self)!
 
+        // Tests 1-4: Pre-cancellation tests.
+        //
+        // Race-free pattern: Task.sleep is a true cooperative cancellation point.
+        // - If the task is already cancelled when sleep is called, it throws CancellationError immediately.
+        // - If cancel() is called while sleeping, sleep is interrupted and throws CancellationError.
+        // Using Task.checkCancellation() alone is racy on Linux's multi-threaded executor because
+        // the task can start on another core and run checkCancellation() before the outer thread
+        // calls task.cancel(). Task.sleep eliminates this race: cancel() is always called
+        // while the task is sleeping (it takes nanoseconds; the sleep is 100ms), so sleep
+        // is always interrupted — or the task sees pre-cancellation at the first sleep call.
+
         // Test 1: Pre-cancelled task — fire-and-forget async method (method1 has no output)
-        // Fire-and-forget methods swallow all errors (including CancellationError) by design.
-        // Verify the call completes without throwing even when the task is cancelled.
         let task1 = Task<Void, Error> {
-            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: 100_000_000)
             await client.method1(arg1: 1, arg2: "should not reach servant")
         }
         task1.cancel()
         do {
             try await task1.value
-            // The Task-level checkCancellation() above should throw before method1 is called
             XCTFail("Expected CancellationError from Task.checkCancellation() before method1")
         } catch is CancellationError {
-            // Expected — the explicit Task.checkCancellation() in the Task body ran first
+            // Expected — Task.sleep threw CancellationError (pre-cancelled or interrupted)
         }
 
         // Test 2: Pre-cancelled task — async method with output (method2)
         let task2 = Task<String, Error> {
-            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: 100_000_000)
             return try await client.method2(arg1: 99)
         }
         task2.cancel()
@@ -1010,6 +1004,7 @@ final class IntegrationTests: XCTestCase {
         buffer.prepare(64)
         buffer.commit(64)
         let task3 = Task<Void, Error> {
+            try await Task.sleep(nanoseconds: 100_000_000)
             try await client.sendAsync(buffer: buffer, timeout: 5000)
         }
         task3.cancel()
@@ -1025,7 +1020,8 @@ final class IntegrationTests: XCTestCase {
         buffer2.prepare(64)
         buffer2.commit(64)
         let task4 = Task<FlatBuffer, Error> {
-            try await client.sendAsyncReceive(buffer: buffer2, timeout: 5000)
+            try await Task.sleep(nanoseconds: 100_000_000)
+            return try await client.sendAsyncReceive(buffer: buffer2, timeout: 5000)
         }
         task4.cancel()
         do {

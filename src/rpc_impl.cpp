@@ -550,9 +550,13 @@ RpcImpl::get_session(const EndPoint& endpoint)
       break;
     }
 #endif
-    con = std::make_shared<SocketConnection>(
-        endpoint,
-        boost::asio::ip::tcp::socket(boost::asio::make_strand(ioc_)));
+    {
+      auto sc = std::make_shared<SocketConnection>(
+          endpoint,
+          boost::asio::ip::tcp::socket(boost::asio::make_strand(ioc_)));
+      sc->start();
+      con = std::move(sc);
+    }
     break;
   case EndPointType::WebSocket:
     con = make_client_plain_websocket_session(endpoint, ioc_);

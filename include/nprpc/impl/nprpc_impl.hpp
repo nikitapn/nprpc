@@ -11,6 +11,7 @@
 #include <boost/asio/strand.hpp>
 #include <boost/core/exchange.hpp>
 #include <cassert>
+#include <chrono>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -18,6 +19,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -136,42 +138,86 @@ protected:
 class SocketConnection : public Session,
                          public std::enable_shared_from_this<SocketConnection>
 {
+  // Outgoing message: buffer + optional write-completion callback.
+  struct outgoing_message {
+    flat_buffer buffer;
+    std::function<void(const boost::system::error_code&)> completion_handler;
+    outgoing_message(flat_buffer&& buf,
+                     std::function<void(const boost::system::error_code&)>&& h)
+        : buffer(std::move(buf)), completion_handler(std::move(h)) {}
+  };
+
+  // In-flight RPC registered before the write is enqueued.
+  struct pending_request {
+    std::function<void(const boost::system::error_code&, flat_buffer&)> completion_handler;
+    std::shared_ptr<boost::asio::steady_timer> timeout_timer; // null if no timeout
+
+    static std::function<void(const boost::system::error_code&, flat_buffer&)>
+    empty_handler() {
+      return [](const boost::system::error_code&, flat_buffer&) {};
+    }
+
+    explicit pending_request(
+        std::function<void(const boost::system::error_code&, flat_buffer&)>&& h)
+        : completion_handler(std::move(h)) {}
+  };
+
   boost::asio::ip::tcp::endpoint endpoint_; // for reconnect
   boost::asio::ip::tcp::socket   socket_;
 
-  // Serializes concurrent send_receive() callers — TCP has no request IDs,
-  // so only one RPC may be in flight at a time per connection.
-  std::mutex rpc_mutex_;
+  // Write queue and read state — accessed only on the socket strand.
+  std::deque<outgoing_message>                          write_queue_;
+  std::unordered_map<uint32_t, pending_request>         pending_requests_;
+  std::atomic<uint32_t>                                 next_request_id_{1};
+  bool                                                  write_loop_running_{false};
+  flat_buffer                                           rx_buffer_{flat_buffer::default_initial_size()};
 
-  // Single pending RPC slot — only one RPC in flight at a time (serialized by
-  // rpc_mutex_). Accessed only on the socket strand inside do_rpc/read_response.
-  struct PendingRpc {
-    flat_buffer* buf_out   = nullptr; // caller's buffer, filled on success
-    bool         error     = false;   // set by read_response on comm failure
-    bool         timed_out = false;   // set by timer callback before cancel
-  } pending_rpc_;
+  uint32_t generate_request_id() { return next_request_id_.fetch_add(1, std::memory_order_relaxed); }
+  void inject_request_id(flat_buffer& buf, uint32_t id);
+  uint32_t extract_request_id(const flat_buffer& buf);
 
-  // Write request then read exactly one RPC reply (stream messages are routed
-  // inline and the read continues until the reply arrives or an error occurs).
-  // timeout_ms == 0 means no timeout.
-  boost::asio::awaitable<void> do_rpc(flat_buffer& buf, uint32_t timeout_ms);
+  // Enqueue a buffer and (re)start the write coroutine if idle.
+  // Must be called on the socket strand.
+  void enqueue_write(flat_buffer&& buf,
+                     std::function<void(const boost::system::error_code&)>&& completion_handler);
 
-  // Reads one complete message off the socket. Stream messages are routed to
-  // ctx_.stream_manager and the read continues; RPC responses fill
-  // pending_rpc_.buf_out. Sets pending_rpc_.error on any comm failure.
-  boost::asio::awaitable<void> read_response();
+  // Write coroutine — drains write_queue_ one message at a time.
+  boost::asio::awaitable<void> write_loop();
+
+  // Read coroutine — loops forever, dispatching responses to pending_requests_.
+  boost::asio::awaitable<void> read_loop();
+
+  // Fail and remove all pending requests (connection error / close).
+  void fail_all_pending(boost::system::error_code ec);
 
 protected:
   virtual void timeout_action() final
   {
-    boost::system::error_code ec;
-    socket_.cancel(ec);
-    if (ec)
-      fail(ec, "socket::cancel()");
+    // Sweep timed-out requests on the strand; per-request steady_timers handle
+    // individual timeouts so this is a safety net for any missed ones.
+    boost::asio::post(socket_.get_executor(),
+                      [self = shared_from_this()]() {
+                        const auto now = std::chrono::steady_clock::now();
+                        auto it = self->pending_requests_.begin();
+                        while (it != self->pending_requests_.end()) {
+                          if (it->second.timeout_timer &&
+                              it->second.timeout_timer->expiry() <= now) {
+                            flat_buffer empty{};
+                            it->second.completion_handler(
+                                boost::asio::error::timed_out, empty);
+                            it = self->pending_requests_.erase(it);
+                          } else {
+                            ++it;
+                          }
+                        }
+                      });
   }
 
 public:
   auto get_executor() noexcept { return socket_.get_executor(); }
+
+  // Must be called once after make_shared — shared_from_this() is valid here.
+  void start();
 
   void send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
 
