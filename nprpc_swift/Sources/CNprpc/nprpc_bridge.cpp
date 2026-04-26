@@ -661,30 +661,6 @@ const uint8_t* nprpc_object_get_origin(void* ptr) {
     return static_cast<nprpc::Object*>(ptr)->origin().data();
 }
 
-// Object RPC call - sends request and receives reply via C++ runtime
-int nprpc_object_send_receive(void* obj_ptr, void* buffer_ptr, uint32_t timeout_ms) {
-    if (!obj_ptr || !buffer_ptr) return -1;
-
-    auto* obj = static_cast<nprpc::Object*>(obj_ptr);
-    auto* buffer = static_cast<nprpc::flat_buffer*>(buffer_ptr);
-
-    // Ensure endpoint is selected
-    if (obj->get_endpoint().empty()) {
-        if (!obj->select_endpoint()) {
-            return -2;  // Failed to select endpoint
-        }
-    }
-
-    try {
-        // Use the free function wrapper to make the call
-        nprpc::impl::rpc_call(obj->get_endpoint(), *buffer, timeout_ms);
-        return 0;  // Success
-    } catch (const std::exception& e) {
-        NPRPC_LOG_ERROR("[SWB] nprpc_object_send_receive exception: {}", e.what());
-        return -3;  // RPC call failed
-    }
-}
-
 // Object async RPC call with callback - for Swift async/await integration
 int nprpc_object_send_async(
     void* obj_ptr,

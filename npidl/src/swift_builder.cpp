@@ -812,18 +812,12 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
   const std::string class_name = swift_type_name(ifs->name);
   const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->full_idl_namespace() + '.' + ifs->name;
 
-  // Check if client proxy can conform to protocol
-  // A method causes non-conformance if:
-  // - It's async (protocol is sync, proxy is async)
-  // - It's streaming (protocol returns AsyncStream, proxy returns AsyncThrowingStream)
-  // - It's non-async without raises() (protocol has no throws, proxy has throws)
-  bool can_conform = true;
-  for (auto& fn : ifs->fns) {
-    if (fn->is_async || fn->is_stream || !fn->is_throwing()) {
-      can_conform = false;
-      break;
-    }
-  }
+  // The client proxy cannot conform to the protocol because:
+  // - Non-IDL-async methods are `async throws` in the proxy but `throws` in the protocol
+  //   (Swift: an async method cannot satisfy a sync protocol requirement)
+  // - IDL-async and streaming methods also differ
+  // The protocol is intended for servant implementations (which stay sync).
+  bool can_conform = false;
 
   out << bl() << "// Client proxy for " << class_name << "\n";
   out << bl() << "// Pure Swift implementation with direct marshalling\n";
@@ -870,17 +864,17 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     }
 
     // Client proxy method signatures:
-    // - Async with outputs or raises(): `func foo() async throws` (needs response, can fail)
-    // - Async without outputs/raises(): `func foo() async` (fire-and-forget, errors ignored)
-    // - Non-async: `func foo() throws` (always throws - communication can fail)
+    // - IDL async with outputs or raises(): `func foo() async throws`
+    // - IDL async without outputs/raises(): `func foo() async` (fire-and-forget)
+    // - Non-async: `func foo() async throws` (non-blocking, cooperative-thread-safe)
     bool async_has_outputs = fn->out_s != nullptr;
     if (fn->is_async && (fn->is_throwing() || async_has_outputs)) {
       out << ") async throws";
     } else if (fn->is_async) {
       out << ") async";
     } else {
-      // Non-async methods always throw (communication errors)
-      out << ") throws";
+      // All non-IDL-async methods are async throws: avoids blocking Swift's cooperative pool.
+      out << ") async throws";
     }
 
     // Return type - match protocol (out params become return values)
@@ -1054,15 +1048,16 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
         }
       }
     } else {
-      // Synchronous method - send and wait for reply
+      // Non-IDL-async: use async/await so callers don't block Swift's cooperative pool.
       out << bl() << "// Send and receive\n";
-      out << bl() << "try sendReceive(buffer: buffer, timeout: timeout)\n\n";
+      out << bl() << "try Task.checkCancellation()\n";
+      out << bl() << "let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)\n\n";
 
       // Handle reply
       out << bl() << "// Handle reply\n";
-      out << bl() << "let stdReply = try handleStandardReply(buffer: buffer)\n";
+      out << bl() << "let stdReply = try handleStandardReply(buffer: responseBuffer)\n";
       if (fn->ex) {
-        out << bl() << "if stdReply == 1 { throw " << ctx_->current_file() << "_throwException(buffer: buffer) }\n";
+        out << bl() << "if stdReply == 1 { throw " << ctx_->current_file() << "_throwException(buffer: responseBuffer) }\n";
       }
 
       if (!fn->out_s) {
@@ -1071,7 +1066,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
         out << bl() << "if stdReply != -1 { throw UnexpectedReplyError(message: \"Unexpected reply\") }\n\n";
 
         // Unmarshal output arguments
-        out << bl() << "guard let responseData = buffer.data else { throw BufferError(message: \"Failed to get response data\") }\n";
+        out << bl() << "guard let responseData = responseBuffer.data else { throw BufferError(message: \"Failed to get response data\") }\n";
 
         bool out_needs_endpoint = false;
         for (auto f : fn->out_s->fields) {

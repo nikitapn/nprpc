@@ -140,27 +140,6 @@ open class NPRPCObject: Codable, @unchecked Sendable {
 
     // MARK: - RPC Communication
 
-    /// Send a request and receive a reply (for client-side calls)
-    /// - Parameters:
-    ///   - buffer: The FlatBuffer containing the request/response
-    ///   - timeout: Timeout in milliseconds
-    /// - Throws: RpcError on communication failure
-    public func sendReceive(buffer: FlatBuffer, timeout: UInt32) throws {
-        let result = nprpc_object_send_receive(handle, buffer.handle, timeout)
-        switch result {
-        case 0:
-            return  // Success
-        case -1:
-            throw RuntimeError(message: "RPC call failed: invalid arguments")
-        case -2:
-            throw RuntimeError(message: "RPC call failed: could not select endpoint")
-        case -3:
-            throw RuntimeError(message: "RPC call failed: communication error")
-        default:
-            throw RuntimeError(message: "RPC call failed: unknown error (\(result))")
-        }
-    }
-
     /// Send a request asynchronously with async/await support
     /// - Parameters:
     ///   - buffer: The FlatBuffer containing the request (ownership transferred)

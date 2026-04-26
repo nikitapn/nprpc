@@ -253,10 +253,6 @@ const char* nprpc_object_get_class_id(void* obj_ptr);
 const char* nprpc_object_get_urls(void* obj_ptr);
 const uint8_t* nprpc_object_get_origin(void* obj_ptr);
 
-// Object RPC call - sends request and receives reply via C++ runtime
-// Returns: 0 = success, -1 = null args, -2 = endpoint selection failed, -3 = RPC call failed
-int nprpc_object_send_receive(void* obj_ptr, void* buffer_ptr, uint32_t timeout_ms);
-
 // Callback type for async RPC completion (fire-and-forget)
 // context: user-provided context (e.g., boxed Swift continuation)
 // error_code: 0 = success, negative = error

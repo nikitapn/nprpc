@@ -101,7 +101,7 @@ final class IntegrationTests: XCTestCase {
     }
 
     /// Test servant instantiation and direct method calls
-    func testServantDirectCalls() throws {
+    func testServantDirectCalls() async throws {
         class TestShapeServant: ShapeServiceServant, @unchecked Sendable {
             var storedRect: Rectangle?
 
@@ -159,7 +159,7 @@ final class IntegrationTests: XCTestCase {
         // This tests the full serialization/dispatch/deserialization cycle
 
         // Test getRectangle - should return the rectangle from our servant
-        let rect = try client.getRectangle(id: 42)
+        let rect = try await client.getRectangle(id: 42)
         XCTAssertEqual(rect.topLeft.x, 10)
         XCTAssertEqual(rect.topLeft.y, 20)
         XCTAssertEqual(rect.bottomRight.x, 110)
@@ -173,7 +173,7 @@ final class IntegrationTests: XCTestCase {
             color: .Blue
         )
 
-        try client.setRectangle(id: 99, rect: newRect)
+        try await client.setRectangle(id: 99, rect: newRect)
         XCTAssertNotNil(servant.storedRect)
         XCTAssertEqual(servant.storedRect?.topLeft.x, 5)
         XCTAssertEqual(servant.storedRect?.topLeft.y, 15)
@@ -186,7 +186,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(servant.storedRect?.color, .Blue)
 
         // Test getRectangles - should return the array of rectangles from our servant
-        let rects = try client.getRectangles()
+        let rects = try await client.getRectangles()
         XCTAssertEqual(rects.count, 2)
         XCTAssertEqual(rects[0].topLeft.x, 1)
         XCTAssertEqual(rects[0].topLeft.y, 2)
@@ -209,12 +209,12 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(rects[1].color, .Blue)
 
         // Test getNumbers - should return the array of integers from our servant
-        let nums = try client.getNumbers()
+        let nums = try await client.getNumbers()
         XCTAssertEqual(nums, [42, 99, -7])
     }
 
     /// Test exception handling through RPC
-    func testExceptionHandling() throws {
+    func testExceptionHandling() async throws {
         class ExceptionServant: ShapeServiceServant, @unchecked Sendable {
             override func getRectangle(id: UInt32) -> Rectangle {
                 return Rectangle()
@@ -237,7 +237,7 @@ final class IntegrationTests: XCTestCase {
 
         // Calling throwingMethod should throw a TestException
         do {
-            try client.throwingMethod(code: 42)
+            try await client.throwingMethod(code: 42)
             XCTFail("Expected TestException to be thrown")
         } catch let e as TestException {
             XCTAssertEqual(e.code, 42)
@@ -248,7 +248,7 @@ final class IntegrationTests: XCTestCase {
 
         // Test with different code
         do {
-            try client.throwingMethod(code: 99)
+            try await client.throwingMethod(code: 99)
             XCTFail("Expected TestException to be thrown")
         } catch let e as TestException {
             XCTAssertEqual(e.code, 99)
@@ -258,7 +258,7 @@ final class IntegrationTests: XCTestCase {
         }
     }
 
-    func testBasicTypes() throws {
+    func testBasicTypes() async throws {
         // nprpc_test.npidl defines a TestBasic interface with methods that use various basic types and arrays.
         class TestBasicServantImpl: TestBasicServant, @unchecked Sendable {
             var in_receivedA: UInt32 = 0
@@ -352,55 +352,59 @@ final class IntegrationTests: XCTestCase {
 
         let client = narrow(obj, to: TestBasic.self)!
         // Returning a boolean value to test basic marshalling of fundamental types
-        XCTAssertEqual(try client.returnBoolean(), true)
+        let returnedBoolean = try await client.returnBoolean()
+        XCTAssertEqual(returnedBoolean, true)
         // Returning an IdArray to test marshalling of array types
-        XCTAssertEqual(try client.returnIdArray(), [1, 2, 3, 4, 5])
+        let returnedIdArray = try await client.returnIdArray()
+        XCTAssertEqual(returnedIdArray, [1, 2, 3, 4, 5])
         // Returning a UInt32 to test marshalling of unsigned integers
-        XCTAssertEqual(try client.returnU32(), 123456789)
+        let returnedU32 = try await client.returnU32()
+        XCTAssertEqual(returnedU32, 123456789)
         // Testing the in_ method to verify marshalling of input parameters
-        XCTAssertEqual(try client.in_(a: 123456789, b: true, c: [1, 2, 3, 4, 5]), true)
+        let inResult = try await client.in_(a: 123456789, b: true, c: [1, 2, 3, 4, 5])
+        XCTAssertEqual(inResult, true)
         // Verifying that the servant received the correct input parameters
         XCTAssertEqual(servant.in_receivedA, 123456789)
         XCTAssertEqual(servant.in_receivedB, true)
         XCTAssertEqual(servant.in_receivedC, [1, 2, 3, 4, 5])
         // Testing the out method to verify marshalling of output parameters
-        let (outA, outB, outC) = try client.out()
+        let (outA, outB, outC) = try await client.out()
         XCTAssertEqual(outA, 123456789)
         XCTAssertEqual(outB, true)
         XCTAssertEqual(outC, [1, 2, 3, 4, 5])
         // Testing marshalling of input structs
         let aaa = AAA(a: 1234, b: "Hello world", c: "Another string")
-        try client.inStruct(a: aaa)
+        try await client.inStruct(a: aaa)
         XCTAssertEqual(servant.inStruct_receivedA.a, 1234)
         XCTAssertEqual(servant.inStruct_receivedA.b, "Hello world")
         XCTAssertEqual(servant.inStruct_receivedA.c, "Another string")
         // Testing marshalling of output structs
-        let outStruct = try client.outStruct()
+        let outStruct = try await client.outStruct()
         XCTAssertEqual(outStruct.a, 1234)
         XCTAssertEqual(outStruct.b, "Hello world")
         XCTAssertEqual(outStruct.c, "Another string")
         // Testing marshalling of input flat structs
         let flatStruct = FlatStruct(a: 42, b: 99, c: 1.2)
-        try client.inFlatStruct(value: 123456789, a: flatStruct)
+        try await client.inFlatStruct(value: 123456789, a: flatStruct)
         XCTAssertEqual(servant.inFlatStruct_receivedValue, 123456789)
         XCTAssertEqual(servant.inFlatStruct_receivedA.a, 42)
         XCTAssertEqual(servant.inFlatStruct_receivedA.b, 99)
         XCTAssertEqual(servant.inFlatStruct_receivedA.c, 1.2)
         // Testing marshalling of output flat structs
-        let outFlatStruct = try client.outFlatStruct(value: 123456789)
+        let outFlatStruct = try await client.outFlatStruct(value: 123456789)
         XCTAssertEqual(servant.outFlatStruct_receivedValue, 123456789)
         XCTAssertEqual(outFlatStruct.a, 42)
         XCTAssertEqual(outFlatStruct.b, 99)
         XCTAssertEqual(outFlatStruct.c, 1.2)
         // Testing marshalling of array of structs
-        let arrayOfStructs = try client.outArrayOfStructs()
+        let arrayOfStructs = try await client.outArrayOfStructs()
         XCTAssertEqual(arrayOfStructs.count, 3)
         XCTAssertEqual(arrayOfStructs[0].id, 1)
         XCTAssertEqual(arrayOfStructs[1].id, 2)
         XCTAssertEqual(arrayOfStructs[2].id, 3)
         // Testing exception handling
         do {
-            try client.inException()
+            try await client.inException()
             XCTFail("Expected SimpleException to be thrown")
         } catch let e as SimpleException {
             XCTAssertEqual(e.code, 42)
@@ -409,7 +413,7 @@ final class IntegrationTests: XCTestCase {
             XCTFail("Expected SimpleException but got: \(error)")
         }
         do {
-            try client.multipleExceptions(code: 0)
+            try await client.multipleExceptions(code: 0)
             XCTFail("Expected SimpleException to be thrown")
         } catch let e as SimpleException {
             XCTAssertEqual(e.code, 456)
@@ -418,7 +422,7 @@ final class IntegrationTests: XCTestCase {
             XCTFail("Expected SimpleException but got: \(error)")
         }
         do {
-            try client.multipleExceptions(code: 1)
+            try await client.multipleExceptions(code: 1)
             XCTFail("Expected AssertionFailed to be thrown")
         } catch let e as AssertionFailed {
             XCTAssertEqual(e.message, "Assertion failed branch")
@@ -426,16 +430,16 @@ final class IntegrationTests: XCTestCase {
             XCTFail("Expected AssertionFailed but got: \(error)")
         }
         // Testing marshalling of output scalar with exception
-        let result = try client.outScalarWithException(dev_addr: 10, addr: 783)
+        let result = try await client.outScalarWithException(dev_addr: 10, addr: 783)
         XCTAssertEqual(servant.outScalarWithException_receivedDevAddr, 10)
         XCTAssertEqual(servant.outScalarWithException_receivedAddr, 783)
         XCTAssertEqual(result, 32)
         // Testing marshalling of output string array
-        let stringArray = try client.returnStringArray(count: 3)
+        let stringArray = try await client.returnStringArray(count: 3)
         XCTAssertEqual(stringArray, ["String 1", "String 2", "String 3"])
     }
 
-    func testLargeMessage() throws {
+    func testLargeMessage() async throws {
         class TestLargeMessageServantImpl: TestLargeMessageServant, @unchecked Sendable {
             var in_receivedA: UInt32 = 0
             var in_receivedB: Bool = false
@@ -465,7 +469,8 @@ final class IntegrationTests: XCTestCase {
 
         // Test with a moderately large array (64KB)
         let largeInput = [UInt8](repeating: 0x42, count: 64 * 1024)
-        XCTAssertEqual(try client.in_(a: 0xCAFEBABE, b: false, c: largeInput), true)
+        let largeInResult = try await client.in_(a: 0xCAFEBABE, b: false, c: largeInput)
+        XCTAssertEqual(largeInResult, true)
         XCTAssertEqual(servant.in_receivedA, 0xCAFEBABE)
         XCTAssertEqual(servant.in_receivedB, false)
         XCTAssertEqual(servant.in_receivedC.count, 64 * 1024)
@@ -473,7 +478,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(servant.in_receivedC.last, 0x42)
 
         // Test output with large array
-        let (outA, outB, outC) = try client.out()
+        let (outA, outB, outC) = try await client.out()
         XCTAssertEqual(outA, 0xDEADBEEF)
         XCTAssertEqual(outB, true)
         XCTAssertEqual(outC.count, 1024 * 1024)
@@ -481,7 +486,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(outC.last, 0xAB)
     }
 
-    func testOptional() throws {
+    func testOptional() async throws {
         class TestOptionalServantImpl: TestOptionalServant, @unchecked Sendable {
             var inEmpty_receivedA: UInt32? = nil
             var in_receivedA: UInt32? = nil
@@ -520,16 +525,19 @@ final class IntegrationTests: XCTestCase {
         let client = narrow(obj, to: TestOptional.self)!
 
         // Test InEmpty with nil
-        XCTAssertEqual(try client.inEmpty(a: nil), true)
+        let inEmptyNilResult = try await client.inEmpty(a: nil)
+        XCTAssertEqual(inEmptyNilResult, true)
         XCTAssertNil(servant.inEmpty_receivedA)
 
         // Test InEmpty with value
-        XCTAssertEqual(try client.inEmpty(a: 123), false)
+        let inEmptyValResult = try await client.inEmpty(a: 123)
+        XCTAssertEqual(inEmptyValResult, false)
         XCTAssertEqual(servant.inEmpty_receivedA, 123)
 
         // Test In_ with both values
         let aaa = AAA(a: 999, b: "Test", c: "Data")
-        XCTAssertEqual(try client.in_(a: 456, b: aaa), true)
+        let inBothResult = try await client.in_(a: 456, b: aaa)
+        XCTAssertEqual(inBothResult, true)
         XCTAssertEqual(servant.in_receivedA, 456)
         XCTAssertNotNil(servant.in_receivedB)
         XCTAssertEqual(servant.in_receivedB?.a, 999)
@@ -537,25 +545,26 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(servant.in_receivedB?.c, "Data")
 
         // Test In_ with nil values
-        XCTAssertEqual(try client.in_(a: nil, b: nil), false)
+        let inNilResult = try await client.in_(a: nil, b: nil)
+        XCTAssertEqual(inNilResult, false)
         XCTAssertNil(servant.in_receivedA)
         XCTAssertNil(servant.in_receivedB)
 
         // Test OutEmpty - returns nil
-        let outEmpty = try client.outEmpty()
+        let outEmpty = try await client.outEmpty()
         XCTAssertNil(outEmpty)
 
         // Test Out - returns value
-        let outVal = try client.out()
+        let outVal = try await client.out()
         XCTAssertEqual(outVal, 42)
 
         // Test ReturnOpt1 - returns struct with optional field populated
-        let opt1 = try client.returnOpt1()
+        let opt1 = try await client.returnOpt1()
         XCTAssertEqual(opt1.str, "Hello")
         XCTAssertEqual(opt1.data, [1, 2, 3, 4, 5])
     }
 
-    func testNested() throws {
+    func testNested() async throws {
         class TestNestedServantImpl: TestNestedServant, @unchecked Sendable {
             override func out() throws -> BBB? {
                 return BBB(
@@ -597,7 +606,7 @@ final class IntegrationTests: XCTestCase {
         let client = narrow(obj, to: TestNested.self)!
 
         // Test Out - optional nested struct
-        let bbb = try client.out()
+        let bbb = try await client.out()
         XCTAssertNotNil(bbb)
         XCTAssertEqual(bbb?.a.count, 2)
         XCTAssertEqual(bbb?.a[0].a, 1)
@@ -614,7 +623,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertNil(bbb?.b[2].c)
 
         // Test ReturnNested - deeply nested struct
-        let nested = try client.returnNested()
+        let nested = try await client.returnNested()
         XCTAssertEqual(nested.x, "top")
         XCTAssertEqual(nested.z, 99999999999)
         XCTAssertEqual(nested.y.x, "level1")
@@ -624,7 +633,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(nested.y.y.z, 0xDEADBEEFCAFEBABE)
     }
 
-    func testArrays() throws {
+    func testArrays() async throws {
         class TestArraysServantImpl: FixedSizeArrayTestServant, @unchecked Sendable {
             var inFixedArray_receivedA: [UInt32] = []
             var inFixedArrayOfStructs_receivedA: [SimpleStruct] = []
@@ -684,15 +693,15 @@ final class IntegrationTests: XCTestCase {
         let client = narrow(obj, to: FixedSizeArrayTest.self)!
         // Test InFixedArray
         let fixedArray: [UInt32] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        try client.inFixedArray(a: fixedArray)
+        try await client.inFixedArray(a: fixedArray)
         XCTAssertEqual(servant.inFixedArray_receivedA, fixedArray)
 
         // Test OutFixedArray
-        let outArray = try client.outFixedArray()
+        let outArray = try await client.outFixedArray()
         XCTAssertEqual(outArray, [10, 20, 30, 40, 50, 60, 70, 80, 90, 100])
 
         // Test OutTwoFixedArrays
-        let (outArray1, outArray2) = try client.outTwoFixedArrays()
+        let (outArray1, outArray2) = try await client.outTwoFixedArrays()
         XCTAssertEqual(outArray1, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
         XCTAssertEqual(outArray2, [10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
 
@@ -704,14 +713,14 @@ final class IntegrationTests: XCTestCase {
             SimpleStruct(id: 4),
             SimpleStruct(id: 5)
         ]
-        try client.inFixedArrayOfStructs(a: structArray)
+        try await client.inFixedArrayOfStructs(a: structArray)
         XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA.count, structArray.count)
         for i in 0..<structArray.count {
             XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[i].id, structArray[i].id)
         }
 
         // Test OutFixedArrayOfStructs
-        let outStructArray = try client.outFixedArrayOfStructs()
+        let outStructArray = try await client.outFixedArrayOfStructs()
         XCTAssertEqual(outStructArray.count, 5)
         XCTAssertEqual(outStructArray[0].id, 10)
         XCTAssertEqual(outStructArray[1].id, 20)
@@ -720,7 +729,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(outStructArray[4].id, 50)
 
         // Test OutTwoFixedArraysOfStructs
-        let (outStructArray1, outStructArray2) = try client.outTwoFixedArraysOfStructs()
+        let (outStructArray1, outStructArray2) = try await client.outTwoFixedArraysOfStructs()
         XCTAssertEqual(outStructArray1.count, 5)
         XCTAssertEqual(outStructArray1[0].id, 1)
         XCTAssertEqual(outStructArray1[1].id, 2)
@@ -750,7 +759,7 @@ final class IntegrationTests: XCTestCase {
         // Test 1: Send array with FEWER elements than expected (3 instead of 10)
         // Should print warning and copy only 3 elements
         let smallArray: [UInt32] = [100, 200, 300]
-        try client.inFixedArray(a: smallArray)
+        try await client.inFixedArray(a: smallArray)
         XCTAssertEqual(servant.inFixedArray_receivedA.count, 10, "Should receive 5 elements sent")
         XCTAssertEqual(servant.inFixedArray_receivedA[0], 100)
         XCTAssertEqual(servant.inFixedArray_receivedA[1], 200)
@@ -759,7 +768,7 @@ final class IntegrationTests: XCTestCase {
         // Test 2: Send array with MORE elements than expected (12 instead of 10)
         // Should print warning and copy only first 10 elements
         let largeArray: [UInt32] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-        try client.inFixedArray(a: largeArray)
+        try await client.inFixedArray(a: largeArray)
         XCTAssertEqual(servant.inFixedArray_receivedA.count, 10, "Should receive only 10 elements (max size)")
         for i in 0..<10 {
             XCTAssertEqual(servant.inFixedArray_receivedA[i], UInt32(i + 1), "Element \(i) should be \(i + 1)")
@@ -771,7 +780,7 @@ final class IntegrationTests: XCTestCase {
             SimpleStruct(id: 43),
             SimpleStruct(id: 44)
         ]
-        try client.inFixedArrayOfStructs(a: smallStructArray)
+        try await client.inFixedArrayOfStructs(a: smallStructArray)
         XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA.count, 5, "Should receive 5 struct elements sent")
         // The first 3 elements should be from the sent array, and the remaining should be garbage/default values (since the servant's array is fixed size 5)
         XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[0].id, 42)
@@ -788,7 +797,7 @@ final class IntegrationTests: XCTestCase {
             SimpleStruct(id: 6),
             SimpleStruct(id: 7),
         ]
-        try client.inFixedArrayOfStructs(a: largeStructArray)
+        try await client.inFixedArrayOfStructs(a: largeStructArray)
         XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA.count, 5, "Should receive only 5 struct elements (max size)")
         for i in 0..<5 {
             XCTAssertEqual(servant.inFixedArrayOfStructs_receivedA[i].id, UInt32(i + 1), "Element \(i) should be \(i + 1)")
@@ -882,16 +891,16 @@ final class IntegrationTests: XCTestCase {
         let testClient = narrow(testObj, to: TestObjects.self)!
 
         // Test 1: Send a single object
-        try testClient.sendObject(o: simpleObj1)
+        try await testClient.sendObject(o: simpleObj1)
         semaphore.wait()
         XCTAssertEqual(simpleServant1.value, 42, "SendObject should have called SetValue(42) on the object")
 
         // Test 2: Release the received object
-        try testClient.releaseReceivedObject()
+        try await testClient.releaseReceivedObject()
 
         // Test 3: Send nested objects
         let nested = NestedObjects(object1: simpleObj1, object2: simpleObj2)
-        try testClient.sendNestedObjects(o: nested)
+        try await testClient.sendNestedObjects(o: nested)
         semaphore.wait()
         XCTAssertEqual(simpleServant1.value, 100, "SendNestedObjects should have called SetValue(100) on object1")
         XCTAssertEqual(simpleServant2.value, 200, "SendNestedObjects should have called SetValue(200) on object2")
@@ -1029,7 +1038,7 @@ final class IntegrationTests: XCTestCase {
 
     /// Test bad input validation for untrusted interfaces
     /// This simulates a malicious client sending a malformed buffer with an oversized vector
-    func testBadInput() throws {
+    func testBadInput() async throws {
         // TestBadInput servant implementation (interface marked as [trusted=false])
         class TestBadInputImpl: TestBadInputServant,@unchecked Sendable {
             override func in_(a: [UInt8]) {
@@ -1088,8 +1097,8 @@ final class IntegrationTests: XCTestCase {
 
         // Send the malformed buffer - should get ExceptionBadInput
         do {
-            try client.sendReceive(buffer: buffer, timeout: client.timeout)
-            let _ = try handleStandardReply(buffer: buffer)
+            let responseBuffer = try await client.sendAsyncReceive(buffer: buffer, timeout: client.timeout)
+            let _ = try handleStandardReply(buffer: responseBuffer)
             XCTFail("Expected ExceptionBadInput to be thrown")
         } catch is ExceptionBadInput {
             // Expected - test passed
@@ -1098,7 +1107,7 @@ final class IntegrationTests: XCTestCase {
         }
     }
 
-    func testUntrusted() throws {
+    func testUntrusted() async throws {
         class UntrustedImpl: TestBadInputServant, @unchecked Sendable {
             var in_receivedA: [UInt8] = []
             var inStrings_receivedA: String = ""
@@ -1130,15 +1139,15 @@ final class IntegrationTests: XCTestCase {
         }
         let client = narrow(obj, to: TestBadInput.self)!
 
-        try client.in_(a: [1, 2, 3, 4, 5])
+        try await client.in_(a: [1, 2, 3, 4, 5])
         XCTAssertEqual(servant.in_receivedA, [1, 2, 3, 4, 5])
 
-        let result = try client.inStrings(a: "Hello", b: "World")
+        let result = try await client.inStrings(a: "Hello", b: "World")
         XCTAssertEqual(result, true)
         XCTAssertEqual(servant.inStrings_receivedA, "Hello")
         XCTAssertEqual(servant.inStrings_receivedB, "World")
 
-        let result2 = try client.send(msg: ChatMessage(
+        let result2 = try await client.send(msg: ChatMessage(
             timestamp: 1234567890,
             str: "Test message",
             attachment: nil
@@ -1938,7 +1947,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(echoedObjects[1].c, "two-ok")
     }
 
-    func testVariantRpc() throws {
+    func testVariantRpc() async throws {
         class TestVariantRpcServantImpl: TestVariantRpcServant, @unchecked Sendable {
             override func echo(value: TestVariant) throws -> TestVariant {
                 return value
@@ -1955,7 +1964,7 @@ final class IntegrationTests: XCTestCase {
 
         // Echo payloadA
         let inputA = TestVariant.payloadA(VariantPayloadA(id: 42, label: "hello swift"))
-        let resultA = try client.echo(value: inputA)
+        let resultA = try await client.echo(value: inputA)
         if case .payloadA(let val) = resultA {
             XCTAssertEqual(val.id, 42)
             XCTAssertEqual(val.label, "hello swift")
@@ -1965,7 +1974,7 @@ final class IntegrationTests: XCTestCase {
 
         // Echo payloadB
         let inputB = TestVariant.payloadB(VariantPayloadB(code: 99, detail: "swift detail"))
-        let resultB = try client.echo(value: inputB)
+        let resultB = try await client.echo(value: inputB)
         if case .payloadB(let val) = resultB {
             XCTAssertEqual(val.code, 99)
             XCTAssertEqual(val.detail, "swift detail")
@@ -1975,7 +1984,7 @@ final class IntegrationTests: XCTestCase {
 
         // Echo payloadA with empty string
         let inputEmpty = TestVariant.payloadA(VariantPayloadA(id: 0, label: ""))
-        let resultEmpty = try client.echo(value: inputEmpty)
+        let resultEmpty = try await client.echo(value: inputEmpty)
         if case .payloadA(let val) = resultEmpty {
             XCTAssertEqual(val.id, 0)
             XCTAssertEqual(val.label, "")
