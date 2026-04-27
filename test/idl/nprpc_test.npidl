@@ -14,8 +14,7 @@ exception AssertionFailed {
 // Simple ACK, for testing unreliable delivery
 interface Ack {
 	// Simple ACK method
-	// Made it async since it will be called io_context thread and we don't want to deadlock
-	async Confirm(what: string);
+	void Confirm(what: string);
 }
 
 interface ServerControl {
@@ -96,7 +95,7 @@ interface TestOptional {
 }
 
 interface SimpleObject {
-	async SetValue(a: u32);
+  void SetValue(a: u32);
 }
 
 message NestedObjects {
@@ -191,10 +190,10 @@ interface TestBadInput {
 interface TestUnreliable {
 	// Unreliable, no reply
 	[unreliable]
-	async FireAndForget(a: u32, b: boolean, c: vector<u8>);
+  void FireAndForget(a: u32, b: boolean, c: vector<u8>);
 
-	// Reliable - needs ACK, can have return value and throw
-	boolean ReliableCall(a: u32, b: boolean, c: vector<u8>) raises (AssertionFailed);
+  // Reliable - needs ACK, can have return value and throw
+  boolean ReliableCall(a: u32, b: boolean, c: vector<u8>) raises (AssertionFailed);
 }
 
 interface TestStreams {
@@ -237,17 +236,14 @@ interface TestStreams {
 }
 
 interface AsyncTest {
-	// Test async method with no return value
-	async Method1(arg1: u32, arg2: string);
+  // Test method with no return value
+  void Method1(arg1: u32, arg2: string);
 
-	// Test async method with output value
-	async Method2(arg1: u32, arg2: out string);
+  // Test method with output value
+  void Method2(arg1: u32, arg2: out string);
 
-	// Test async method that can throw an exception
-	// Async methods cannot throw an exception at this time because it would require callback parameters in C++.
-	// Future enhancement could allow async methods to throw exceptions that are delivered to the caller as rejections of the returned promise.
-	// In C++ the exception would be in the callback parameters.
-	// async Method3(arg1: u32) raises (AssertionFailed);
+  // Test method that can throw an exception
+  // (previously async - now uses Async coroutine variants)
 }
 
 interface FixedSizeArrayTest {

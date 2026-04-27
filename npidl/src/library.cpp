@@ -267,7 +267,6 @@ class Lexer : public ILexer
         {"raises"sv, TokenId::Raises},
         {"direct"sv, TokenId::OutDirect},
         {"helper"sv, TokenId::Helper},
-        {"async"sv, TokenId::Async},
         {"const"sv, TokenId::Const},
         {"module"sv, TokenId::Module},
         {"import"sv, TokenId::Import},
@@ -1263,27 +1262,22 @@ class Parser : public IParser
     return true;
   }
   // clang-format off
-  // function_decl ::= ('async' | type_decl) IDENTIFIER '(' (arg_decl (',' arg_decl)*)? ')' (';' | 'raises' '(' IDENTIFIER (',' IDENTIFIER)* ')' ';')
+  // function_decl ::= type_decl IDENTIFIER '(' (arg_decl (',' arg_decl)*)? ')' (';' | 'raises' '(' IDENTIFIER (',' IDENTIFIER)* ')' ';')
   // clang-format on
   bool function_decl(AstFunctionDecl*& f)
   {
-    bool is_async;
     AstTypeDecl* ret_type = nullptr;
     Token start_tok;
     {
       PeekGuard pg(*this);
-      start_tok = peek(); // Capture starting position (async or return type)
+      start_tok = peek(); // Capture starting position (return type token)
     }
-    if (!(is_async = check(&Parser::one, TokenId::Async)) &&
-        !check(&Parser::type_decl, std::ref(ret_type)))
+    if (!check(&Parser::type_decl, std::ref(ret_type)))
       return false;
-
-    if (!ret_type)
-      ret_type = new AstVoidDecl();
 
     f = new AstFunctionDecl();
     f->ret_value = ret_type;
-    f->is_async = is_async;
+    f->is_async = false;
     f->is_stream = false;
     auto name_tok = match(TokenId::Identifier);
     f->name = name_tok.name;
@@ -1363,9 +1357,6 @@ class Parser : public IParser
     if (tok == TokenId::Semicolon) {
       flush();
     } else if (tok == TokenId::Raises) {
-      if (f->is_async)
-        throw_error("Function declared as async cannot throw exceptions. Remove 'async' or 'raises' clause.");
-
       flush();
       match('(');
 
@@ -1524,11 +1515,17 @@ class Parser : public IParser
                         f->name);
         }
 
-        // [unreliable] requires async or stream (streams are inherently async)
-        if (!f->is_async && !f->is_stream && !f->is_reliable)
-          throw_error("Function '" + f->name +
-                      "' can only be marked [unreliable] if declared "
-                      "as 'async' or 'stream'");
+        // [unreliable] requires stream (streams are inherently async) or void return with no raises
+        if (!f->is_stream && !f->is_reliable) {
+          // Unreliable non-stream methods must be void (no out params, no return value)
+          bool is_void_like = (f->ret_value->id == FieldType::Void);
+          for (auto& arg : f->args) {
+            if (arg->modifier == ArgumentModifier::Out) { is_void_like = false; break; }
+          }
+          if (!is_void_like)
+            throw_error("Function '" + f->name +
+                        "' marked [unreliable] must have no return value and no out parameters");
+        }
 
         if (f->is_throwing() && !f->is_reliable)
           throw_error("Function' " + f->name +

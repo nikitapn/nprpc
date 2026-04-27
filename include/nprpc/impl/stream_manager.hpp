@@ -24,7 +24,7 @@
 
 namespace nprpc {
 
-class SessionContext;
+struct SessionContext;
 class StreamWriterBase;
 class StreamReaderBase;
 

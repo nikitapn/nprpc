@@ -11,7 +11,6 @@
 #include <deque>
 #include <functional>
 #include <boost/asio/ip/address.hpp>
-#include <string>
 #include <unordered_map>
 
 namespace nprpc::impl {
@@ -102,6 +101,10 @@ public:
   void start_read_loop();
 
   virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
+
+  virtual nprpc::Task<> send_receive_coro(flat_buffer& buffer,
+                                           uint32_t timeout_ms,
+                                           std::stop_token st = {}) override;
 
   virtual void send_receive_async(
       flat_buffer&& buffer,

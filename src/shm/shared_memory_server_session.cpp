@@ -45,6 +45,14 @@ public:
     assert(false && "send_receive should not be called on server session");
   }
 
+  nprpc::Task<> send_receive_coro(flat_buffer& buffer,
+                                          uint32_t timeout_ms,
+                                          std::stop_token st = {}) override
+  {
+    assert(false && "send_receive_coro should not be called on server session");
+    co_return;
+  }
+
   virtual void send_receive_async(
       flat_buffer&&,
       std::optional<std::function<void(const boost::system::error_code&,

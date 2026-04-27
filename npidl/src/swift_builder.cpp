@@ -864,16 +864,11 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     }
 
     // Client proxy method signatures:
-    // - IDL async with outputs or raises(): `func foo() async throws`
-    // - IDL async without outputs/raises(): `func foo() async` (fire-and-forget)
-    // - Non-async: `func foo() async throws` (non-blocking, cooperative-thread-safe)
-    bool async_has_outputs = fn->out_s != nullptr;
-    if (fn->is_async && (fn->is_throwing() || async_has_outputs)) {
-      out << ") async throws";
-    } else if (fn->is_async) {
+    // - Unreliable (fire-and-forget): `func foo() async`
+    // - Reliable: `func foo() async throws` (non-blocking, cooperative-thread-safe)
+    if (!fn->is_reliable) {
       out << ") async";
     } else {
-      // All non-IDL-async methods are async throws: avoids blocking Swift's cooperative pool.
       out << ") async throws";
     }
 
@@ -913,9 +908,8 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
     out << " " << bb();
 
-    // For async methods without throws and without outputs, we use return instead of throw for errors
-    // Async with outputs can throw because sendAsyncReceive throws
-    const bool can_throw = fn->is_throwing() || !fn->is_async || async_has_outputs;
+    // For unreliable (fire-and-forget), errors are ignored (no throw)
+    const bool can_throw = fn->is_reliable;
     const char* error_stmt = can_throw ? "throw" : "return";
 
     // Calculate buffer size
@@ -972,83 +966,17 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     out << bl() << "finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)\n\n";
 
     // Send Request
-    if (fn->is_async) {
-      // Check if async method has output parameters (requires waiting for response)
-      bool has_outputs = fn->out_s != nullptr;
-      
-      if (has_outputs) {
-        // Async method with output parameters - use sendAsyncReceive
-        out << bl() << "// Send async and receive response\n";
-        out << bl() << "try Task.checkCancellation()\n";
-        out << bl() << "let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)\n\n";
-        
-        // Handle reply
-        out << bl() << "// Handle reply\n";
-        out << bl() << "let stdReply = try handleStandardReply(buffer: responseBuffer)\n";
-        if (fn->ex) {
-          out << bl() << "if stdReply == 1 { throw " << ctx_->current_file() << "_throwException(buffer: responseBuffer) }\n";
-        }
-        out << bl() << "if stdReply != -1 { throw UnexpectedReplyError(message: \"Unexpected reply\") }\n\n";
-
-        // Unmarshal output arguments
-        out << bl() << "guard let responseData = responseBuffer.data else { throw BufferError(message: \"Failed to get response data\") }\n";
-
-        bool out_needs_endpoint = false;
-        for (auto f : fn->out_s->fields) {
-          if (contains_object(f->type)) {
-            out_needs_endpoint = true;
-            break;
-          }
-        }
-
-        if (out_needs_endpoint) {
-          out << bl() << "let out = try " << ns(fn->out_s->nm) << "unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ", endpoint: endpoint)\n";
-        } else {
-          out << bl() << "let out = " << ns(fn->out_s->nm) << "unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ")\n";
-        }
-
-        // Return output values
-        if ((has_return ? 1 : 0) + out_params.size() > 1) {
-          // Multiple return values - use tuple
-          out << bl() << "return (";
-          bool first_ret = true;
-          int ix = 0;
-          if (has_return) {
-            out << "out._1";
-            first_ret = false;
-            ix = 1;
-          }
-          for (auto out_arg : fn->args) {
-            if (out_arg->modifier == ArgumentModifier::In) continue;
-            ++ix;
-            if (!first_ret) out << ", ";
-            first_ret = false;
-            out << "out._" << ix;
-          }
-          out << ")\n";
-        } else if (has_return) {
-          out << bl() << "return out._1\n";
-        } else {
-          // Single out parameter
-          out << bl() << "return out._1\n";
-        }
-      } else {
-        // Async method without outputs - fire-and-forget
-        out << bl() << "// Send async (no reply expected)\n";
-        if (fn->is_throwing()) {
-          out << bl() << "try Task.checkCancellation()\n";
-          out << bl() << "try await sendAsync(buffer: buffer, timeout: timeout)\n";
-        } else {
-          // Fire-and-forget: wrap in do/catch since sendAsync can throw
-          out << bl() << "do {\n";
-          out << bl() << "  try await sendAsync(buffer: buffer, timeout: timeout)\n";
-          out << bl() << "} catch {\n";
-          out << bl() << "  // Fire-and-forget: ignore communication errors\n";
-          out << bl() << "}\n";
-        }
-      }
+    if (!fn->is_reliable) {
+      // Unreliable (fire-and-forget) - no reply expected
+      out << bl() << "// Send unreliable (no reply expected)\n";
+      // Fire-and-forget: wrap in do/catch since sendAsync can throw
+      out << bl() << "do {\n";
+      out << bl() << "  try await sendAsync(buffer: buffer, timeout: timeout)\n";
+      out << bl() << "} catch {\n";
+      out << bl() << "  // Fire-and-forget: ignore communication errors\n";
+      out << bl() << "}\n";
     } else {
-      // Non-IDL-async: use async/await so callers don't block Swift's cooperative pool.
+      // Reliable: use async/await so callers don't block Swift's cooperative pool.
       out << bl() << "// Send and receive\n";
       out << bl() << "try Task.checkCancellation()\n";
       out << bl() << "let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)\n\n";
@@ -1108,7 +1036,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
           out << bl() << "return out._1\n";
         }
       }
-    } // end if (fn->is_async) else
+    }
 
     out << eb() << "\n";
   }

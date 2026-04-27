@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/asio_compat.hpp>
 #include <nprpc_nameserver.hpp>
 #include <nprpc_test.hpp>
 
@@ -14,6 +15,7 @@
 #include <boost/range/irange.hpp>
 
 #include "common/helper.inl"
+#include "../../src/logging.hpp"
 
 namespace nprpctest {
   nprpc::Rpc* rpc;

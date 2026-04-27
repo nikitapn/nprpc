@@ -101,7 +101,6 @@ private:
 
   void proxy_call(AstFunctionDecl* fn);
   void proxy_call_coro(AstFunctionDecl* fn);  // coroutine variant
-  void proxy_async_call(AstFunctionDecl* fn);
   void proxy_unreliable_call(AstFunctionDecl* fn); // Fire-and-forget
   void proxy_stream_call(AstFunctionDecl* fn); // Server-streaming call
   void proxy_client_stream_call(AstFunctionDecl* fn);

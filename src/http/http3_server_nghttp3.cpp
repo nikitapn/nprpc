@@ -1054,6 +1054,14 @@ public:
     assert(false && "send_receive not supported on WebTransport server control session");
   }
 
+  nprpc::Task<> send_receive_coro(flat_buffer& buffer,
+                                          uint32_t timeout_ms,
+                                          std::stop_token st = {}) override
+  {
+    assert(false && "send_receive_coro not supported on WebTransport server control session");
+    co_return;
+  }
+
   void send_receive_async(
       flat_buffer&&,
       std::optional<std::function<void(const boost::system::error_code&, flat_buffer&)>>&&,

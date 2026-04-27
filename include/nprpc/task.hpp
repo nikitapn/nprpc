@@ -80,7 +80,7 @@ struct TaskPromiseBase {
   TaskResult<T>           result;
   std::coroutine_handle<> continuation;  // set by co_await; resumed at end
   std::binary_semaphore   ready{0};      // released at end; used by get()
-  std::function<void(std::exception_ptr)> completion_handler;
+  std::move_only_function<void(std::exception_ptr)> completion_handler;
 
   // Called by final_suspend's awaiter after the coroutine body finishes.
   void on_final() noexcept {
@@ -160,7 +160,7 @@ public:
       std::rethrow_exception(ep);
   }
 
-  void set_completion_handler(std::function<void(std::exception_ptr)> handler) {
+  void set_completion_handler(std::move_only_function<void(std::exception_ptr)> handler) {
     if (!handle_)
       return;
     handle_.promise().completion_handler = std::move(handler);

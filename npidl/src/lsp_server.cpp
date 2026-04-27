@@ -520,8 +520,6 @@ LspServer::create_hover_content(const npidl::PositionIndex::Entry* entry)
     auto* fn = static_cast<npidl::AstFunctionDecl*>(entry->node);
     md << "**function** `" << fn->name << "`\n\n";
     md << "```npidl\n";
-    if (fn->is_async)
-      md << "async ";
 
     // Return type
     if (fn->ret_value->id == npidl::FieldType::Void) {

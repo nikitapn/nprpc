@@ -78,7 +78,6 @@ enum class TokenId {
   OutDirect,
   Helper,
   Trusted,
-  Async,
   Const,
   Module,
   Import,

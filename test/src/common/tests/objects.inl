@@ -11,6 +11,8 @@ class TestObjectsImpl : public nprpc::test::ITestObjects_Servant {
   SimpleObjectImpl simple_object_;
   nprpc::Poa* poa_;
   nprpc::ObjectPtr<nprpc::test::SimpleObject> received_object_;
+
+
 public:
   TestObjectsImpl(nprpc::Poa* poa)
     : poa_(poa)
@@ -23,10 +25,15 @@ public:
     if (!simple_obj) {
       throw nprpc::test::AssertionFailed{"Invalid object type passed to SendObject"};
     }
-    
+
     // Store the object for later release
     received_object_ = nprpc::ObjectPtr<nprpc::test::SimpleObject>(simple_obj);
-    received_object_->SetValue(42);
+    auto obj = received_object_.get();
+    nprpc::spawn_task(nprpc::get_io_context(),
+      [obj]() -> boost::asio::awaitable<void> {
+        co_await nprpc::as_awaitable(obj->SetValueAsync(42));
+      }
+    );
   }
 
   void ReleaseReceivedObject() override {
@@ -34,7 +41,7 @@ public:
       throw nprpc::test::AssertionFailed{"No object was received yet"};
     }
 
-    received_object_->release();
+    received_object_.reset();
   }
 
   void SendNestedObjects (nprpc::test::flat::NestedObjects_Direct o) override {
@@ -45,21 +52,24 @@ public:
     auto* obj1_raw = nprpc::impl::create_object_from_flat(o.object1(), ctx.remote_endpoint);
     auto* obj2_raw = nprpc::impl::create_object_from_flat(o.object2(), ctx.remote_endpoint);
 
-    // Narrow to the specific interface
-    auto obj1 = nprpc::narrow<nprpc::test::SimpleObject>(obj1_raw);
-    auto obj2 = nprpc::narrow<nprpc::test::SimpleObject>(obj2_raw);
+    // Narrow to the specific interface and transfer ownership into ObjectPtr
+    nprpc::ObjectPtr<nprpc::test::SimpleObject> o1(
+      nprpc::narrow<nprpc::test::SimpleObject>(obj1_raw));
+    nprpc::ObjectPtr<nprpc::test::SimpleObject> o2(
+      nprpc::narrow<nprpc::test::SimpleObject>(obj2_raw));
 
-    if (!obj1 || !obj2) {
+    if (!o1 || !o2) {
       throw nprpc::test::AssertionFailed{"Invalid object types in NestedObjects"};
     }
 
-    // Now you can call methods on the objects
-    obj1->SetValue(100);
-    obj2->SetValue(200);
-    
-    // Release references when done
-    obj1->release();
-    obj2->release();
+
+    // SetValue RPCs go back to the caller; schedule after dispatch returns.
+    nprpc::spawn_task(nprpc::get_io_context(),
+      [o1 = std::move(o1), o2 = std::move(o2)]() mutable -> boost::asio::awaitable<void> {
+        co_await nprpc::as_awaitable(o1->SetValueAsync(100));
+        co_await nprpc::as_awaitable(o2->SetValueAsync(200));
+      }
+    );
   }
 
 };

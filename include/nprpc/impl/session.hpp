@@ -44,11 +44,7 @@ public:
   // Pass a stop_token to enable cancellation; throws OperationCancelled.
   virtual nprpc::Task<> send_receive_coro(flat_buffer& buffer,
                                           uint32_t timeout_ms,
-                                          std::stop_token st = {})
-  {
-    send_receive(buffer, timeout_ms);
-    co_return;
-  }
+                                          std::stop_token st = {}) = 0;
 
   virtual void send_receive_async(
       flat_buffer&& buffer,

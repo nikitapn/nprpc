@@ -59,6 +59,14 @@ struct IoUringConn : Session {
   // Server-side only — these paths are never taken.
   void timeout_action() final {}
   void send_receive(flat_buffer&, uint32_t) override { assert(false); }
+  nprpc::Task<> send_receive_coro(flat_buffer& buffer,
+                                          uint32_t timeout_ms,
+                                          std::stop_token st = {}) override
+  {
+    send_receive(buffer, timeout_ms);
+    co_return;
+  }
+
   void send_receive_async(
       flat_buffer&&,
       std::optional<std::function<void(const boost::system::error_code&,

@@ -10,6 +10,8 @@
 #include <string_view>
 #include <vector>
 
+#include <boost/asio/io_context.hpp>
+
 namespace nprpc {
 
 class ObjectServant;
@@ -57,5 +59,10 @@ struct SessionContext {
 };
 
 NPRPC_API SessionContext& get_context();
+
+// Returns the io_context for the current RPC instance.
+// Safe to call from any thread, including servant dispatch handlers.
+// Use with nprpc::spawn_task() to schedule async work after dispatch returns.
+NPRPC_API boost::asio::io_context& get_io_context();
 
 } // namespace nprpc

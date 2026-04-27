@@ -150,6 +150,7 @@ void WebSocketSession<Derived>::on_read(
       it->second.completion_handler(boost::system::error_code{}, response);
       pending_requests_.erase(it);
     } else {
+      NPRPC_LOG_WARN("[WS::on_read] Received response for unknown request ID: {}", request_id);
       // Received response for unknown request - possible attack or bug
       NPRPC_WEBSOCKET_SESSION_LOG_WARN("Received response for unknown request ID: {}", request_id);
     }
@@ -309,6 +310,43 @@ void WebSocketSession<Derived>::send_receive(flat_buffer& buffer,
   }
 }
 
+template <class Derived>
+nprpc::Task<> WebSocketSession<Derived>::send_receive_coro(flat_buffer& buffer,
+                                                            uint32_t timeout_ms,
+                                                            std::stop_token /*st*/)
+{
+  struct Awaiter {
+    WebSocketSession& self;
+    flat_buffer&      buf;
+    uint32_t          timeout_ms;
+    boost::system::error_code result_ec;
+
+    bool await_ready() noexcept { return false; }
+
+    void await_suspend(std::coroutine_handle<> h) noexcept
+    {
+      self.send_receive_async(
+          std::move(buf),
+          [this, h](const boost::system::error_code& ec,
+                    flat_buffer& response) mutable {
+            result_ec = ec;
+            if (!ec)
+              buf = std::move(response);
+            h.resume();
+          },
+          timeout_ms);
+    }
+
+    void await_resume()
+    {
+      if (result_ec)
+        throw nprpc::ExceptionCommFailure();
+    }
+  };
+
+  co_await Awaiter{*this, buffer, timeout_ms};
+}
+
 // Called outside of strand context, so we need to ensure thread safety
 template <class Derived>
 void WebSocketSession<Derived>::send_receive_async(
@@ -332,9 +370,6 @@ void WebSocketSession<Derived>::send_receive_async(
        completion_handler = std::move(completion_handler),
        timeout_ms]() mutable {
         // Store the pending request
-        // This is not really necessary if completion_handler is not
-        // provided, but we do it anyway to keep track of all pending
-        // requests.
         pending_requests_.emplace(
             request_id, pending_request{completion_handler
                                             ? std::move(*completion_handler)

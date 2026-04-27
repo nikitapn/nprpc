@@ -1935,12 +1935,6 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
     oc << "  return { std::move(writer), std::move(reader) };\n";
   }
 
-void CppBuilder::proxy_async_call(AstFunctionDecl* fn)
-{
-  // Fire-and-forget: no reply expected, no handler parameter.
-  oc << "  ::nprpc::impl::g_rpc->call_async(this->get_endpoint(), "
-        "std::move(buf), std::nullopt, get_timeout());\n";
-}
 
 std::string_view CppBuilder::proxy_arguments(AstFunctionDecl* fn)
 {
@@ -2307,8 +2301,8 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
     oh << ' ' << fn->name << " ";
     oh << proxy_arguments(fn) << ";\n";
-    // Coroutine variant for reliable, non-async, non-stream TCP methods
-    if (!fn->is_async && !fn->is_stream && fn->is_reliable) {
+    // Coroutine variant for reliable, non-stream TCP methods
+    if (!fn->is_stream && fn->is_reliable) {
       oh << "  ::nprpc::Task<";
       emit_type(fn->ret_value, oh);
       oh << "> " << fn->name << "Async ";
@@ -2365,10 +2359,8 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
 
     // For sync reliable calls bind the TLS bump arena to avoid malloc/realloc
-    // during request serialization.  Async calls skip this because the buffer
-    // is moved into the io_context and the calling thread can reset the arena
-    // immediately after returning — which would corrupt in-flight data.
-    if (fn->is_reliable && !fn->is_async) {
+    // during request serialization.
+    if (fn->is_reliable) {
       oc << "  auto& __arena = ::nprpc::impl::tls_bump_arena();\n"
             "  __arena.reset();\n"
             "  ::nprpc::flat_buffer buf;\n"
@@ -2427,16 +2419,14 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     if (!fn->is_reliable) {
       // Unreliable (e.g., QUIC DATAGRAM) - fire-and-forget
       proxy_unreliable_call(fn);
-    } else if (!fn->is_async) {
-      proxy_call(fn);
     } else {
-      proxy_async_call(fn);
+      proxy_call(fn);
     }
 
     oc << "}\n\n";
 
-    // Emit coroutine (Async) variant for reliable, non-async, non-stream TCP methods
-    if (!fn->is_async && !fn->is_stream && fn->is_reliable) {
+    // Emit coroutine (Async) variant for reliable, non-stream TCP methods
+    if (!fn->is_stream && fn->is_reliable) {
       oc << "::nprpc::Task<";
       emit_type(fn->ret_value, oc);
       oc << ">\n";

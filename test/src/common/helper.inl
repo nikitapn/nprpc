@@ -160,7 +160,7 @@ public:
 #endif
                 .build();
 
-            rpc->start_thread_pool(1);
+            rpc->start_thread_pool(4);
 
             poa = rpc->create_poa()
                 .with_max_objects(128)

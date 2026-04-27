@@ -121,6 +121,16 @@ std::string serialize_host_object(const ObjectId& object_id)
 }
 } // namespace
 
+} // namespace nprpc::impl
+
+namespace nprpc {
+NPRPC_API boost::asio::io_context& get_io_context() {
+  return impl::g_rpc->ioc();
+}
+} // namespace nprpc
+
+namespace nprpc::impl {
+
 NPRPC_API Rpc* RpcBuilderBase::build()
 {
   if (impl::g_rpc)

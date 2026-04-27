@@ -348,27 +348,15 @@ export class Connection {
           }
 
           let obj = get_object(buf, msg.poa_idx, msg.object_id)
-
-          if (obj) {
-            //    std::cout << "Refference added." << std::endl;
-
-            make_simple_answer(buf, impl.MessageId.Success);
-          } 
-
+          make_simple_answer(buf, obj ? impl.MessageId.Success : impl.MessageId.Error_ObjectNotExist);
           break;
         }
         case impl.MessageId.ReleaseObject: {
           let msg = detail.unmarshal_ObjectIdLocal(buf, header_size);
-          //detail::ObjectIdLocal oid{ msg.poa_idx(), msg.object_id() };
-
-          //  std::cout << "ReleaseObject. " << "poa_idx: " << oid.poa_idx << ", oid: " << oid.object_id << std::endl;
-
-          //if (ref_list_.remove_ref(msg.poa_idx(), msg.object_id())) {
-          //  make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Success);
-          //} else {
-          //  make_simple_answer(rx_buffer_(), nprpc::impl::MessageId::Error_ObjectNotExist);
-          //}
-
+          if (gLogLevel >= LogLevel.trace) {
+            console.log("ReleaseObject. poa_idx: " + msg.poa_idx + " , oid: " + msg.object_id);
+          }
+          make_simple_answer(buf, impl.MessageId.Success);
           break;
         }
         default:
