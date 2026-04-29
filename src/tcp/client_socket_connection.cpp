@@ -173,6 +173,21 @@ net::awaitable<void> SocketConnection::read_loop()
 
     const uint32_t request_id = extract_request_id(rx_buffer_);
 
+    // Check message type first: server-pushed Request frames (stream chunks)
+    // must go through handle_request, not the pending_requests_ table.
+    impl::flat::Header_Direct hdr(rx_buffer_, 0);
+    if (hdr.msg_type() == impl::MessageType::Request) {
+      flat_buffer frame;
+      auto dst = frame.prepare(msg_size);
+      std::memcpy(dst.data(), rx_buffer_.data_ptr(), msg_size);
+      frame.commit(msg_size);
+      rx_buffer_.consume(msg_size);
+
+      flat_buffer tx; // no reply expected
+      handle_request(frame, tx);
+      continue;
+    }
+
     auto it = pending_requests_.find(request_id);
     if (it != pending_requests_.end()) {
       if (it->second.timeout_timer)

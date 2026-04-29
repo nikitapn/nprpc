@@ -539,8 +539,7 @@ case .msgB(let b): print("B: \(b.code)")
 - `in` — input parameter (by value)
 - `out` — output parameter
 - `raises(E1, E2)` — exception specification
-- `async` — fire-and-forget (no reply)
-- `[unreliable]` — fire-and-forget RPC (must be `void`, only `in` args, no `raises`) or best-effort streams (QUIC DATAGRAM when available; other transports may still deliver the bytes)
+- `[unreliable]` — best-effort delivery (QUIC/WebTransport only, others ignore)
 - `[force_helpers=1]` — emit helper `from_flat` / `to_flat` functions for a `message`
 - `[trusted=true]` — disable strict bounds checking for untrusted input
 
@@ -571,9 +570,9 @@ exception NotFound { id: u32; }
 message Post { id: u32; title: string; body: string; }
 
 interface BlogService {
-  Post        GetPost(id: in u32) raises(NotFound);
+  Post         GetPost(id: in u32) raises(NotFound);
   vector<Post> ListPosts(page: in u32, size: in u32);
-  async       DeletePost(id: in u32);
+  bool         DeletePost(id: in u32);
 
   // Stream all posts matching a query
   stream<Post> Search(query: in string) raises(NotFound);
@@ -674,9 +673,13 @@ let sum = try await calc.add(a: 10, b: 20)   // 30.0
 for try await item in try feed.watch(limit: 10) {
     show(item)
 }
-```
 
-See [docs/STREAMS.md](docs/STREAMS.md) for client and bidi streams.
+// Awaitable method
+await client.playerMoved(x: 1.0, y: 2.0, z: 0.0)
+
+// Awaitable method with return value
+let reply = try await client.method2(arg1: 42)
+```
 
 ### File descriptors (Swift)
 

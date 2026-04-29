@@ -180,7 +180,7 @@ TEST_F(NprpcTest, TestStreams)
   // GetByteStream is marked [unreliable], so QUIC can reorder/drop datagrams.
   // Exact delivery assertions are covered only on reliable transports.
   // TODO: TCP stream crashes...
-  // exec_test(nprpc::ObjectActivationFlags::tcp);
+  exec_test(nprpc::ObjectActivationFlags::tcp);
 }
 
 TEST_F(NprpcTest, TestObjectStream)

@@ -47,6 +47,13 @@ public:
       std::cerr << "ERROR: Failed to fork NPRPC server process\n";
       return false;
     } else if (nprpc_server_pid_ == 0) {
+      int log_fd = open("/tmp/benchmark_server_out_err.log",
+                        O_WRONLY | O_CREAT | O_TRUNC, 0644);
+      if (log_fd >= 0) {
+        dup2(log_fd, STDOUT_FILENO);
+        dup2(log_fd, STDERR_FILENO);
+        close(log_fd);
+      }
       // Child process - run the server
       execl(server_path.c_str(), "benchmark_server", nullptr);
 

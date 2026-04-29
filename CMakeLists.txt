@@ -38,7 +38,7 @@ option(NPRPC_ENABLE_TCP "Enable TCP transport" ON)
 option(NPRPC_ENABLE_HTTP "Enable HTTP/1.1 server (static files, HTTP RPC, WebSocket upgrades)" ON)
 option(NPRPC_ENABLE_WEBSOCKET "Enable WebSocket transport (WS/WSS)" ON)
 option(NPRPC_ENABLE_SSL "Enable TLS (HTTPS/WSS) via OpenSSL/BoringSSL" ON)
-option(NPRPC_ENABLE_QUIC "Enable QUIC transport using MsQuic" OFF)
+option(NPRPC_ENABLE_QUIC "Enable raw QUIC transport using ngtcp2" OFF)
 option(NPRPC_ENABLE_HTTP3 "Enable HTTP/3 server" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(NPRPC_USE_BORINGSSL "Use BoringSSL from third_party/boringssl instead of system OpenSSL" OFF)
@@ -175,28 +175,11 @@ if(CMAKE_CXX_COMPILER MATCHES "swift.*clang")
   message(STATUS "Using Swift's Clang - linking libstdc++")
 endif()
 
-# MsQuic integration
-if(NPRPC_ENABLE_QUIC)
-  message(STATUS "QUIC transport enabled - building MsQuic")
-  
-  # Configure MsQuic options before adding subdirectory
-  # Use MsQuic's bundled OpenSSL build (not system libcrypto) to avoid
-  # symbol compatibility issues with OpenSSL 3.5+ (ossl_time_now is internal)
-  # See: https://github.com/microsoft/msquic/issues/5210
-  set(QUIC_TLS_LIB "openssl" CACHE STRING "Use OpenSSL for TLS" FORCE)
-  set(QUIC_USE_SYSTEM_LIBCRYPTO ${NPRPC_QUIC_USE_SYSTEM_LIBCRYPTO} CACHE BOOL "Build libcrypto from source" FORCE)
-  set(QUIC_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-  set(QUIC_BUILD_TEST OFF CACHE BOOL "" FORCE)
-  set(QUIC_BUILD_PERF OFF CACHE BOOL "" FORCE)
-  set(QUIC_BUILD_SHARED ON CACHE BOOL "" FORCE)
-  set(QUIC_ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
-  
-  add_subdirectory(third_party/msquic)
-endif()
-
-# HTTP/3 support
-if(NPRPC_ENABLE_HTTP3)
-  message(STATUS "HTTP/3 server enabled - building nghttp3 backend")
+# ngtcp2 is shared by both QUIC transport and HTTP/3
+if(NPRPC_ENABLE_HTTP3 OR NPRPC_ENABLE_QUIC)
+  if(NPRPC_ENABLE_QUIC AND NOT NPRPC_ENABLE_HTTP3)
+    message(STATUS "QUIC transport enabled - building ngtcp2")
+  endif()
 
   # Build ngtcp2 (QUIC implementation)
   set(ENABLE_STATIC_LIB ON CACHE BOOL "" FORCE)
@@ -217,6 +200,11 @@ if(NPRPC_ENABLE_HTTP3)
     set(ENABLE_BORINGSSL OFF CACHE BOOL "" FORCE)
   endif()
   add_subdirectory(third_party/ngtcp2 EXCLUDE_FROM_ALL)
+endif()
+
+# HTTP/3 support
+if(NPRPC_ENABLE_HTTP3)
+  message(STATUS "HTTP/3 server enabled - building nghttp3 backend")
 
   # Build nghttp3 (HTTP/3 framing)
   set(ENABLE_STATIC_LIB ON CACHE BOOL "" FORCE)
@@ -449,7 +437,7 @@ endif()
 
 if(NPRPC_ENABLE_QUIC)
   target_sources(nprpc PRIVATE
-    src/quic/quic_transport.cpp
+    src/quic/quic_ngtcp2.cpp
   )
 endif()
 
@@ -553,17 +541,29 @@ endif()
 
 
 
-# MsQuic linking. Private: no public header includes msquic.h. libmsquic is
-# installed next to libnprpc, and $ORIGIN lets the installed library find it
-# in any prefix.
-if(NPRPC_ENABLE_QUIC)
-  target_link_libraries(nprpc PRIVATE msquic)
-  set_target_properties(nprpc PROPERTIES INSTALL_RPATH "$ORIGIN")
-  target_include_directories(nprpc PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/msquic/src/inc
+# ngtcp2 linking (shared by QUIC transport and HTTP/3)
+if(NPRPC_ENABLE_HTTP3 OR NPRPC_ENABLE_QUIC)
+  target_include_directories(nprpc PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ngtcp2/lib/includes
+    ${CMAKE_CURRENT_BINARY_DIR}/third_party/ngtcp2/lib/includes
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ngtcp2/crypto/includes
   )
+endif()
+
+# QUIC transport (ngtcp2-based)
+if(NPRPC_ENABLE_QUIC)
   target_compile_definitions(nprpc PUBLIC NPRPC_QUIC_ENABLED NPRPC_ENABLE_QUIC)
-  target_link_libraries(nprpc PRIVATE OpenSSL::Crypto)
+  if(NPRPC_USE_BORINGSSL)
+    target_link_libraries(nprpc PRIVATE
+      ngtcp2_static
+      ngtcp2_crypto_boringssl_static
+    )
+  else()
+    target_link_libraries(nprpc PRIVATE
+      ngtcp2_static
+      ngtcp2_crypto_ossl_static
+    )
+  endif()
 endif()
 
 # HTTP/3 linking
@@ -582,10 +582,7 @@ if(NPRPC_ENABLE_HTTP3)
       nghttp3_static
     )
   endif()
-  target_include_directories(nprpc PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ngtcp2/lib/includes
-    ${CMAKE_CURRENT_BINARY_DIR}/third_party/ngtcp2/lib/includes
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ngtcp2/crypto/includes
+  target_include_directories(nprpc PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nghttp3/lib/includes
     ${CMAKE_CURRENT_BINARY_DIR}/third_party/nghttp3/lib/includes
   )

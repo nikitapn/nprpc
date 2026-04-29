@@ -396,13 +396,7 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   if (cfg_->quic_client_tls.ca_file.empty())
     cfg_->quic_client_tls.ca_file = cfg_->ssl_client_self_signed_cert_path;
   set_quic_client_tls(cfg_->quic_client_tls);
-  if (cfg_->quic_port != 0) {
-    auto& quic = QuicApi::instance();
-    auto checked = quic.create_configuration("nprpc", true,
-        cfg_->quic_cert_file.c_str(), cfg_->quic_key_file.c_str());
-    if (!checked) throw Exception("Invalid QUIC server credentials or client trust bundle");
-    quic.api()->ConfigurationClose(checked);
-  }
+  if (cfg_->quic_port != 0) validate_quic_server_tls();
 #else
   if (!cfg_->quic_client_tls.ca_file.empty() || !cfg_->quic_client_tls.certificate_file.empty() || !cfg_->quic_client_tls.private_key_file.empty() || !cfg_->quic_client_ca_file.empty())
     throw Exception("QUIC TLS configuration requires QUIC support");

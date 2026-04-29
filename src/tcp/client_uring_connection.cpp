@@ -440,6 +440,20 @@ class UringClientConnection
 
       const uint32_t rid = extract_request_id(buf);
 
+      // Check message type: server-pushed Request frames (stream chunks) must
+      // go through handle_request, not the pending_requests_ table.
+      {
+        impl::flat::Header_Direct hdr(buf, 0);
+        if (hdr.msg_type() == impl::MessageType::Request) {
+          boost::asio::post(exec_,
+              [self = shared_from_this(), frame = std::move(buf)]() mutable {
+                flat_buffer tx;
+                self->handle_request(frame, tx);
+              });
+          continue;
+        }
+      }
+
       std::optional<PendingEntry> entry;
       {
         std::lock_guard lk(pending_mutex_);
