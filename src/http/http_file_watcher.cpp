@@ -12,6 +12,7 @@
 #include <sys/inotify.h>
 #include <sys/poll.h>
 #include <unistd.h>
+#include <limits.h>
 
 #include <cstring>
 #include <stdexcept>

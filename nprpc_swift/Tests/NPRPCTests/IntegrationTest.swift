@@ -172,11 +172,11 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(writtenPath, outputPath)
 
         let text = try String(contentsOfFile: outputPath, encoding: .utf8)
-        print("Produced host.json content:\n\(text)")
+        // print("Produced host.json content:\n\(text)")
         XCTAssertTrue(text.contains("\"shape\""))
         XCTAssertTrue(text.contains("\"class_id\": \"basic_test/swift.test.ShapeService\""))
         XCTAssertTrue(text.contains("\"secured\": true"))
-        XCTAssertTrue(text.contains("\"urls\": \"ws://localhost:16001;wss://localhost:16001;http://localhost:16001;https://localhost:16001;\""))
+        XCTAssertTrue(text.contains("\"urls\": \"web://localhost:16001;\""))
     }
 
     /// Test servant instantiation and direct method calls
@@ -823,7 +823,7 @@ final class IntegrationTests: XCTestCase {
                 // setValue is async - use Task to call from sync context
                 let sem = semaphore
                 Task { [simpleObj, sem] in
-                    await simpleObj.setValue(a: 42)
+                    try await simpleObj.setValue(a: 42)
                     sem.signal()
                 }
             }
@@ -845,8 +845,8 @@ final class IntegrationTests: XCTestCase {
                 // Call methods on both objects - use Task for async calls
                 let sem = semaphore
                 Task { [obj1, obj2, sem] in
-                    await obj1.setValue(a: 100)
-                    await obj2.setValue(a: 200)
+                    try await obj1.setValue(a: 100)
+                    try await obj2.setValue(a: 200)
                     sem.signal()
                 }
             }
@@ -922,7 +922,7 @@ final class IntegrationTests: XCTestCase {
 
         // Test 1: Async method with no return value
         // await blocks until the RPC completes and servant has executed
-        await client.method1(arg1: 42, arg2: "Hello async!")
+        try await client.method1(arg1: 42, arg2: "Hello async!")
         XCTAssertEqual(servant.receivedArg1, 42)
         XCTAssertEqual(servant.receivedArg2, "Hello async!")
 
@@ -936,12 +936,12 @@ final class IntegrationTests: XCTestCase {
         servant.receivedArg1 = 0
         servant.receivedArg2 = ""
 
-        async let call1: Void = client.method1(arg1: 100, arg2: "First")
-        async let call2: Void = client.method1(arg1: 200, arg2: "Second")
-        async let call3: Void = client.method1(arg1: 300, arg2: "Third")
+        async let call1: Void = try client.method1(arg1: 100, arg2: "First")
+        async let call2: Void = try client.method1(arg1: 200, arg2: "Second")
+        async let call3: Void = try client.method1(arg1: 300, arg2: "Third")
 
         // Wait for all calls to complete
-        _ = await (call1, call2, call3)
+        _ = try await (call1, call2, call3)
 
         // All calls have completed - the last received values depend on execution order
         XCTAssertTrue(servant.receivedArg1 >= 100, "At least one async call should have completed")
@@ -976,7 +976,7 @@ final class IntegrationTests: XCTestCase {
         // Test 1: Pre-cancelled task — fire-and-forget async method (method1 has no output)
         let task1 = Task<Void, Error> {
             try await Task.sleep(nanoseconds: 100_000_000)
-            await client.method1(arg1: 1, arg2: "should not reach servant")
+            try await client.method1(arg1: 1, arg2: "should not reach servant")
         }
         task1.cancel()
         do {

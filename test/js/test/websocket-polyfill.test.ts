@@ -58,7 +58,7 @@ describe('NPRPC WebSocket Polyfill Test', function() {
         try {
             const nameserver = NPRPC.get_nameserver('127.0.0.1');
             expect(nameserver).to.not.be.undefined;
-            expect(nameserver.data.urls).to.include('ws://127.0.0.1:15001');
+            expect(nameserver.data.urls).to.include('web://127.0.0.1:15001');
         } catch (error) {
             throw new Error(`Failed to create nameserver proxy: ${error}`);
         }

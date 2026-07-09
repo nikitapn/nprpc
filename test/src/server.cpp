@@ -53,7 +53,7 @@ int main(int argc, char** argv)
 
   using F = nprpc::ObjectActivationFlags;
   constexpr auto flags =
-      F::ws | F::wss | F::http | F::https;
+      F::ws | F::wss | F::http | F::https | F::wt;
 
   ServerControlImpl server_control;
   nprpctest::bind<nprpc::test::ServerControl>( server_control, flags, "nprpc_test_server_control");

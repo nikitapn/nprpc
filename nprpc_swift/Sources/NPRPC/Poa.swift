@@ -20,7 +20,7 @@ public struct ObjectActivationFlags: OptionSet, Sendable {
         self.rawValue = rawValue
     }
 
-    /// Make object session-specific (tethered to current session)
+    /// Make object session-specific (Ephemeral to current session)
     public static let privateSession = ObjectActivationFlags(rawValue: detail.ObjectActivationFlags.privateSession.rawValue)
 
     /// Allow TCP connections
@@ -38,6 +38,9 @@ public struct ObjectActivationFlags: OptionSet, Sendable {
     /// Allow secured HTTP connections
     public static let https = ObjectActivationFlags(rawValue: detail.ObjectActivationFlags.https.rawValue)
 
+    /// Allow WebTransport connections
+    public static let wt = ObjectActivationFlags(rawValue: detail.ObjectActivationFlags.wt.rawValue)
+
     /// Allow shared memory transport
     public static let shm = ObjectActivationFlags(rawValue: detail.ObjectActivationFlags.shm.rawValue)
 
@@ -46,13 +49,13 @@ public struct ObjectActivationFlags: OptionSet, Sendable {
 
     /// Allow all transports
     public static let allowAll: ObjectActivationFlags = [
-        .tcp, .ws, .wss, .http, 
-        .https, .shm, .quic
+        .tcp, .ws, .wss, .http,
+        .https, .wt, .quic, .shm
     ]
 
     /// Network transports only (no shared memory)
     public static let networkOnly: ObjectActivationFlags = [
-        .tcp, .ws, .wss, .http, .https, .quic
+        .tcp, .ws, .wss, .http, .https, .wt, .quic
     ]
 }
 

@@ -12,15 +12,20 @@ export * from './marshal_helpers'
 import { Nameserver, _INameserver_Servant } from './gen/nprpc_nameserver'
 import { detail } from './gen/nprpc_base';
 
-export function get_nameserver(nameserver_ip: string): Nameserver {
-	const secure_host = nameserver_ip === '127.0.0.1' ? 'localhost' : nameserver_ip;
+export function get_nameserver(host: string): Nameserver {
+	const flags = detail.ObjectFlag.Persistent
+		| detail.ObjectFlag.HttpUnsecured
+		| detail.ObjectFlag.HttpSecured
+		| detail.ObjectFlag.WebSocketUnsecured
+		| detail.ObjectFlag.WebSocketSecured
+
 	const oid: detail.ObjectId = {
 		object_id: 0n,
 		poa_idx: 0,
-		flags: detail.ObjectFlag.Persistent,
+		flags: flags,
 		origin: new Uint8Array(16).fill(0),
 		class_id: _INameserver_Servant._get_class(),
-		urls: "ws://" + nameserver_ip + ":15001;wss://" + secure_host + ":15001;https://" + secure_host + ":15001",
+		urls: "web://" + host + ":15001;",
 	};
 	const nameserver = new Nameserver(oid);
 	nameserver.select_endpoint();

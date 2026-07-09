@@ -1,4 +1,4 @@
-// Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
+// Copyright (c) 2021-2026, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
 module nprpc;
@@ -63,14 +63,15 @@ enum ObjectActivationFlags : u32 {
   // Restrict access to the session that activated the object
   privateSession    = 1,
   tcp               = 2,
-  ws                = 4,
-  wss               = 8,
-  http              = 16,
-  https             = 32,
-  shm               = 64,
+  http              = 4,
+  https             = 8,
+  ws                = 16,
+  wss               = 32,
+  wt                = 64,
+  shm               = 128,
   quic              = 256,
   // All transport flags combined (excludes privateSession)
-  all               = 382,
+  all               = 510,
 }
 
 message ObjectIdLocal {
@@ -86,11 +87,22 @@ enum ObjectFlag {
   // `true`  - only one client can access the object in the existing opened session
   // (this is for objects that originate from a Browser or clients behind NAT)
   // `false` - multiple clients can access the object by opening multiple sessions
-  Tethered  = 2,
+  Ephemeral  = 2,
 
-  // Object may be reached from the browser over WebTransport using the
-  // existing secured HTTP origin.
-  WebTransport = 4,
+  // Object may be reached from the browser over HTTP
+  HttpUnsecured = 4,
+
+  // Object may be reached from the browser over HTTPS
+  HttpSecured = 8,
+
+  // Object may be reached from the browser over WS
+  WebSocketUnsecured = 16,
+
+  // Object may be reached from the browser over WSS
+  WebSocketSecured = 32,
+
+  // Object may be reached from the browser over WT
+  WebTransport = 64,
 }
 
 [force_helpers]
@@ -106,14 +118,11 @@ message ObjectId {
   // Class identifier of the object
   class_id: string;
   // List of urls available for connection separated by ';'
-  // Currently supported protocols:
-  //   [PLAIN | TETHERED] tcp://<hostname|ip>:<port>
-  //   [PLAIN]            ws://<hostname|ip>:<port>
-  //   [SECURED]          wss://hostname>:<port>
-  //   [PLAIN]            http://<hostname|ip>:<port>/rpc
-  //   [SECURED]          https://<hostname>:<port>/rpc
-  //   [PLAIN]            mem://<path>
-  //   [SECURED]          quic://<hostname>:<port>
+  // Currently supported transports:
+  //   tcp://<hostname|ip>:<port>     -- simple TCP transport (no encryption, no compression)
+  //   web://<hostname|ip>:<port>/rpc -- includes HTTP/HTTPS, WebSocket and WebTransport over HTTP/3
+  //   mem://<uuid>                   -- shared memory transport (only for local clients)
+  //   quic://<hostname>:<port>       -- QUIC native transport
   urls: string;
 }
 

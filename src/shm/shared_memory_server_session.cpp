@@ -138,11 +138,11 @@ public:
       : Session(ioc.get_executor())
       , channel_(std::move(channel))
   {
-    // Set the endpoint for this session (used for tethered objects)
-    // Server sessions get a "tethered" shared memory endpoint
+    // Set the endpoint for this session (used for Ephemeral objects)
+    // Server sessions get a "Ephemeral" shared memory endpoint
     ctx_.remote_endpoint =
         EndPoint(EndPointType::SharedMemory, // Will need to add
-                                             // TetheredSharedMemory if needed
+                                             // EphemeralSharedMemory if needed
                  channel_->channel_id(),
                  0); // Port not used for shared memory
 

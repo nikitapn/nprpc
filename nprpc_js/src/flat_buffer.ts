@@ -74,7 +74,7 @@ export class FlatBuffer {
 		return this.dv.getUint32(12, true);
 	}
 
-	public get writable_view(): DataView {
+	public get writable_view(): DataView<ArrayBuffer> {
 		return new DataView(this.array_buffer, 0, this.size);
 	}
 

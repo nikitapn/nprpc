@@ -219,7 +219,7 @@ TEST_F(NprpcTest, ProduceHostJson)
   EXPECT_NE(text.find(std::string("\"class_id\": \"") +
                           std::string(servant.get_class()) + "\""),
             std::string::npos);
-  EXPECT_NE(text.find("\"urls\": \"ws://localhost:22223;wss://localhost:22223;http://localhost:22223;https://localhost:22223;\""),
+  EXPECT_NE(text.find("\"urls\": \"web://localhost:22223;"),
             std::string::npos);
 }
 

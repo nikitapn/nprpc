@@ -39,7 +39,7 @@ public:
   HttpRpcSession(boost::asio::io_context& ioc)
       : Session(ioc.get_executor())
   {
-    // HTTP sessions are "tethered" (ephemeral) - use TcpTethered type
+    // HTTP sessions are "Ephemeral" (ephemeral) - use TcpEphemeral type
     ctx_.remote_endpoint = EndPoint(EndPointType::TcpPrivate, "", 0);
   }
 

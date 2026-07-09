@@ -178,10 +178,8 @@ Object::select_endpoint(std::optional<EndPoint> remote_endpoint) noexcept
 
         boost::system::error_code ec;
         auto ipv4_addr = nprpc::impl::net::ip::make_address_v4(ipv4_str, ec);
-        if ((!ec && ipv4_addr.to_uint() == 0x7F000001) ||
-            ipv4_str == "localhost") {
-          // Change ip from localhost or 127.0.0.1 to ip of the remote
-          // endpoint
+        if ((!ec && ipv4_addr.to_uint() == 0x7F000001) || ipv4_str == "localhost") {
+          // Change ip from localhost or 127.0.0.1 to ip of the remote endpoint
           auto remote_ip = remote_endpoint->hostname();
           assert(remote_ip.size() > 0 &&
                  "Remote endpoint must have a valid hostname");
@@ -190,33 +188,39 @@ Object::select_endpoint(std::optional<EndPoint> remote_endpoint) noexcept
         }
       };
 
-      size_t pos = std::string::npos, pos2 = std::string::npos;
-      if (same_machine &&
-          ((pos = urls.find(mem_prefix)) != std::string::npos)) {
-        // Prefer shared memory if possible
+      // Ordef of preference for endpoint selection:
+      // 1. Shared memory (if same machine)
+      // 2. QUIC
+      // 3. WebSocket (secured)
+      // 4. WebSocket (unsecured)
+      // 5. TCP
+
+      // SHM
+      size_t pos = std::string::npos;
+      if (same_machine && ((pos = urls.find(mem_prefix)) != std::string::npos))
         return pos;
+
+      // QUIC
+      if ((pos = urls.find(quic_prefix)) != std::string::npos)
+        return pos;
+
+      // WS/WSS
+      if ((pos = urls.find(web_prefix)) != std::string::npos) {
+        if (flags() & static_cast<uint16_t>(detail::ObjectFlag::WebSocketSecured))
+          return pos;
+
+        if (flags() & static_cast<uint16_t>(detail::ObjectFlag::WebSocketUnsecured)) {
+          try_replace_ip(pos, web_prefix);
+          return pos;
+        }
+        pos = std::string::npos;
       }
 
-      // Check for QUIC endpoint
-      // Note: Don't replace IP for QUIC - TLS certificates must match the hostname
-      if ((pos = urls.find(quic_prefix)) != std::string::npos) {
-        return pos;
-      }
-
-      if ((pos = urls.find(tcp_prefix)) != std::string::npos)
+      // TCP
+      if ((pos = urls.find(tcp_prefix)) != std::string::npos) {
         try_replace_ip(pos, tcp_prefix);
-
-      if ((pos2 = urls.find(ws_prefix)) != std::string::npos)
-        try_replace_ip(pos2, ws_prefix);
-
-      if (pos != std::string::npos)
         return pos;
-
-      if (pos2 != std::string::npos)
-        return pos2;
-
-      if ((pos = urls.find(wss_prefix)) != std::string::npos)
-        return pos;
+      }
 
       throw std::runtime_error("No valid endpoint found for object " +
                                class_id() + " with urls: " + urls);
@@ -224,7 +228,7 @@ Object::select_endpoint(std::optional<EndPoint> remote_endpoint) noexcept
 
     auto end = urls.find(';', start);
     auto size = (end != std::string::npos) ? end - start : std::string::npos;
-    endpoint_ = EndPoint(urls.substr(start, size));
+    endpoint_ = EndPoint(urls.substr(start, size), flags());
     return true;
   } catch (const std::exception& ex) {
     NPRPC_LOG_ERROR("Failed to select endpoint: {}", ex.what());

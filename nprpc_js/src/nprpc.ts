@@ -49,36 +49,18 @@ export class EndPoint {
 
   public static to_string(type: EndPointType): string {
     switch (type) {
-      case EndPointType.WebSocket:
-        return "ws://";
-      case EndPointType.SecuredWebSocket:
-        return "wss://";
       case EndPointType.Http:
-        return "http://";
       case EndPointType.SecuredHttp:
-        return "https://";
+      case EndPointType.WebSocket:
+      case EndPointType.SecuredWebSocket:
       case EndPointType.WebTransport:
-        return "wt://";
+        return "web://";
       default:
         throw new Exception("Unknown EndPointType");
     };
   };
 
-  public static from_string(str: string): EndPoint {
-    let type: EndPointType;
-    if (str.startsWith("ws://")) {
-      type = EndPointType.WebSocket;
-    } else if (str.startsWith("wss://")) {
-      type = EndPointType.SecuredWebSocket;
-    } else if (str.startsWith("http://")) {
-      type = EndPointType.Http;
-    } else if (str.startsWith("https://")) {
-      type = EndPointType.SecuredHttp;
-    } else if (str.startsWith("wt://")) {
-      type = EndPointType.WebTransport;
-    } else {
-      throw new Exception("Invalid EndPoint string: " + str);
-    }
+  public static from_string(str: string, endpoint_type: EndPointType): EndPoint {
     let idx = str.indexOf("://") + 3;
     let colon_idx = str.indexOf(":", idx);
     if (colon_idx < 0) {
@@ -90,7 +72,7 @@ export class EndPoint {
     if (isNaN(port) || port < 0 || port > 65535) {
       throw new Exception("Invalid port in EndPoint string: " + str);
     }
-    return new EndPoint(type, hostname, port);
+    return new EndPoint(endpoint_type, hostname, port);
   }
 
   public equal(other: EndPoint): boolean {
@@ -175,7 +157,7 @@ export class Connection {
     await this.send_payload(buffer.writable_view);
   }
 
-  private async send_payload(payload: ArrayBufferView) {
+  private async send_payload(payload: ArrayBufferView<ArrayBuffer>) {
     await this.ready_;
     if (this.closed_) throw new Error("Connection closed");
 
@@ -184,13 +166,13 @@ export class Connection {
       return;
     }
 
-    this.ws.send(payload);
+    this.ws!.send(payload);
   }
 
   private send_native_stream_payload(stream_id: bigint,
-                                     payload: ArrayBufferView) {
+                                     payload: ArrayBufferView<ArrayBuffer>) {
     if (this.endpoint.type !== EndPointType.WebTransport) {
-      this.ws.send(payload);
+      this.ws!.send(payload);
       return;
     }
 
@@ -611,9 +593,9 @@ export class Connection {
     this.ready_ = endpoint.type === EndPointType.WebTransport
       ? this.init_webtransport()
       : this.init_websocket();
-    this.stream_manager = new StreamManager(payload => {
+    this.stream_manager = new StreamManager((payload: ArrayBufferView<ArrayBuffer>) => {
       void this.send_payload(payload);
-    }, (stream_id, payload) => {
+    }, (stream_id: bigint, payload: ArrayBufferView<ArrayBuffer>) => {
       void this.send_native_stream_payload(stream_id, payload);
     }, (stream_id) => {
       this.close_native_stream(stream_id);
@@ -653,7 +635,7 @@ export class Rpc {
   }
 
   /** @internal */
-  public get_poa(poa_idx: number): Poa {
+  public get_poa(poa_idx: number): Poa | null {
     if (poa_idx >= this.poa_list_.length || poa_idx < 0)
       return null;
     return this.poa_list_[poa_idx];
@@ -773,7 +755,7 @@ export class Rpc {
 
 interface StorageData<T> {
   oid: bigint,
-  obj: T
+  obj: T | null
 }
 
 const index = (oid: bigint): number => {
@@ -810,7 +792,7 @@ class Storage<T> {
     this.tail_idx_ = idx;
   }
 
-  public get(oid: bigint): T {
+  public get(oid: bigint): T | null {
     let idx = index(oid);
     if (idx >= this.max_size_)
       return null;
@@ -860,7 +842,7 @@ export class Poa {
     let oid: ObjectId = {
       object_id: object_id_internal,
       poa_idx: this.index,
-      flags: detail.ObjectFlag.Tethered,
+      flags: detail.ObjectFlag.Ephemeral,
       origin: new Uint8Array(16).fill(0), // origin is not used in JS
       class_id: obj.get_class(),
       urls: "", // urls is not used in JS
@@ -892,11 +874,10 @@ export class ObjectProxy {
   /** @internal */
   timeout_ms_: number;
   /** @internal */
-  endpoint_: EndPoint;
+  endpoint_: EndPoint | undefined;
 
   constructor(data?: ObjectId) {
-    if (!data) (this.data as any) = {}
-    else this.data = data;
+    this.data = data ?? ({} as ObjectId);
     this.timeout_ms_ = 1000;
     this.local_ref_cnt_ = 0;
   }
@@ -906,7 +887,7 @@ export class ObjectProxy {
       return this.endpoint_;
 
     this.select_endpoint(isBrowser ? { hostname: window.location.hostname } : undefined);
-    return this.endpoint_;
+    return this.endpoint_!;
   }
 
   public get timeout() { return this.timeout_ms_; }
@@ -954,38 +935,40 @@ export class ObjectProxy {
   }
 
   public select_endpoint(remote_endpoint?: {hostname: string}): void {
-    const oid = this.data;
-    const urls = oid.urls.split(";");
+    const oid = this.data
+    const urls = oid.urls.split(";")
+    const flags = oid.flags
+    const web = urls.find(url => url.startsWith("web://"))
 
+    if (!web) throw new Exception("Object has no urls for web transport")
+
+    const has_ws = Boolean(flags & detail.ObjectFlag.WebSocketUnsecured)
     if (host_info.secured) {
-      const https = urls.find(url => url.startsWith("https://"));
-      const has_webtransport = Boolean(oid.flags & detail.ObjectFlag.WebTransport);
-      const host_allows_webtransport = Boolean(host_info.webtransport);
+      const has_wss = Boolean(flags & detail.ObjectFlag.WebSocketSecured)
+      const has_webtransport = Boolean(flags & detail.ObjectFlag.WebTransport)
+      const host_allows_webtransport = Boolean(host_info.webtransport)
       const runtime_has_webtransport = typeof (globalThis as any).WebTransport !== "undefined";
-      if (https && has_webtransport && host_allows_webtransport && runtime_has_webtransport) {
-        const endpoint = EndPoint.from_string(https);
-        endpoint.type = EndPointType.WebTransport;
-        this.endpoint_ = endpoint;
+      if (has_webtransport && host_allows_webtransport && runtime_has_webtransport) {
+        const endpoint = EndPoint.from_string(web, EndPointType.WebTransport)
+        endpoint.type = EndPointType.WebTransport
+        this.endpoint_ = endpoint
+      } else if (has_wss) {
+        this.endpoint_ = EndPoint.from_string(web, EndPointType.SecuredWebSocket)
       } else {
-        const wss = urls.find(url => url.startsWith("wss://"));
-        if (!wss) throw new Exception("Object has no urls for secured connection");
-        this.endpoint_ = EndPoint.from_string(wss);
+        throw new Exception("Object has no urls for secured connection in secured context")
       }
+    } else if (has_ws) {
+      this.endpoint_ = EndPoint.from_string(web, EndPointType.WebSocket)
     } else {
-      const ws = urls.find(url => url.startsWith("ws://"));
-      if (!ws) throw new Exception("Object has no urls for unsecured connection");
-      this.endpoint_ = EndPoint.from_string(ws);
+      throw new Exception("Object has no bidirectional web endpoints (ws/wss/webtransport)")
     }
 
     if (!remote_endpoint)
-      return;
+      return
 
     // if remote_endpoint is provided, use it to override the hostname
-    if (this.endpoint_.hostname === "localhost" ||
-      this.endpoint_.hostname === "127.0.0.1")
-    {
-      this.endpoint_.hostname = remote_endpoint.hostname;
-    }
+    if (this.endpoint_.hostname === "localhost" || this.endpoint_.hostname === "127.0.0.1")
+      this.endpoint_.hostname = remote_endpoint.hostname
   }
 
   /**
@@ -1009,19 +992,19 @@ export class ObjectProxy {
     let offset = 0;
 
     // object_id (u64, little-endian)
-    view.setBigUint64(offset, oid.object_id, true);
+    view.setBigUint64(offset, oid!.object_id, true);
     offset += 8;
 
     // poa_idx (u16, little-endian)
-    view.setUint16(offset, oid.poa_idx, true);
+    view.setUint16(offset, oid!.poa_idx, true);
     offset += 2;
 
     // flags (u16, little-endian)
-    view.setUint16(offset, oid.flags, true);
+    view.setUint16(offset, oid!.flags, true);
     offset += 2;
 
     // origin (16 bytes UUID)
-    bytes.set(oid.origin, offset);
+    bytes.set(oid!.origin, offset);
     offset += 16;
 
     // class_id_len (u32, little-endian) + class_id
@@ -1214,7 +1197,7 @@ export const handle_standart_reply = (buf: FlatBuffer): number => {
 // export const oid_create_from_flat = ...
 // export function oid_assign_from_ts(...) { ... }
 
-export const narrow = <T extends ObjectProxy>(from: ObjectProxy, to: new () => T): T => {
+export const narrow = <T extends ObjectProxy>(from: ObjectProxy, to: new () => T): T | null => {
   if (from.data.class_id !== (to as any).servant_t._get_class()) {
     console.warn("fail: narrowing from " + from.data.class_id + " to " + (to as any).servant_t._get_class());
     return null;
@@ -1225,7 +1208,7 @@ export const narrow = <T extends ObjectProxy>(from: ObjectProxy, to: new () => T
   obj.local_ref_cnt_ = from.local_ref_cnt_;
   obj.timeout_ms_ = from.timeout_ms_;
 
-  from.data = null;
+  from.data = {} as ObjectId;
   (from as ObjectProxy).local_ref_cnt_ = 0;
 
   return obj;
@@ -1234,19 +1217,19 @@ export const narrow = <T extends ObjectProxy>(from: ObjectProxy, to: new () => T
 /**
  * Create ObjectProxy from ObjectId and remote endpoint
  * @param oid ObjectId
- * @param remote_endpoint Remote endpoint (used if ObjectId is tethered)
+ * @param remote_endpoint Remote endpoint (used if ObjectId is Ephemeral)
  * @returns ObjectProxy or null if oid is invalid
  */
 export const create_object_from_oid = (
   oid: ObjectId,
-  remote_endpoint: EndPoint): ObjectProxy =>
+  remote_endpoint: EndPoint): ObjectProxy | null =>
 {
   if (oid.object_id == invalid_object_id)
     return null;
 
   const obj = new ObjectProxy(oid);
 
-  if (oid.flags & detail.ObjectFlag.Tethered) {
+  if (oid.flags & detail.ObjectFlag.Ephemeral) {
     obj.data.urls = remote_endpoint.to_string();
     obj.endpoint_ = remote_endpoint;
   } else {

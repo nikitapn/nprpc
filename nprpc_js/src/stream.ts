@@ -283,8 +283,8 @@ export class StreamManager {
   private writer_objects = new Map<bigint, StreamWriter<any>>();
 
   constructor(
-    private readonly send_message: (payload: ArrayBufferView) => void,
-    private readonly send_native_stream?: (stream_id: bigint, payload: ArrayBufferView) => void,
+    private readonly send_message: (payload: ArrayBufferView<ArrayBuffer>) => void,
+    private readonly send_native_stream?: (stream_id: bigint, payload: ArrayBufferView<ArrayBuffer>) => void,
     private readonly on_stream_finished?: (stream_id: bigint) => void,
     private readonly get_native_stream_flush?: (stream_id: bigint) => Promise<void>,
   ) {}

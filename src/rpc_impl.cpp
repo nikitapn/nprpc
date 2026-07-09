@@ -550,9 +550,7 @@ RpcImpl::get_session(const EndPoint& endpoint)
   switch (endpoint.type()) {
   case EndPointType::TcpPrivate:
     throw nprpc::ExceptionCommFailure(
-        "nprpc::impl::RpcImpl::get_session: Cannot create tethered "
-        "TCP "
-        "connection");
+        "nprpc::impl::RpcImpl::get_session: Cannot create Ephemeral TCP connection");
   case EndPointType::Tcp:
 #if defined(__linux__)
     if (g_cfg.use_uring_tcp) {
@@ -916,7 +914,7 @@ NPRPC_API Object* create_object_from_flat(detail::flat::ObjectId_Direct direct,
   oid = nprpc::detail::helpers::ObjectId::from_flat(direct);
 
   if (direct.flags() &
-      static_cast<nprpc::oflags_t>(detail::ObjectFlag::Tethered)) {
+      static_cast<nprpc::oflags_t>(detail::ObjectFlag::Ephemeral)) {
     // should always use existing session
     oid.urls = remote_endpoint.to_string();
     obj->endpoint_ = remote_endpoint;
@@ -980,52 +978,63 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
   const std::string default_url =
       g_cfg.hostname.empty() ? "127.0.0.1"s : g_cfg.hostname;
 
-  if ((activation_flags & ObjectActivationFlags::tcp) &&
-      g_cfg.listen_tcp_port != 0) {
+  bool tcp_enabled = (activation_flags & ObjectActivationFlags::tcp);
+  bool wt_enabled  = (activation_flags & ObjectActivationFlags::wt);
+  bool http_enabled = (activation_flags & ObjectActivationFlags::http);
+  bool https_enabled = (activation_flags & ObjectActivationFlags::https);
+  bool ws_enabled = (activation_flags & ObjectActivationFlags::ws);
+  bool wss_enabled = (activation_flags & ObjectActivationFlags::wss);
+  bool web_enabled = http_enabled || https_enabled || ws_enabled || wss_enabled || wt_enabled;
+
+  if (web_enabled && g_cfg.listen_http_port == 0) {
+    throw std::runtime_error(
+        "Web transport is enabled for object activation, but no HTTP port is configured.");
+  }
+
+  if (wt_enabled) {
+#ifndef NPRPC_HTTP3_ENABLED
+    throw std::runtime_error(
+        "WebTransport is enabled for object activation, but HTTP/3 support is not compiled in.");
+#endif
+    if (!g_cfg.http3_enabled) {
+      throw std::runtime_error(
+          "WebTransport is enabled for object activation, but HTTP/3 is not enabled.");
+    }
+  }
+
+  if (wss_enabled && g_cfg.hostname.empty()) {
+    throw std::runtime_error("WebSocket Secure (WSS) requires a hostname");
+  }
+
+  if (https_enabled && g_cfg.hostname.empty()) {
+    throw std::runtime_error("HTTPS requires a hostname");
+  }
+
+  if (tcp_enabled && g_cfg.listen_tcp_port != 0) {
     oid.urls += (std::string(tcp_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_tcp_port)) +
                 ';';
   }
 
-  if ((activation_flags & ObjectActivationFlags::ws) &&
-      g_cfg.listen_http_port != 0) {
-    oid.urls += (std::string(ws_prefix) + default_url + ":" +
+  if (web_enabled && g_cfg.listen_http_port != 0) {
+    oid.urls += (std::string(web_prefix) + default_url + ":" +
                  std::to_string(g_cfg.listen_http_port)) +
                 ';';
-  }
-
-  if (activation_flags & ObjectActivationFlags::wss) {
-    if (g_cfg.hostname.empty()) {
-      throw std::runtime_error("SSL websocket requires a hostname");
+    // Set correct object flags
+    if (http_enabled) {
+      oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::HttpUnsecured);
     }
-    if (g_cfg.listen_http_port != 0) {
-      oid.urls += (std::string(wss_prefix) + g_cfg.hostname + ":" +
-                   std::to_string(g_cfg.listen_http_port)) +
-                  ';';
+    if (https_enabled) {
+      oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::HttpSecured);
     }
-  }
-
-  if ((activation_flags & ObjectActivationFlags::http) &&
-      g_cfg.listen_http_port != 0) {
-    oid.urls += (std::string(http_prefix) + default_url + ":" +
-                 std::to_string(g_cfg.listen_http_port)) +
-                ';';
-  }
-
-  if (activation_flags & ObjectActivationFlags::https) {
-    if (g_cfg.hostname.empty()) {
-      throw std::runtime_error("Secured HTTP requires a hostname");
+    if (ws_enabled) {
+      oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::WebSocketUnsecured);
     }
-    if (g_cfg.listen_http_port != 0) {
-      oid.urls += (std::string(https_prefix) + g_cfg.hostname + ":" +
-                   std::to_string(g_cfg.listen_http_port)) +
-                  ';';
-
-#ifdef NPRPC_HTTP3_ENABLED
-      if (g_cfg.http3_enabled) {
-        oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::WebTransport);
-      }
-#endif
+    if (wss_enabled) {
+      oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::WebSocketSecured);
+    }
+    if (wt_enabled) {
+      oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::WebTransport);
     }
   }
 
@@ -1040,7 +1049,7 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
                 ';';
   }
 
-  // Ensure at least one URL was added (unless session-specific which uses tethered connection)
+  // Ensure at least one URL was added (unless session-specific which uses Ephemeral connection)
   if (oid.urls.empty() && !(activation_flags & ObjectActivationFlags::privateSession)) {
     throw std::runtime_error("No transport configured for activation. "
                              "Check that at least one requested transport "
@@ -1058,7 +1067,7 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
 
   if (activation_flags & ObjectActivationFlags::privateSession) {
     obj->session_ctx_ = ctx;
-    oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::Tethered);
+    oid.flags |= static_cast<oflags_t>(detail::ObjectFlag::Ephemeral);
   }
 
   return result;

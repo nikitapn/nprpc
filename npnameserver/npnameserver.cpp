@@ -1,6 +1,7 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include "nprpc_base.hpp"
 #include <iostream>
 #include <memory>
 #include <unordered_map>
@@ -74,8 +75,10 @@ int main()
                    .with_object_id_policy( nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied) .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
                    .build();
 
+
+    using F = nprpc::ObjectActivationFlags;
     auto oid = poa->activate_object_with_id(
-        0, &server, nprpc::ObjectActivationFlags::all);
+        0, &server, F::tcp | F::http | F::https | F::ws | F::wss);
 
     boost::asio::signal_set signals(rpc->ioc(), SIGINT, SIGTERM);
     signals.async_wait(

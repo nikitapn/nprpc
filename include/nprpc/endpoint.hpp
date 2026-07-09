@@ -11,13 +11,9 @@
 
 namespace nprpc {
 static constexpr std::string_view tcp_prefix = "tcp://";
-static constexpr std::string_view ws_prefix = "ws://";
-static constexpr std::string_view wss_prefix = "wss://";
-static constexpr std::string_view http_prefix = "http://";
-static constexpr std::string_view https_prefix = "https://";
+static constexpr std::string_view web_prefix = "web://";
 static constexpr std::string_view mem_prefix = "mem://";
 static constexpr std::string_view quic_prefix = "quic://";
-static constexpr std::string_view webtransport_prefix = "wt://";
 
 class EndPoint
 {
@@ -33,19 +29,15 @@ public:
     case EndPointType::TcpPrivate:
       return tcp_prefix;
     case EndPointType::WebSocket:
-      return ws_prefix;
     case EndPointType::SecuredWebSocket:
-      return wss_prefix;
     case EndPointType::Http:
-      return http_prefix;
     case EndPointType::SecuredHttp:
-      return https_prefix;
+    case EndPointType::WebTransport:
+      return web_prefix;
     case EndPointType::SharedMemory:
       return mem_prefix;
     case EndPointType::Quic:
       return quic_prefix;
-    case EndPointType::WebTransport:
-      return webtransport_prefix;
     default:
       assert(false);
       return "unknown://";
@@ -111,7 +103,7 @@ public:
   {
   }
 
-  EndPoint(std::string_view url)
+  EndPoint(std::string_view url, uint32_t flags = 0)
   {
     if (url.empty()) {
       throw std::invalid_argument("URL cannot be empty");
@@ -148,27 +140,28 @@ public:
     if (url.find(tcp_prefix) == 0) {
       type_ = EndPointType::Tcp;
       split(url, tcp_prefix, true);
-    } else if (url.find(ws_prefix) == 0) {
-      type_ = EndPointType::WebSocket;
-      split(url, ws_prefix, true);
-    } else if (url.find(wss_prefix) == 0) {
-      type_ = EndPointType::SecuredWebSocket;
-      split(url, wss_prefix, true);
-    } else if (url.find(http_prefix) == 0) {
-      type_ = EndPointType::Http;
-      split(url, http_prefix, true);
-    } else if (url.find(https_prefix) == 0) {
-      type_ = EndPointType::SecuredHttp;
-      split(url, https_prefix, true);
+    } else if (url.find(web_prefix) == 0) {
+      if (flags & static_cast<uint16_t>(detail::ObjectFlag::HttpUnsecured)) {
+        type_ = EndPointType::Http;
+      } else if (flags & static_cast<uint16_t>(detail::ObjectFlag::HttpSecured)) {
+        type_ = EndPointType::SecuredHttp;
+      } else if (flags & static_cast<uint16_t>(detail::ObjectFlag::WebSocketUnsecured)) {
+        type_ = EndPointType::WebSocket;
+      } else if (flags & static_cast<uint16_t>(detail::ObjectFlag::WebSocketSecured)) {
+        type_ = EndPointType::SecuredWebSocket;
+      } else if (flags & static_cast<uint16_t>(detail::ObjectFlag::WebTransport)) {
+        type_ = EndPointType::WebTransport;
+      } else {
+        throw std::invalid_argument(
+            "Invalid flags for web transport endpoint");
+      }
+      split(url, web_prefix, true);
     } else if (url.find(mem_prefix) == 0) {
       type_ = EndPointType::SharedMemory;
       split(url, mem_prefix, false); // Port is optional for shared memory
     } else if (url.find(quic_prefix) == 0) {
       type_ = EndPointType::Quic;
       split(url, quic_prefix, true);
-    } else if (url.find(webtransport_prefix) == 0) {
-      type_ = EndPointType::WebTransport;
-      split(url, webtransport_prefix, true);
     } else {
       throw std::invalid_argument("Invalid URL format");
     }
