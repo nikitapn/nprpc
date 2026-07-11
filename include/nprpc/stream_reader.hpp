@@ -31,9 +31,18 @@ template <typename T>
 class StreamReader : public StreamReaderBase
 {
 public:
-  StreamReader(SessionContext& session, uint64_t stream_id)
+  // producer_window is the credit pool the remote producer is working with:
+  // - client-side readers advertise kDefaultReaderWindow via
+  //   StreamInit.initial_credits, so stubs pass that value here;
+  // - server-side readers (client/bidi uploads) have no advertisement
+  //   channel, so the producer sits on the legacy kInitialWindowSize —
+  //   the default keeps the grant threshold below that window.
+  StreamReader(SessionContext& session, uint64_t stream_id,
+               uint32_t producer_window =
+                   static_cast<uint32_t>(impl::StreamManager::kInitialWindowSize))
       : session_(session)
       , stream_id_(stream_id)
+      , grant_threshold_(producer_window / 2 > 0 ? producer_window / 2 : 1)
   {
     // Register with session's stream manager
     if (session_.stream_manager) {
@@ -50,7 +59,8 @@ public:
       , cancelled_(other.cancelled_)
       , error_(std::move(other.error_))
       , resume_handle_(other.resume_handle_)
-      , window_size_(other.window_size_)
+      , grant_threshold_(other.grant_threshold_)
+      , consumed_since_grant_(other.consumed_since_grant_)
   {
     // Update the registration to point to new 'this'
     if (session_.stream_manager && !cancelled_) {
@@ -140,12 +150,18 @@ public:
     auto fb = std::move(chunks_.front());
     chunks_.pop();
 
-    // Update window size and send to server
-    window_size_++;
-    send_window_update();
+    // Watermark-batched flow control: grant credits back to the producer
+    // once per grant_threshold_ consumed chunks instead of per chunk.
+    // Liveness: if the producer ever stalls at zero credits, everything it
+    // sent is buffered here, so consumed_since_grant_ must reach the
+    // threshold and fire a refill.
+    if (++consumed_since_grant_ >= grant_threshold_) {
+      send_window_update(consumed_since_grant_);
+      consumed_since_grant_ = 0;
+    }
 
     // Deserialize T from the flat buffer
-    // The buffer contains: Header + StreamChunk (stream_id, sequence, data, window_size)
+    // The buffer contains: Header + StreamChunk (stream_id, sequence, data)
     // Use StreamChunk_Direct to access the data vector
     impl::flat::StreamChunk_Direct chunk(fb, sizeof(impl::flat::Header));
     auto data_span = chunk.data();
@@ -183,7 +199,6 @@ public:
     {
       std::lock_guard lock(mutex_);
       chunks_.push(std::move(fb));
-      window_size_--;
       resume_handle = std::exchange(resume_handle_, {});
     }
 
@@ -277,17 +292,20 @@ private:
   bool cancelled_ = false;
   std::exception_ptr error_;
 
-  // Backpressure: window-based flow control
-  // Guarded by mutex_
-  size_t window_size_ = 16; // Number of chunks client can buffer
+  // Backpressure: watermark-batched credit grants (guarded by mutex_).
+  // grant_threshold_ = producer_window / 2 — must not exceed the producer's
+  // window or the stream deadlocks with the producer out of credits and the
+  // consumer under threshold.
+  uint32_t grant_threshold_;
+  uint32_t consumed_since_grant_ = 0;
 
   // Coroutine support
   std::coroutine_handle<> resume_handle_;
 
-  void send_window_update()
+  void send_window_update(uint32_t credits)
   {
     if (session_.stream_manager) {
-      session_.stream_manager->send_window_update(stream_id_, 1);
+      session_.stream_manager->send_window_update(stream_id_, credits);
     }
   }
 

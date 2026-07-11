@@ -3,8 +3,8 @@
 
 import { FlatBuffer } from './flat_buffer';
 import { MyPromise } from "./utils";
-import { BidiStream, StreamManager, StreamReader, StreamWriter } from './stream';
-export { BidiStream, StreamReader, StreamWriter, bytes_deserializer } from './stream';
+import { BidiStream, StreamManager, StreamReader, StreamWriter, default_reader_window } from './stream';
+export { BidiStream, StreamReader, StreamWriter, bytes_deserializer, default_reader_window } from './stream';
 import {
   impl, detail, oid_t, poa_idx_t,
   LogLevel,
@@ -654,7 +654,9 @@ export class Rpc {
     signal?: AbortSignal,
   ): Promise<StreamReader<T>> {
     const conn = this.get_connection(endpoint);
-    const reader = conn.stream_manager.create_reader(stream_id, deserialize);
+    // The generated stub advertised default_reader_window in
+    // StreamInit.initial_credits, so the producer holds that window.
+    const reader = conn.stream_manager.create_reader(stream_id, deserialize, default_reader_window);
     try {
       await conn.send_receive(buf, timeout_ms, signal);
       if (handle_standart_reply(buf) !== 0) {
@@ -696,7 +698,10 @@ export class Rpc {
     signal?: AbortSignal,
   ): Promise<BidiStream<TIn, TOut>> {
     const conn = this.get_connection(endpoint);
-    const stream = conn.stream_manager.create_bidi_stream(stream_id, serialize, deserialize);
+    // Writer: upload direction, legacy window (nothing advertised for it).
+    // Reader: download direction sized by the advertised default_reader_window.
+    const stream = conn.stream_manager.create_bidi_stream(
+      stream_id, serialize, deserialize, 0, default_reader_window);
     try {
       await conn.send_receive(buf, timeout_ms, signal);
       if (handle_standart_reply(buf) !== 0) {

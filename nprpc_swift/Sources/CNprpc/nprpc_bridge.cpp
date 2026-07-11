@@ -1209,11 +1209,12 @@ void nprpc_stream_manager_send_window_update(
 
 void nprpc_stream_manager_register_external_writer(
     void* stream_manager,
-    uint64_t stream_id)
+    uint64_t stream_id,
+    uint32_t initial_credits)
 {
     auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
     if (!mgr) return;
-    mgr->register_external_writer(stream_id);
+    mgr->register_external_writer(stream_id, initial_credits);
 }
 
 void nprpc_stream_manager_write_chunk_async(
@@ -1319,12 +1320,12 @@ struct SwiftStreamReader : public nprpc::StreamReaderBase {
 
     void on_chunk_received(nprpc::flat_buffer fb) override {
         // Extract data from StreamChunk
-        // Chunk layout: Header (16) + stream_id (8) + sequence (8) + data vector header (8) + window_size (4)
+        // Chunk layout: Header (16) + stream_id (8) + sequence (8) + data vector header (8)
         constexpr size_t header_size = 16;
         constexpr size_t chunk_offset = header_size;
 
         auto data = fb.data();
-        if (data.size() < chunk_offset + 28) return;
+        if (data.size() < chunk_offset + 24) return;
 
         // Read data vector
         const uint8_t* chunk_ptr = static_cast<const uint8_t*>(data.data()) + chunk_offset;

@@ -39,13 +39,22 @@ export class StreamReader<T> extends StreamReaderBase {
   private next_expected_seq = 0n;
   private final_sequence?: bigint;
   private out_of_order = new Map<bigint, T>();
+  // Watermark-batched flow control: grant credits back once per
+  // grant_threshold consumed chunks instead of per chunk.  The threshold
+  // must not exceed the producer's credit window (producer_window) or the
+  // stream deadlocks with the producer out of credits and the consumer
+  // under threshold.
+  private readonly grant_threshold: number;
+  private consumed_since_grant = 0;
 
   constructor(
     private readonly deserialize: (data: Uint8Array) => T,
     private readonly manager?: StreamManager,
     private readonly stream_id?: bigint,
+    producer_window: number = kInitialWindowSize,
   ) {
     super();
+    this.grant_threshold = Math.max(1, Math.floor(producer_window / 2));
   }
 
   push_chunk(data: Uint8Array, sequence: bigint): boolean {
@@ -147,9 +156,13 @@ export class StreamReader<T> extends StreamReaderBase {
       }
       while (this.chunks.length > 0) {
         yield this.chunks.shift()!;
-        // Grant one credit back to the server after each consumed chunk.
+        // Batched credit grant: one StreamWindowUpdate per grant_threshold
+        // consumed chunks rather than per chunk.
         if (this.manager && this.stream_id !== undefined) {
-          this.manager.send_window_update(this.stream_id, 1);
+          if (++this.consumed_since_grant >= this.grant_threshold) {
+            this.manager.send_window_update(this.stream_id, this.consumed_since_grant);
+            this.consumed_since_grant = 0;
+          }
         }
       }
       if (this.done_) {
@@ -166,12 +179,17 @@ export class StreamReader<T> extends StreamReaderBase {
   public get is_done(): boolean { return this.done_; }
 }
 
+// Producer's starting credit pool when the consumer didn't advertise a
+// window (StreamInit.initial_credits == 0).
 const kInitialWindowSize = 8;
+// Window a consumer advertises in StreamInit.initial_credits when it opens
+// a stream; refills are granted in batches of half this window.
+export const default_reader_window = 32;
 
 export class StreamWriter<T> {
   private sequence = 0n;
   private closed = false;
-  private credits = kInitialWindowSize;
+  private credits: number;
   private credit_resolve: (() => void) | null = null;
   private write_error: Error | null = null;
 
@@ -179,7 +197,10 @@ export class StreamWriter<T> {
     private readonly serialize: (value: T) => Uint8Array,
     private readonly manager: StreamManager,
     private readonly stream_id: bigint,
-  ) {}
+    initial_credits: number = 0,
+  ) {
+    this.credits = initial_credits > 0 ? initial_credits : kInitialWindowSize;
+  }
 
   async write(value: T): Promise<void> {
     if (this.closed) {
@@ -309,15 +330,28 @@ export class StreamManager {
     }
   }
 
-  create_reader<T>(stream_id: bigint, deserialize: (data: Uint8Array) => T): StreamReader<T> {
-    const reader = new StreamReader<T>(deserialize, this, stream_id);
+  // producer_window: the credit pool the remote producer is working with —
+  // pass default_reader_window when this side advertised it via
+  // StreamInit.initial_credits; omit for legacy/unadvertised streams.
+  create_reader<T>(
+    stream_id: bigint,
+    deserialize: (data: Uint8Array) => T,
+    producer_window?: number,
+  ): StreamReader<T> {
+    const reader = new StreamReader<T>(deserialize, this, stream_id, producer_window);
     this.register_reader(stream_id, reader);
     return reader;
   }
 
-  create_writer<T>(stream_id: bigint, serialize: (value: T) => Uint8Array): StreamWriter<T> {
+  // initial_credits: the consumer's window from StreamInit.initial_credits
+  // (0 = legacy default).
+  create_writer<T>(
+    stream_id: bigint,
+    serialize: (value: T) => Uint8Array,
+    initial_credits: number = 0,
+  ): StreamWriter<T> {
     this.active_writers.add(stream_id);
-    const writer = new StreamWriter<T>(serialize, this, stream_id);
+    const writer = new StreamWriter<T>(serialize, this, stream_id, initial_credits);
     this.writer_objects.set(stream_id, writer);
     return writer;
   }
@@ -326,10 +360,12 @@ export class StreamManager {
     stream_id: bigint,
     serialize: (value: TIn) => Uint8Array,
     deserialize: (data: Uint8Array) => TOut,
+    writer_initial_credits: number = 0,
+    reader_producer_window?: number,
   ): BidiStream<TIn, TOut> {
     return new BidiStream(
-      this.create_writer(stream_id, serialize),
-      this.create_reader(stream_id, deserialize),
+      this.create_writer(stream_id, serialize, writer_initial_credits),
+      this.create_reader(stream_id, deserialize, reader_producer_window),
     );
   }
 
@@ -398,14 +434,13 @@ export class StreamManager {
 
   send_chunk(stream_id: bigint, data: Uint8Array, sequence: bigint): void {
     const buf = FlatBuffer.create(header_size + 32 + data.byteLength);
-    buf.commit(header_size + 28);
+    buf.commit(header_size + 24);
     buf.write_msg_id(impl.MessageId.StreamDataChunk);
     buf.write_msg_type(impl.MessageType.Request);
     impl.marshal_StreamChunk(buf, header_size, {
       stream_id,
       sequence,
       data,
-      window_size: 0,
     });
     buf.write_len(buf.size);
     if (this.send_native_stream) {

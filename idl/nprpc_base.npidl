@@ -222,6 +222,10 @@ message StreamInit {
   object_id: oid_t;          // Target object
   func_idx: fn_idx_t;        // Method index
   stream_kind: StreamKind;   // Direction of the stream
+  initial_credits: u32;      // Consumer's chunk window for producer->consumer
+                             // data (0 = legacy default of 8).  The producer
+                             // uses this as its starting credit pool; the
+                             // consumer grants batched refills as it consumes.
 }
 
 // Data chunk from server to client
@@ -229,7 +233,6 @@ message StreamChunk {
   stream_id: u64;       // Stream identifier
   sequence: u64;        // Monotonic sequence number (for ordering)
   data: vector<u8>;     // Data payload
-  window_size: u32;     // Client's remaining buffer capacity (for backpressure)
 }
 
 // Stream completion marker

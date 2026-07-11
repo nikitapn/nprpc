@@ -247,11 +247,19 @@ public func createObjectStreamReader<T: Sendable>(
     return reader
 }
 
+// Window a consumer advertises in StreamInit.initial_credits when opening a
+// stream; refills are granted in batches of half this window.
+public let defaultReaderWindow: UInt32 = 32
+
+// Producer's starting credit pool when nothing was advertised (legacy peers).
+public let kInitialWindowSize: UInt32 = 8
+
 public func createStreamManagerReader<T: Sendable>(
     streamManager: UnsafeMutableRawPointer,
     streamId: UInt64,
     buffer: FlatBuffer,
     unreliable: Bool = false,
+    producerWindow: UInt32 = kInitialWindowSize,
     deserializer: @escaping (UnsafeRawPointer, Int) -> T
 ) -> NPRPCStreamReader<T> {
     let reader = NPRPCStreamReader(streamId: streamId, buffer: buffer, deserializer: deserializer)
@@ -269,9 +277,21 @@ public func createStreamManagerReader<T: Sendable>(
     if unreliable {
         nprpc_stream_manager_set_reader_unreliable(streamManager, streamId, true)
     }
-    // Send one credit back to the server for every chunk consumed.
+    // Watermark-batched flow control: grant credits back once per
+    // grantThreshold consumed chunks instead of per chunk.  The threshold
+    // must not exceed the producer's window (producerWindow) or the stream
+    // deadlocks.  Liveness: if the producer stalls at zero credits, all its
+    // chunks are buffered locally, so the counter must reach the threshold.
+    // windowUpdateFn is invoked from the single consuming iterator, so the
+    // captured counter is not accessed concurrently.
+    let grantThreshold = max(1, producerWindow / 2)
+    var consumedSinceGrant: UInt32 = 0
     reader.windowUpdateFn = {
-        nprpc_stream_manager_send_window_update(streamManager, streamId, 1)
+        consumedSinceGrant += 1
+        if consumedSinceGrant >= grantThreshold {
+            nprpc_stream_manager_send_window_update(streamManager, streamId, consumedSinceGrant)
+            consumedSinceGrant = 0
+        }
     }
     return reader
 }
@@ -469,10 +489,13 @@ public func createStreamManagerWriter<T: Sendable>(
     streamManager: UnsafeMutableRawPointer,
     streamId: UInt64,
     initialPayloadCapacity: Int,
+    initialCredits: UInt32 = 0,
     serializer: @escaping (FlatBuffer, Int, T) -> Void
 ) -> NPRPCStreamWriter<T> {
-    // Register the stream with the credit-tracking system before the first write.
-    nprpc_stream_manager_register_external_writer(streamManager, streamId)
+    // Register the stream with the credit-tracking system before the first
+    // write.  initialCredits carries the consumer's advertised window from
+    // StreamInit.initial_credits (0 = legacy default).
+    nprpc_stream_manager_register_external_writer(streamManager, streamId, initialCredits)
 
     let writer = NPRPCStreamWriter(
         streamId: streamId,
@@ -547,12 +570,18 @@ public func createObjectBidiStream<TWrite: Sendable, TRead: Sendable>(
     return NPRPCBidiStream(writer: writer, reader: reader)
 }
 
+// initialCredits: consumer's advertised window for our writer direction
+// (from StreamInit.initial_credits when we're the servant; 0 = legacy).
+// producerWindow: the window we advertised for our reader direction (pass
+// defaultReaderWindow when the stub sent it in StreamInit).
 public func createStreamManagerBidiStream<TWrite: Sendable, TRead: Sendable>(
     streamManager: UnsafeMutableRawPointer,
     streamId: UInt64,
     buffer: FlatBuffer,
     initialPayloadCapacity: Int,
     unreliable: Bool = false,
+    initialCredits: UInt32 = 0,
+    producerWindow: UInt32 = kInitialWindowSize,
     serializer: @escaping (FlatBuffer, Int, TWrite) -> Void,
     deserializer: @escaping (UnsafeRawPointer, Int) -> TRead
 ) -> NPRPCBidiStream<TWrite, TRead> {
@@ -561,12 +590,14 @@ public func createStreamManagerBidiStream<TWrite: Sendable, TRead: Sendable>(
         streamId: streamId,
         buffer: buffer,
         unreliable: unreliable,
+        producerWindow: producerWindow,
         deserializer: deserializer
     )
     let writer = createStreamManagerWriter(
         streamManager: streamManager,
         streamId: streamId,
         initialPayloadCapacity: initialPayloadCapacity,
+        initialCredits: initialCredits,
         serializer: serializer
     )
     return NPRPCBidiStream(writer: writer, reader: reader)

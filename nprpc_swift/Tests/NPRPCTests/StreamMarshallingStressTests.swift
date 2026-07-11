@@ -197,13 +197,12 @@ final class StreamMarshallingStressTests: XCTestCase {
             let chunk = impl.StreamChunk(
                 stream_id: UInt64(index + 1),
                 sequence: UInt64(index * 3),
-                data: (0..<(128 + index * 5)).map { UInt8(($0 + index) & 0xFF) },
-                window_size: UInt32(1024 + index)
+                data: (0..<(128 + index * 5)).map { UInt8(($0 + index) & 0xFF) }
             )
 
             let buffer = FlatBuffer()
             buffer.prepare(200)
-            NPRPC.marshal_stream_struct(buffer: buffer, offset: 0, rootSize: 28, value: chunk) { buf, off, elem in
+            NPRPC.marshal_stream_struct(buffer: buffer, offset: 0, rootSize: 24, value: chunk) { buf, off, elem in
                 impl.marshal_StreamChunk(buffer: buf, offset: off, data: elem)
             }
 
@@ -216,7 +215,6 @@ final class StreamMarshallingStressTests: XCTestCase {
             XCTAssertEqual(decoded.stream_id, chunk.stream_id)
             XCTAssertEqual(decoded.sequence, chunk.sequence)
             XCTAssertEqual(decoded.data, chunk.data)
-            XCTAssertEqual(decoded.window_size, chunk.window_size)
         }
     }
 }

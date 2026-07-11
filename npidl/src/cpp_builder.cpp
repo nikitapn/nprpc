@@ -1940,7 +1940,8 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
   emit_stream_reader_type(*this, sd, oc,
     [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
     [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
-  oc << " reader(session->ctx(), stream_id);\n";
+  oc << " reader(session->ctx(), stream_id, "
+        "::nprpc::impl::StreamManager::kDefaultReaderWindow);\n";
 
   const auto args_offset = get_stream_init_arguments_offset();
   const auto fixed_size = args_offset + (fn->in_s ? fn->in_s->size : 0);
@@ -1965,6 +1966,10 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
         "  init.func_idx() = "
      << fn->idx << ";\n";
   oc << "  init.stream_kind() = ::nprpc::impl::StreamKind::Server;\n";
+  // Advertise this reader's window so the producer starts with the full
+  // credit pool (the reader grants batched refills at half the window).
+  oc << "  init.initial_credits() = "
+        "::nprpc::impl::StreamManager::kDefaultReaderWindow;\n";
 
   // Serialize input arguments
   if (fn->in_s) {
@@ -2025,7 +2030,9 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
       "  init.object_id() = this->object_id();\n"
       "  init.func_idx() = "
        << fn->idx << ";\n"
-      "  init.stream_kind() = ::nprpc::impl::StreamKind::Client;\n";
+      "  init.stream_kind() = ::nprpc::impl::StreamKind::Client;\n"
+      // Upload-only stream: there is no producer->us direction to size.
+      "  init.initial_credits() = 0;\n";
 
     if (fn->in_s) {
       oc << "  " << fn->in_s->name << "_Direct _(buf," << args_offset << ");\n";
@@ -2061,7 +2068,8 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
     emit_stream_reader_type(*this, sd, oc,
     [this](AstTypeDecl* t, std::ostream& os){ emit_type(t, os); },
     [this](AstTypeDecl* t, std::ostream& os){ emit_direct_type(t, os); });
-    oc << " reader(session->ctx(), stream_id);\n";
+    oc << " reader(session->ctx(), stream_id, "
+      "::nprpc::impl::StreamManager::kDefaultReaderWindow);\n";
 
     const auto args_offset = get_stream_init_arguments_offset();
     const auto fixed_size = args_offset + (fn->in_s ? fn->in_s->size : 0);
@@ -2084,7 +2092,9 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
       "  init.object_id() = this->object_id();\n"
       "  init.func_idx() = "
        << fn->idx << ";\n"
-      "  init.stream_kind() = ::nprpc::impl::StreamKind::Bidi;\n";
+      "  init.stream_kind() = ::nprpc::impl::StreamKind::Bidi;\n"
+      "  init.initial_credits() = "
+      "::nprpc::impl::StreamManager::kDefaultReaderWindow;\n";
 
     if (fn->in_s) {
       oc << "  " << fn->in_s->name << "_Direct _(buf," << args_offset << ");\n";
@@ -2688,7 +2698,8 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
         oc << "        ctx.stream_manager->register_stream(init.stream_id(), "
               "std::make_unique<::nprpc::StreamWriter<";
         emit_type(fn->stream_decl->stream_out_type(), oc);
-        oc << ">>(std::move(writer)), " << (fn->is_reliable ? "false" : "true") << ");\n";
+        oc << ">>(std::move(writer)), " << (fn->is_reliable ? "false" : "true")
+           << ", init.initial_credits());\n";
         oc << "        ctx.stream_manager->defer_stream_start(init.stream_id());\n";
         if (fn->ex)
           emit_declared_exception_reply(fn, oc, "        ");

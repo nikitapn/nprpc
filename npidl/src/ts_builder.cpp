@@ -1346,6 +1346,14 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       default:
         assert(false);
       }
+      out << ",\n" << bl() << "initial_credits: ";
+      // Advertise the reader's window when this side will be consuming
+      // (server/bidi downloads); upload-only streams have no such direction.
+      if (fn->stream_kind == StreamKind::Client) {
+        out << "0";
+      } else {
+        out << "NPRPC.default_reader_window";
+      }
 
       out << "\n" << eb(false) << bl() << "});\n";
 
@@ -2313,7 +2321,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
     case StreamKind::Server:
       out << bl() << "const writer = conn.stream_manager.create_writer(init.stream_id, ";
       emit_stream_serializer(fn->stream_decl->stream_out_type(), out);
-      out << ");\n"
+      out << ", init.initial_credits);\n"
           << bl() << "NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);\n"
           << bl() << "void (async () => {\n"
           << bb(false)
@@ -2399,7 +2407,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       emit_stream_serializer(fn->stream_decl->stream_out_type(), out);
       out << ", ";
       emit_stream_deserializer(fn->stream_decl->stream_in_type(), out);
-      out << ");\n"
+      out << ", init.initial_credits);\n"
           << bl() << "NPRPC.make_simple_answer(buf, NPRPC.impl.MessageId.Success);\n"
           << bl() << "void (async () => {\n"
           << bb(false)

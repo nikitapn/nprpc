@@ -179,133 +179,86 @@ Browser (Chromium)
 
 ## Window Credit Flow Control
 
-### Current Design
+### Design
 
-NPRPC uses a **chunk-level credit system** for stream backpressure. The producer (typically the server) can only send a limited number of data chunks before it must wait for the consumer (typically the client) to grant more credits.
+NPRPC uses a **chunk-level credit system** for stream backpressure (demand is
+expressed in chunks — units of work — like Reactive Streams' `REQUEST_N`, not
+in bytes like TCP/QUIC). The producer can only send as many chunks as it has
+credits; the consumer refills the pool with **watermark-batched**
+`StreamWindowUpdate` grants instead of one grant per consumed chunk.
 
 #### Constants
 
 | Constant | Value | Description |
 |---|---|---|
-| `kInitialWindowSize` | 8 | Pre-granted credits before the first `StreamWindowUpdate` |
-| Client `window_size_` (C++) | 16 | Initial buffer capacity in the C++ reader |
+| `kDefaultReaderWindow` (C++) / `default_reader_window` (TS) / `defaultReaderWindow` (Swift) | 32 | Window a consumer advertises in `StreamInit.initial_credits` |
+| Grant threshold | window / 2 | Consumed chunks accumulated before one batched `StreamWindowUpdate` |
+| `kInitialWindowSize` | 8 | Producer fallback window when `initial_credits == 0` (legacy peer, or upload direction with no advertisement) |
 
-#### Protocol Flow
+#### Window advertisement
+
+`StreamInit` carries `initial_credits: u32` (offset 28, fits the tail padding
+— the message stayed 32 bytes). The stub that opens a server/bidi stream sets
+it to the reader's window; the producer uses it as its starting credit pool
+(`StreamManager::register_stream` / `register_external_writer` /
+TS `create_writer`). `0` means "not advertised" and falls back to
+`kInitialWindowSize = 8`.
+
+The upload direction (client streams, and the client→server half of bidi) has
+no advertisement channel — the server-side reader assumes the legacy window of
+8 and batches at threshold 4.
+
+#### Protocol Flow (window = 32, threshold = 16)
 
 ```
 Server (producer)                          Client (consumer)
-    │                                           │
-    │── StreamDataChunk (seq=0) ──────────────>│  credits: 8→7
-    │── StreamDataChunk (seq=1) ──────────────>│  credits: 7→6
-    │── StreamDataChunk (seq=2) ──────────────>│  credits: 6→5
-    │   ...                                     │  (client reads chunk 0)
-    │<─────────────── StreamWindowUpdate(1) ───│  credits: 5→6
-    │   ...                                     │  (client reads chunk 1)
-    │<─────────────── StreamWindowUpdate(1) ───│  credits: 6→7
-    │   ...                                     │
-    │── StreamDataChunk (seq=7) ──────────────>│  credits: 1→0
-    │   *** BLOCKED — waiting for credits ***   │
-    │<─────────────── StreamWindowUpdate(1) ───│  (client reads chunk 2)
-    │── StreamDataChunk (seq=8) ──────────────>│  credits: 1→0
-    │   ...                                     │
+    │<── StreamInit (initial_credits=32) ──────│
+    │── StreamDataChunk (seq=0..15) ─────────> │  credits: 32→16
+    │   ...                                    │  (client consumes 16 chunks)
+    │<────────────── StreamWindowUpdate(16) ───│  credits: +16
+    │── StreamDataChunk (seq=16..31) ─────────>│
+    │   ...                                    │  (client consumes 16 more)
+    │<────────────── StreamWindowUpdate(16) ───│
 ```
 
-#### How It Works
+Two flow-control messages per 32 chunks instead of 32 — a 16× reduction in
+upstream control traffic.
 
-**Server side (`StreamManager`):**
-- Each stream starts with `kInitialWindowSize = 8` credits
-- When `write_chunk_or_queue()` is called:
-  - If `credits > 0` → send immediately, decrement credits
-  - If `credits == 0` → enqueue the chunk in `pending_writes`
-- When `on_window_update(stream_id, credits)` arrives:
-  - Add credits to the pool
-  - Drain queued `pending_writes` (one credit per chunk)
-  - If a coroutine is blocked, cancel its sleep timer to unblock it
+#### Correctness properties
 
-**Client side (JS `StreamReader`):**
-- The async iterator yields chunks one at a time
-- After each `yield`, sends `send_window_update(stream_id, 1)` — granting exactly **one credit per consumed chunk**
-- The window update is sent over the same **control stream**
+- **No deadlock:** the grant threshold never exceeds the producer's window.
+  If the producer stalls at zero credits, everything it sent is buffered at
+  the consumer, so the consumed counter must reach the threshold and fire a
+  refill.
+- **No stall (steady state):** the producer goes idle only if it burns
+  `window` credits before a grant makes the round trip, i.e. the window must
+  satisfy `window ≥ chunk_rate × RTT + threshold`. With window 32 /
+  threshold 16 there is headroom for ~16 chunks in flight per RTT.
+- **Version coupling:** both ends must speak the same protocol. A consumer
+  that advertises 32 and batches at 16 will deadlock against an old producer
+  that ignores `initial_credits` (window 8 < threshold 16).
 
-**Client side (C++ `StreamReader`):**
-- `read_next()` pops a chunk from the queue, increments `window_size_`, sends `send_window_update(1)`
-- Same one-credit-per-read pattern
+#### Implementation map
 
-### Inefficiency Analysis
+| Piece | Location |
+|---|---|
+| Producer credit pool & refill | `StreamManager::register_stream`, `on_window_update` (C++); `StreamWriter` credits (TS) |
+| Consumer batching | `StreamReader::read_next` (C++), `StreamReader` async iterator (TS), `createStreamManagerReader.windowUpdateFn` (Swift) |
+| Advertisement | npidl-generated stubs set `StreamInit.initial_credits`; servant dispatch passes it to the writer registration |
 
-The current design sends **one `StreamWindowUpdate` message per consumed chunk**. For a video stream producing 30+ chunks/second, that's 30+ small control messages/second flowing upstream just for flow control. Each message is:
-- 16 bytes header + 12 bytes payload = 28 bytes
-- Framed as a full NPRPC message on the control stream
-- Serialized, routed through nghttp3/ngtcp2, ACK'd by QUIC
+### Rejected alternatives
 
-This creates unnecessary overhead, especially on the control stream which also handles RPC traffic.
-
-### Better Strategies
-
-#### 1. Batched Credits (Simple Improvement)
-
-Instead of sending 1 credit per read, accumulate and send in batches:
-
-```
-// Send credits when consumed count reaches a threshold (e.g., half the window)
-if (++consumed_since_last_update >= window_size / 2) {
-    send_window_update(stream_id, consumed_since_last_update);
-    consumed_since_last_update = 0;
-}
-```
-
-**Trade-off:** Slightly higher latency before the producer learns it can send more. With a window of 8 and threshold of 4, the producer may stall briefly if it sends all 8 before the first batch arrives.
-
-**Mitigation:** Increase the initial window to 16–32 so the producer has headroom while the first batch is in flight.
-
-#### 2. High-Watermark / Low-Watermark
-
-Grant credits proactively at a low-watermark rather than reactively per-read:
-
-```
-// Grant credits when the consumer's buffer drops below low_watermark
-on_chunk_consumed():
-    buffered_count--
-    if buffered_count <= low_watermark:
-        grant = high_watermark - buffered_count
-        send_window_update(stream_id, grant)
-```
-
-Example: `high_watermark = 16`, `low_watermark = 4`. When buffered chunks drop to 4, grant 12 credits at once. This keeps the pipeline full and sends far fewer messages.
-
-#### 3. Byte-Based Window (Like TCP/QUIC)
-
-Instead of counting chunks, count bytes. The consumer advertises how many bytes it can buffer. This is fairer for variable-size chunks (a 32KB video segment vs a 24-byte metadata update shouldn't cost the same credit).
-
-```
-StreamWindowUpdate {
-    stream_id: u64;
-    byte_credits: u64;   // Number of additional BYTES the sender may transmit
-}
-```
-
-The producer tracks `remaining_bytes` and blocks when it reaches zero. This is how TCP receive window and QUIC flow control work.
-
-**Trade-off:** Need to choose a reasonable initial byte window (e.g., 256KB–1MB for video, 64KB for metadata). Per-stream tuning becomes important.
-
-#### 4. Implicit Credits via QUIC Flow Control (Zero Application Messages)
-
-Since native streams map 1:1 to QUIC bidi streams, QUIC already has stream-level flow control (`MAX_STREAM_DATA`). The application could rely entirely on QUIC backpressure:
-
-- The client's QUIC stack stops sending `MAX_STREAM_DATA` when the application is slow to read
-- ngtcp2 returns `NGTCP2_ERR_STREAM_DATA_BLOCKED` when the peer's window is exhausted
-- The server detects blocking and pauses the producer
-
-This eliminates `StreamWindowUpdate` messages entirely. The downside is coupling to QUIC semantics (doesn't work over WebSocket), and less application-level visibility into backpressure.
-
-**Hybrid approach:** Use QUIC flow control for native streams (where it's free), keep application-level credits only for the control stream mux.
-
-#### 5. Adaptive Window Sizing
-
-Dynamically adjust the window based on observed RTT and throughput, similar to TCP congestion control. Start small, grow aggressively if the consumer keeps up, shrink if it falls behind.
-
-This is complex to implement correctly and is usually overkill unless you have wildly varying bandwidth conditions.
-
-### Recommendation
-
-For the immediate term, **Strategy 1 (batched credits)** with a larger initial window is the simplest improvement — it reduces message count by 4–8x with a one-line change on each client. For longer-term, **Strategy 4 (implicit QUIC flow control)** for native streams is the most elegant since it eliminates redundant flow control entirely on the transport that already provides it.
+- **Byte-based window (TCP/QUIC style):** fairer for wildly variable chunk
+  sizes, but message-oriented protocols inherit HTTP/2's pathology — a chunk
+  can only be sent when the window covers its entire size, requiring
+  window ≥ max chunk size at all times to avoid deadlock. Chunk credits +
+  per-stream window tuning (`initial_credits`) covers the practical cases; a
+  byte *cap* could be added alongside chunk credits later if needed.
+- **Implicit QUIC flow control** (`MAX_STREAM_DATA` backpressure on native
+  streams): free on QUIC, but streams also run multiplexed over the control
+  stream and over non-QUIC transports, so the application-level mechanism
+  must exist anyway. QUIC's stream flow control still acts as a transparent
+  memory-safety net underneath native streams.
+- **Adaptive window sizing:** overkill until there's evidence of widely
+  varying bandwidth-delay products; `initial_credits` provides the per-stream
+  tuning knob.

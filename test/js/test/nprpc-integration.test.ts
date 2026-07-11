@@ -1235,6 +1235,7 @@ describe('NPRPC Integration Tests', function() {
         });
 
         it('should echo payloadA via HTTP transport', async function() {
+            this.timeout(100); // wait a bit avoiding 429 throttling errors
             const variantRpc = await resolveTestObject('nprpc_test_variant_rpc', test.TestVariantRpc);
             const input: test.TestVariant = { kind: 'payloadA', value: { id: 7, label: 'http test' } };
             const result = await variantRpc.http.Echo(input);

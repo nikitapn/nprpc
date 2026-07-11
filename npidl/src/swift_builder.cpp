@@ -1108,7 +1108,17 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
   default:
     assert(false);
   }
-  out << ".rawValue, toByteOffset: " << (size_of_header + 25) << ", as: UInt8.self)\n\n";
+  out << ".rawValue, toByteOffset: " << (size_of_header + 25) << ", as: UInt8.self)\n";
+  // initial_credits at offset 28: advertise the reader window when this side
+  // consumes (server/bidi downloads); 0 for upload-only streams.
+  out << bl() << "data.storeBytes(of: ";
+  if (fn->stream_kind == StreamKind::Client) {
+    out << "UInt32(0)";
+  } else {
+    out << "defaultReaderWindow";
+  }
+  out << ", toByteOffset: " << (size_of_header + 28)
+      << ", as: UInt32.self)  // initial_credits at offset 28\n\n";
 
   // Marshal input arguments if any
   if (fn->in_s) {
@@ -1136,7 +1146,8 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
 
   switch (fn->stream_kind) {
   case StreamKind::Server:
-    out << bl() << "let reader = NPRPC.createStreamManagerReader(streamManager: streamManager, streamId: streamId, buffer: buffer, unreliable: " << (fn->is_reliable ? "false" : "true") << ", deserializer: ";
+    // producerWindow matches the initial_credits advertised above.
+    out << bl() << "let reader = NPRPC.createStreamManagerReader(streamManager: streamManager, streamId: streamId, buffer: buffer, unreliable: " << (fn->is_reliable ? "false" : "true") << ", producerWindow: defaultReaderWindow, deserializer: ";
     emit_stream_deserializer(stream_decl->stream_out_type(), "self.endpoint",
                              out);
     out << ")\n";
@@ -1152,6 +1163,7 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
     out << bl() << "let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: "
         << estimate_stream_initial_payload_capacity(stream_decl->stream_in_type())
       << ", unreliable: " << (fn->is_reliable ? "false" : "true")
+        << ", producerWindow: defaultReaderWindow"
         << ", serializer: ";
     emit_stream_serializer(stream_decl->stream_in_type(), out);
     out << ", deserializer: ";
@@ -1585,9 +1597,12 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstInterfaceDecl* ifs,
   out << bl() << "}\n";
   switch (fn->stream_kind) {
   case StreamKind::Server:
+    // Consumer's advertised window (StreamInit.initial_credits, offset 28).
+    out << bl() << "let initialCredits = data.load(fromByteOffset: "
+        << (size_of_header + 28) << ", as: UInt32.self)\n";
     out << bl() << "let writer = NPRPC.createStreamManagerWriter(streamManager: streamManager, streamId: streamId, initialPayloadCapacity: "
         << estimate_stream_initial_payload_capacity(stream_decl->stream_out_type())
-        << ", serializer: ";
+        << ", initialCredits: initialCredits, serializer: ";
     emit_stream_serializer(stream_decl->stream_out_type(), out);
     out << ")\n";
     out << bl() << "let source = " << swift_method_name(fn->name) << "(";
@@ -1602,9 +1617,13 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstInterfaceDecl* ifs,
     out << bl() << "await " << swift_method_name(fn->name) << "(";
     break;
   case StreamKind::Bidi:
+    // Consumer's advertised window (StreamInit.initial_credits, offset 28).
+    out << bl() << "let initialCredits = data.load(fromByteOffset: "
+        << (size_of_header + 28) << ", as: UInt32.self)\n";
     out << bl() << "let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: "
         << estimate_stream_initial_payload_capacity(stream_decl->stream_out_type())
       << ", unreliable: " << (fn->is_reliable ? "false" : "true")
+        << ", initialCredits: initialCredits"
         << ", serializer: ";
     emit_stream_serializer(stream_decl->stream_out_type(), out);
     out << ", deserializer: ";

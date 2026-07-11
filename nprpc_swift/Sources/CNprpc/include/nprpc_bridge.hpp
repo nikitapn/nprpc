@@ -476,9 +476,12 @@ void nprpc_stream_manager_send_window_update(
 // Register an external (Swift/C) writer for a stream so that it participates
 // in credit-based flow control.  Must be called once per stream before the
 // first nprpc_stream_manager_write_chunk_async() call.
+// initial_credits: the consumer's window from StreamInit.initial_credits
+// (0 = use the legacy default of 8).
 void nprpc_stream_manager_register_external_writer(
     void* stream_manager,
-    uint64_t stream_id);
+    uint64_t stream_id,
+    uint32_t initial_credits);
 
 // Async write helper: calls 'callback(context, success)' when the chunk has
 // been sent (either immediately if credits are available, or after the next

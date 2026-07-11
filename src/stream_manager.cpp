@@ -300,14 +300,19 @@ void StreamManager::start_stream(uint64_t stream_id)
 
 void StreamManager::register_stream(uint64_t stream_id,
                                     std::unique_ptr<StreamWriterBase> writer,
-                                    bool unreliable)
+                                    bool unreliable,
+                                    uint32_t initial_credits)
 {
+  const int32_t credits = initial_credits > 0
+      ? static_cast<int32_t>(initial_credits)
+      : kInitialWindowSize;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    writers_[stream_id] = StreamInfo{std::move(writer), unreliable};
+    writers_[stream_id] = StreamInfo{std::move(writer), unreliable, credits};
   }
 
-  NPRPC_STREAM_MANAGER_LOG_TRACE("Stream registered: {} (unreliable={})", stream_id, unreliable);
+  NPRPC_STREAM_MANAGER_LOG_TRACE("Stream registered: {} (unreliable={}, credits={})",
+                                 stream_id, unreliable, credits);
 }
 
 bool StreamManager::is_stream_unreliable(uint64_t stream_id) const
@@ -519,7 +524,7 @@ bool StreamManager::send_chunk(uint64_t stream_id,
   // Build the message - start with fixed-size header and fields
   flat_buffer fb;
   constexpr size_t header_size = sizeof(flat::Header);
-  // StreamChunk fixed part: stream_id(8) + sequence(8) + Vector overhead(8) + window_size(4) = 28 bytes
+  // StreamChunk fixed part: stream_id(8) + sequence(8) + Vector overhead(8) = 24 bytes
   // Then variable data follows
   constexpr size_t chunk_fixed_size = sizeof(flat::StreamChunk);
 
@@ -537,7 +542,6 @@ bool StreamManager::send_chunk(uint64_t stream_id,
   flat::StreamChunk_Direct chunk_msg(fb, header_size);
   chunk_msg.stream_id() = stream_id;
   chunk_msg.sequence() = sequence;
-  chunk_msg.window_size() = 0;
 
   // Allocate and copy data using the Vector allocation pattern
   // Note: data() may reallocate the buffer, so header pointer may be invalid after this
@@ -730,7 +734,6 @@ void StreamManager::on_window_update(uint64_t stream_id, uint32_t credits)
       flat::StreamChunk_Direct msg(fb, hdr);
       msg.stream_id() = stream_id;
       msg.sequence() = pw.sequence;
-      msg.window_size() = 0;
       msg.data(static_cast<uint32_t>(pw.data.size()));
       if (!pw.data.empty()) {
         auto span = msg.data();
@@ -760,14 +763,18 @@ void StreamManager::on_window_update(uint64_t stream_id, uint32_t credits)
   }
 }
 
-void StreamManager::register_external_writer(uint64_t stream_id)
+void StreamManager::register_external_writer(uint64_t stream_id, uint32_t initial_credits)
 {
-  NPRPC_STREAM_MANAGER_LOG_TRACE("External writer registered for stream_id={}", stream_id);
+  NPRPC_STREAM_MANAGER_LOG_TRACE("External writer registered for stream_id={} credits={}",
+                                 stream_id, initial_credits);
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = writers_.find(stream_id);
   if (it == writers_.end()) {
     // Create a StreamInfo entry with no coroutine writer but with credits.
-    writers_[stream_id] = StreamInfo{};
+    StreamInfo info{};
+    if (initial_credits > 0)
+      info.credits = static_cast<int32_t>(initial_credits);
+    writers_[stream_id] = std::move(info);
   }
   // If already present (e.g. from a deferred stream start), leave credits alone.
 }

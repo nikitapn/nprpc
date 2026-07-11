@@ -36,6 +36,15 @@ class Session;
 class NPRPC_API StreamManager : public std::enable_shared_from_this<StreamManager>
 {
 public:
+  // Producer's starting credit pool when StreamInit carried no window
+  // advertisement (initial_credits == 0, i.e. a legacy peer).
+  static constexpr int32_t kInitialWindowSize = 8;
+  // Window a consumer advertises in StreamInit.initial_credits when it opens
+  // a stream.  Readers grant batched refills at half this window, so the
+  // producer never stalls as long as grants make the round trip within
+  // window/2 chunk periods.
+  static constexpr uint32_t kDefaultReaderWindow = 32;
+
   // Callback type for sending on main stream (control messages, always reliable)
   using SendCallback = std::function<void(flat_buffer&&)>;
   // Callback type for sending on native QUIC stream (reliable stream data)
@@ -60,10 +69,13 @@ public:
   // Set the callback for sending datagrams (unreliable stream data)
   void set_send_datagram_callback(SendDatagramCallback callback) { send_datagram_callback_ = std::move(callback); }
 
-  // Server-side: register outgoing stream (with optional unreliable flag)
+  // Server-side: register outgoing stream (with optional unreliable flag).
+  // initial_credits is the consumer's window from StreamInit.initial_credits;
+  // 0 means the peer didn't advertise one — fall back to kInitialWindowSize.
   void register_stream(uint64_t stream_id,
                        std::unique_ptr<StreamWriterBase> writer,
-                       bool unreliable = false);
+                       bool unreliable = false,
+                       uint32_t initial_credits = 0);
 
   // Client-side: register incoming stream
   void register_reader(uint64_t stream_id, StreamReaderBase* reader);
@@ -82,7 +94,8 @@ public:
   // External writer interface (called from C bridge / Swift).
   // Registers a stream entry with the initial credit window so that
   // write_chunk_or_queue() can perform credit-based flow control.
-  void register_external_writer(uint64_t stream_id);
+  // initial_credits: consumer's window from StreamInit (0 = default).
+  void register_external_writer(uint64_t stream_id, uint32_t initial_credits = 0);
 
   // Try to send a chunk for an external writer.  If credits are available
   // the chunk is sent synchronously and callback(success) is called before
@@ -152,7 +165,6 @@ private:
   std::vector<std::shared_ptr<StreamManager>> extra_owners_;
 
   // Active outgoing streams (server-side)
-  static constexpr int32_t kInitialWindowSize = 8; // pre-grant before first update
   struct StreamInfo {
     std::unique_ptr<StreamWriterBase> writer;  // null for external (Swift) writers
     bool unreliable = false;
