@@ -1,3 +1,4 @@
+#include <array>
 #include <random>
 #include <thread>
 #include <vector>
@@ -347,4 +348,99 @@ TEST(LockFreeRingBuffer, ZeroCopyConcurrentMPSC)
 
   ASSERT_EQ(consumed.load(), kMessages);
   ASSERT_FALSE(ring->try_read_view()) << "ring should be empty after all reads";
+}
+
+// Multiple producers under PAYLOAD pressure with variable-size messages.
+//
+// ZeroCopyConcurrentMPSC above never stresses the payload ring: with fixed
+// 128-byte messages in a 128 MB ring, the 1024 header slots are the binding
+// constraint and at most 128 KB of payload is ever in flight.  This test
+// inverts that: a 64 KB ring with messages up to ~8 KB means only a handful
+// of messages fit at once, so racing producers constantly contend on the
+// payload capacity check.  Variable sizes additionally make slot-order vs
+// payload-order mismatches visible in the read cursor arithmetic.  Every
+// byte of every message is verified, along with per-producer FIFO order.
+TEST(LockFreeRingBuffer, ConcurrentProducersPayloadPressure)
+{
+  constexpr size_t   kBufferSize    = 64 * 1024;
+  constexpr uint32_t kProducerCount = 4;
+  constexpr uint32_t kMsgsPerProd   = 50000;
+
+  LockFreeRingBuffer::remove("test_mpsc_pressure"); // Clean up previous runs
+  auto ring = LockFreeRingBuffer::create("test_mpsc_pressure", kBufferSize);
+  ASSERT_NE(ring, nullptr);
+
+  struct MsgHeader {
+    uint32_t producer;
+    uint32_t seq;
+  };
+
+  auto fill_byte = [](uint32_t producer, uint32_t seq, size_t i) {
+    return static_cast<uint8_t>(producer * 31 + seq * 7 + i);
+  };
+
+  std::vector<std::thread> producers;
+  for (uint32_t p = 0; p < kProducerCount; ++p) {
+    producers.emplace_back([&, p] {
+      std::minstd_rand rng(p + 1);
+      std::vector<uint8_t> buf;
+      for (uint32_t seq = 0; seq < kMsgsPerProd; ++seq) {
+        // 100 B .. ~8 KiB: a few concurrent claims approach ring capacity.
+        size_t payload = 100 + rng() % (8 * 1024);
+        buf.resize(sizeof(MsgHeader) + payload);
+        MsgHeader hdr{p, seq};
+        std::memcpy(buf.data(), &hdr, sizeof(hdr));
+        for (size_t i = 0; i < payload; ++i)
+          buf[sizeof(hdr) + i] = fill_byte(p, seq, i);
+
+        // Alternate between the two write APIs; they share the claim path
+        // but commit differently.
+        if (seq & 1) {
+          LockFreeRingBuffer::WriteReservation rsv;
+          while (!(rsv = ring->try_reserve_write(buf.size())))
+            std::this_thread::yield();
+          std::memcpy(rsv.data, buf.data(), buf.size());
+          ring->commit_write(rsv, buf.size());
+        } else {
+          while (!ring->try_write(buf.data(), buf.size()))
+            std::this_thread::yield();
+        }
+      }
+    });
+  }
+
+  // Consume on the test thread so gtest ASSERTs abort the test properly.
+  const size_t total = size_t(kProducerCount) * kMsgsPerProd;
+  std::array<uint32_t, kProducerCount> next_seq{};
+  std::vector<uint8_t> rbuf(16 * 1024);
+  std::vector<uint8_t> expected;
+  for (size_t got = 0; got < total;) {
+    size_t n = ring->try_read(rbuf.data(), rbuf.size());
+    if (n == 0) {
+      std::this_thread::yield();
+      continue;
+    }
+    ASSERT_GE(n, sizeof(MsgHeader));
+    MsgHeader hdr;
+    std::memcpy(&hdr, rbuf.data(), sizeof(hdr));
+    ASSERT_LT(hdr.producer, kProducerCount) << "corrupt producer id";
+    ASSERT_EQ(hdr.seq, next_seq[hdr.producer])
+        << "per-producer FIFO order broken (producer " << hdr.producer << ")";
+    ++next_seq[hdr.producer];
+
+    expected.resize(n - sizeof(MsgHeader));
+    for (size_t i = 0; i < expected.size(); ++i)
+      expected[i] = fill_byte(hdr.producer, hdr.seq, i);
+    ASSERT_EQ(std::memcmp(rbuf.data() + sizeof(MsgHeader), expected.data(),
+                          expected.size()),
+              0)
+        << "payload corruption in msg " << hdr.seq << " from producer "
+        << hdr.producer;
+    ++got;
+  }
+
+  for (auto& t : producers) t.join();
+
+  ASSERT_EQ(ring->try_read(rbuf.data(), rbuf.size()), 0u)
+      << "ring should be empty after all messages consumed";
 }

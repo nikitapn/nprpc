@@ -34,31 +34,69 @@ namespace nprpc::impl {
 // can zero it reliably regardless of payload size — the root correctness
 // problem of the previous single-ring design.
 //
-// Producer protocol (try_reserve_write + commit_write):
-//   1. CAS write_slot_idx  → claims header slot s = old % N.
-//   2. CAS write_payload_idx → claims claimed_size payload bytes at payload_off.
-//   3. Zero headers[s].actual_size (release) — stable address, always correct.
-//   4. Store headers[s].claimed_size, headers[s].payload_off.
-//   5. Fill data at payload_region + payload_off.
-//   6. Release-store headers[s].actual_size != 0 — commit signal.
+// Cursors pack both ring positions into a single 64-bit word:
+// [63:48] slot counter (mod 2^16), [47:0] payload byte offset (mod
+// buffer_size).  Packing makes the slot claim, the payload claim and both
+// capacity checks one atomic CAS, which is what makes multiple concurrent
+// producers safe:
+//  - the capacity check and the claim are atomic, so racing producers
+//    cannot collectively overcommit the payload ring;
+//  - payload offsets are assigned in slot order, so the consumer's cursor
+//    update (payload_off + claimed_size of the slot it just consumed) is
+//    always the exact start of the next live message's payload.
+//
+// Producer protocol (try_write / try_reserve_write + commit_write):
+//   1. CAS write_cursor → claims header slot s = slot(old) % N and
+//      claimed_size payload bytes at payload(old).  Fails (ring full) if
+//      either the slot ring or the payload ring lacks capacity relative to
+//      an acquire-loaded snapshot of read_cursor; a stale snapshot only
+//      under-reports free space, never over-reports it.
+//   2. Zero headers[s].actual_size (release) — stable address, always correct.
+//   3. Store headers[s].claimed_size, headers[s].payload_off.
+//   4. Fill data at payload_region + payload_off.
+//   5. Release-store headers[s].actual_size != 0 — commit signal.
 //
 // Consumer protocol (try_read_view):
-//   1. Spin on headers[read_slot_idx % N].actual_size != 0.
+//   1. Spin on headers[slot(read_cursor) % N].actual_size != 0.
 //   2. Read claimed_size / payload_off from header.
 //   3. Return ReadView pointing into payload ring.
-//   4. commit_read() zeros actual_size (release), bumps read_slot_idx and
-//      read_payload_idx.
+//   4. commit_read() zeros actual_size (release), then release-stores
+//      read_cursor = {slot+1, (payload_off + claimed_size) % buffer_size}.
 //
 // Synchronization:
-// - write_slot_idx: claimed via CAS (acq_rel); monotonically increasing.
-// - write_payload_idx: claimed via CAS (acq_rel); monotonically increasing.
+// - write_cursor: claimed via CAS (acq_rel).
 // - actual_size: zero at init, release-zeroed by consumer, release-set by
 //   producer.
-// - read_slot_idx / read_payload_idx: single-consumer, relaxed store OK but
-//   release used so producers' acquire on read_payload_idx sees both.
+// - read_cursor: single-consumer, release store so producers' acquire load
+//   sees both the zeroed actual_size and the consumer's finished payload
+//   reads before the space is reused.
 
 // Number of header slots.  Must be a power of two.
 static constexpr uint32_t kRingSlots = 1024;
+
+// The slot counter lives in 16 bits and wraps mod 2^16; slot(counter) %
+// kRingSlots is only stable across that wrap if kRingSlots divides 2^16.
+static_assert((kRingSlots & (kRingSlots - 1)) == 0,
+              "kRingSlots must be a power of two");
+static_assert(kRingSlots <= (1u << 16),
+              "slot counter is 16 bits; kRingSlots must divide 2^16");
+
+// Packed-cursor helpers.
+inline constexpr uint32_t kCursorSlotShift   = 48;
+inline constexpr uint64_t kCursorPayloadMask = (uint64_t(1) << kCursorSlotShift) - 1;
+
+inline constexpr uint16_t cursor_slot(uint64_t c)
+{
+  return static_cast<uint16_t>(c >> kCursorSlotShift);
+}
+inline constexpr uint64_t cursor_payload(uint64_t c)
+{
+  return c & kCursorPayloadMask;
+}
+inline constexpr uint64_t pack_cursor(uint16_t slot, uint64_t payload)
+{
+  return (static_cast<uint64_t>(slot) << kCursorSlotShift) | payload;
+}
 
 // Per-slot metadata stored in the fixed-size header ring.
 // Each instance lives at headers[seq % kRingSlots] — a stable address
@@ -71,13 +109,15 @@ struct alignas(16) SlotHeader {
 static_assert(sizeof(SlotHeader) == 16, "SlotHeader must be 16 bytes");
 
 struct alignas(64) RingBufferHeader {
-  // Slot-index cursors (monotonically increasing, wrap mod kRingSlots via %)
-  alignas(64) std::atomic<uint64_t> write_slot_idx{0};
-  alignas(64) std::atomic<uint64_t> read_slot_idx{0};
+  // Packed producer cursor: {slot counter, payload offset} (see pack_cursor).
+  // Claimed by producers with a single CAS so capacity check + claim are
+  // atomic and payload offsets are assigned in slot order.
+  alignas(64) std::atomic<uint64_t> write_cursor{0};
 
-  // Payload-byte cursors (monotonically increasing, wrap mod buffer_size)
-  alignas(64) std::atomic<size_t> write_payload_idx{0};
-  alignas(64) std::atomic<size_t> read_payload_idx{0};
+  // Packed consumer cursor: advanced only by the single consumer.  One
+  // atomic word so producers always see a consistent (slot, payload)
+  // snapshot for their capacity checks.
+  alignas(64) std::atomic<uint64_t> read_cursor{0};
 
   // Fixed at creation
   size_t   buffer_size;        // Payload ring size in bytes
@@ -144,7 +184,7 @@ public:
   struct WriteReservation {
     uint8_t* data;       // Pointer to write data (into payload ring)
     size_t   max_size;   // Maximum bytes that can be written (== reserved size)
-    uint64_t slot_idx;   // Internal: header ring index (write_slot_idx before CAS)
+    uint64_t slot_idx;   // Internal: slot counter claimed from write_cursor
     bool     valid;      // true if reservation succeeded
 
     explicit operator bool() const { return valid; }
@@ -153,7 +193,7 @@ public:
   struct ReadView {
     const uint8_t* data;     // Pointer to message data (into payload ring)
     size_t         size;     // Message size in bytes
-    uint64_t       slot_idx; // Internal: header slot index (read_slot_idx)
+    uint64_t       slot_idx; // Internal: slot counter from read_cursor
     bool           valid;    // true if read succeeded
 
     explicit operator bool() const { return valid; }
@@ -199,6 +239,12 @@ private:
 
   // Calculate total shared memory size needed
   static size_t calculate_shm_size(size_t buffer_size);
+
+  // Atomically claim one header slot and `size` payload bytes with a single
+  // CAS on write_cursor.  Returns false if either ring is full.
+  bool claim_slot_and_payload(size_t size,
+                              uint16_t& slot_out,
+                              uint64_t& payload_off_out);
 
   // Helper to calculate used payload bytes
   size_t used_payload_bytes() const;

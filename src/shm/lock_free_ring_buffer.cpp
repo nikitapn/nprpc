@@ -117,6 +117,10 @@ std::unique_ptr<LockFreeRingBuffer>
 LockFreeRingBuffer::create(const std::string& name, size_t buffer_size, size_t max_message_size)
 {
   try {
+    // Payload offsets live in the low 48 bits of the packed cursors.
+    if (buffer_size >= (uint64_t(1) << kCursorSlotShift))
+      throw std::runtime_error("buffer_size exceeds 48-bit payload cursor range");
+
     size_t page_size   = get_page_size();
     size_t hdr_ring_sz = header_ring_bytes();
     size_t ring_window = round_up_page(buffer_size);
@@ -263,9 +267,47 @@ LockFreeRingBuffer::~LockFreeRingBuffer()
 
 size_t LockFreeRingBuffer::used_payload_bytes() const
 {
-  size_t w = header_->write_payload_idx.load(std::memory_order_acquire);
-  size_t r = header_->read_payload_idx.load(std::memory_order_acquire);
-  return (w - r + header_->buffer_size) % header_->buffer_size;
+  uint64_t w = cursor_payload(header_->write_cursor.load(std::memory_order_acquire));
+  uint64_t r = cursor_payload(header_->read_cursor.load(std::memory_order_acquire));
+  return static_cast<size_t>((w - r + header_->buffer_size) % header_->buffer_size);
+}
+
+bool LockFreeRingBuffer::claim_slot_and_payload(size_t size,
+                                                uint16_t& slot_out,
+                                                uint64_t& payload_off_out)
+{
+  const uint64_t B = header_->buffer_size;
+  uint64_t old_cursor = header_->write_cursor.load(std::memory_order_relaxed);
+  for (;;) {
+    // Consumer cursor snapshot.  It may be stale, but stale only
+    // under-reports free space, so the checks stay conservative.
+    uint64_t rd = header_->read_cursor.load(std::memory_order_acquire);
+
+    uint16_t in_flight =
+        static_cast<uint16_t>(cursor_slot(old_cursor) - cursor_slot(rd));
+    if (in_flight >= kRingSlots)
+      return false;
+
+    uint64_t w_pay = cursor_payload(old_cursor);
+    uint64_t used  = (w_pay - cursor_payload(rd) + B) % B;
+    if (used + size + 1 > B)
+      return false;
+
+    // One CAS claims the slot and the payload bytes together: the checks
+    // above are atomic with the claim, and payload offsets are handed out
+    // in slot order.
+    uint64_t new_cursor =
+        pack_cursor(static_cast<uint16_t>(cursor_slot(old_cursor) + 1),
+                    (w_pay + size) % B);
+    if (header_->write_cursor.compare_exchange_weak(
+            old_cursor, new_cursor,
+            std::memory_order_acq_rel, std::memory_order_relaxed)) {
+      slot_out        = cursor_slot(old_cursor);
+      payload_off_out = w_pay;
+      return true;
+    }
+    // CAS failure reloaded old_cursor; re-check capacity against it.
+  }
 }
 
 bool LockFreeRingBuffer::try_write(const void* data, size_t size)
@@ -275,55 +317,19 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size)
     return false;
   }
 
-  // Pre-flight capacity check: bail early if either resource is full.
-  // This is a snapshot check; the actual claims below use CAS.
-  {
-    uint64_t r_slot = header_->read_slot_idx.load(std::memory_order_acquire);
-    uint64_t w_slot = header_->write_slot_idx.load(std::memory_order_relaxed);
-    if (w_slot - r_slot >= kRingSlots)
-      return false;
-    size_t r_payload = header_->read_payload_idx.load(std::memory_order_acquire);
-    size_t w_payload = header_->write_payload_idx.load(std::memory_order_relaxed);
-    size_t used = (w_payload - r_payload + header_->buffer_size) % header_->buffer_size;
-    if (used + size + 1 > header_->buffer_size)
-      return false;
-  }
-
-  // --- Claim a header slot ---
-  uint64_t old_slot;
-  do {
-    old_slot = header_->write_slot_idx.load(std::memory_order_relaxed);
-    uint64_t r_slot = header_->read_slot_idx.load(std::memory_order_acquire);
-    if (old_slot - r_slot >= kRingSlots)
-      return false;
-  } while (!header_->write_slot_idx.compare_exchange_weak(
-               old_slot, old_slot + 1,
-               std::memory_order_acq_rel,
-               std::memory_order_relaxed));
-
-  // --- Claim payload bytes ---
-  // Once the header slot is claimed, the consumer is blocked waiting for
-  // actual_size != 0 on this slot.  We MUST claim payload and commit;
-  // returning false here would leave the slot permanently uncommitted.
-  // Spin-CAS without a capacity check — payload space is guaranteed by
-  // the pre-flight check and by the invariant that the payload ring is
-  // large enough for kRingSlots × MAX_MESSAGE_SIZE simultaneously.
-  size_t old_payload;
-  do {
-    old_payload = header_->write_payload_idx.load(std::memory_order_relaxed);
-  } while (!header_->write_payload_idx.compare_exchange_weak(
-               old_payload, (old_payload + size) % header_->buffer_size,
-               std::memory_order_acq_rel,
-               std::memory_order_relaxed));
+  uint16_t slot;
+  uint64_t payload_off;
+  if (!claim_slot_and_payload(size, slot, payload_off))
+    return false;
 
   // --- Fill slot header ---
-  SlotHeader& sh = slot_headers_[old_slot % kRingSlots];
+  SlotHeader& sh = slot_headers_[slot % kRingSlots];
   sh.actual_size.store(0, std::memory_order_release);
   sh.claimed_size = static_cast<uint32_t>(size);
-  sh.payload_off  = old_payload;
+  sh.payload_off  = payload_off;
 
   // Copy data (mirrored: single memcpy safe across wrap boundary).
-  std::memcpy(payload_region_ + old_payload, static_cast<const uint8_t*>(data), size);
+  std::memcpy(payload_region_ + payload_off, static_cast<const uint8_t*>(data), size);
 
   // Commit: consumer's spin signal.
   sh.actual_size.store(static_cast<uint32_t>(size), std::memory_order_release);
@@ -339,12 +345,12 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size)
 
 size_t LockFreeRingBuffer::try_read(void* buffer, size_t buffer_size)
 {
-  uint64_t r_slot = header_->read_slot_idx.load(std::memory_order_relaxed);
-  uint64_t w_slot = header_->write_slot_idx.load(std::memory_order_acquire);
-  if (r_slot == w_slot)
+  uint64_t rd = header_->read_cursor.load(std::memory_order_relaxed);
+  uint64_t wr = header_->write_cursor.load(std::memory_order_acquire);
+  if (cursor_slot(rd) == cursor_slot(wr))
     return 0;
 
-  SlotHeader& sh = slot_headers_[r_slot % kRingSlots];
+  SlotHeader& sh = slot_headers_[cursor_slot(rd) % kRingSlots];
 
   uint32_t actual_size;
   while ((actual_size = sh.actual_size.load(std::memory_order_acquire)) == 0)
@@ -367,9 +373,10 @@ size_t LockFreeRingBuffer::try_read(void* buffer, size_t buffer_size)
 
   sh.actual_size.store(0, std::memory_order_release);
 
-  size_t next_payload = (payload_off + claimed_size) % header_->buffer_size;
-  header_->read_payload_idx.store(next_payload, std::memory_order_release);
-  header_->read_slot_idx.store(r_slot + 1, std::memory_order_release);
+  header_->read_cursor.store(
+      pack_cursor(static_cast<uint16_t>(cursor_slot(rd) + 1),
+                  (payload_off + claimed_size) % header_->buffer_size),
+      std::memory_order_release);
 
   return actual_size;
 }
@@ -414,9 +421,9 @@ size_t LockFreeRingBuffer::available_bytes() const
 
 bool LockFreeRingBuffer::is_empty() const
 {
-  uint64_t r = header_->read_slot_idx.load(std::memory_order_relaxed);
-  uint64_t w = header_->write_slot_idx.load(std::memory_order_acquire);
-  return r == w;
+  uint64_t rd = header_->read_cursor.load(std::memory_order_relaxed);
+  uint64_t wr = header_->write_cursor.load(std::memory_order_acquire);
+  return cursor_slot(rd) == cursor_slot(wr);
 }
 
 bool LockFreeRingBuffer::is_full(size_t message_size) const
@@ -437,49 +444,20 @@ LockFreeRingBuffer::try_reserve_write(size_t min_size)
     return {};
   }
 
-  // Pre-flight capacity check.
-  {
-    uint64_t r_slot = header_->read_slot_idx.load(std::memory_order_acquire);
-    uint64_t w_slot = header_->write_slot_idx.load(std::memory_order_relaxed);
-    if (w_slot - r_slot >= kRingSlots)
-      return {};
-    size_t r_payload = header_->read_payload_idx.load(std::memory_order_acquire);
-    size_t w_payload = header_->write_payload_idx.load(std::memory_order_relaxed);
-    size_t used = (w_payload - r_payload + header_->buffer_size) % header_->buffer_size;
-    if (used + min_size + 1 > header_->buffer_size)
-      return {};
-  }
-
-  // --- Claim a header slot ---
-  uint64_t old_slot;
-  do {
-    old_slot = header_->write_slot_idx.load(std::memory_order_relaxed);
-    uint64_t r_slot = header_->read_slot_idx.load(std::memory_order_acquire);
-    if (old_slot - r_slot >= kRingSlots)
-      return {};
-  } while (!header_->write_slot_idx.compare_exchange_weak(
-               old_slot, old_slot + 1,
-               std::memory_order_acq_rel,
-               std::memory_order_relaxed));
-
-  // --- Claim payload bytes (spin — must not fail after slot is claimed) ---
-  size_t old_payload;
-  do {
-    old_payload = header_->write_payload_idx.load(std::memory_order_relaxed);
-  } while (!header_->write_payload_idx.compare_exchange_weak(
-               old_payload, (old_payload + min_size) % header_->buffer_size,
-               std::memory_order_acq_rel,
-               std::memory_order_relaxed));
+  uint16_t slot;
+  uint64_t payload_off;
+  if (!claim_slot_and_payload(min_size, slot, payload_off))
+    return {};
 
   // --- Initialise slot header ---
-  SlotHeader& sh = slot_headers_[old_slot % kRingSlots];
+  SlotHeader& sh = slot_headers_[slot % kRingSlots];
   sh.actual_size.store(0, std::memory_order_release);
   sh.claimed_size = static_cast<uint32_t>(min_size);
-  sh.payload_off  = old_payload;
+  sh.payload_off  = payload_off;
 
   WriteReservation result;
-  result.slot_idx = old_slot;
-  result.data     = payload_region_ + old_payload;
+  result.slot_idx = slot;
+  result.data     = payload_region_ + payload_off;
   result.max_size = min_size;
   result.valid    = true;
   return result;
@@ -511,13 +489,13 @@ void LockFreeRingBuffer::commit_write(const WriteReservation& reservation,
 
 LockFreeRingBuffer::ReadView LockFreeRingBuffer::try_read_view()
 {
-  uint64_t r_slot = header_->read_slot_idx.load(std::memory_order_relaxed);
-  uint64_t w_slot = header_->write_slot_idx.load(std::memory_order_acquire);
+  uint64_t rd = header_->read_cursor.load(std::memory_order_relaxed);
+  uint64_t wr = header_->write_cursor.load(std::memory_order_acquire);
 
-  if (r_slot == w_slot)
+  if (cursor_slot(rd) == cursor_slot(wr))
     return {};
 
-  SlotHeader& sh = slot_headers_[r_slot % kRingSlots];
+  SlotHeader& sh = slot_headers_[cursor_slot(rd) % kRingSlots];
 
   uint32_t actual_size;
   while ((actual_size = sh.actual_size.load(std::memory_order_acquire)) == 0)
@@ -539,7 +517,7 @@ LockFreeRingBuffer::ReadView LockFreeRingBuffer::try_read_view()
   ReadView result;
   result.data     = payload_region_ + payload_off;
   result.size     = actual_size;
-  result.slot_idx = r_slot;
+  result.slot_idx = cursor_slot(rd);
   result.valid    = true;
   return result;
 }
@@ -553,17 +531,18 @@ void LockFreeRingBuffer::commit_read(const ReadView& view)
 
   SlotHeader& sh = slot_headers_[view.slot_idx % kRingSlots];
 
-  // Zero actual_size (release) before advancing cursors.  Producers that
-  // CAS-acquire read_slot_idx / read_payload_idx will subsequently
-  // observe actual_size == 0 when they reuse this slot index.
+  // Zero actual_size (release) before advancing the cursor.  Producers that
+  // acquire-load read_cursor will subsequently observe actual_size == 0
+  // when they reuse this slot index.
   sh.actual_size.store(0, std::memory_order_release);
 
   uint32_t claimed_size = sh.claimed_size;
-  size_t   payload_off  = sh.payload_off;
-  size_t   next_payload = (payload_off + claimed_size) % header_->buffer_size;
+  uint64_t payload_off  = sh.payload_off;
 
-  header_->read_payload_idx.store(next_payload, std::memory_order_release);
-  header_->read_slot_idx.store(view.slot_idx + 1, std::memory_order_release);
+  header_->read_cursor.store(
+      pack_cursor(static_cast<uint16_t>(view.slot_idx + 1),
+                  (payload_off + claimed_size) % header_->buffer_size),
+      std::memory_order_release);
 }
 
 
@@ -580,7 +559,7 @@ void LockFreeRingBuffer::wait_for_readable(std::chrono::milliseconds timeout)
   // Sleep phase: fall back to condvar.
   // seq_cst on fetch_add pairs with seq_cst on the producer's load:
   // either the producer sees waiting_readers > 0 and signals us, or it
-  // wrote the slot index (acq_rel CAS) before our is_empty() recheck and
+  // advanced write_cursor (acq_rel CAS) before our is_empty() recheck and
   // we see data without sleeping at all — no lost wakeup is possible.
   boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex>
       lock(header_->mutex);
