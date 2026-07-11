@@ -59,7 +59,7 @@ Session::Session(boost::asio::any_io_executor executor)
     , inactive_timer_{executor}
 {
   ctx_.stream_manager = new impl::StreamManager(
-      ctx_, static_cast<impl::RpcImpl*>(g_rpc)->stream_executor());
+      ctx_, self_cell_, static_cast<impl::RpcImpl*>(g_rpc)->stream_executor());
   // Capture self_cell_ (a shared_ptr<weak_ptr<Session>>), not `this`. The
   // cell is a separate heap allocation kept alive by the callback's own
   // copy, so it's always safe to read even long after *this has been

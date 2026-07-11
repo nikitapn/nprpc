@@ -1458,7 +1458,7 @@ final class IntegrationTests: XCTestCase {
             override func echoByteStream(xor_mask: UInt8, stream: NPRPCBidiStream<UInt8, UInt8>) async {
                 do {
                     for try await byte in stream.reader {
-                        await stream.writer.write(byte ^ xor_mask)
+                        try await stream.writer.write(byte ^ xor_mask)
                     }
                     stream.writer.close()
                 } catch {
@@ -1469,7 +1469,7 @@ final class IntegrationTests: XCTestCase {
             override func echoStringStream(suffix: String, stream: NPRPCBidiStream<String, String>) async {
                 do {
                     for try await value in stream.reader {
-                        await stream.writer.write(value + suffix)
+                        try await stream.writer.write(value + suffix)
                     }
                     stream.writer.close()
                 } catch {
@@ -1480,7 +1480,7 @@ final class IntegrationTests: XCTestCase {
             override func echoBinaryStream(xor_mask: UInt8, stream: NPRPCBidiStream<[UInt8], [UInt8]>) async {
                 do {
                     for try await value in stream.reader {
-                        await stream.writer.write(value.map { $0 ^ xor_mask })
+                        try await stream.writer.write(value.map { $0 ^ xor_mask })
                     }
                     stream.writer.close()
                 } catch {
@@ -1491,7 +1491,7 @@ final class IntegrationTests: XCTestCase {
             override func echoU16VectorStream(delta: UInt16, stream: NPRPCBidiStream<[UInt16], [UInt16]>) async {
                 do {
                     for try await value in stream.reader {
-                        await stream.writer.write(value.map { $0 + delta })
+                        try await stream.writer.write(value.map { $0 + delta })
                     }
                     stream.writer.close()
                 } catch {
@@ -1502,7 +1502,7 @@ final class IntegrationTests: XCTestCase {
             override func echoObjectVectorStream(suffix: String, stream: NPRPCBidiStream<[AAA], [AAA]>) async {
                 do {
                     for try await value in stream.reader {
-                        await stream.writer.write(value.map { Self.transformAAA($0, suffix: suffix) })
+                        try await stream.writer.write(value.map { Self.transformAAA($0, suffix: suffix) })
                     }
                     stream.writer.close()
                 } catch {
@@ -1513,7 +1513,7 @@ final class IntegrationTests: XCTestCase {
             override func echoU16ArrayStream(delta: UInt16, stream: NPRPCBidiStream<[UInt16], [UInt16]>) async {
                 do {
                     for try await value in stream.reader {
-                        await stream.writer.write(value.map { $0 + delta })
+                        try await stream.writer.write(value.map { $0 + delta })
                     }
                     stream.writer.close()
                 } catch {
@@ -1524,7 +1524,7 @@ final class IntegrationTests: XCTestCase {
             override func echoObjectArrayStream(suffix: String, stream: NPRPCBidiStream<[AAA], [AAA]>) async {
                 do {
                     for try await value in stream.reader {
-                        await stream.writer.write(value.map { Self.transformAAA($0, suffix: suffix) })
+                        try await stream.writer.write(value.map { Self.transformAAA($0, suffix: suffix) })
                     }
                     stream.writer.close()
                 } catch {
@@ -1535,7 +1535,7 @@ final class IntegrationTests: XCTestCase {
             override func echoAliasOptionalStream(suffix: String, delta: UInt32, stream: NPRPCBidiStream<AliasOptionalStreamPayload, AliasOptionalStreamPayload>) async {
                 do {
                     for try await value in stream.reader {
-                        await stream.writer.write(Self.transformAliasOptionalPayload(value, suffix: suffix, delta: delta))
+                        try await stream.writer.write(Self.transformAliasOptionalPayload(value, suffix: suffix, delta: delta))
                     }
                     stream.writer.close()
                 } catch {
@@ -1546,7 +1546,7 @@ final class IntegrationTests: XCTestCase {
             override func echoObjectStream(suffix: String, stream: NPRPCBidiStream<AAA, AAA>) async {
                 do {
                     for try await value in stream.reader {
-                        await stream.writer.write(Self.transformAAA(value, suffix: suffix))
+                        try await stream.writer.write(Self.transformAAA(value, suffix: suffix))
                     }
                     stream.writer.close()
                 } catch {
@@ -1663,7 +1663,7 @@ final class IntegrationTests: XCTestCase {
 
         let uploadWriter = try client.uploadByteStream(expected_size: 5)
         for byte in [UInt8(1), 2, 3, 4, 5] {
-            await uploadWriter.write(byte)
+            try await uploadWriter.write(byte)
         }
         uploadWriter.close()
 
@@ -1672,8 +1672,8 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(servant.uploadedBytes, [1, 2, 3, 4, 5])
 
         let uploadObjectWriter = try client.uploadObjectStream(expected_count: 2)
-        await uploadObjectWriter.write(AAA(a: 1, b: "first", c: "one"))
-        await uploadObjectWriter.write(AAA(a: 2, b: "second", c: "two"))
+        try await uploadObjectWriter.write(AAA(a: 1, b: "first", c: "one"))
+        try await uploadObjectWriter.write(AAA(a: 2, b: "second", c: "two"))
         uploadObjectWriter.close()
 
         await fulfillment(of: [objectUploadExpectation], timeout: 2.0)
@@ -1687,9 +1687,9 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(servant.uploadedObjects[1].c, "two")
 
         let uploadStringWriter = try client.uploadStringStream(expected_count: 3)
-        await uploadStringWriter.write("alpha")
-        await uploadStringWriter.write("beta")
-        await uploadStringWriter.write("gamma")
+        try await uploadStringWriter.write("alpha")
+        try await uploadStringWriter.write("beta")
+        try await uploadStringWriter.write("gamma")
         uploadStringWriter.close()
 
         await fulfillment(of: [stringUploadExpectation], timeout: 2.0)
@@ -1697,9 +1697,9 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(servant.uploadedStrings, ["alpha", "beta", "gamma"])
 
         let uploadBinaryWriter = try client.uploadBinaryStream(expected_count: 3)
-        await uploadBinaryWriter.write([1, 2, 3])
-        await uploadBinaryWriter.write([4, 5])
-        await uploadBinaryWriter.write([6, 7, 8, 9])
+        try await uploadBinaryWriter.write([1, 2, 3])
+        try await uploadBinaryWriter.write([4, 5])
+        try await uploadBinaryWriter.write([6, 7, 8, 9])
         uploadBinaryWriter.close()
 
         await fulfillment(of: [binaryUploadExpectation], timeout: 2.0)
@@ -1707,9 +1707,9 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(servant.uploadedBinaryChunks, [[1, 2, 3], [4, 5], [6, 7, 8, 9]])
 
         let uploadU16VectorWriter = try client.uploadU16VectorStream(expected_count: 3)
-        await uploadU16VectorWriter.write([10, 20, 30])
-        await uploadU16VectorWriter.write([40, 50])
-        await uploadU16VectorWriter.write([60, 70, 80, 90])
+        try await uploadU16VectorWriter.write([10, 20, 30])
+        try await uploadU16VectorWriter.write([40, 50])
+        try await uploadU16VectorWriter.write([60, 70, 80, 90])
         uploadU16VectorWriter.close()
 
         await fulfillment(of: [u16VectorUploadExpectation], timeout: 2.0)
@@ -1717,11 +1717,11 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(servant.uploadedU16Vectors, [[10, 20, 30], [40, 50], [60, 70, 80, 90]])
 
         let uploadObjectVectorWriter = try client.uploadObjectVectorStream(expected_count: 2)
-        await uploadObjectVectorWriter.write([
+        try await uploadObjectVectorWriter.write([
             AAA(a: 1, b: "left_0", c: "payload_0"),
             AAA(a: 2, b: "left_1", c: "payload_1"),
         ])
-        await uploadObjectVectorWriter.write([
+        try await uploadObjectVectorWriter.write([
             AAA(a: 3, b: "right_0", c: "payload_2"),
             AAA(a: 4, b: "right_1", c: "payload_3"),
         ])
@@ -1736,8 +1736,8 @@ final class IntegrationTests: XCTestCase {
         expectAAA(servant.uploadedObjectVectors[1][1], AAA(a: 4, b: "right_1", c: "payload_3"))
 
         let uploadU16ArrayWriter = try client.uploadU16ArrayStream(expected_count: 2)
-        await uploadU16ArrayWriter.write([1, 2, 3, 4])
-        await uploadU16ArrayWriter.write([10, 20, 30, 40])
+        try await uploadU16ArrayWriter.write([1, 2, 3, 4])
+        try await uploadU16ArrayWriter.write([10, 20, 30, 40])
         uploadU16ArrayWriter.close()
 
         await fulfillment(of: [u16ArrayUploadExpectation], timeout: 2.0)
@@ -1745,11 +1745,11 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(servant.uploadedU16Arrays, [[1, 2, 3, 4], [10, 20, 30, 40]])
 
         let uploadObjectArrayWriter = try client.uploadObjectArrayStream(expected_count: 2)
-        await uploadObjectArrayWriter.write([
+        try await uploadObjectArrayWriter.write([
             AAA(a: 5, b: "array_0_0", c: "item_0_0"),
             AAA(a: 6, b: "array_0_1", c: "item_0_1"),
         ])
-        await uploadObjectArrayWriter.write([
+        try await uploadObjectArrayWriter.write([
             AAA(a: 7, b: "array_1_0", c: "item_1_0"),
             AAA(a: 8, b: "array_1_1", c: "item_1_1"),
         ])
@@ -1766,7 +1766,7 @@ final class IntegrationTests: XCTestCase {
         let bidiStream = try client.echoByteStream(xor_mask: 0x5A)
         let input: [UInt8] = [10, 11, 12, 13]
         for byte in input {
-            await bidiStream.writer.write(byte)
+            try await bidiStream.writer.write(byte)
         }
         bidiStream.writer.close()
 
@@ -1779,7 +1779,7 @@ final class IntegrationTests: XCTestCase {
 
         let stringBidiStream = try client.echoStringStream(suffix: "-ok")
         for value in ["left", "right"] {
-            await stringBidiStream.writer.write(value)
+            try await stringBidiStream.writer.write(value)
         }
         stringBidiStream.writer.close()
 
@@ -1791,7 +1791,7 @@ final class IntegrationTests: XCTestCase {
 
         let binaryBidiStream = try client.echoBinaryStream(xor_mask: 0x5A)
         for value in [[UInt8(0), 1, 2], [10, 11]] {
-            await binaryBidiStream.writer.write(value)
+            try await binaryBidiStream.writer.write(value)
         }
         binaryBidiStream.writer.close()
 
@@ -1805,8 +1805,8 @@ final class IntegrationTests: XCTestCase {
         )
 
         let u16VectorBidiStream = try client.echoU16VectorStream(delta: 7)
-        await u16VectorBidiStream.writer.write([1, 2, 3])
-        await u16VectorBidiStream.writer.write([100, 200])
+        try await u16VectorBidiStream.writer.write([1, 2, 3])
+        try await u16VectorBidiStream.writer.write([100, 200])
         u16VectorBidiStream.writer.close()
 
         var echoedU16Vectors: [[UInt16]] = []
@@ -1816,11 +1816,11 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(echoedU16Vectors, [[8, 9, 10], [107, 207]])
 
         let objectVectorBidiStream = try client.echoObjectVectorStream(suffix: "-ok")
-        await objectVectorBidiStream.writer.write([
+        try await objectVectorBidiStream.writer.write([
             AAA(a: 1, b: "vec_a", c: "left"),
             AAA(a: 2, b: "vec_b", c: "right"),
         ])
-        await objectVectorBidiStream.writer.write([
+        try await objectVectorBidiStream.writer.write([
             AAA(a: 3, b: "vec_c", c: "up"),
             AAA(a: 4, b: "vec_d", c: "down"),
         ])
@@ -1837,8 +1837,8 @@ final class IntegrationTests: XCTestCase {
         expectAAA(echoedObjectVectors[1][1], AAA(a: 104, b: "vec_d-ok", c: "down-ok"))
 
         let u16ArrayBidiStream = try client.echoU16ArrayStream(delta: 7)
-        await u16ArrayBidiStream.writer.write([1, 2, 3, 4])
-        await u16ArrayBidiStream.writer.write([10, 20, 30, 40])
+        try await u16ArrayBidiStream.writer.write([1, 2, 3, 4])
+        try await u16ArrayBidiStream.writer.write([10, 20, 30, 40])
         u16ArrayBidiStream.writer.close()
 
         var echoedU16Arrays: [[UInt16]] = []
@@ -1848,11 +1848,11 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(echoedU16Arrays, [[8, 9, 10, 11], [17, 27, 37, 47]])
 
         let objectArrayBidiStream = try client.echoObjectArrayStream(suffix: "-ok")
-        await objectArrayBidiStream.writer.write([
+        try await objectArrayBidiStream.writer.write([
             AAA(a: 11, b: "arr_a", c: "west"),
             AAA(a: 12, b: "arr_b", c: "east"),
         ])
-        await objectArrayBidiStream.writer.write([
+        try await objectArrayBidiStream.writer.write([
             AAA(a: 13, b: "arr_c", c: "north"),
             AAA(a: 14, b: "arr_d", c: "south"),
         ])
@@ -1869,7 +1869,7 @@ final class IntegrationTests: XCTestCase {
         expectAAA(echoedObjectArrays[1][1], AAA(a: 114, b: "arr_d-ok", c: "south-ok"))
 
         let aliasBidiStream = try client.echoAliasOptionalStream(suffix: "-ok", delta: 7)
-        await aliasBidiStream.writer.write(
+        try await aliasBidiStream.writer.write(
             AliasOptionalStreamPayload(
                 id: 10,
                 ids: [1, 2, 3],
@@ -1881,7 +1881,7 @@ final class IntegrationTests: XCTestCase {
                 maybe_payload: [6, 7, 8]
             )
         )
-        await aliasBidiStream.writer.write(
+        try await aliasBidiStream.writer.write(
             AliasOptionalStreamPayload(
                 id: 30,
                 ids: [9],
@@ -1925,7 +1925,7 @@ final class IntegrationTests: XCTestCase {
             AAA(a: 20, b: "beta", c: "two"),
         ]
         for value in objectInput {
-            await objectBidiStream.writer.write(value)
+            try await objectBidiStream.writer.write(value)
         }
         objectBidiStream.writer.close()
 

@@ -1122,7 +1122,7 @@ void* nprpc_get_stream_manager(void* session_ctx) {
     return ctx->stream_manager;
 }
 
-void nprpc_stream_manager_send_chunk(
+bool nprpc_stream_manager_send_chunk(
     void* stream_manager,
     uint64_t stream_id,
     const void* data,
@@ -1132,7 +1132,7 @@ void nprpc_stream_manager_send_chunk(
     auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
     if (!mgr) {
         NPRPC_LOG_ERROR("[SWB] send_chunk: stream_manager is null");
-        return;
+        return false;
     }
 
     std::span<const uint8_t> data_span(
@@ -1140,7 +1140,7 @@ void nprpc_stream_manager_send_chunk(
         data_size
     );
 
-    mgr->send_chunk(stream_id, data_span, sequence);
+    return mgr->send_chunk(stream_id, data_span, sequence);
 }
 
 void nprpc_stream_manager_send_complete(void* stream_manager, uint64_t stream_id, uint64_t final_sequence) {
@@ -1215,7 +1215,7 @@ void nprpc_stream_manager_write_chunk_async(
 {
     auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
     if (!mgr) {
-        if (callback) callback(context);
+        if (callback) callback(context, false);
         return;
     }
 
@@ -1229,8 +1229,8 @@ void nprpc_stream_manager_write_chunk_async(
         stream_id,
         data_span,
         sequence,
-        [ctx = context, cb = callback]() {
-            if (cb) cb(ctx);
+        [ctx = context, cb = callback](bool success) {
+            if (cb) cb(ctx, success);
         });
 }
 

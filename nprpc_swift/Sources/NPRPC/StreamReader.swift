@@ -265,14 +265,17 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
     private let buffer: FlatBuffer
     private let serializer: (FlatBuffer, Int, T) -> Void
     private let initialPayloadCapacity: Int
-    private let sendChunk: (FlatBuffer, UInt64) -> Void
+    // Returns false if the chunk was dropped instead of sent (the owning
+    // session had already died) — see Session::bind_self() on the C++ side.
+    private let sendChunk: (FlatBuffer, UInt64) -> Bool
     private let sendComplete: (UInt64, UInt64) -> Void
     private let sendError: (UInt64, UInt32) -> Void
     private let sendCancel: ((UInt64) -> Void)?
     // When non-nil, writes go through credit-based backpressure.
     // The closure serializes the value, enqueues with the C++ layer, and
-    // calls the provided callback when the chunk is actually sent.
-    internal let asyncSendChunk: ((FlatBuffer, UInt64, @escaping () -> Void) -> Void)?
+    // calls the provided callback with whether the chunk was actually sent
+    // (false if the owning session had already died) once it's queued/sent.
+    internal let asyncSendChunk: ((FlatBuffer, UInt64, @escaping (Bool) -> Void) -> Void)?
     private var sequence: UInt64 = 0
     private var closed = false
     private let lock = NSLock()
@@ -282,11 +285,11 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
         buffer: FlatBuffer = FlatBuffer(),
         initialPayloadCapacity: Int,
         serializer: @escaping (FlatBuffer, Int, T) -> Void,
-        sendChunk: @escaping (FlatBuffer, UInt64) -> Void,
+        sendChunk: @escaping (FlatBuffer, UInt64) -> Bool,
         sendComplete: @escaping (UInt64, UInt64) -> Void,
         sendError: @escaping (UInt64, UInt32) -> Void,
         sendCancel: ((UInt64) -> Void)? = nil,
-        asyncSendChunk: ((FlatBuffer, UInt64, @escaping () -> Void) -> Void)? = nil
+        asyncSendChunk: ((FlatBuffer, UInt64, @escaping (Bool) -> Void) -> Void)? = nil
     ) {
         self.streamId = streamId
         self.buffer = buffer
@@ -300,19 +303,36 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
     }
 
     /// Synchronous write (used when no backpressure hook is configured).
-    public func write(_ value: T) {
+    /// Throws if the writer is already closed, or if this write discovers
+    /// the peer's session has died — in the latter case the writer is also
+    /// marked closed, since the stream can't recover.
+    public func write(_ value: T) throws {
+        try performSyncWrite(value)
+    }
+
+    // Named distinctly from write(_:)/write(_:) async so that the async
+    // overload's synchronous fallback path (below) can call it unambiguously
+    // — `write(value)` inside `write(_ value: T) async` resolves back to the
+    // async overload itself even without `await` (Swift picks the async
+    // candidate when one is in scope), which would recurse forever instead
+    // of falling back.
+    private func performSyncWrite(_ value: T) throws {
         lock.lock()
         defer { lock.unlock() }
         guard !closed else {
-            return
+            throw RuntimeError(message: "NPRPCStreamWriter: stream is closed")
         }
 
         buffer.consume(buffer.size)
         buffer.prepare(initialPayloadCapacity)
         serializer(buffer, 0, value)
 
-        sendChunk(buffer, sequence)
+        let sent = sendChunk(buffer, sequence)
         sequence += 1
+        if !sent {
+            closed = true
+            throw RuntimeError(message: "NPRPCStreamWriter: write failed, the stream's session is no longer alive")
+        }
     }
 
     // Synchronous helper: serializes `value` into a snapshot buffer and
@@ -338,19 +358,32 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
         return (snapshot, seq)
     }
 
+    private func markClosed() {
+        lock.lock()
+        closed = true
+        lock.unlock()
+    }
+
     /// Async write that respects credit-based backpressure when available.
     /// Falls back to synchronous write if no async hook was configured.
-    public func write(_ value: T) async {
+    /// Throws under the same conditions as the synchronous write(_:).
+    public func write(_ value: T) async throws {
         guard let asyncSend = asyncSendChunk else {
-            await write(value)
+            try performSyncWrite(value)
             return
         }
 
-        guard let (snapshot, seq) = prepareChunk(value) else { return }
+        guard let (snapshot, seq) = prepareChunk(value) else {
+            throw RuntimeError(message: "NPRPCStreamWriter: stream is closed")
+        }
 
-        // Suspend until the credit gate opens and the chunk is queued.
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            asyncSend(snapshot, seq) { cont.resume() }
+        // Suspend until the credit gate opens and the chunk is queued/sent.
+        let sent = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            asyncSend(snapshot, seq) { ok in cont.resume(returning: ok) }
+        }
+        if !sent {
+            markClosed()
+            throw RuntimeError(message: "NPRPCStreamWriter: write failed, the stream's session is no longer alive")
         }
     }
 
@@ -390,14 +423,14 @@ public struct NPRPCBidiStream<TWrite: Sendable, TRead: Sendable>: @unchecked Sen
 }
 
 private final class CallbackBox {
-    let fn: () -> Void
-    init(_ fn: @escaping () -> Void) { self.fn = fn }
+    let fn: (Bool) -> Void
+    init(_ fn: @escaping (Bool) -> Void) { self.fn = fn }
 }
 
 // C trampoline: releases the retained CallbackBox and invokes fn.
-private let nprpcCallbackTrampoline: @convention(c) (UnsafeMutableRawPointer?) -> Void = { ctx in
+private let nprpcCallbackTrampoline: @convention(c) (UnsafeMutableRawPointer?, Bool) -> Void = { ctx, success in
     guard let ctx else { return }
-    Unmanaged<CallbackBox>.fromOpaque(ctx).takeRetainedValue().fn()
+    Unmanaged<CallbackBox>.fromOpaque(ctx).takeRetainedValue().fn(success)
 }
 
 public func createStreamManagerWriter<T: Sendable>(
@@ -414,8 +447,8 @@ public func createStreamManagerWriter<T: Sendable>(
         initialPayloadCapacity: initialPayloadCapacity,
         serializer: serializer,
         sendChunk: { buffer, sequence in
-            guard let data = buffer.constData else { return }
-            nprpc_stream_manager_send_chunk(streamManager, streamId, data, UInt32(buffer.size), sequence)
+            guard let data = buffer.constData else { return true }
+            return nprpc_stream_manager_send_chunk(streamManager, streamId, data, UInt32(buffer.size), sequence)
         },
         sendComplete: { streamId, finalSequence in
             nprpc_stream_manager_send_complete(streamManager, streamId, finalSequence)
@@ -427,7 +460,7 @@ public func createStreamManagerWriter<T: Sendable>(
             nprpc_stream_manager_send_cancel(streamManager, streamId)
         },
         asyncSendChunk: { buffer, sequence, callback in
-            guard let data = buffer.constData else { callback(); return }
+            guard let data = buffer.constData else { callback(true); return }
             let boxPtr = Unmanaged.passRetained(CallbackBox(callback)).toOpaque()
             nprpc_stream_manager_write_chunk_async(
                 streamManager, streamId,

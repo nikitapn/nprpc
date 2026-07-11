@@ -23,17 +23,18 @@ final class StreamMarshallingStressTests: XCTestCase {
             serializer: serializer,
             sendChunk: { _, _ in
                 XCTFail("Unexpected synchronous stream send path")
+                return true
             },
             sendComplete: { _, _ in },
             sendError: { _, _ in },
             asyncSendChunk: { buffer, sequence, callback in
                 guard let data = buffer.constData else {
                     XCTFail("Async writer produced an empty buffer")
-                    callback()
+                    callback(true)
                     return
                 }
                 sink(sequence, Data(bytes: data, count: buffer.size))
-                callback()
+                callback(true)
             }
         )
     }
@@ -89,7 +90,7 @@ final class StreamMarshallingStressTests: XCTestCase {
         }
     }
 
-    func testAsyncWriterStressForObjectStreamPayload() async {
+    func testAsyncWriterStressForObjectStreamPayload() async throws {
         var encodedChunks: [(UInt64, Data)] = []
         var expectedValues: [AAA] = []
 
@@ -108,7 +109,7 @@ final class StreamMarshallingStressTests: XCTestCase {
         for index in 0..<256 {
             let value = makeAAA(seed: index, repeatCount: 6 + (index % 11))
             expectedValues.append(value)
-            await writer.write(value)
+            try await writer.write(value)
         }
 
         XCTAssertEqual(encodedChunks.count, expectedValues.count)
@@ -119,7 +120,7 @@ final class StreamMarshallingStressTests: XCTestCase {
         }
     }
 
-    func testAsyncWriterStressForObjectArrayStreamPayload() async {
+    func testAsyncWriterStressForObjectArrayStreamPayload() async throws {
         var encodedChunks: [(UInt64, Data)] = []
         var expectedValues: [[AAA]] = []
 
@@ -144,7 +145,7 @@ final class StreamMarshallingStressTests: XCTestCase {
                 makeAAA(seed: index * 2 + 1, repeatCount: 9 + (index % 7))
             ]
             expectedValues.append(value)
-            await writer.write(value)
+            try await writer.write(value)
         }
 
         XCTAssertEqual(encodedChunks.count, expectedValues.count)
@@ -161,7 +162,7 @@ final class StreamMarshallingStressTests: XCTestCase {
         }
     }
 
-    func testAsyncWriterStressForAliasOptionalStreamPayload() async {
+    func testAsyncWriterStressForAliasOptionalStreamPayload() async throws {
         var encodedChunks: [(UInt64, Data)] = []
         var expectedValues: [AliasOptionalStreamPayload] = []
 
@@ -180,7 +181,7 @@ final class StreamMarshallingStressTests: XCTestCase {
         for index in 0..<224 {
             let value = makeAliasOptionalPayload(seed: index, repeatCount: 4 + (index % 10))
             expectedValues.append(value)
-            await writer.write(value)
+            try await writer.write(value)
         }
 
         XCTAssertEqual(encodedChunks.count, expectedValues.count)

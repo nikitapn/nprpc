@@ -30,6 +30,8 @@ class StreamReaderBase;
 
 namespace impl {
 
+class Session;
+
 // Manages active streams per session
 class NPRPC_API StreamManager
 {
@@ -44,7 +46,9 @@ public:
   // Generate unique stream ID (client-side)
   static uint64_t generate_stream_id();
 
-  StreamManager(SessionContext& session, boost::asio::any_io_executor executor);
+  StreamManager(SessionContext& session,
+               std::shared_ptr<std::weak_ptr<Session>> self_cell,
+               boost::asio::any_io_executor executor);
   ~StreamManager();
 
   // Set the callback for sending on main stream (control messages)
@@ -81,16 +85,21 @@ public:
   void register_external_writer(uint64_t stream_id);
 
   // Try to send a chunk for an external writer.  If credits are available
-  // the chunk is sent synchronously and callback() is called before return.
-  // If no credits are available the data is queued and callback() is called
-  // (on the stream executor) when credits are granted via on_window_update().
+  // the chunk is sent synchronously and callback(success) is called before
+  // return.  If no credits are available the data is queued and
+  // callback(success) is called (on the stream executor) when credits are
+  // granted via on_window_update(). success is false when the underlying
+  // session has died (see send_chunk()) — the chunk was dropped, not sent.
   void write_chunk_or_queue(uint64_t stream_id,
                             std::span<const uint8_t> data,
                             uint64_t sequence,
-                            std::function<void()> callback);
+                            std::function<void(bool)> callback);
 
-  // Send methods
-  void send_chunk(uint64_t stream_id,
+  // Send methods. send_chunk() returns false (without throwing/aborting) if
+  // the owning session has already died — the caller (ultimately the Swift
+  // NPRPCStreamWriter) surfaces this as a thrown error rather than the
+  // write silently vanishing.
+  bool send_chunk(uint64_t stream_id,
                   std::span<const uint8_t> data,
                   uint64_t sequence);
   void send_complete(uint64_t stream_id, uint64_t final_sequence);
@@ -117,6 +126,10 @@ public:
 
 private:
   SessionContext& session_;
+  // Independent of session_'s own lifetime — kept alive by our own copy of
+  // the shared_ptr, always safe to lock() even after the owning Session (and
+  // session_) has been destroyed. See Session::bind_self() / self_cell_.
+  std::shared_ptr<std::weak_ptr<Session>> self_cell_;
   boost::asio::any_io_executor stream_executor_;
   SendCallback send_callback_;
   SendNativeStreamCallback send_native_stream_callback_;
@@ -137,7 +150,7 @@ private:
     struct PendingWrite {
       std::vector<uint8_t> data;
       uint64_t sequence;
-      std::function<void()> callback; // invoked when the chunk is sent
+      std::function<void(bool)> callback; // invoked when the chunk is sent (or dropped)
     };
     std::deque<PendingWrite> pending_writes;
   };
@@ -165,7 +178,8 @@ private:
   // Internal helper to determine if a stream is unreliable
   bool is_stream_unreliable(uint64_t stream_id) const;
   bool is_stream_started(uint64_t stream_id) const;
-  void dispatch_buffer(uint64_t stream_id, flat_buffer&& fb);
+  // Returns false without dispatching if the owning session has died.
+  bool dispatch_buffer(uint64_t stream_id, flat_buffer&& fb);
   void start_stream(uint64_t stream_id);
 };
 

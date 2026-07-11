@@ -422,7 +422,11 @@ void* nprpc_get_stream_manager(void* session_ctx);
 //   data: chunk data pointer
 //   data_size: size of data in bytes
 //   sequence: sequence number
-void nprpc_stream_manager_send_chunk(
+// Returns false if the chunk was dropped instead of sent — either
+// stream_manager was null, or the owning session had already died (see
+// Session::bind_self()). The caller should treat this as "the stream is no
+// longer usable", not retry the same write.
+bool nprpc_stream_manager_send_chunk(
     void* stream_manager,
     uint64_t stream_id,
     const void* data,
@@ -463,11 +467,13 @@ void nprpc_stream_manager_register_external_writer(
     void* stream_manager,
     uint64_t stream_id);
 
-// Async write helper: calls 'callback(context)' when the chunk has been
-// queued (either immediately if credits are available, or after the next
-// StreamWindowUpdate unlocks the sender).  The callback is always invoked
-// exactly once, on the stream executor thread.
-typedef void (*nprpc_write_callback)(void* context);
+// Async write helper: calls 'callback(context, success)' when the chunk has
+// been sent (either immediately if credits are available, or after the next
+// StreamWindowUpdate unlocks the sender). success is false if the chunk was
+// dropped because the owning session had already died — the stream is no
+// longer usable. The callback is always invoked exactly once, on the stream
+// executor thread.
+typedef void (*nprpc_write_callback)(void* context, bool success);
 
 void nprpc_stream_manager_write_chunk_async(
     void* stream_manager,

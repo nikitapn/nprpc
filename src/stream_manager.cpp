@@ -35,8 +35,10 @@ uint64_t StreamManager::generate_stream_id()
   return random_base ^ (++counter);
 }
 
-StreamManager::StreamManager(SessionContext& session, boost::asio::any_io_executor stream_executor)
-    : session_(session), stream_executor_(stream_executor)
+StreamManager::StreamManager(SessionContext& session,
+                             std::shared_ptr<std::weak_ptr<Session>> self_cell,
+                             boost::asio::any_io_executor stream_executor)
+    : session_(session), self_cell_(std::move(self_cell)), stream_executor_(stream_executor)
 {
 }
 
@@ -47,8 +49,20 @@ bool StreamManager::is_stream_started(uint64_t stream_id) const
   return started_streams_.contains(stream_id);
 }
 
-void StreamManager::dispatch_buffer(uint64_t stream_id, flat_buffer&& fb)
+bool StreamManager::dispatch_buffer(uint64_t stream_id, flat_buffer&& fb)
 {
+  // self_cell_ outlives the owning Session (it's a separate heap
+  // allocation, kept alive by our own copy), so this is always safe to
+  // check even if the session has since been destroyed. If it has, every
+  // send_callback_/send_native_stream_callback_ dispatch below would just
+  // silently no-op against a dead session (see Session::bind_self()) — bail
+  // out here instead so callers (ultimately NPRPCStreamWriter.write()) can
+  // report the failure instead of believing the write succeeded.
+  if (self_cell_ && self_cell_->expired()) {
+    NPRPC_LOG_WARN("StreamManager::dispatch_buffer: session is gone, dropping stream_id={}", stream_id);
+    return false;
+  }
+
   NPRPC_STREAM_MANAGER_LOG_TRACE("Dispatching buffer to stream: stream_id={} buffer_size={}", stream_id, fb.data().size());
   auto* header = reinterpret_cast<flat::Header*>(fb.data().data());
   if (header->msg_id == MessageId::StreamDataChunk) {
@@ -56,6 +70,7 @@ void StreamManager::dispatch_buffer(uint64_t stream_id, flat_buffer&& fb)
     if (unreliable && send_datagram_callback_) {
       if (!send_datagram_callback_(std::move(fb))) {
         NPRPC_LOG_WARN("StreamManager::send_chunk: datagram send failed (may be too large)");
+        return false;
       }
     } else if (send_native_stream_callback_) {
       send_native_stream_callback_(std::move(fb));
@@ -63,8 +78,9 @@ void StreamManager::dispatch_buffer(uint64_t stream_id, flat_buffer&& fb)
       send_callback_(std::move(fb));
     } else {
       NPRPC_LOG_ERROR("StreamManager::dispatch_buffer: no send callback set for stream chunk");
+      return false;
     }
-    return;
+    return true;
   }
 
   // StreamCompletion/StreamError must go on the same native transport stream
@@ -79,15 +95,18 @@ void StreamManager::dispatch_buffer(uint64_t stream_id, flat_buffer&& fb)
       send_callback_(std::move(fb));
     } else {
       NPRPC_LOG_ERROR("StreamManager::dispatch_buffer: no send callback set");
+      return false;
     }
-    return;
+    return true;
   }
 
   if (send_callback_) {
     send_callback_(std::move(fb));
   } else {
     NPRPC_LOG_ERROR("StreamManager::dispatch_buffer: no send callback set");
+    return false;
   }
+  return true;
 }
 
 void StreamManager::defer_stream_start(uint64_t stream_id)
@@ -455,7 +474,7 @@ void StreamManager::on_stream_cancel(uint64_t stream_id)
   }
 }
 
-void StreamManager::send_chunk(uint64_t stream_id,
+bool StreamManager::send_chunk(uint64_t stream_id,
                                std::span<const uint8_t> data,
                                uint64_t sequence)
 {
@@ -514,11 +533,11 @@ void StreamManager::send_chunk(uint64_t stream_id,
     std::lock_guard<std::mutex> lock(mutex_);
     if (!is_stream_started(stream_id)) {
       pending_messages_[stream_id].push_back(std::move(fb));
-      return;
+      return true; // not yet known to have failed - queued for start_stream()
     }
   }
 
-  dispatch_buffer(stream_id, std::move(fb));
+  return dispatch_buffer(stream_id, std::move(fb));
 }
 
 void StreamManager::send_complete(uint64_t stream_id, uint64_t final_sequence)
@@ -665,7 +684,7 @@ void StreamManager::on_window_update(uint64_t stream_id, uint32_t credits)
   NPRPC_STREAM_MANAGER_LOG_TRACE("on_window_update stream_id={} credits={}", stream_id, credits);
 
   boost::asio::steady_timer* timer = nullptr;
-  std::vector<std::pair<flat_buffer, std::function<void()>>> to_dispatch;
+  std::vector<std::pair<flat_buffer, std::function<void(bool)>>> to_dispatch;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -708,8 +727,8 @@ void StreamManager::on_window_update(uint64_t stream_id, uint32_t credits)
 
   // Send queued external chunks and invoke their callbacks (outside the lock).
   for (auto& [fb, cb] : to_dispatch) {
-    dispatch_buffer(stream_id, std::move(fb));
-    if (cb) cb();
+    const bool ok = dispatch_buffer(stream_id, std::move(fb));
+    if (cb) cb(ok);
   }
 
   // Wake the co_spawn coroutine if it was parked waiting for credits.
@@ -734,7 +753,7 @@ void StreamManager::register_external_writer(uint64_t stream_id)
 void StreamManager::write_chunk_or_queue(uint64_t stream_id,
                                          std::span<const uint8_t> data,
                                          uint64_t sequence,
-                                         std::function<void()> callback)
+                                         std::function<void(bool)> callback)
 {
   NPRPC_STREAM_MANAGER_LOG_TRACE("write_chunk_or_queue called: stream_id={}, data.size()={}, sequence={}",
                   stream_id, data.size(), sequence);
@@ -763,8 +782,8 @@ void StreamManager::write_chunk_or_queue(uint64_t stream_id,
   }
 
   if (send_now) {
-    send_chunk(stream_id, data, sequence);
-    if (callback) callback();
+    const bool ok = send_chunk(stream_id, data, sequence);
+    if (callback) callback(ok);
   }
 }
 
