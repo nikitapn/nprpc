@@ -33,7 +33,7 @@ namespace impl {
 class Session;
 
 // Manages active streams per session
-class NPRPC_API StreamManager
+class NPRPC_API StreamManager : public std::enable_shared_from_this<StreamManager>
 {
 public:
   // Callback type for sending on main stream (control messages, always reliable)
@@ -118,6 +118,20 @@ public:
   // Cleanup
   void cancel_all();
 
+  // External (non-C++-owner) shared ownership, for holders reachable only
+  // through the opaque `void*` handle crossing the C bridge (the Swift
+  // NPRPCStreamWriter/NPRPCStreamReader). Session owns this object via its
+  // own shared_ptr (stream_manager_owner_) for as long as the session is
+  // alive, but a Swift writer/reader can legitimately outlive the session
+  // (e.g. it just hasn't noticed the disconnect yet) — external_retain()
+  // takes this object's own share to keep it alive until the matching
+  // external_release(), regardless of whether Session has already dropped
+  // its own share. Without this, StreamManager either had to leak forever
+  // (the previous behavior) or risk being freed out from under a Swift-side
+  // raw pointer that has no way to know it's now dangling.
+  void external_retain();
+  void external_release();
+
   template <typename Fn>
   void post(Fn&& fn)
   {
@@ -134,6 +148,8 @@ private:
   SendCallback send_callback_;
   SendNativeStreamCallback send_native_stream_callback_;
   SendDatagramCallback send_datagram_callback_;
+  // One entry per outstanding external_retain(). Guarded by mutex_.
+  std::vector<std::shared_ptr<StreamManager>> extra_owners_;
 
   // Active outgoing streams (server-side)
   static constexpr int32_t kInitialWindowSize = 8; // pre-grant before first update

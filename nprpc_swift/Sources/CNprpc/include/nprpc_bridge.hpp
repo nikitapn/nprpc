@@ -415,6 +415,19 @@ void* nprpc_session_get_stream_manager(void* session_ptr);
 // The stream_manager pointer remains valid for the lifetime of the session
 void* nprpc_get_stream_manager(void* session_ctx);
 
+// Take/release an external (Swift-side) share of ownership of a
+// StreamManager, independent of whether its owning Session is still alive.
+// Call nprpc_stream_manager_retain() once when a Swift object (e.g.
+// NPRPCStreamWriter/NPRPCStreamReader) first captures a stream_manager
+// pointer for later use, and nprpc_stream_manager_release() exactly once
+// when that object is deallocated. Unbalanced calls are logged and ignored
+// rather than crashing. Without this, the C++ side either has to leak the
+// StreamManager forever (its Session may already be gone while a Swift
+// writer/reader is still legitimately using it) or risk freeing it while a
+// raw stream_manager pointer is still in use on the Swift side.
+void nprpc_stream_manager_retain(void* stream_manager);
+void nprpc_stream_manager_release(void* stream_manager);
+
 // Send a stream chunk via stream_manager (server -> client)
 // Parameters:
 //   stream_manager: StreamManager* from nprpc_get_stream_manager

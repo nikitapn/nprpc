@@ -36,6 +36,16 @@ protected:
   std::shared_ptr<std::weak_ptr<Session>> self_cell_ =
       std::make_shared<std::weak_ptr<Session>>();
 
+  // Owns the StreamManager ctx_.stream_manager points at. External holders
+  // of that raw pointer (the Swift NPRPCStreamWriter/NPRPCStreamReader, via
+  // the C bridge) take their own share via StreamManager::external_retain()/
+  // external_release() — see nprpc issue about the StreamManager leak this
+  // replaces. Session dropping its own share here does NOT free the object
+  // out from under a still-alive Swift-side writer/reader; it just stops
+  // being one of the owners. self_cell_ above is what tells StreamManager
+  // the *session* has died, independent of who still owns the object itself.
+  std::shared_ptr<StreamManager> stream_manager_owner_;
+
   boost::asio::system_timer timeout_timer_;
   boost::asio::system_timer inactive_timer_;
   std::chrono::system_clock::duration timeout_ =

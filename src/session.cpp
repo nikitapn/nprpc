@@ -58,8 +58,15 @@ Session::Session(boost::asio::any_io_executor executor)
     : timeout_timer_{executor}
     , inactive_timer_{executor}
 {
-  ctx_.stream_manager = new impl::StreamManager(
+  // Owned via shared_ptr (not a bare `new`) so external holders reachable
+  // only through ctx_.stream_manager's raw pointer — the Swift
+  // NPRPCStreamWriter/NPRPCStreamReader, via external_retain()/
+  // external_release() across the C bridge — can take their own share and
+  // keep the object alive past *this Session's own lifetime, instead of it
+  // either leaking forever or being freed out from under them.
+  stream_manager_owner_ = std::make_shared<impl::StreamManager>(
       ctx_, self_cell_, static_cast<impl::RpcImpl*>(g_rpc)->stream_executor());
+  ctx_.stream_manager = stream_manager_owner_.get();
   // Capture self_cell_ (a shared_ptr<weak_ptr<Session>>), not `this`. The
   // cell is a separate heap allocation kept alive by the callback's own
   // copy, so it's always safe to read even long after *this has been

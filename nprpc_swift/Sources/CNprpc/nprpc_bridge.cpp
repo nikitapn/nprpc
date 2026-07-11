@@ -1122,6 +1122,18 @@ void* nprpc_get_stream_manager(void* session_ctx) {
     return ctx->stream_manager;
 }
 
+void nprpc_stream_manager_retain(void* stream_manager) {
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) return;
+    mgr->external_retain();
+}
+
+void nprpc_stream_manager_release(void* stream_manager) {
+    auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager);
+    if (!mgr) return;
+    mgr->external_release();
+}
+
 bool nprpc_stream_manager_send_chunk(
     void* stream_manager,
     uint64_t stream_id,

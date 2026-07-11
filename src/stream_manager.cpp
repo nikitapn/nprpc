@@ -44,6 +44,28 @@ StreamManager::StreamManager(SessionContext& session,
 
 StreamManager::~StreamManager() { cancel_all(); }
 
+void StreamManager::external_retain()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  extra_owners_.push_back(shared_from_this());
+}
+
+void StreamManager::external_release()
+{
+  // Drop the shared_ptr (and, if it's the last owner, run ~StreamManager())
+  // outside the lock — cancel_all() takes mutex_ itself.
+  std::shared_ptr<StreamManager> dropped;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (extra_owners_.empty()) {
+      NPRPC_LOG_WARN("StreamManager::external_release: unbalanced release (no matching retain)");
+      return;
+    }
+    dropped = std::move(extra_owners_.back());
+    extra_owners_.pop_back();
+  }
+}
+
 bool StreamManager::is_stream_started(uint64_t stream_id) const
 {
   return started_streams_.contains(stream_id);
@@ -794,7 +816,15 @@ void StreamManager::cancel_all()
     std::lock_guard<std::mutex> lock(mutex_);
 
     for (auto& [id, info] : writers_) {
-      info.writer->cancel();
+      // External (Swift/C-bridge) writers registered via
+      // register_external_writer() have no StreamWriterBase — they never
+      // set info.writer, it stays null by design (see the StreamInfo
+      // comment above). This path was unreachable before StreamManager
+      // gained real ownership/destruction (it used to leak forever), so
+      // this null check was never exercised until now.
+      if (info.writer) {
+        info.writer->cancel();
+      }
     }
     writers_.clear();
     active_tasks_.clear();

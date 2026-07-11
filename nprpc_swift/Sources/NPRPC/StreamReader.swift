@@ -76,6 +76,10 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     // update back to the producer.  Set by createObjectStreamReader /
     // createStreamManagerReader via the windowUpdateFn parameter.
     internal var windowUpdateFn: (() -> Void)?
+    // Set via retainStreamManager() by createStreamManagerReader — nil for
+    // createObjectStreamReader, which doesn't have a stream_manager pointer
+    // to retain (window updates are already skipped on that path).
+    private var streamManagerHandle: UnsafeMutableRawPointer?
 
     public init(streamId: UInt64, buffer: FlatBuffer, deserializer: @escaping (UnsafeRawPointer, Int) -> T) {
         self.streamId = streamId
@@ -144,8 +148,19 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
         Unmanaged.passRetained(StreamReaderBridge(reader: self) as StreamReaderBridgeBase).toOpaque()
     }
 
+    // Takes this reader's own share of the StreamManager's lifetime — see
+    // nprpc_stream_manager_retain/release. Must be called at most once.
+    internal func retainStreamManager(_ handle: UnsafeMutableRawPointer) {
+        precondition(streamManagerHandle == nil, "retainStreamManager called twice")
+        nprpc_stream_manager_retain(handle)
+        streamManagerHandle = handle
+    }
+
     deinit {
         cancel()
+        if let streamManagerHandle {
+            nprpc_stream_manager_release(streamManagerHandle)
+        }
     }
 }
 
@@ -240,6 +255,7 @@ public func createStreamManagerReader<T: Sendable>(
     deserializer: @escaping (UnsafeRawPointer, Int) -> T
 ) -> NPRPCStreamReader<T> {
     let reader = NPRPCStreamReader(streamId: streamId, buffer: buffer, deserializer: deserializer)
+    reader.retainStreamManager(streamManager)
     let context = reader.makeBridgeContext()
     nprpc_stream_manager_register_reader(
         streamManager,
@@ -279,6 +295,8 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
     private var sequence: UInt64 = 0
     private var closed = false
     private let lock = NSLock()
+    // Set via retainStreamManager() by createStreamManagerWriter.
+    private var streamManagerHandle: UnsafeMutableRawPointer?
 
     internal init(
         streamId: UInt64,
@@ -410,6 +428,20 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
         sendCancel?(streamId)
         closed = true
     }
+
+    // Takes this writer's own share of the StreamManager's lifetime — see
+    // nprpc_stream_manager_retain/release. Must be called at most once.
+    internal func retainStreamManager(_ handle: UnsafeMutableRawPointer) {
+        precondition(streamManagerHandle == nil, "retainStreamManager called twice")
+        nprpc_stream_manager_retain(handle)
+        streamManagerHandle = handle
+    }
+
+    deinit {
+        if let streamManagerHandle {
+            nprpc_stream_manager_release(streamManagerHandle)
+        }
+    }
 }
 
 public struct NPRPCBidiStream<TWrite: Sendable, TRead: Sendable>: @unchecked Sendable {
@@ -442,7 +474,7 @@ public func createStreamManagerWriter<T: Sendable>(
     // Register the stream with the credit-tracking system before the first write.
     nprpc_stream_manager_register_external_writer(streamManager, streamId)
 
-    return NPRPCStreamWriter(
+    let writer = NPRPCStreamWriter(
         streamId: streamId,
         initialPayloadCapacity: initialPayloadCapacity,
         serializer: serializer,
@@ -468,6 +500,8 @@ public func createStreamManagerWriter<T: Sendable>(
                 boxPtr, nprpcCallbackTrampoline)
         }
     )
+    writer.retainStreamManager(streamManager)
+    return writer
 }
 
 public func createObjectStreamWriter<T: Sendable>(
