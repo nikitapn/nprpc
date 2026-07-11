@@ -1073,20 +1073,34 @@ void* nprpc_object_get_session(void* object_ptr) {
         return nullptr;
     }
 
-    if (obj->get_endpoint().empty()) {
-        if (!obj->select_endpoint()) {
-            NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: failed to select endpoint");
+    try {
+        if (obj->get_endpoint().empty()) {
+            if (!obj->select_endpoint()) {
+                NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: failed to select endpoint");
+                return nullptr;
+            }
+        }
+
+        auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
+        if (!session) {
+            NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: session lookup failed");
             return nullptr;
         }
-    }
 
-    auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
-    if (!session) {
-        NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: session lookup failed");
+        return session.get();
+    } catch (const nprpc::ExceptionCommFailure& e) {
+        NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: communication failure: {}", e.what);
+        return nullptr;
+    } catch (const nprpc::Exception& e) {
+        NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: nprpc::Exception occurred: {}", e.what());
+        return nullptr;
+    } catch (const std::exception& e) {
+        NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: exception occurred: {}", e.what());
+        return nullptr;
+    } catch (...) {
+        NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: exception occurred");
         return nullptr;
     }
-
-    return session.get();
 }
 
 void* nprpc_session_get_stream_manager(void* session_ptr) {

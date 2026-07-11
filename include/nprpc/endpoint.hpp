@@ -94,16 +94,14 @@ public:
 
   EndPoint() = default;
 
-  EndPoint(EndPointType type,
-           std::string_view hostname,
-           std::uint16_t port) noexcept
+  EndPoint(EndPointType type, std::string_view hostname, std::uint16_t port) noexcept
       : type_{type}
       , hostname_{hostname}
       , port_{port}
   {
   }
 
-  EndPoint(std::string_view url, uint32_t flags = 0)
+  EndPoint(std::string_view url, std::optional<EndPointType> type = std::nullopt)
   {
     if (url.empty()) {
       throw std::invalid_argument("URL cannot be empty");
@@ -141,19 +139,10 @@ public:
       type_ = EndPointType::Tcp;
       split(url, tcp_prefix, true);
     } else if (url.find(web_prefix) == 0) {
-      if (flags & static_cast<uint16_t>(detail::ObjectFlag::HttpUnsecured)) {
-        type_ = EndPointType::Http;
-      } else if (flags & static_cast<uint16_t>(detail::ObjectFlag::HttpSecured)) {
-        type_ = EndPointType::SecuredHttp;
-      } else if (flags & static_cast<uint16_t>(detail::ObjectFlag::WebSocketUnsecured)) {
-        type_ = EndPointType::WebSocket;
-      } else if (flags & static_cast<uint16_t>(detail::ObjectFlag::WebSocketSecured)) {
-        type_ = EndPointType::SecuredWebSocket;
-      } else if (flags & static_cast<uint16_t>(detail::ObjectFlag::WebTransport)) {
-        type_ = EndPointType::WebTransport;
+      if (type.has_value()) {
+        type_ = type.value();
       } else {
-        throw std::invalid_argument(
-            "Invalid flags for web transport endpoint");
+        throw std::invalid_argument( "Missing type for web transport endpoint");
       }
       split(url, web_prefix, true);
     } else if (url.find(mem_prefix) == 0) {

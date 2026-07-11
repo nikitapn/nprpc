@@ -91,6 +91,47 @@ TEST_F(NprpcTest, TestBasic)
   exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
+// Preferred transport is a soft hint for select_endpoint().
+TEST_F(NprpcTest, PreferredTransport)
+{
+#include "common/tests/basic.inl"
+  TestBasicImpl servant;
+  try {
+    // Advertise SHM + TCP so default preference would pick SHM (same machine).
+    auto flags = nprpc::ObjectActivationFlags::tcp |
+                 nprpc::ObjectActivationFlags::shm;
+    auto obj = bind_and_resolve<nprpc::test::TestBasic>(servant, flags);
+
+    // Default: same-machine → SharedMemory.
+    EXPECT_TRUE(obj->select_endpoint());
+    EXPECT_EQ(obj->get_endpoint().type(), nprpc::EndPointType::SharedMemory);
+
+    // Prefer TCP when available.
+    obj->set_preferred_transport(nprpc::EndPointType::Tcp);
+    EXPECT_TRUE(obj->select_endpoint());
+    EXPECT_EQ(obj->get_endpoint().type(), nprpc::EndPointType::Tcp);
+    EXPECT_EQ(obj->preferred_transport(), nprpc::EndPointType::Tcp);
+
+    // Prefer QUIC when not advertised → fall back to default (SHM).
+    obj->set_preferred_transport(nprpc::EndPointType::Quic);
+    EXPECT_TRUE(obj->select_endpoint());
+    EXPECT_EQ(obj->get_endpoint().type(), nprpc::EndPointType::SharedMemory);
+
+    // Clear preference → default again.
+    obj->set_preferred_transport(std::nullopt);
+    EXPECT_TRUE(obj->select_endpoint());
+    EXPECT_EQ(obj->get_endpoint().type(), nprpc::EndPointType::SharedMemory);
+    EXPECT_FALSE(obj->preferred_transport().has_value());
+
+    // Preferred TCP must still work for an actual call.
+    obj->set_preferred_transport(nprpc::EndPointType::Tcp);
+    EXPECT_TRUE(obj->select_endpoint());
+    EXPECT_EQ(obj->ReturnU32(), 42u);
+  } catch (nprpc::Exception& ex) {
+    FAIL() << "Exception in PreferredTransport: " << ex.what();
+  }
+}
+
 // Basic exception handling
 TEST_F(NprpcTest, TestException)
 {

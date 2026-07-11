@@ -166,7 +166,7 @@ Object::select_endpoint(std::optional<EndPoint> remote_endpoint) noexcept
 {
   try {
     std::string& urls = data_.urls;
-    size_t start = [&urls, this, &remote_endpoint] {
+    auto [start, endpoint_type_opt] = [&urls, this, &remote_endpoint]() -> std::pair<size_t, std::optional<EndPointType>> {
       const auto same_machine = is_same_origin(impl::g_cfg.uuid);
       auto try_replace_ip = [&](size_t pos, std::string_view prefix) {
         if (same_machine || !remote_endpoint)
@@ -188,38 +188,73 @@ Object::select_endpoint(std::optional<EndPoint> remote_endpoint) noexcept
         }
       };
 
-      // Ordef of preference for endpoint selection:
+      // Try a single transport; returns nullopt if not present / not eligible.
+      auto try_transport = [&](EndPointType type)
+          -> std::optional<std::pair<size_t, std::optional<EndPointType>>> {
+        size_t pos = std::string::npos;
+        switch (type) {
+        case EndPointType::SharedMemory:
+          if (same_machine &&
+              (pos = urls.find(mem_prefix)) != std::string::npos)
+            return std::make_pair(pos, std::nullopt);
+          break;
+        case EndPointType::Quic:
+          if ((pos = urls.find(quic_prefix)) != std::string::npos)
+            return std::make_pair(pos, std::nullopt);
+          break;
+        case EndPointType::SecuredWebSocket:
+          if ((pos = urls.find(web_prefix)) != std::string::npos &&
+              (flags() & static_cast<uint16_t>(
+                             detail::ObjectFlag::WebSocketSecured)))
+            return std::make_pair(pos, EndPointType::SecuredWebSocket);
+          break;
+        case EndPointType::WebSocket:
+          if ((pos = urls.find(web_prefix)) != std::string::npos &&
+              (flags() & static_cast<uint16_t>(
+                             detail::ObjectFlag::WebSocketUnsecured))) {
+            try_replace_ip(pos, web_prefix);
+            return std::make_pair(pos, EndPointType::WebSocket);
+          }
+          break;
+        case EndPointType::Tcp:
+        case EndPointType::TcpPrivate:
+          if ((pos = urls.find(tcp_prefix)) != std::string::npos) {
+            try_replace_ip(pos, tcp_prefix);
+            return std::make_pair(pos, std::nullopt);
+          }
+          break;
+        case EndPointType::Http:
+        case EndPointType::SecuredHttp:
+        case EndPointType::WebTransport:
+          // These share the web:// URL form but are not selected as client
+          // RPC transports today; treat as unsupported hints.
+          break;
+        }
+        return std::nullopt;
+      };
+
+      // Soft preference: use preferred transport if it is available.
+      if (preferred_transport_) {
+        if (auto hit = try_transport(*preferred_transport_))
+          return *hit;
+      }
+
+      // Default order of preference for endpoint selection:
       // 1. Shared memory (if same machine)
       // 2. QUIC
       // 3. WebSocket (secured)
       // 4. WebSocket (unsecured)
       // 5. TCP
-
-      // SHM
-      size_t pos = std::string::npos;
-      if (same_machine && ((pos = urls.find(mem_prefix)) != std::string::npos))
-        return pos;
-
-      // QUIC
-      if ((pos = urls.find(quic_prefix)) != std::string::npos)
-        return pos;
-
-      // WS/WSS
-      if ((pos = urls.find(web_prefix)) != std::string::npos) {
-        if (flags() & static_cast<uint16_t>(detail::ObjectFlag::WebSocketSecured))
-          return pos;
-
-        if (flags() & static_cast<uint16_t>(detail::ObjectFlag::WebSocketUnsecured)) {
-          try_replace_ip(pos, web_prefix);
-          return pos;
-        }
-        pos = std::string::npos;
-      }
-
-      // TCP
-      if ((pos = urls.find(tcp_prefix)) != std::string::npos) {
-        try_replace_ip(pos, tcp_prefix);
-        return pos;
+      static constexpr EndPointType kDefaultOrder[] = {
+          EndPointType::SharedMemory,
+          EndPointType::Quic,
+          EndPointType::SecuredWebSocket,
+          EndPointType::WebSocket,
+          EndPointType::Tcp,
+      };
+      for (auto type : kDefaultOrder) {
+        if (auto hit = try_transport(type))
+          return *hit;
       }
 
       throw std::runtime_error("No valid endpoint found for object " +
@@ -228,7 +263,7 @@ Object::select_endpoint(std::optional<EndPoint> remote_endpoint) noexcept
 
     auto end = urls.find(';', start);
     auto size = (end != std::string::npos) ? end - start : std::string::npos;
-    endpoint_ = EndPoint(urls.substr(start, size), flags());
+    endpoint_ = EndPoint(urls.substr(start, size), endpoint_type_opt);
     return true;
   } catch (const std::exception& ex) {
     NPRPC_LOG_ERROR("Failed to select endpoint: {}", ex.what());

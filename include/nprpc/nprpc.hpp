@@ -237,6 +237,10 @@ class Object : public ObjectId
   std::atomic_uint32_t local_ref_cnt_ = 0;
   uint32_t timeout_ms_ = 1000;
   EndPoint endpoint_;
+  // Soft preference applied by select_endpoint() when the transport is
+  // present in urls() (and eligible, e.g. SHM only on the same machine).
+  // nullopt = use the default preference order.
+  std::optional<EndPointType> preferred_transport_;
 
 public:
   std::string_view get_class() const noexcept { return class_id(); };
@@ -254,6 +258,21 @@ public:
   // and will indicate that something is wrong
   NPRPC_API bool select_endpoint(
       std::optional<EndPoint> remote_endpoint = std::nullopt) noexcept;
+
+  /// Prefer a specific transport when select_endpoint() runs.
+  /// Non-binding: if the transport is not advertised in urls() (or is
+  /// ineligible, e.g. SharedMemory to a remote machine), the default
+  /// preference order is used instead. Pass std::nullopt to clear.
+  void set_preferred_transport(
+      std::optional<EndPointType> type) noexcept
+  {
+    preferred_transport_ = type;
+  }
+
+  std::optional<EndPointType> preferred_transport() const noexcept
+  {
+    return preferred_transport_;
+  }
 
   uint32_t set_timeout(uint32_t timeout_ms) noexcept
   {
@@ -281,7 +300,9 @@ public:
       local_ref_cnt_ = other.local_ref_cnt_.load();
       timeout_ms_ = other.timeout_ms_;
       endpoint_ = std::move(other.endpoint_);
+      preferred_transport_ = other.preferred_transport_;
       other.timeout_ms_ = other.timeout_ms_;
+      other.preferred_transport_ = std::nullopt;
     }
     return *this;
   }

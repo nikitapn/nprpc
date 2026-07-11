@@ -66,16 +66,19 @@ class NprpcConcurrentFixture : public ::benchmark::Fixture
 
   void select_transport(nprpc::ObjectPtr<nprpc::benchmark::Benchmark>& proxy)
   {
-    std::string prefix;
+    nprpc::EndPointType type;
     switch (transport_) {
-    case TransportType::SharedMemory: prefix = "mem://"; break;
-    case TransportType::TCP:          prefix = "tcp://"; break;
-    case TransportType::WebSocket:    prefix = "ws://";  break;
+    case TransportType::SharedMemory:
+      type = nprpc::EndPointType::SharedMemory;
+      break;
+    case TransportType::TCP:
+      type = nprpc::EndPointType::Tcp;
+      break;
+    case TransportType::WebSocket:
+      type = nprpc::EndPointType::WebSocket;
+      break;
     }
-    auto& urls = proxy->get_data().urls;
-    auto a = urls.find(prefix);
-    auto b = urls.find(';', a);
-    urls = urls.substr(a, b - a);
+    proxy->set_preferred_transport(type);
     proxy->select_endpoint();
   }
 
@@ -119,6 +122,7 @@ public:
           for (int i = 0; i < kCallsPerWorker; ++i) {
             auto t0 = std::chrono::steady_clock::now();
             try {
+              std::cout << "Thread " << t << " calling Ping() iteration " << i << std::endl;
               proxy->Ping();
             } catch (...) {
               ++failures;

@@ -77,7 +77,7 @@ TEST(SharedMemoryEndpoint, OtherTypesReturnEmpty)
   EndPoint tcp_ep("tcp://localhost:8080");
   EXPECT_TRUE(tcp_ep.memory_channel_id().empty());
 
-  EndPoint ws_ep("web://example.com:9090", static_cast<uint32_t>(nprpc::detail::ObjectFlag::WebSocketUnsecured));
+  EndPoint ws_ep("web://example.com:9090", EndPointType::WebSocket);
   EXPECT_TRUE(ws_ep.memory_channel_id().empty());
 }
 

@@ -20,20 +20,20 @@ protected:
   TransportType transport_;
   nprpc::ObjectPtr<nprpc::benchmark::Benchmark> proxy_;
 
-  std::string GetEndpoint(TransportType type)
+  static nprpc::EndPointType ToEndPointType(TransportType type)
   {
     switch (type) {
     case TransportType::SharedMemory:
-      return "mem://";
+      return nprpc::EndPointType::SharedMemory;
     case TransportType::TCP:
-      return "tcp://";
+      return nprpc::EndPointType::Tcp;
     case TransportType::WebSocket:
-      return "ws://";
+      return nprpc::EndPointType::WebSocket;
     case TransportType::QUIC:
-      return "quic://";
+      return nprpc::EndPointType::Quic;
     default:
       assert(false);
-      return "";
+      return nprpc::EndPointType::Tcp;
     }
   }
 
@@ -61,14 +61,9 @@ public:
     transport_ = static_cast<TransportType>(state.range(0));
     proxy_ = get_object<nprpc::benchmark::Benchmark>("nprpc_benchmark");
 
-    auto endpoint = GetEndpoint(transport_);
-
-    auto& urls = proxy_->get_data().urls;
-
-    auto a = urls.find(endpoint);
-    auto b = urls.find(";", a);
-    urls = urls.substr(a, b - a);
-
+    // Soft preference: select_endpoint() uses this transport when present
+    // in the object's URL list, otherwise falls back to the default order.
+    proxy_->set_preferred_transport(ToEndPointType(transport_));
     proxy_->select_endpoint();
   }
 

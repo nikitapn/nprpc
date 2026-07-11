@@ -582,8 +582,7 @@ RpcImpl::get_session(const EndPoint& endpoint)
 #endif
    default:
      throw nprpc::ExceptionCommFailure(
-         "nprpc::impl::RpcImpl::get_session: Unknown endpoint "
-         "type: " +
+         "nprpc::impl::RpcImpl::get_session: Unknown endpoint " "type: " +
          std::to_string(static_cast<int>(endpoint.type())));
   }
 
