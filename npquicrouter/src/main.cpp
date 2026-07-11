@@ -103,7 +103,7 @@ struct glz::meta<Config> {
         "default_udp_backend",     &T::default_udp_backend,
         "udp_session_timeout_sec", &T::udp_session_timeout_sec,
         "routes",                  &T::routes,
-        "shm_egress_channel",       &T::shm_egress_channel,
+        "shm_egress_channel",      &T::shm_egress_channel,
         "num_workers",             &T::num_workers);
 };
 

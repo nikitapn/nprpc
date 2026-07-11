@@ -113,6 +113,7 @@ public:
         // std::cout << std::endl;
 
         channel_->commit_write(reservation, tx_buffer.size());
+        tx_buffer.release_write_view();
       } else {
         // Should not happen for now...
         // NPRPC_LOG_ERROR("SharedMemoryServerSession: Unexpected non-zero-copy response path");

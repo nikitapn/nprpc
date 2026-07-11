@@ -660,82 +660,95 @@ NPRPC_API bool RpcImpl::prepare_zero_copy_buffer(SessionContext& ctx,
   if (!is_shared_memory(ctx.remote_endpoint))
     return false;
 
-  // Zero-copy reservation is disabled for both server-side and client-side
-  // SHM paths.
-  //
-  // The ring buffer requires try_reserve_write to claim the exact final size
-  // upfront.  Dispatch stubs call prepare_zero_copy_buffer with a minimum
-  // hint (e.g. 152 bytes) before the response is serialised; if the actual
-  // response is larger (e.g. 1 MB), the flat_buffer overflows the reserved
-  // slot and reverts to heap mode.  The original slot's actual_size field
-  // remains zero forever, causing the consumer to spin-wait indefinitely on
-  // what is now an abandoned slot.
-  //
-  // All SHM writes therefore go through the copy path: build into a heap
-  // buffer first, then reserve + copy + commit with the exact final size.
-  // This is handled by on_message_received (server) and the work_impl in
-  // send_receive (client).
-  (void)buffer; (void)max_size;
-  return false;
+  // The ring requires the exact final wire size to be claimed up-front.
+  // Callers (npidl-generated stubs) must measure the payload first via
+  // nprpc::flat::grow_size walks, then pass that size here.
+  SharedMemoryChannel* channel = ctx.shm_channel;
+  if (!channel) {
+    // Client-side: session context should carry the channel (set by
+    // SharedMemoryConnection).  Fall back to looking up the connection.
+    try {
+      auto session = get_session(ctx.remote_endpoint);
+      auto* shm_conn = dynamic_cast<SharedMemoryConnection*>(session.get());
+      if (!shm_conn)
+        return false;
+      channel = shm_conn->channel();
+    } catch (const std::exception& e) {
+      NPRPC_LOG_ERROR("prepare_zero_copy_buffer: {}", e.what());
+      return false;
+    }
+  }
+
+  if (!channel)
+    return false;
+
+  auto reservation = channel->reserve_write(max_size);
+  if (!reservation)
+    return false;
+
+  buffer.set_view(reservation.data, 0, reservation.max_size,
+                  &ctx.remote_endpoint, reservation.slot_idx, true,
+                  channel);
+  return true;
+}
+
+NPRPC_API void abort_zero_copy_reservation(void* channel, uint64_t slot_idx)
+{
+  if (!channel)
+    return;
+  auto* ch = static_cast<SharedMemoryChannel*>(channel);
+  LockFreeRingBuffer::WriteReservation rsv;
+  rsv.data = nullptr;
+  rsv.max_size = 0;
+  rsv.slot_idx = slot_idx;
+  rsv.valid = true;
+  ch->abort_write(rsv);
 }
 
 // Helper function called from flat_buffer::grow() when view mode buffer needs
-// to expand
+// to expand.  Preferred path is measure-then-reserve so this is rarely hit;
+// if it does fire, reallocate_in_view_mode has already aborted the old slot.
 NPRPC_API bool prepare_zero_copy_buffer_grow(const EndPoint& endpoint,
                                              flat_buffer& buffer,
                                              size_t new_size,
                                              const void* existing_data,
                                              size_t existing_size)
 {
-  return false;
-  // if (!RpcImpl::is_shared_memory(endpoint))
-  //   return false;
+  if (!RpcImpl::is_shared_memory(endpoint) || !g_rpc)
+    return false;
 
-  // // Check if we're on a server-side shared memory session
-  // auto& ctx = get_context();
-  // if (ctx.shm_channel) {
-  //   // Server-side: use the existing channel
-  //   auto reservation = ctx.shm_channel->reserve_write(new_size);
-  //   if (!reservation)
-  //     return false;
+  // Prefer a long-lived SessionContext so the EndPoint* stored in the
+  // flat_buffer view remains valid for the lifetime of the reservation.
+  // get_context() is only valid during servant dispatch — do not call it
+  // unconditionally (client-side grow has no thread-local context).
+  SessionContext* ctx = nullptr;
+  try {
+    auto& thr_ctx = get_context();
+    if (thr_ctx.shm_channel && thr_ctx.remote_endpoint == endpoint)
+      ctx = &thr_ctx;
+  } catch (const nprpc::Exception&) {
+    // No thread-local session context (e.g. client proxy path).
+  }
+  if (!ctx) {
+    try {
+      auto session = g_rpc->get_session(endpoint);
+      if (session)
+        ctx = &session->ctx();
+    } catch (...) {
+      return false;
+    }
+  }
+  if (!ctx)
+    return false;
 
-  //   buffer.set_view(reservation.data, 0, reservation.max_size,
-  //                   &endpoint, reservation.write_idx, true);
+  if (!g_rpc->prepare_zero_copy_buffer(*ctx, buffer, new_size))
+    return false;
 
-  //   // Copy existing data to the new buffer
-  //   if (existing_size > 0 && existing_data) {
-  //     std::memcpy(buffer.data_ptr(), existing_data, existing_size);
-  //     buffer.commit(existing_size);
-  //   }
-
-  //   return true;
-  // }
-
-  // // Client-side: get the existing connection
-  // try {
-  //   auto session = g_rpc->get_session(endpoint);
-  //   auto* shm_conn = static_cast<SharedMemoryConnection*>(session.get());
-
-  //   if (dynamic_cast<SharedMemoryConnection*>(session.get()) == nullptr) {
-  //     std::cerr << "prepare_zero_copy_buffer_grow: Session is not a
-  //     SharedMemoryConnection" << std::endl; std::abort();
-  //   }
-
-  //   // Request a new larger buffer from the shared memory ring
-  //   // The old reservation will be abandoned (not committed)
-  //   if (!shm_conn->prepare_write_buffer(buffer, new_size, &endpoint))
-  //     return false;
-
-  //   // Copy existing data to the new buffer
-  //   if (existing_size > 0 && existing_data) {
-  //     std::memcpy(buffer.data_ptr(), existing_data, existing_size);
-  //     buffer.commit(existing_size);
-  //   }
-
-  //   return true;
-  // } catch (const std::exception&) {
-  //   return false;
-  // }
+  if (existing_size > 0 && existing_data) {
+    std::memcpy(buffer.data_ptr(), existing_data, existing_size);
+    buffer.commit(existing_size);
+  }
+  return true;
 }
 
 NPRPC_API std::optional<ObjectGuard> RpcImpl::get_object(poa_idx_t poa_idx,

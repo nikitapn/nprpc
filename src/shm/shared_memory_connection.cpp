@@ -33,7 +33,6 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
     flat_buffer& buf;
     SharedMemoryConnection& this_;
     uint32_t timeout_ms;
-    LockFreeRingBuffer::WriteReservation reservation; // For zero-copy write
 
     std::atomic_bool done{false};
     boost::system::error_code result;
@@ -52,14 +51,21 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
         return;
       }
 
-      // Check if this is a zero-copy write (buffer in view mode with
-      // active reservation)
-      if (buf.is_view_mode() && reservation.valid) {
-        // Zero-copy path: data is already in ring buffer, just commit
-        this_.channel_->commit_write(reservation, buf.size());
+      // Zero-copy: reservation lives on the flat_buffer (set by
+      // prepare_zero_copy_buffer).  Reconstruct and commit, then drop the
+      // write view so the response can be copied into an owned buffer.
+      if (buf.is_view_mode() && buf.has_write_reservation()) {
+        LockFreeRingBuffer::WriteReservation rsv;
+        rsv.data = buf.data_ptr();
+        rsv.max_size = buf.max_size();
+        rsv.slot_idx = buf.reservation_write_idx();
+        rsv.valid = true;
+        this_.channel_->commit_write(rsv, buf.size());
+        buf.release_write_view();
       } else {
-        // Normal path: copy data to ring buffer
-        if (!this_.channel_->send(buf.data().data(), buf.size())) {
+        // Copy path: build happened in a heap/arena buffer
+        if (!this_.channel_->send(buf.data().data(),
+                                  static_cast<uint32_t>(buf.size()))) {
           on_failed(
               boost::system::error_code(boost::asio::error::no_buffer_space,
                                         boost::system::system_category()));
@@ -71,6 +77,17 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
 
     void on_failed(const boost::system::error_code& ec) noexcept override
     {
+      // If we still own a ring reservation, release it so the consumer is
+      // not stuck on an uncommitted slot.
+      if (buf.is_view_mode() && buf.has_write_reservation()) {
+        LockFreeRingBuffer::WriteReservation rsv;
+        rsv.data = buf.data_ptr();
+        rsv.max_size = buf.max_size();
+        rsv.slot_idx = buf.reservation_write_idx();
+        rsv.valid = true;
+        this_.channel_->abort_write(rsv);
+        buf.clear_reservation();
+      }
       result = ec;
       done.store(true, std::memory_order_release);
       done.notify_one();
@@ -93,19 +110,17 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
 
     work_impl(flat_buffer& _buf,
               SharedMemoryConnection& _this_,
-              uint32_t _timeout_ms,
-              LockFreeRingBuffer::WriteReservation _reservation)
+              uint32_t _timeout_ms)
         : buf(_buf)
         , this_(_this_)
         , timeout_ms(_timeout_ms)
-        , reservation(_reservation)
     {
     }
   };
 
   // Post work and wait for completion
   // Work remains owned by the connection until completion
-  auto w = std::make_shared<work_impl>(buffer, *this, timeout_ms, LockFreeRingBuffer::WriteReservation{});
+  auto w = std::make_shared<work_impl>(buffer, *this, timeout_ms);
   add_work(w);
   auto ec = w->wait();
 
@@ -226,6 +241,10 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
     throw nprpc::Exception(error_msg.c_str());
   }
 
+  // Expose the channel on the session context so prepare_zero_copy_buffer
+  // can reserve directly without re-looking up the connection.
+  ctx_.shm_channel = channel_.get();
+
   // Copy response into the flat_buffer so the ring buffer read can be
   // committed immediately in the read_loop.  Deferring commit_read via
   // set_view_from_read was unsound: the read_loop would call try_read_view()
@@ -288,18 +307,22 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
 
 SharedMemoryConnection::~SharedMemoryConnection() { close(); }
 
-bool SharedMemoryConnection::prepare_write_buffer(flat_buffer& /*buffer*/,
-                                                  size_t /*max_size*/,
-                                                  const EndPoint* /*endpoint*/)
+bool SharedMemoryConnection::prepare_write_buffer(flat_buffer& buffer,
+                                                  size_t max_size,
+                                                  const EndPoint* endpoint)
 {
-  // Zero-copy reservation is disabled: try_reserve_write does not advance
-  // write_idx until commit_write, so concurrent callers would receive the
-  // same write position and corrupt each other's data.  The SPSC ring
-  // supports at most one outstanding reservation at a time, making the
-  // zero-copy path fundamentally incompatible with concurrent use.
-  // All callers fall back to the copy path inside send_receive's work queue,
-  // which is already correctly serialised.
-  return false;
+  // MPSC ring: each try_reserve_write claims a unique slot+payload via CAS,
+  // so concurrent callers are safe.  Callers must pass the exact final wire
+  // size (measured before serialisation).
+  auto reservation = channel_->reserve_write(max_size);
+  if (!reservation)
+    return false;
+
+  const EndPoint* ep =
+      endpoint ? endpoint : &ctx_.remote_endpoint;
+  buffer.set_view(reservation.data, 0, reservation.max_size, ep,
+                  reservation.slot_idx, true, channel_.get());
+  return true;
 }
 
 } // namespace nprpc::impl

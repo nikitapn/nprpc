@@ -59,6 +59,15 @@ private:
                             bool from_iterator = false,
                             bool top_type = false,
                             bool direct_type = false);
+  /// Emit code that advances `cursor_expr` by the variable-length wire bytes
+  /// that serialising `cpp_expr` (of `type`) would append after the fixed
+  /// layout is already committed.  Mirrors assign_from_cpp_type / _alloc.
+  void measure_from_cpp_type(AstTypeDecl* type,
+                             const std::string& cursor_expr,
+                             const std::string& cpp_expr,
+                             std::ostream& os,
+                             bool from_iterator = false,
+                             bool top_type = false);
   void assign_from_flat_type(AstTypeDecl* type,
                              std::string op1,
                              std::string op2,

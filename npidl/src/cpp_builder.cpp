@@ -8,6 +8,7 @@
 #include <iostream>
 #include <set>
 #include <fstream>
+#include <sstream>
 #include <string_view>
 
 #include <boost/container/small_vector.hpp>
@@ -621,14 +622,15 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
       os << bd << "memcpy(" << op1 << vec_accessor << "data(), " << op2 << ".data(), " << op2 << ".size() * "
          << size << ");\n";
     } else if (wt->id == FieldType::String) {
+      // String_Direct1::operator= does length()+copy in one step.  Do not call
+      // length() separately first — that would double-allocate the body and
+      // make wire-size pre-measurement wrong.
       os << bd << "{\n"
          << (bd += 1) << "auto vdir = " << op1 << "_d();\n"
          << bd << "auto it = " << op2 << ".begin();\n"
          << bd << "auto span = vdir();\n"
          << bd << "for (auto e : span) {\n";
-      os << (bd += 1) << "e.length(it->size());\n";
-      os << "e = *it;\n";
-
+      os << (bd += 1) << "e = *it;\n";
       os << bd << "++it;\n" << (bd -= 1) << "}\n" << (bd -= 1) << "}\n";
     } else {
       os << bd << "{\n"
@@ -749,6 +751,136 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
     os << bd + 1 << "}, " << op2 << ".value);\n";
     os << bd0 << "}\n";
     bd = bd0;
+    break;
+  }
+
+  default:
+    assert(false);
+    break;
+  }
+}
+
+void CppBuilder::measure_from_cpp_type(AstTypeDecl* type,
+                                       const std::string& cursor,
+                                       const std::string& expr,
+                                       std::ostream& os,
+                                       bool from_iterator,
+                                       bool top_type)
+{
+  // Advance `cursor` by the same number of bytes _alloc / alloc_arm would
+  // append when serialising `expr`.  Fixed-size fields contribute nothing —
+  // they already live inside the committed fixed layout.
+  switch (type->id) {
+  case FieldType::Fundamental:
+  case FieldType::Enum:
+  case FieldType::Object:
+    break;
+
+  case FieldType::Struct: {
+    auto s = cflat(type);
+    if (s->flat)
+      break;
+    for (auto field : s->fields) {
+      const std::string field_expr =
+          expr + (from_iterator ? "->" : ".") + field->name;
+      measure_from_cpp_type(field->type, cursor, field_expr, os, false, false);
+    }
+    break;
+  }
+
+  case FieldType::Vector: {
+    auto wt = cwt(type)->type;
+    auto real_wt = wt->id == FieldType::Alias ? calias(wt)->get_real_type() : wt;
+    auto [elem_size, elem_align] = get_type_size_align(wt);
+    // Vector body allocation (N elements of flat elem layout)
+    os << bd << cursor << " = ::nprpc::flat::grow_size(" << cursor << ", "
+       << elem_align << ", static_cast<std::size_t>(" << expr << ".size()) * "
+       << elem_size << ");\n";
+    if (!is_flat(real_wt)) {
+      // Each element may contribute further variable-length tail data
+      os << bd << "for (auto const& __m_elem : " << expr << ") {\n";
+      auto bd0 = bd;
+      bd = bd + 1;
+      measure_from_cpp_type(wt, cursor, "__m_elem", os, false, true);
+      bd = bd0;
+      os << bd << "}\n";
+    }
+    break;
+  }
+
+  case FieldType::Array: {
+    auto wt = car(type)->type;
+    auto real_wt = wt->id == FieldType::Alias ? calias(wt)->get_real_type() : wt;
+    // Fixed array body is already in the parent layout; only nested varlen.
+    if (!is_flat(real_wt)) {
+      os << bd << "for (auto const& __m_elem : " << expr << ") {\n";
+      auto bd0 = bd;
+      bd = bd + 1;
+      measure_from_cpp_type(wt, cursor, "__m_elem", os, false, true);
+      bd = bd0;
+      os << bd << "}\n";
+    }
+    break;
+  }
+
+  case FieldType::Alias:
+    measure_from_cpp_type(calias(type)->type, cursor, expr, os, from_iterator,
+                          top_type);
+    break;
+
+  case FieldType::String:
+    // String is Vector<char>; body is N bytes, alignof(char) == 1
+    os << bd << cursor << " = ::nprpc::flat::grow_size(" << cursor
+       << ", 1, static_cast<std::size_t>(" << expr << ".size()));\n";
+    break;
+
+  case FieldType::Optional: {
+    auto wt = copt(type)->real_type();
+    auto [sz, al] = get_type_size_align(wt);
+    os << bd << "if (" << expr << ") {\n";
+    auto bd0 = bd;
+    bd = bd + 1;
+    // Optional::alloc places one flat T
+    os << bd << cursor << " = ::nprpc::flat::grow_size(" << cursor << ", " << al
+       << ", " << sz << ");\n";
+    measure_from_cpp_type(wt, cursor, expr + ".value()", os, false, true);
+    bd = bd0;
+    os << bd << "}\n";
+    break;
+  }
+
+  case FieldType::Variant: {
+    auto* v = cvar(type);
+    os << bd << "switch (static_cast<std::uint32_t>(" << expr << ".kind)) {\n";
+    auto bd0 = bd;
+    for (size_t i = 0; i < v->arms.size(); ++i) {
+      auto& arm = v->arms[i];
+      auto* atype = arm.type;
+      if (atype->id == FieldType::Alias)
+        atype = calias(atype)->get_real_type();
+      auto [sz, al] = get_type_size_align(atype);
+      os << bd << "case " << i << ": {\n";
+      bd = bd0 + 1;
+      // alloc_arm grows by arm_size with arm_align (always, even if empty arm)
+      os << bd << cursor << " = ::nprpc::flat::grow_size(" << cursor << ", " << al
+         << ", " << sz << ");\n";
+      // Nested variable data from the active arm value
+      os << bd << "{\n";
+      bd = bd0 + 2;
+      os << bd << "auto const& __m_arm = std::get<";
+      if (atype->id == FieldType::Struct)
+        os << "struct ";
+      emit_type(atype, os);
+      os << ">(" << expr << ".value);\n";
+      measure_from_cpp_type(atype, cursor, "__m_arm", os, false, true);
+      bd = bd0 + 1;
+      os << bd << "}\n";
+      os << bd << "break;\n";
+      bd = bd0;
+      os << bd << "}\n";
+    }
+    os << bd << "default: break;\n";
+    os << bd << "}\n";
     break;
   }
 
@@ -1655,9 +1787,37 @@ void CppBuilder::emit_declared_exception_reply(AstFunctionDecl* fn,
        << indent << "  assert(ctx.tx_buffer != nullptr);\n"
        << indent << "  auto& obuf = *ctx.tx_buffer;\n"
        << indent << "  obuf.consume(obuf.size());\n"
-       << indent << "  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, "
-       << initial_size << "))\n"
-       << indent << "    obuf.prepare(" << initial_size << ");\n"
+       << indent << "  std::size_t __wire_size = " << initial_size << ";\n";
+    always_full_namespace(false);
+
+    // Measure variable-length exception fields (e.g. string message)
+    {
+      auto saved_bd = bd;
+      // indent is spaces; measure uses bd for indentation — emit with indent
+      // by temporarily writing into a stringstream with manual prefix, or
+      // just use indent + two spaces via a local BlockDepth of 0 and prefix.
+      for (size_t i = 1; i < ex->fields.size(); ++i) {
+        auto mb = ex->fields[i];
+        // Manually indent measure lines
+        std::ostringstream tmp;
+        auto bd_save = bd;
+        bd = 0;
+        measure_from_cpp_type(mb->type, "__wire_size", "e." + mb->name, tmp);
+        bd = bd_save;
+        // Prefix each line with indent + "  "
+        std::istringstream lines(tmp.str());
+        std::string line;
+        while (std::getline(lines, line)) {
+          if (!line.empty())
+            os << indent << "  " << line << "\n";
+        }
+      }
+      bd = saved_bd;
+    }
+
+    always_full_namespace(true);
+    os << indent << "  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, __wire_size))\n"
+       << indent << "    obuf.prepare(__wire_size);\n"
        << indent << "  obuf.commit(" << initial_size << ");\n"
        << indent << "  " << ns(ex->nm) << "flat::" << ex->name << "_Direct oa(obuf,"
        << offset << ");\n"
@@ -1666,7 +1826,20 @@ void CppBuilder::emit_declared_exception_reply(AstFunctionDecl* fn,
 
     for (size_t i = 1; i < ex->fields.size(); ++i) {
       auto mb = ex->fields[i];
-      assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name, os);
+      // assign_from_cpp_type uses bd; set it so output is indented enough.
+      // These catch blocks are emitted with `indent` as the base — use a
+      // temporary stream and re-indent like measure above.
+      std::ostringstream tmp;
+      auto bd_save = bd;
+      bd = 0;
+      assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name, tmp);
+      bd = bd_save;
+      std::istringstream lines(tmp.str());
+      std::string line;
+      while (std::getline(lines, line)) {
+        if (!line.empty())
+          os << indent << "  " << line << "\n";
+      }
     }
 
     os << indent << "  auto* out_header = static_cast<::nprpc::impl::Header*>(obuf.data().data());\n"
@@ -2370,50 +2543,62 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
 
     const auto fixed_size = get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
-    const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
 
-    // Try zero-copy buffer for shared memory transport
-    oc << "  auto session = "
-          "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n"
-          "  if "
-          "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, "
-       << capacity
-       << "))\n"
-          "    buf.prepare("
-       << capacity
-       << ");\n"
-          "  {\n"
-          "    buf.commit("
-       << fixed_size
-       << ");\n"
-          "    "
-          "static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = "
-          "::nprpc::impl::MessageId::FunctionCall;\n"
-          "  static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type ="
-          "::nprpc::impl::MessageType::Request;\n"
-          "  }\n"
-          "  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));\n"
-          "  __ch.object_id() = this->object_id();\n"
-          "  __ch.poa_idx() = this->poa_idx();\n"
-          "  __ch.interface_idx() = interface_idx_;\n"
-          "  __ch.function_idx() = "
-       << fn->idx << ";\n";
+    // Measure exact wire size so SHM can reserve the final slot size up-front
+    // (true zero-copy into the ring buffer).
+    auto emit_proxy_body = [&](bool /*is_async*/) {
+      oc << "  auto session = "
+            "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n"
+            "  std::size_t __wire_size = "
+         << fixed_size << ";\n";
+      if (fn->in_s && !fn->in_s->flat) {
+        bd = 1;
+        for (auto in : fn->args) {
+          if (in->modifier == ArgumentModifier::Out)
+            continue;
+          measure_from_cpp_type(in->type, "__wire_size", in->name, oc);
+        }
+      }
+      oc << "  if "
+            "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, "
+            "__wire_size))\n"
+            "    buf.prepare(__wire_size);\n"
+            "  {\n"
+            "    buf.commit("
+         << fixed_size
+         << ");\n"
+            "    "
+            "static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = "
+            "::nprpc::impl::MessageId::FunctionCall;\n"
+            "  static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type ="
+            "::nprpc::impl::MessageType::Request;\n"
+            "  }\n"
+            "  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));\n"
+            "  __ch.object_id() = this->object_id();\n"
+            "  __ch.poa_idx() = this->poa_idx();\n"
+            "  __ch.interface_idx() = interface_idx_;\n"
+            "  __ch.function_idx() = "
+         << fn->idx << ";\n";
 
-    if (fn->in_s) {
-      oc << "  " << fn->in_s->name << "_Direct _(buf," << get_arguments_offset() << ");\n";
-    }
+      if (fn->in_s) {
+        oc << "  " << fn->in_s->name << "_Direct _(buf," << get_arguments_offset()
+           << ");\n";
+      }
 
-    int ix = 0;
-    for (auto in : fn->args) {
-      if (in->modifier == ArgumentModifier::Out)
-        continue;
-      bd = 1;
-      assign_from_cpp_type(in->type, "_._" + std::to_string(++ix), in->name, oc);
-    }
+      int ix = 0;
+      for (auto in : fn->args) {
+        if (in->modifier == ArgumentModifier::Out)
+          continue;
+        bd = 1;
+        assign_from_cpp_type(in->type, "_._" + std::to_string(++ix), in->name, oc);
+      }
 
-    oc << "  static_cast<::nprpc::impl::Header*>(buf.data().data())->size "
-          "= "
-          "static_cast<uint32_t>(buf.size());\n";
+      oc << "  static_cast<::nprpc::impl::Header*>(buf.data().data())->size "
+            "= "
+            "static_cast<uint32_t>(buf.size());\n";
+    };
+
+    emit_proxy_body(false);
 
     // Choose the call method based on interface/function attributes
     if (!fn->is_reliable) {
@@ -2442,46 +2627,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       oc << "  if (st.stop_requested()) throw nprpc::OperationCancelled();\n";
       // Coro: plain heap buffer — no TLS arena (unsafe across co_await thread switch)
       oc << "  ::nprpc::flat_buffer buf;\n";
-      oc << "  auto session = "
-            "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n"
-            "  if "
-            "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, "
-         << capacity
-         << "))\n"
-            "    buf.prepare("
-         << capacity
-         << ");\n"
-            "  {\n"
-            "    buf.commit("
-         << fixed_size
-         << ");\n"
-            "    "
-            "static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = "
-            "::nprpc::impl::MessageId::FunctionCall;\n"
-            "  static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type ="
-            "::nprpc::impl::MessageType::Request;\n"
-            "  }\n"
-            "  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));\n"
-            "  __ch.object_id() = this->object_id();\n"
-            "  __ch.poa_idx() = this->poa_idx();\n"
-            "  __ch.interface_idx() = interface_idx_;\n"
-            "  __ch.function_idx() = "
-         << fn->idx << ";\n";
-      if (fn->in_s) {
-        oc << "  " << fn->in_s->name << "_Direct _(buf," << get_arguments_offset() << ");\n";
-      }
-      {
-        int ix = 0;
-        for (auto in : fn->args) {
-          if (in->modifier == ArgumentModifier::Out)
-            continue;
-          bd = 1;
-          assign_from_cpp_type(in->type, "_._" + std::to_string(++ix), in->name, oc);
-        }
-      }
-      oc << "  static_cast<::nprpc::impl::Header*>(buf.data().data())->size "
-            "= "
-            "static_cast<uint32_t>(buf.size());\n";
+      emit_proxy_body(true);
       proxy_call_coro(fn);
       oc << "}\n\n";
     }
@@ -2691,18 +2837,51 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       }
     }
 
-    if (fn->out_s && !fn->out_s->flat) {
+    auto passed_as_direct = [](AstFunctionArgument* arg) {
+      auto real_type = arg->type;
+      if (real_type->id == FieldType::Alias)
+        real_type = calias(real_type)->get_real_type();
+
+      return arg->modifier == ArgumentModifier::Out &&
+             (real_type->id == FieldType::Vector || real_type->id == FieldType::String ||
+              real_type->id == FieldType::Struct);
+    };
+
+    // Helper to check if an argument is a Struct type (resolving aliases)
+    auto is_struct_type = [](AstFunctionArgument* arg) {
+      auto real_type = arg->type;
+      if (real_type->id == FieldType::Alias)
+        real_type = calias(real_type)->get_real_type();
+      return real_type->id == FieldType::Struct || real_type->id == FieldType::Array;
+    };
+
+    // Out-parameters on a non-flat response are filled via Direct / buffer
+    // references during the servant call, so the final wire size is not known
+    // beforehand.  Those paths stay on the heap (session layer does
+    // reserve+copy).  Pure return-value responses are measured after the
+    // servant returns, then reserved exactly for true zero-copy.
+    bool has_out_args = false;
+    if (fn->out_s) {
+      for (auto arg : fn->args) {
+        if (arg->modifier == ArgumentModifier::Out) {
+          has_out_args = true;
+          break;
+        }
+      }
+    }
+    // Non-flat response with out-args (or any Direct-style fill during call)
+    // → prepare heap buffer before servant.
+    const bool pre_buffer_out =
+        fn->out_s && !fn->out_s->flat && has_out_args;
+
+    if (pre_buffer_out) {
+      // Heap path only — do not claim a ring slot with a size guess.
       const auto offset = size_of_header;
       const auto initial_size = offset + fn->out_s->size;
       oc << "      assert(ctx.tx_buffer != nullptr);\n"
             "      auto& obuf = *ctx.tx_buffer;\n"
-            "      obuf.consume(obuf.size());\n" // Clear buffer
-            "      if "
-            "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
-            "obuf, "
-         << initial_size + 128
-         << "))\n"
-            "         obuf.prepare("
+            "      obuf.consume(obuf.size());\n"
+            "      obuf.prepare("
          << initial_size + 128
          << ");\n"
             "      obuf.commit("
@@ -2725,24 +2904,6 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     // variables (for _d() access)
     size_t out_ix = fn->is_void() ? 0 : 1, out_temp_ix = 0;
 
-    auto passed_as_direct = [](AstFunctionArgument* arg) {
-      auto real_type = arg->type;
-      if (real_type->id == FieldType::Alias)
-        real_type = calias(real_type)->get_real_type();
-
-      return arg->modifier == ArgumentModifier::Out &&
-             (real_type->id == FieldType::Vector || real_type->id == FieldType::String ||
-              real_type->id == FieldType::Struct);
-    };
-
-    // Helper to check if an argument is a Struct type (resolving aliases)
-    auto is_struct_type = [](AstFunctionArgument* arg) {
-      auto real_type = arg->type;
-      if (real_type->id == FieldType::Alias)
-        real_type = calias(real_type)->get_real_type();
-      return real_type->id == FieldType::Struct || real_type->id == FieldType::Array;
-    };
-
     // For flat output structs with Struct-type outputs, we need to prepare
     // the output buffer BEFORE calling the servant so we can pass _Direct types
     bool flat_has_struct_out = false;
@@ -2756,7 +2917,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
 
     if (flat_has_struct_out) {
-      // Prepare output buffer early for flat structs with Struct-type outputs
+      // Flat layout → exact size known at compile time
       const auto offset = size_of_header;
       const auto initial_size = offset + fn->out_s->size;
       oc << bd << "assert(ctx.tx_buffer != nullptr);\n"
@@ -2782,9 +2943,8 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
           oc << " _out_" << out_ix << ";\n";
         }
       }
-    } else if (fn->out_s) {
-      // For non-flat output structs, create temporary variables only for
-      // complex types
+    } else if (fn->out_s && pre_buffer_out) {
+      // Pre-buffered path: create temporary Direct wrappers for complex outs
       for (auto arg : fn->args) {
         if (arg->modifier != ArgumentModifier::Out)
           continue;
@@ -2831,8 +2991,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
           oc << "oa_" << ++out_temp_ix;
           ++out_ix;
         } else {
-          // For non-flat structs with simple types, pass direct
-          // reference
+          // Simple / Object out: buffer already prepared (pre_buffer_out)
           oc << "oa._" << ++out_ix << "()";
         }
       } else {
@@ -2867,60 +3026,65 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
     */
 
-     if (fn->is_throwing()) {
+    if (fn->is_throwing()) {
       auto declared_exceptions = fn->exceptions;
       if (declared_exceptions.empty() && fn->ex)
         declared_exceptions.push_back(fn->ex);
 
       const auto offset = size_of_header;
-        oc << "      }\n";
+      oc << "      }\n";
       for (auto* ex : declared_exceptions) {
         const auto initial_size = offset + ex->size;
 
         always_full_namespace(true);
-          oc << "      catch("
-          << ns(ex->nm) << ex->name
-          << "& e) {\n"
-            "        assert(ctx.tx_buffer != nullptr);\n"
-            "        auto& obuf = *ctx.tx_buffer;\n"
-            "        obuf.consume(obuf.size());\n"
-            "        if "
-            "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
-            "obuf, "
-          << initial_size
-          << "))\n"
-            "          obuf.prepare("
-          << initial_size
-          << ");\n"
-            "        obuf.commit("
-          << initial_size
-          << ");\n"
-            "        "
-          << ns(ex->nm) << "flat::" << ex->name << "_Direct oa(obuf," << offset
-          << ");\n"
-            "        oa.__ex_id() = "
-          << ex->exception_id << ";\n";
+        oc << "      catch(" << ns(ex->nm) << ex->name << "& e) {\n"
+              "        assert(ctx.tx_buffer != nullptr);\n"
+              "        auto& obuf = *ctx.tx_buffer;\n"
+              "        obuf.consume(obuf.size());\n"
+              "        std::size_t __wire_size = "
+           << initial_size << ";\n";
         always_full_namespace(false);
 
+        bd = 4;
         for (size_t i = 1; i < ex->fields.size(); ++i) {
-         auto mb = ex->fields[i];
-         assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name, oc);
+          auto mb = ex->fields[i];
+          measure_from_cpp_type(mb->type, "__wire_size", "e." + mb->name, oc);
+        }
+
+        always_full_namespace(true);
+        oc << "        if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
+              "obuf, __wire_size))\n"
+              "          obuf.prepare(__wire_size);\n"
+              "        obuf.commit("
+           << initial_size
+           << ");\n"
+              "        "
+           << ns(ex->nm) << "flat::" << ex->name << "_Direct oa(obuf," << offset
+           << ");\n"
+              "        oa.__ex_id() = "
+           << ex->exception_id << ";\n";
+        always_full_namespace(false);
+
+        bd = 4;
+        for (size_t i = 1; i < ex->fields.size(); ++i) {
+          auto mb = ex->fields[i];
+          assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name, oc);
         }
 
         oc << "        "
-            "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
-            "size = "
-            "static_cast<uint32_t>(obuf.size());\n"
-            "        "
-            "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
-            "msg_id = "
-            "::nprpc::impl::MessageId::Exception;\n"
-            "        "
-            "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
-            "msg_type "
-            "= ::nprpc::impl::MessageType::Answer;\n"
-            "        return;\n"
-            "      }\n";
+              "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
+              "size = "
+              "static_cast<uint32_t>(obuf.size());\n"
+              "        "
+              "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
+              "msg_id = "
+              "::nprpc::impl::MessageId::Exception;\n"
+              "        "
+              "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
+              "msg_type "
+              "= ::nprpc::impl::MessageType::Answer;\n"
+              "        return;\n"
+              "      }\n";
       }
     }
 
@@ -2974,8 +3138,36 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
             assign_from_cpp_type(out->type, "oa._" + n, "_out_" + n, oc);
           }
         }
-      } else if (!fn->is_void()) {
-        assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val", oc);
+      } else if (pre_buffer_out) {
+        // Buffer already prepared (heap); serialize return value if any
+        if (!fn->is_void()) {
+          assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val", oc);
+        }
+      } else {
+        // Measure-after path (return value only, no out-args): measure the
+        // C++ return, reserve exact SHM space, then serialise (true zero-copy).
+        const auto offset = size_of_header;
+        const auto initial_size = offset + fn->out_s->size;
+        oc << "      assert(ctx.tx_buffer != nullptr);\n"
+              "      auto& obuf = *ctx.tx_buffer;\n"
+              "      obuf.consume(obuf.size());\n"
+              "      std::size_t __wire_size = "
+           << initial_size << ";\n";
+        bd = 3;
+        if (!fn->is_void()) {
+          measure_from_cpp_type(fn->ret_value, "__wire_size", "__ret_val", oc);
+        }
+        oc << "      if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
+              "obuf, __wire_size))\n"
+              "        obuf.prepare(__wire_size);\n"
+              "      obuf.commit("
+           << initial_size
+           << ");\n"
+              "      "
+           << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n";
+        if (!fn->is_void()) {
+          assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val", oc);
+        }
       }
 
       oc << "      "

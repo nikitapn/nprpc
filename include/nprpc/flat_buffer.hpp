@@ -31,6 +31,10 @@ bool prepare_zero_copy_buffer_grow(const EndPoint& endpoint,
                                    const void* existing_data,
                                    size_t existing_size);
 
+// Abort a pending zero-copy write reservation (opaque channel + slot).
+// channel is SharedMemoryChannel*; no-op if null.
+NPRPC_API void abort_zero_copy_reservation(void* channel, uint64_t slot_idx);
+
 // Free function wrapper for making RPC calls (used by Swift bridge)
 NPRPC_API void rpc_call(const EndPoint& endpoint, flat_buffer& buffer, uint32_t timeout_ms);
 } // namespace impl
@@ -94,6 +98,8 @@ private:
   // WriteReservation: slot_idx to reconstruct reservation for commit_write()
   uint64_t reservation_write_idx_ = 0;
   bool has_reservation_ = false;
+  // Opaque SharedMemoryChannel* that owns the reservation (for abort on grow).
+  void* reservation_channel_ = nullptr;
 
   // For shared memory zero-copy reads: stores the ReadView for commit_read()
   // When set, flat_buffer will automatically commit the read when needed
@@ -124,6 +130,17 @@ private:
     // Save current view state before any modifications
     std::uint8_t* old_view_base = view_base_;
     const EndPoint* old_endpoint = endpoint_;
+    const bool had_reservation = has_reservation_;
+    const uint64_t old_slot = reservation_write_idx_;
+    void* old_channel = reservation_channel_;
+
+    // Abandon the old ring-buffer reservation if we had one.  Leaving it
+    // uncommitted would stall the consumer at that slot forever.
+    // prepare_zero_copy_buffer_grow may re-reserve; if it fails we fall back
+    // to heap and must not leave the old slot claimed.
+    if (had_reservation && old_channel) {
+      impl::abort_zero_copy_reservation(old_channel, old_slot);
+    }
 
     // Try to get a new larger shared memory buffer first
     if (old_endpoint && impl::g_rpc) {
@@ -134,6 +151,8 @@ private:
       view_max_size_ = 0;
       endpoint_ = nullptr;
       has_reservation_ = false;
+      reservation_channel_ = nullptr;
+      reservation_write_idx_ = 0;
 
       if (impl::prepare_zero_copy_buffer_grow(*old_endpoint, *this, new_cap,
                                               old_view_base,
@@ -163,6 +182,8 @@ private:
     view_max_size_ = 0;
     endpoint_ = nullptr;
     has_reservation_ = false;
+    reservation_channel_ = nullptr;
+    reservation_write_idx_ = 0;
   }
 
   void grow(std::size_t n)
@@ -273,6 +294,7 @@ public:
       , endpoint_(other.endpoint_)
       , reservation_write_idx_(other.reservation_write_idx_)
       , has_reservation_(other.has_reservation_)
+      , reservation_channel_(other.reservation_channel_)
       , arena_(other.arena_)
       , arena_backed_(other.arena_backed_)
   {
@@ -286,6 +308,7 @@ public:
     other.endpoint_ = nullptr;
     other.reservation_write_idx_ = 0;
     other.has_reservation_ = false;
+    other.reservation_channel_ = nullptr;
     other.arena_ = nullptr;
     other.arena_backed_ = false;
   }
@@ -306,6 +329,7 @@ public:
       endpoint_ = other.endpoint_;
       reservation_write_idx_ = other.reservation_write_idx_;
       has_reservation_ = other.has_reservation_;
+      reservation_channel_ = other.reservation_channel_;
       arena_ = other.arena_;
       arena_backed_ = other.arena_backed_;
 
@@ -319,6 +343,7 @@ public:
       other.endpoint_ = nullptr;
       other.reservation_write_idx_ = 0;
       other.has_reservation_ = false;
+      other.reservation_channel_ = nullptr;
       other.arena_ = nullptr;
       other.arena_backed_ = false;
     }
@@ -497,7 +522,8 @@ public:
                 std::size_t max_size,
                 const EndPoint* endpoint = nullptr,
                 std::size_t write_idx = 0,
-                bool has_reservation = false)
+                bool has_reservation = false,
+                void* reservation_channel = nullptr)
   {
     // Release owned memory if any (never delete arena-backed memory).
     if (!arena_backed_) delete[] buffer_;
@@ -514,6 +540,7 @@ public:
     endpoint_ = endpoint;
     reservation_write_idx_ = static_cast<uint64_t>(write_idx);
     has_reservation_ = has_reservation;
+    reservation_channel_ = reservation_channel;
   }
 
   /// Create a view from a ReadView (for zero-copy response reading)
@@ -575,6 +602,7 @@ public:
     endpoint_ = nullptr;
     reservation_write_idx_ = 0;
     has_reservation_ = false;
+    reservation_channel_ = nullptr;
 
     // Allocate and copy
     if (sz > 0) {
@@ -624,6 +652,31 @@ public:
   {
     has_reservation_ = false;
     reservation_write_idx_ = 0;
+    reservation_channel_ = nullptr;
+  }
+
+  /// Opaque SharedMemoryChannel* that owns a pending write reservation
+  void* reservation_channel() const noexcept { return reservation_channel_; }
+
+  /// Drop a write-view into the ring after a successful commit_write.
+  /// Leaves the buffer empty and in owned mode so a subsequent response can
+  /// be stored without overwriting the send ring (or triggering a grow that
+  /// tries to re-reserve).
+  void release_write_view() noexcept
+  {
+    view_base_ = nullptr;
+    view_size_ = 0;
+    view_max_size_ = 0;
+    endpoint_ = nullptr;
+    has_reservation_ = false;
+    reservation_write_idx_ = 0;
+    reservation_channel_ = nullptr;
+    // Empty owned state (do not delete — buffer_ was already null in view mode)
+    buffer_ = nullptr;
+    in_ = 0;
+    out_ = 0;
+    capacity_ = 0;
+    arena_backed_ = false;
   }
 
   /// @brief  Swap two flat_buffer instances

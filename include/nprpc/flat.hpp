@@ -215,6 +215,20 @@ public:
   }
 };
 
+// Simulate the size growth performed by _alloc / alloc_arm without writing.
+// Must stay in lock-step with those routines: same padding rule, and a zero
+// nbytes request leaves the cursor unchanged (matches _alloc early-return).
+[[nodiscard]] inline std::size_t grow_size(std::size_t cursor,
+                                           std::size_t align,
+                                           std::size_t nbytes) noexcept
+{
+  if (!nbytes)
+    return cursor;
+  const auto rem = cursor % align;
+  const auto padding = rem ? align - rem : 0;
+  return cursor + padding + nbytes;
+}
+
 // returns a new 'this' if the buffer is rellocated and an offset to allocated
 // space from that 'this'
 template <typename T>
