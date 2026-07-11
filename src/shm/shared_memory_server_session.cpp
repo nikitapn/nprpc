@@ -194,6 +194,7 @@ std::shared_ptr<Session> create_shared_memory_server_session(
 {
   auto session =
       std::make_shared<SharedMemoryServerSession>(ioc, std::move(channel));
+  session->bind_self(session);
   session->start(); // Initialize the handler after shared_ptr is created
   return session;
 }

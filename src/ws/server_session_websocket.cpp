@@ -132,6 +132,7 @@ public:
       });
     }
 
+    this->bind_self(this->shared_from_this());
     g_rpc->add_connection(this->shared_from_this());
     // Accept the WebSocket upgrade request
     do_accept(std::move(req));

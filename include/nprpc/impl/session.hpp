@@ -8,6 +8,7 @@
 #include <boost/date_time/posix_time/ptime.hpp>
 
 #include <chrono>
+#include <memory>
 #include <stop_token>
 
 #include <nprpc/basic.hpp>
@@ -22,6 +23,18 @@ class Session
 {
 protected:
   SessionContext ctx_;
+
+  // Indirection cell shared with StreamManager's send callbacks (set up in
+  // Session::Session(), before any shared_ptr owns *this — shared_from_this()
+  // is not usable there). bind_self() fills in the real weak_ptr once the
+  // caller has wrapped the concrete session in a shared_ptr; the callbacks
+  // capture this cell (not `this`) so they can safely detect — via
+  // weak_ptr::lock(), with no use-after-free/TOCTOU window — that the
+  // session has since been destroyed, instead of dispatching a virtual call
+  // through a dangling pointer. See nprpc issue: pure-virtual-method-called
+  // crash when writing to a stream after its session died uncleanly.
+  std::shared_ptr<std::weak_ptr<Session>> self_cell_ =
+      std::make_shared<std::weak_ptr<Session>>();
 
   boost::asio::system_timer timeout_timer_;
   boost::asio::system_timer inactive_timer_;
@@ -100,6 +113,15 @@ public:
     return ctx_.remote_endpoint;
   }
   SessionContext& ctx() noexcept { return ctx_; }
+
+  // Must be called once by the creator, right after wrapping the concrete
+  // session in a shared_ptr (e.g. `session->bind_self(session);`), and
+  // before the session is exposed to any I/O. Cannot be done from within
+  // Session's own constructor — no shared_ptr owns *this yet at that point.
+  void bind_self(std::weak_ptr<Session> self) noexcept
+  {
+    *self_cell_ = std::move(self);
+  }
   // Handles incoming request in rx_buffer and prepares response in tx_buffer
   // in some cases rx_buffer and tx_buffer can be the same buffer
   // Returns true if a reply should be sent, false for fire-and-forget messages

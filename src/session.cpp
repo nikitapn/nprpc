@@ -60,14 +60,28 @@ Session::Session(boost::asio::any_io_executor executor)
 {
   ctx_.stream_manager = new impl::StreamManager(
       ctx_, static_cast<impl::RpcImpl*>(g_rpc)->stream_executor());
-  // Set up send callback for control messages - uses main stream
-  ctx_.stream_manager->set_send_callback([this](flat_buffer&& fb) {
-    this->send_main_stream_message(std::move(fb));
-  });
+  // Capture self_cell_ (a shared_ptr<weak_ptr<Session>>), not `this`. The
+  // cell is a separate heap allocation kept alive by the callback's own
+  // copy, so it's always safe to read even long after *this has been
+  // destroyed — unlike a raw `this` capture, which crashed in production
+  // ("pure virtual method called") when a chunk was written after the
+  // owning session died without a clean close (bind_self() below never ran
+  // for that leftover session, so cell->lock() correctly comes back empty
+  // and the write is silently dropped instead of dispatching through a
+  // dangling Session*).
+  ctx_.stream_manager->set_send_callback(
+      [cell = self_cell_](flat_buffer&& fb) {
+        if (auto self = cell->lock()) {
+          self->send_main_stream_message(std::move(fb));
+        }
+      });
   // Set up native stream callback for data - uses native QUIC streams if available
-  ctx_.stream_manager->set_send_native_stream_callback([this](flat_buffer&& fb) {
-    this->send_stream_message(std::move(fb));
-  });
+  ctx_.stream_manager->set_send_native_stream_callback(
+      [cell = self_cell_](flat_buffer&& fb) {
+        if (auto self = cell->lock()) {
+          self->send_stream_message(std::move(fb));
+        }
+      });
 }
 
 bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)

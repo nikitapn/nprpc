@@ -3044,6 +3044,7 @@ Http3Connection::get_or_create_webtransport_control_session(int64_t session_stre
   auto session =
       std::make_shared<WebTransportControlSession>(*this, session_stream_id,
                                                    remote_ep_);
+  session->bind_self(session);
   webtransport_control_sessions_.emplace(session_stream_id, session);
   return session;
 }

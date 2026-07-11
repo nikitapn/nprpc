@@ -138,6 +138,7 @@ class EpollAcceptor {
       }
       setup_conn_socket(cfd);
       auto conn = std::make_shared<EpollConn>(cfd, g_rpc->ioc().get_executor());
+      conn->bind_self(conn);
       conns_.emplace(cfd, std::move(conn));
       // EPOLLRDHUP lets us detect clean peer close without a zero-length read.
       add_to_epoll(cfd, EPOLLIN | EPOLLET | EPOLLRDHUP);

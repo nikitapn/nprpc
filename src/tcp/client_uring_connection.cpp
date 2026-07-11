@@ -741,7 +741,9 @@ std::shared_ptr<Session>
 make_uring_client_connection(const EndPoint& endpoint,
                               boost::asio::any_io_executor ex)
 {
-  return std::make_shared<UringClientConnection>(endpoint, std::move(ex));
+  auto session = std::make_shared<UringClientConnection>(endpoint, std::move(ex));
+  session->bind_self(session);
+  return session;
 }
 
 } // namespace nprpc::impl

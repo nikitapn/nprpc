@@ -108,6 +108,7 @@ inline bool process_http_rpc(boost::asio::io_context& ioc,
                              std::vector<std::string>* out_set_cookies = nullptr)
 {
   auto session = std::make_shared<HttpRpcSession>(ioc);
+  session->bind_self(session);
   return session->process_rpc_request(request_body, response_body, cookies, out_set_cookies);
 }
 
@@ -118,6 +119,7 @@ inline bool process_http_rpc(boost::asio::io_context& ioc,
                              std::vector<std::string>* out_set_cookies = nullptr)
 {
   auto session = std::make_shared<HttpRpcSession>(ioc);
+  session->bind_self(session);
   return session->process_rpc_request(std::move(request_body), response_body,
                                       cookies, out_set_cookies);
 }

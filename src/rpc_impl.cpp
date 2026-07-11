@@ -562,6 +562,7 @@ RpcImpl::get_session(const EndPoint& endpoint)
       auto sc = std::make_shared<SocketConnection>(
           endpoint,
           boost::asio::ip::tcp::socket(boost::asio::make_strand(ioc_)));
+      sc->bind_self(sc);
       sc->start();
       con = std::move(sc);
     }
@@ -573,7 +574,11 @@ RpcImpl::get_session(const EndPoint& endpoint)
     con = make_client_ssl_websocket_session(endpoint, ioc_);
     break;
   case EndPointType::SharedMemory:
-    con = std::make_shared<SharedMemoryConnection>(endpoint, ioc_);
+    {
+      auto smc = std::make_shared<SharedMemoryConnection>(endpoint, ioc_);
+      smc->bind_self(smc);
+      con = std::move(smc);
+    }
     break;
 #ifdef NPRPC_QUIC_ENABLED
    case EndPointType::Quic:

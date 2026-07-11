@@ -188,6 +188,7 @@ class IoUringAcceptor {
     int cfd = res;
     setup_conn_socket(cfd);
     auto conn = std::make_shared<IoUringConn>(cfd, g_rpc->ioc().get_executor());
+    conn->bind_self(conn);
     conns_.emplace(cfd, conn);
     submit_recv(*conn);
 

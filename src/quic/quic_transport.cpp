@@ -1838,6 +1838,7 @@ NPRPC_API void init_quic(boost::asio::io_context& ioc)
                            [](std::shared_ptr<QuicServerConnection> conn) {
                              auto session =
                                  std::make_shared<QuicServerSession>(conn);
+                             session->bind_self(session);
                              session->start();
                            });
   } catch (const std::exception& e) {
@@ -1856,7 +1857,9 @@ NPRPC_API void stop_quic_listener()
 NPRPC_API std::shared_ptr<Session>
 make_quic_client_session(const EndPoint& endpoint, boost::asio::io_context& /*ioc*/)
 {
-  return std::make_shared<QuicClientSession>(endpoint);
+  auto session = std::make_shared<QuicClientSession>(endpoint);
+  session->bind_self(session);
+  return session;
 }
 
 } // namespace nprpc::impl

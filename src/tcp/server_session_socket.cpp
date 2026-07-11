@@ -221,7 +221,9 @@ public:
     }
     if (!running_)
       return;
-    std::make_shared<Session_Socket>(std::move(socket))->run();
+    auto session = std::make_shared<Session_Socket>(std::move(socket));
+    session->bind_self(session);
+    session->run();
     do_accept();
   }
 

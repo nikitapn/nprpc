@@ -19,6 +19,7 @@ make_client_plain_websocket_session(const EndPoint& endpoint,
   auto ws = future.get();
   auto session = std::make_shared<ClientPlainWebSocketSession>(
       std::move(*ws.release()), endpoint);
+  session->bind_self(session);
   session->ws().read_message_max(g_cfg.http_websocket_max_message_size);
   // Mirror the server-side performance settings.
   session->ws().auto_fragment(false);
@@ -44,6 +45,7 @@ make_client_ssl_websocket_session(const EndPoint& endpoint,
   auto ws = future.get();
   auto session = std::make_shared<ClientSSLWebSocketSession>(
       std::move(*ws.release()), endpoint);
+  session->bind_self(session);
   session->ws().read_message_max(g_cfg.http_websocket_max_message_size);
   // Mirror the server-side performance settings (SSL layer wraps TCP).
   session->ws().auto_fragment(false);
