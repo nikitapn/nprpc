@@ -22,7 +22,7 @@ TEST_F(NprpcTest, TestEmptyStreamCompletion)
 {
   boost::asio::io_context io_context;
   nprpc::SessionContext ctx;
-  nprpc::impl::StreamManager stream_manager(ctx, io_context.get_executor());
+  nprpc::impl::StreamManager stream_manager(ctx, {}, io_context.get_executor());
   ctx.stream_manager = &stream_manager;
 
   constexpr uint64_t stream_id = 42;
@@ -49,7 +49,7 @@ TEST_F(NprpcTest, TestUnreliableStreamCompletionDoesNotWaitForMissingChunk)
 {
   boost::asio::io_context io_context;
   nprpc::SessionContext ctx;
-  nprpc::impl::StreamManager stream_manager(ctx, io_context.get_executor());
+  nprpc::impl::StreamManager stream_manager(ctx, {}, io_context.get_executor());
   ctx.stream_manager = &stream_manager;
 
   constexpr uint64_t stream_id = 43;
