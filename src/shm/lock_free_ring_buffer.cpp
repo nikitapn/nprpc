@@ -51,6 +51,15 @@ static size_t header_ring_bytes()
   return round_up_page(kRingSlots * sizeof(SlotHeader));
 }
 
+// How long the consumer waits for a claimed slot to be committed before
+// giving up and reporting "empty".  Covers the producer's window between
+// the write_cursor CAS and the actual_size commit store (two plain stores
+// plus the payload memcpy).  A very large memcpy can exceed this — the read
+// cursor doesn't move, so the next call simply retries the slot; a producer
+// that died mid-write stalls the ring but no longer hangs the consumer
+// inside a try_ function.
+static constexpr int kCommitSpinYields = 1024;
+
 // Shared mmap setup used by both create() and open().
 static bool setup_mappings(int fd,
                            size_t page_size,
@@ -124,7 +133,10 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size, size_t m
     size_t page_size   = get_page_size();
     size_t hdr_ring_sz = header_ring_bytes();
     size_t ring_window = round_up_page(buffer_size);
-    size_t total_size  = page_size + hdr_ring_sz + buffer_size;
+    // Size the file to the page-aligned mapping window, not buffer_size:
+    // wrapping messages spill into [buffer_size, ring_window) through the
+    // mirror, and MAP_SHARED stores past EOF are undefined.
+    size_t total_size  = page_size + hdr_ring_sz + ring_window;
 
     boost::interprocess::managed_shared_memory shm(
         boost::interprocess::create_only, name.c_str(), total_size);
@@ -312,8 +324,8 @@ bool LockFreeRingBuffer::claim_slot_and_payload(size_t size,
 
 bool LockFreeRingBuffer::try_write(const void* data, size_t size)
 {
-  if (size > header_->max_message_size) {
-    NPRPC_LOG_ERROR("Message size {} exceeds maximum {}", size, header_->max_message_size);
+  if (size == 0 || size > header_->max_message_size) {
+    NPRPC_LOG_ERROR("Message size {} out of range (max {})", size, header_->max_message_size);
     return false;
   }
 
@@ -345,40 +357,67 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size)
 
 size_t LockFreeRingBuffer::try_read(void* buffer, size_t buffer_size)
 {
-  uint64_t rd = header_->read_cursor.load(std::memory_order_relaxed);
-  uint64_t wr = header_->write_cursor.load(std::memory_order_acquire);
-  if (cursor_slot(rd) == cursor_slot(wr))
-    return 0;
+  for (;;) {
+    uint64_t rd = header_->read_cursor.load(std::memory_order_relaxed);
+    uint64_t wr = header_->write_cursor.load(std::memory_order_acquire);
+    if (cursor_slot(rd) == cursor_slot(wr))
+      return 0;
 
-  SlotHeader& sh = slot_headers_[cursor_slot(rd) % kRingSlots];
+    SlotHeader& sh = slot_headers_[cursor_slot(rd) % kRingSlots];
 
-  uint32_t actual_size;
-  while ((actual_size = sh.actual_size.load(std::memory_order_acquire)) == 0)
-    std::this_thread::yield();
+    // Bounded wait for the producer's commit signal.
+    uint32_t actual_size = sh.actual_size.load(std::memory_order_acquire);
+    for (int i = 0; actual_size == 0 && i < kCommitSpinYields; ++i) {
+      std::this_thread::yield();
+      actual_size = sh.actual_size.load(std::memory_order_acquire);
+    }
+    if (actual_size == 0)
+      return 0; // not committed yet; cursor unchanged, next call retries
 
-  uint32_t claimed_size = sh.claimed_size;
-  size_t   payload_off  = sh.payload_off;
+    uint32_t claimed_size = sh.claimed_size;
+    uint64_t payload_off  = sh.payload_off;
 
-  if (claimed_size == 0 || claimed_size > header_->max_message_size) {
-    NPRPC_LOG_ERROR("Corrupt claimed_size: {}", claimed_size);
-    return 0;
+    // Validate everything read from shared memory before using it — a buggy
+    // or hostile peer controls these fields.
+    if (claimed_size == 0 || claimed_size > header_->max_message_size ||
+        payload_off >= header_->buffer_size) {
+      NPRPC_LOG_ERROR("Corrupt slot header: claimed_size={}, payload_off={}",
+                      claimed_size, payload_off);
+      return 0;
+    }
+
+    if (actual_size == kSlotSkipped) {
+      // Aborted write: release the slot and its payload bytes, try the next.
+      sh.actual_size.store(0, std::memory_order_release);
+      header_->read_cursor.store(
+          pack_cursor(static_cast<uint16_t>(cursor_slot(rd) + 1),
+                      (payload_off + claimed_size) % header_->buffer_size),
+          std::memory_order_release);
+      continue;
+    }
+
+    if (actual_size > claimed_size) {
+      NPRPC_LOG_ERROR("Corrupt actual_size {} > claimed_size {}",
+                      actual_size, claimed_size);
+      return 0;
+    }
+    if (actual_size > buffer_size) {
+      NPRPC_LOG_ERROR("Buffer too small: message={}, buffer={}", actual_size, buffer_size);
+      return 0;
+    }
+
+    std::memcpy(static_cast<uint8_t*>(buffer),
+                payload_region_ + payload_off, actual_size);
+
+    sh.actual_size.store(0, std::memory_order_release);
+
+    header_->read_cursor.store(
+        pack_cursor(static_cast<uint16_t>(cursor_slot(rd) + 1),
+                    (payload_off + claimed_size) % header_->buffer_size),
+        std::memory_order_release);
+
+    return actual_size;
   }
-  if (actual_size > buffer_size) {
-    NPRPC_LOG_ERROR("Buffer too small: message={}, buffer={}", actual_size, buffer_size);
-    return 0;
-  }
-
-  std::memcpy(static_cast<uint8_t*>(buffer),
-              payload_region_ + payload_off, actual_size);
-
-  sh.actual_size.store(0, std::memory_order_release);
-
-  header_->read_cursor.store(
-      pack_cursor(static_cast<uint16_t>(cursor_slot(rd) + 1),
-                  (payload_off + claimed_size) % header_->buffer_size),
-      std::memory_order_release);
-
-  return actual_size;
 }
 
 size_t LockFreeRingBuffer::read_with_timeout(void* buffer,
@@ -438,8 +477,8 @@ bool LockFreeRingBuffer::is_full(size_t message_size) const
 LockFreeRingBuffer::WriteReservation
 LockFreeRingBuffer::try_reserve_write(size_t min_size)
 {
-  if (min_size > header_->max_message_size) {
-    NPRPC_LOG_ERROR("Requested size {} exceeds MAX_MESSAGE_SIZE {}", min_size,
+  if (min_size == 0 || min_size > header_->max_message_size) {
+    NPRPC_LOG_ERROR("Requested size {} out of range (max {})", min_size,
                     header_->max_message_size);
     return {};
   }
@@ -470,9 +509,19 @@ void LockFreeRingBuffer::commit_write(const WriteReservation& reservation,
     NPRPC_LOG_ERROR("commit_write: invalid reservation");
     return;
   }
+  if (actual_size == 0) {
+    // 0 is the "uncommitted" sentinel — storing it would leave the consumer
+    // waiting on this slot forever.  Treat as an aborted write instead.
+    NPRPC_LOG_WARN("commit_write: actual_size 0, aborting reservation");
+    abort_write(reservation);
+    return;
+  }
   if (actual_size > reservation.max_size) {
-    NPRPC_LOG_ERROR("commit_write: actual_size {} exceeds reserved {}",
+    // Committing more than was reserved would let the consumer read past the
+    // claimed payload bytes; abort rather than leave the slot uncommitted.
+    NPRPC_LOG_ERROR("commit_write: actual_size {} exceeds reserved {}, aborting",
                     actual_size, reservation.max_size);
+    abort_write(reservation);
     return;
   }
 
@@ -487,39 +536,79 @@ void LockFreeRingBuffer::commit_write(const WriteReservation& reservation,
   }
 }
 
+void LockFreeRingBuffer::abort_write(const WriteReservation& reservation)
+{
+  if (!reservation.valid) {
+    NPRPC_LOG_ERROR("abort_write: invalid reservation");
+    return;
+  }
+
+  SlotHeader& sh = slot_headers_[reservation.slot_idx % kRingSlots];
+  sh.actual_size.store(kSlotSkipped, std::memory_order_release);
+
+  // Wake a sleeping reader so it can release the slot promptly.
+  if (header_->waiting_readers.load(std::memory_order_seq_cst) > 0) {
+    boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex>
+        lock(header_->mutex);
+    header_->data_available.notify_one();
+  }
+}
+
 LockFreeRingBuffer::ReadView LockFreeRingBuffer::try_read_view()
 {
-  uint64_t rd = header_->read_cursor.load(std::memory_order_relaxed);
-  uint64_t wr = header_->write_cursor.load(std::memory_order_acquire);
+  for (;;) {
+    uint64_t rd = header_->read_cursor.load(std::memory_order_relaxed);
+    uint64_t wr = header_->write_cursor.load(std::memory_order_acquire);
 
-  if (cursor_slot(rd) == cursor_slot(wr))
-    return {};
+    if (cursor_slot(rd) == cursor_slot(wr))
+      return {};
 
-  SlotHeader& sh = slot_headers_[cursor_slot(rd) % kRingSlots];
+    SlotHeader& sh = slot_headers_[cursor_slot(rd) % kRingSlots];
 
-  uint32_t actual_size;
-  while ((actual_size = sh.actual_size.load(std::memory_order_acquire)) == 0)
-    std::this_thread::yield();
+    // Bounded wait for the producer's commit signal.
+    uint32_t actual_size = sh.actual_size.load(std::memory_order_acquire);
+    for (int i = 0; actual_size == 0 && i < kCommitSpinYields; ++i) {
+      std::this_thread::yield();
+      actual_size = sh.actual_size.load(std::memory_order_acquire);
+    }
+    if (actual_size == 0)
+      return {}; // not committed yet; cursor unchanged, next call retries
 
-  uint32_t claimed_size = sh.claimed_size;
-  size_t   payload_off  = sh.payload_off;
+    uint32_t claimed_size = sh.claimed_size;
+    uint64_t payload_off  = sh.payload_off;
 
-  if (claimed_size == 0 || claimed_size > header_->max_message_size) {
-    NPRPC_LOG_ERROR("Corrupt claimed_size in read_view: {}", claimed_size);
-    return {};
+    // Validate everything read from shared memory before using it — a buggy
+    // or hostile peer controls these fields.
+    if (claimed_size == 0 || claimed_size > header_->max_message_size ||
+        payload_off >= header_->buffer_size) {
+      NPRPC_LOG_ERROR("Corrupt slot header in read_view: claimed_size={}, payload_off={}",
+                      claimed_size, payload_off);
+      return {};
+    }
+
+    if (actual_size == kSlotSkipped) {
+      // Aborted write: release the slot and its payload bytes, try the next.
+      sh.actual_size.store(0, std::memory_order_release);
+      header_->read_cursor.store(
+          pack_cursor(static_cast<uint16_t>(cursor_slot(rd) + 1),
+                      (payload_off + claimed_size) % header_->buffer_size),
+          std::memory_order_release);
+      continue;
+    }
+
+    if (actual_size > claimed_size) {
+      NPRPC_LOG_ERROR("actual_size {} > claimed_size {} in read_view",
+                      actual_size, claimed_size);
+      return {};
+    }
+
+    ReadView result;
+    result.data     = payload_region_ + payload_off;
+    result.size     = actual_size;
+    result.slot_idx = cursor_slot(rd);
+    result.valid    = true;
+    return result;
   }
-  if (actual_size > claimed_size) {
-    NPRPC_LOG_ERROR("actual_size {} > claimed_size {} in read_view",
-                    actual_size, claimed_size);
-    return {};
-  }
-
-  ReadView result;
-  result.data     = payload_region_ + payload_off;
-  result.size     = actual_size;
-  result.slot_idx = cursor_slot(rd);
-  result.valid    = true;
-  return result;
 }
 
 void LockFreeRingBuffer::commit_read(const ReadView& view)

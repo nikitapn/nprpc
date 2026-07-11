@@ -57,10 +57,15 @@ namespace nprpc::impl {
 //   5. Release-store headers[s].actual_size != 0 — commit signal.
 //
 // Consumer protocol (try_read_view):
-//   1. Spin on headers[slot(read_cursor) % N].actual_size != 0.
-//   2. Read claimed_size / payload_off from header.
-//   3. Return ReadView pointing into payload ring.
-//   4. commit_read() zeros actual_size (release), then release-stores
+//   1. Spin (bounded) on headers[slot(read_cursor) % N].actual_size != 0;
+//      returns empty if the producer hasn't committed yet (slow or dead) —
+//      the read cursor doesn't move, so the next call retries the slot.
+//   2. Read claimed_size / payload_off from header; both are validated
+//      before use (they live in shared memory a peer can scribble on).
+//   3. actual_size == kSlotSkipped → aborted write: release the slot and
+//      its payload bytes, continue with the next slot.
+//   4. Return ReadView pointing into payload ring.
+//   5. commit_read() zeros actual_size (release), then release-stores
 //      read_cursor = {slot+1, (payload_off + claimed_size) % buffer_size}.
 //
 // Synchronization:
@@ -73,6 +78,12 @@ namespace nprpc::impl {
 
 // Number of header slots.  Must be a power of two.
 static constexpr uint32_t kRingSlots = 1024;
+
+// actual_size sentinel: the slot was reserved but the write was aborted
+// (abort_write / commit_write with size 0).  The consumer releases the slot
+// and its claimed payload bytes without delivering anything.  Cannot collide
+// with a real size: max_message_size is far below 2^32 - 1.
+static constexpr uint32_t kSlotSkipped = 0xFFFFFFFFu;
 
 // The slot counter lives in 16 bits and wraps mod 2^16; slot(counter) %
 // kRingSlots is only stable across that wrap if kRingSlots divides 2^16.
@@ -102,7 +113,7 @@ inline constexpr uint64_t pack_cursor(uint16_t slot, uint64_t payload)
 // Each instance lives at headers[seq % kRingSlots] — a stable address
 // independent of payload size.
 struct alignas(16) SlotHeader {
-  std::atomic<uint32_t> actual_size{0};  // 0 = empty; commit signal
+  std::atomic<uint32_t> actual_size{0};  // 0 = uncommitted; kSlotSkipped = aborted; else commit signal
   uint32_t              claimed_size{0}; // payload bytes reserved
   uint64_t              payload_off{0};  // byte offset into payload ring
 };
@@ -207,8 +218,17 @@ public:
   WriteReservation try_reserve_write(size_t min_size);
 
   // Commit a reserved write with the actual size written
-  // Must be called after try_reserve_write() with the actual bytes written
+  // Must be called after try_reserve_write() with the actual bytes written.
+  // actual_size == 0 is treated as abort_write() (the consumer would
+  // otherwise wait forever for the commit signal).
   void commit_write(const WriteReservation& reservation, size_t actual_size);
+
+  // Abort a reserved write: commits a skip marker so the consumer releases
+  // the slot and its payload bytes without delivering anything.  Call on
+  // error paths where the payload cannot be produced after
+  // try_reserve_write() succeeded — a reservation that is neither committed
+  // nor aborted stalls the ring at that slot.
+  void abort_write(const WriteReservation& reservation);
 
   // Get a read view into the ring buffer (zero-copy read)
   // Call commit_read() after processing to advance read pointer

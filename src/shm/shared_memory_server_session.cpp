@@ -72,20 +72,22 @@ public:
    */
   void on_message_received(const LockFreeRingBuffer::ReadView& read_view)
   {
+    // Outside the try so the catch can release an abandoned zero-copy
+    // write reservation.
+    flat_buffer tx_buffer;
+
     try {
       // Zero-copy read: create a view directly into the ring buffer
       flat_buffer rx_buffer(const_cast<std::uint8_t*>(read_view.data),
                             read_view.size, read_view.size);
 
-      flat_buffer tx_buffer;
-
       // Dispatch the RPC request (calls servant methods)
       // This synchronously deserializes rx_buffer and calls the servant
       handle_request(rx_buffer, tx_buffer);
 
-      // Now that handle_request is done reading rx_buffer,
-      // we can commit the read and free the ring buffer space
-      channel_->commit_read(read_view);
+      // NOTE: read_view is committed by the channel's read_loop after this
+      // callback returns (same contract as the client-side callback);
+      // committing here as well would advance the read cursor twice.
 
       // Send response back through the channel
       if (tx_buffer.has_write_reservation() && tx_buffer.is_view_mode()) {
@@ -130,6 +132,16 @@ public:
     } catch (const std::exception& e) {
       NPRPC_LOG_ERROR("SharedMemoryServerSession: Error processing message: {}",
                       e.what());
+      // Release an abandoned zero-copy reservation so the send ring does
+      // not stall at that slot waiting for a commit that will never come.
+      if (tx_buffer.has_write_reservation() && tx_buffer.is_view_mode()) {
+        LockFreeRingBuffer::WriteReservation reservation;
+        reservation.data = tx_buffer.data_ptr();
+        reservation.max_size = tx_buffer.max_size();
+        reservation.slot_idx = tx_buffer.reservation_write_idx();
+        reservation.valid = true;
+        channel_->abort_write(reservation);
+      }
     }
   }
 

@@ -114,6 +114,15 @@ public:
                     size_t actual_size);
 
   /**
+   * @brief Abort a zero-copy write reservation
+   *
+   * Releases the reserved slot without delivering anything.  Must be called
+   * on error paths where the payload cannot be produced after
+   * reserve_write() succeeded, otherwise the ring stalls at that slot.
+   */
+  void abort_write(const LockFreeRingBuffer::WriteReservation& reservation);
+
+  /**
    * @brief Get max message size for reservation
    */
   static constexpr size_t max_message_size() { return MAX_MESSAGE_SIZE; }

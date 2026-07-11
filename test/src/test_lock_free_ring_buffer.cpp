@@ -444,3 +444,71 @@ TEST(LockFreeRingBuffer, ConcurrentProducersPayloadPressure)
   ASSERT_EQ(ring->try_read(rbuf.data(), rbuf.size()), 0u)
       << "ring should be empty after all messages consumed";
 }
+
+// Aborted reservations must be skipped by the consumer, releasing both the
+// slot and its claimed payload bytes.
+TEST(LockFreeRingBuffer, AbortedWriteIsSkipped)
+{
+  LockFreeRingBuffer::remove("test_abort_write");
+  auto ring = LockFreeRingBuffer::create("test_abort_write", 4096);
+  ASSERT_NE(ring, nullptr);
+
+  // Reserve then abort; the consumer must deliver only the real message
+  // written afterwards.
+  auto rsv = ring->try_reserve_write(100);
+  ASSERT_TRUE(rsv);
+  ring->abort_write(rsv);
+
+  const std::string msg = "after abort";
+  ASSERT_TRUE(ring->try_write(msg.data(), msg.size()));
+
+  char buf[64];
+  size_t n = ring->try_read(buf, sizeof(buf));
+  ASSERT_EQ(n, msg.size());
+  ASSERT_EQ(std::string_view(buf, n), msg);
+  ASSERT_EQ(ring->try_read(buf, sizeof(buf)), 0u) << "ring should be empty";
+
+  // commit_write with actual_size == 0 must behave as abort, not wedge the
+  // consumer on an uncommitted slot.
+  auto rsv2 = ring->try_reserve_write(50);
+  ASSERT_TRUE(rsv2);
+  ring->commit_write(rsv2, 0);
+  ASSERT_TRUE(ring->try_write(msg.data(), msg.size()));
+  n = ring->try_read(buf, sizeof(buf));
+  ASSERT_EQ(std::string_view(buf, n), msg);
+
+  // Aborted payload bytes must be reclaimed: fill the ring several times
+  // over with aborted reservations; capacity must not leak.
+  for (int i = 0; i < 100; ++i) {
+    auto r = ring->try_reserve_write(1024);
+    ASSERT_TRUE(r) << "capacity leaked after " << i << " aborts";
+    ring->abort_write(r);
+    // Consumer view must skip the aborted slot and report empty.
+    ASSERT_FALSE(ring->try_read_view());
+  }
+}
+
+// A claimed-but-uncommitted slot must not hang the consumer inside try_read /
+// try_read_view; it reports empty and retries on the next call.
+TEST(LockFreeRingBuffer, UncommittedSlotDoesNotHangReader)
+{
+  LockFreeRingBuffer::remove("test_uncommitted");
+  auto ring = LockFreeRingBuffer::create("test_uncommitted", 4096);
+  ASSERT_NE(ring, nullptr);
+
+  auto rsv = ring->try_reserve_write(100);
+  ASSERT_TRUE(rsv);
+
+  // No commit yet: reads must return "empty" after the bounded spin instead
+  // of blocking forever.
+  char buf[256];
+  ASSERT_EQ(ring->try_read(buf, sizeof(buf)), 0u);
+  ASSERT_FALSE(ring->try_read_view());
+
+  // Late commit: the message becomes readable.
+  std::memset(rsv.data, 0xAB, 100);
+  ring->commit_write(rsv, 100);
+  ASSERT_EQ(ring->try_read(buf, sizeof(buf)), 100u);
+  for (size_t i = 0; i < 100; ++i)
+    ASSERT_EQ(static_cast<uint8_t>(buf[i]), 0xAB);
+}

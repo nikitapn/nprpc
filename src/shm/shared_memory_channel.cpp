@@ -134,6 +134,14 @@ void SharedMemoryChannel::commit_write(
   }
 }
 
+void SharedMemoryChannel::abort_write(
+    const LockFreeRingBuffer::WriteReservation& reservation)
+{
+  if (send_ring_) {
+    send_ring_->abort_write(reservation);
+  }
+}
+
 void SharedMemoryChannel::commit_read(const LockFreeRingBuffer::ReadView& view)
 {
   if (recv_ring_) {
