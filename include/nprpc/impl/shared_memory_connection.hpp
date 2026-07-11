@@ -31,14 +31,16 @@ class SharedMemoryConnection
   std::mutex mutex_;
   uint32_t pending_requests_ = 0;
 
+  // Insert work into wq_ ordered by slot_idx (wrap-aware 16-bit).  Must be
+  // called with mutex_ held.  Arms the front work's timeout if the new
+  // entry is at the front.
+  void enqueue_ordered(std::shared_ptr<IOWork> w);
 
 protected:
   virtual void timeout_action() final;
 
 public:
   auto get_executor() noexcept { return ioc_.get_executor(); }
-
-  void add_work(std::shared_ptr<IOWork> w);
 
   void send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
 

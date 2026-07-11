@@ -99,6 +99,12 @@ struct IOWork {
   virtual void on_executed() noexcept = 0;
   virtual flat_buffer& buffer() noexcept = 0;
   virtual ~IOWork() = default;
+
+  // Shared-memory client path: ring slot counter (16-bit, from write_cursor)
+  // used to keep wq_ ordered consistently with ring FIFO.  Unused by other
+  // transports (has_slot_order == false → push_back).
+  uint64_t slot_idx = 0;
+  bool has_slot_order = false;
 };
 
 template <typename T> class CommonConnection

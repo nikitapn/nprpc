@@ -122,7 +122,6 @@ public:
           for (int i = 0; i < kCallsPerWorker; ++i) {
             auto t0 = std::chrono::steady_clock::now();
             try {
-              std::cout << "Thread " << t << " calling Ping() iteration " << i << std::endl;
               proxy->Ping();
             } catch (...) {
               ++failures;
