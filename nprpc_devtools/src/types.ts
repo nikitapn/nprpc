@@ -4,7 +4,7 @@
 export type Transport = 'ws' | 'wss' | 'http' | 'https' | 'wt';
 export type CallDirection = 'client' | 'server';
 export type CallStatus  = 'pending' | 'success' | 'error' | 'cancelled';
-export type DebugEntryKind = 'rpc' | 'stream';
+export type DebugEntryKind = 'rpc' | 'stream' | 'separator';
 export type StreamKind = 'server' | 'client' | 'bidi';
 export type StreamMessageKind = 'chunk' | 'complete' | 'error' | 'cancel' | 'window_update';
 export type StreamMessageDirection = 'incoming' | 'outgoing';
@@ -96,7 +96,23 @@ export interface StreamEvent {
   error?: string;
 }
 
-export type DebugEntry = RpcEvent | StreamEvent;
+/** Visual marker between calls when the inspected page reloads / navigates. */
+export interface SeparatorEntry {
+  entry_kind: 'separator';
+  /** Negative id space so it never collides with inject.js call ids */
+  id: number;
+  seq: number;
+  timestamp: number;
+  label: string;
+  /** URL of the page after navigation, when known */
+  url?: string;
+}
+
+/** Call / stream rows plus list-only markers (separators). */
+export type DebugEntry = RpcEvent | StreamEvent | SeparatorEntry;
+
+/** Entries that represent an actual RPC or stream session. */
+export type CallEntry = RpcEvent | StreamEvent;
 
 // ── Messages shared between inject / content / background / panel ──
 

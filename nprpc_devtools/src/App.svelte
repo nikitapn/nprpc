@@ -2,21 +2,81 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { DebugEntry, DebugMsg, RpcEvent, StreamEvent, StreamMessageEvent } from './types';
+  import type {
+    CallEntry,
+    DebugEntry,
+    DebugMsg,
+    RpcEvent,
+    SeparatorEntry,
+    StreamEvent,
+    StreamMessageEvent,
+  } from './types';
   import EventList   from './lib/EventList.svelte';
   import EventDetail from './lib/EventDetail.svelte';
 
   // ── State ────────────────────────────────────────────────────────
   let entries = $state<DebugEntry[]>([]);
-  let selected = $state<DebugEntry | null>(null);
+  let selected = $state<CallEntry | null>(null);
   let filter = $state('');
   let recording = $state(true);
   let nextId = $state(0);
   let seq = $state(0); // 1-based display sequence number (reset on Clear)
+  /** Negative ids for separators so they never collide with inject call ids. */
+  let nextSeparatorId = $state(-1);
 
   // Pending RPC calls keyed by id -> index in the reactive entries array.
   const pending = new Map<number, number>();
   const openStreams = new Map<number, number>();
+
+  function cancel_orphaned(reason: string) {
+    const now = Date.now();
+    for (const index of pending.values()) {
+      const current = entries[index];
+      if (current?.entry_kind === 'rpc' && current.status === 'pending') {
+        const updated: RpcEvent = {
+          ...current,
+          status: 'cancelled',
+          error: reason,
+          duration_ms: now - current.timestamp,
+        };
+        entries[index] = updated;
+        if (selected?.id === updated.id) selected = updated;
+      }
+    }
+    for (const index of openStreams.values()) {
+      const current = entries[index];
+      if (current?.entry_kind === 'stream' && current.status === 'pending') {
+        const updated: StreamEvent = {
+          ...current,
+          status: 'cancelled',
+          error: reason,
+          duration_ms: now - current.timestamp,
+        };
+        entries[index] = updated;
+        if (selected?.id === updated.id) selected = updated;
+      }
+    }
+    pending.clear();
+    openStreams.clear();
+  }
+
+  function insert_page_reload_separator(url?: string) {
+    cancel_orphaned('Page reloaded');
+
+    // Nothing to separate, or already marked (e.g. double navigation events).
+    if (entries.length === 0) return;
+    if (entries[entries.length - 1]?.entry_kind === 'separator') return;
+
+    const sep: SeparatorEntry = {
+      entry_kind: 'separator',
+      id: nextSeparatorId--,
+      seq: ++seq,
+      timestamp: Date.now(),
+      label: 'Page reloaded',
+      url: url || undefined,
+    };
+    entries = [...entries, sep];
+  }
 
   // ── Direct connection to content script (no background SW) ─────────
   onMount(() => {
@@ -118,14 +178,23 @@
       port.onDisconnect.addListener(() => {
         // page navigated/reloaded — re-inject happens automatically,
         // reconnect after a short delay to let the content script settle.
-        pending.clear();   // drop any calls that were in-flight before reload
+        // Orphan cancellation + separator are handled by onNavigated.
         setTimeout(connect, 500);
       });
       port.postMessage({ type: 'nprpc_devtools_setup', nextId });
     };
 
+    // Fires on full page navigations and reloads of the inspected window.
+    const onNavigated = (url: string) => {
+      insert_page_reload_separator(url);
+    };
+    chrome.devtools.network.onNavigated.addListener(onNavigated);
+
     connect();
-    return () => port?.disconnect();
+    return () => {
+      port?.disconnect();
+      chrome.devtools.network.onNavigated.removeListener(onNavigated);
+    };
   });
 
   // ── Actions ──────────────────────────────────────────────────────
@@ -134,6 +203,7 @@
     selected = null;
     seq      = 0;
     nextId   = 0;
+    nextSeparatorId = -1;
     pending.clear();
     openStreams.clear();
   }
@@ -141,13 +211,19 @@
   function toggleRecording() { recording = !recording; }
 
   // ── Stats ────────────────────────────────────────────────────────
-  const total = $derived(entries.length);
-  const errors = $derived(entries.filter((e) => e.status === 'error').length);
+  const total = $derived(
+    entries.filter((e) => e.entry_kind !== 'separator').length
+  );
+  const errors = $derived(
+    entries.filter((e) => e.entry_kind !== 'separator' && e.status === 'error').length
+  );
   const filtered = $derived.by(() => {
     if (!filter) return entries;
 
     const q = filter.toLowerCase();
     return entries.filter((ev) => {
+      // Keep reload markers so filtered views still show session boundaries.
+      if (ev.entry_kind === 'separator') return true;
       return (ev.method_name ?? '').toLowerCase().includes(q)
         || ev.class_id.toLowerCase().includes(q)
         || `${ev.endpoint.hostname}:${ev.endpoint.port}`.includes(q);

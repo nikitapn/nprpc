@@ -1,17 +1,21 @@
 <svelte:options runes={true} />
 
 <script lang="ts">
-  import type { DebugEntry } from '../types';
+  import type { CallEntry, DebugEntry } from '../types';
 
   type SortKey = 'seq' | 'direction' | 'method' | 'duration' | 'bytes' | 'status';
 
   let {
     events = [],
-    selected = $bindable<DebugEntry | null>(null)
+    selected = $bindable<CallEntry | null>(null)
   }: {
     events?: DebugEntry[];
-    selected?: DebugEntry | null;
+    selected?: CallEntry | null;
   } = $props();
+
+  function is_call(ev: DebugEntry): ev is CallEntry {
+    return ev.entry_kind === 'rpc' || ev.entry_kind === 'stream';
+  }
 
   let tbody: HTMLElement | undefined = $state();
   let userScrolled = $state(false);
@@ -67,26 +71,37 @@
   }
 
   function select(ev: DebugEntry) {
+    if (!is_call(ev)) return;
     selected = ev;
   }
 
-  // Keyboard navigation
+  /** Next/prev selectable (non-separator) row from `from`, stepping by `dir`. */
+  function find_call_row(from: number, dir: 1 | -1): CallEntry | undefined {
+    for (let i = from; i >= 0 && i < displayedEvents.length; i += dir) {
+      const ev = displayedEvents[i];
+      if (ev && is_call(ev)) return ev;
+    }
+    return undefined;
+  }
+
+  // Keyboard navigation (skips separator rows)
   function onKeyDown(e: KeyboardEvent) {
     if (!displayedEvents.length) return;
     const selectedId = selected?.id;
     const idx = selectedId === undefined ? -1 : displayedEvents.findIndex(x => x.id === selectedId);
     if (e.key === 'ArrowDown') {
-      const next = displayedEvents[Math.min(idx + 1, displayedEvents.length - 1)];
+      const next = find_call_row(idx + 1, 1);
       if (next) selected = next;
       e.preventDefault();
     } else if (e.key === 'ArrowUp') {
-      const prev = displayedEvents[Math.max(idx - 1, 0)];
+      const prev = find_call_row(idx <= 0 ? displayedEvents.length - 1 : idx - 1, -1);
       if (prev) selected = prev;
       e.preventDefault();
     }
   }
 
   function onRowKeyDown(e: KeyboardEvent, ev: DebugEntry) {
+    if (!is_call(ev)) return;
     if (e.key === 'Enter' || e.key === ' ') {
       selected = ev;
       e.preventDefault();
@@ -101,7 +116,7 @@
     return slash >= 0 ? class_id.slice(slash + 1) : class_id;
   }
 
-  function method_label(ev: DebugEntry): string {
+  function method_label(ev: CallEntry): string {
     const cls = short_class(ev.class_id);
     const fn  = ev.method_name ?? `fn#${ev.func_idx}`;
     return ev.entry_kind === 'stream'
@@ -109,7 +124,7 @@
       : `${cls}.${fn}`;
   }
 
-  function fmt_duration(ev: DebugEntry): string {
+  function fmt_duration(ev: CallEntry): string {
     if (ev.status === 'pending') return '…';
     if (ev.duration_ms === undefined) return '—';
     if (ev.duration_ms < 1000) return `${ev.duration_ms} ms`;
@@ -122,7 +137,7 @@
     return `${(b / 1024).toFixed(1)} K`;
   }
 
-  function fmt_entry_bytes(ev: DebugEntry): string {
+  function fmt_entry_bytes(ev: CallEntry): string {
     if (ev.entry_kind === 'stream') {
       const out = fmt_bytes(ev.sent_bytes);
       const incoming = fmt_bytes(ev.received_bytes);
@@ -138,14 +153,14 @@
     return request;
   }
 
-  function bytes_value(ev: DebugEntry): number {
+  function bytes_value(ev: CallEntry): number {
     if (ev.entry_kind === 'stream') {
       return ev.sent_bytes + ev.received_bytes;
     }
     return (ev.request_bytes ?? 0) + (ev.response_bytes ?? 0);
   }
 
-  function status_rank(ev: DebugEntry): number {
+  function status_rank(ev: CallEntry): number {
     switch (ev.status) {
       case 'pending':
         return 0;
@@ -158,12 +173,18 @@
     }
   }
 
-  function direction_label(ev: DebugEntry): string {
+  function direction_label(ev: CallEntry): string {
     if (ev.entry_kind === 'stream') return 'stream';
     return ev.direction;
   }
 
   function compareEntries(left: DebugEntry, right: DebugEntry): number {
+    // Separators only make sense in timeline order; always pin by seq when
+    // either side is a marker so column sorts don't scramble session bounds.
+    if (left.entry_kind === 'separator' || right.entry_kind === 'separator') {
+      return left.seq - right.seq;
+    }
+
     switch (sortKey) {
       case 'seq':
         return left.seq - right.seq;
@@ -231,7 +252,7 @@
     displayedEvents.slice(windowRange.start, windowRange.end)
   );
 
-  function row_class(ev: DebugEntry): string {
+  function row_class(ev: CallEntry): string {
     const parts = ['row'];
     if (ev.direction === 'server') parts.push('server');
     if (ev.status === 'error')     parts.push('error');
@@ -273,43 +294,53 @@
       ></div>
 
       {#each visibleEvents as ev (ev.id)}
-        <div
-          class={row_class(ev)}
-          role="row"
-          tabindex="-1"
-          onclick={() => select(ev)}
-          onkeydown={(e) => onRowKeyDown(e, ev)}
-        >
-          <span class="col-seq mono">{ev.seq}</span>
+        {#if ev.entry_kind === 'separator'}
+          <div
+            class="row separator"
+            role="row"
+            title={ev.url ?? ev.label}
+          >
+            <span class="separator-label">{ev.label}</span>
+          </div>
+        {:else}
+          <div
+            class={row_class(ev)}
+            role="row"
+            tabindex="-1"
+            onclick={() => select(ev)}
+            onkeydown={(e) => onRowKeyDown(e, ev)}
+          >
+            <span class="col-seq mono">{ev.seq}</span>
 
-          <span class="col-dir">
-            {#if ev.entry_kind === 'stream'}
-              <span class="badge badge-stream" title="Stream session">⇄</span>
-            {:else if ev.direction === 'client'}
-              <span class="badge badge-client" title="Client → Server">↑</span>
-            {:else}
-              <span class="badge badge-server" title="Server → Client">↓</span>
-            {/if}
-          </span>
+            <span class="col-dir">
+              {#if ev.entry_kind === 'stream'}
+                <span class="badge badge-stream" title="Stream session">⇄</span>
+              {:else if ev.direction === 'client'}
+                <span class="badge badge-client" title="Client → Server">↑</span>
+              {:else}
+                <span class="badge badge-server" title="Server → Client">↓</span>
+              {/if}
+            </span>
 
-          <span class="col-method" title={method_label(ev)}>{method_label(ev)}</span>
+            <span class="col-method" title={method_label(ev)}>{method_label(ev)}</span>
 
-          <span class="col-dur mono dur-{ev.status}">{fmt_duration(ev)}</span>
+            <span class="col-dur mono dur-{ev.status}">{fmt_duration(ev)}</span>
 
-          <span class="col-bytes mono" title={fmt_entry_bytes(ev)}>{fmt_entry_bytes(ev)}</span>
+            <span class="col-bytes mono" title={fmt_entry_bytes(ev)}>{fmt_entry_bytes(ev)}</span>
 
-          <span class="col-status">
-            {#if ev.status === 'success'}
-              <span class="dot dot-ok" title="Success">●</span>
-            {:else if ev.status === 'error'}
-              <span class="dot dot-err" title={ev.error ?? 'Error'}>●</span>
-            {:else if ev.status === 'cancelled'}
-              <span class="dot dot-cancel" title="Cancelled">●</span>
-            {:else}
-              <span class="dot dot-pending" title="Pending">●</span>
-            {/if}
-          </span>
-        </div>
+            <span class="col-status">
+              {#if ev.status === 'success'}
+                <span class="dot dot-ok" title="Success">●</span>
+              {:else if ev.status === 'error'}
+                <span class="dot dot-err" title={ev.error ?? 'Error'}>●</span>
+              {:else if ev.status === 'cancelled'}
+                <span class="dot dot-cancel" title="Cancelled">●</span>
+              {:else}
+                <span class="dot dot-pending" title="Pending">●</span>
+              {/if}
+            </span>
+          </div>
+        {/if}
       {/each}
 
       <div
@@ -388,6 +419,35 @@
   .row.error    { background: rgba(244,67,54,0.08); color: #ef9a9a; }
   .row.cancelled { background: rgba(158, 158, 158, 0.08); color: #c7c7c7; }
   .row.pending:not(.stream) { opacity: 0.6; }
+
+  .row.separator {
+    justify-content: center;
+    cursor: default;
+    background: #25272b;
+    color: #9aa0a6;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-bottom: 1px solid #3c4043;
+    border-top: 1px solid #3c4043;
+  }
+  .row.separator:hover { background: #25272b; }
+  .separator-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    justify-content: center;
+  }
+  .separator-label::before,
+  .separator-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #3c4043;
+    max-width: 120px;
+  }
 
   /* ─ column widths ─ */
   .col-seq    { width: 32px;  flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; }

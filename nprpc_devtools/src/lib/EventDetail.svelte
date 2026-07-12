@@ -1,7 +1,7 @@
 <svelte:options runes={true} />
 
 <script lang="ts">
-  import type { DebugEntry, StreamEvent, StreamMessageEvent } from '../types';
+  import type { CallEntry, StreamEvent, StreamMessageEvent } from '../types';
   import {
     detailTabs,
     type DetailTab,
@@ -13,7 +13,7 @@
   let {
     event = null
   }: {
-    event?: DebugEntry | null;
+    event?: CallEntry | null;
   } = $props();
 
   // RPC and stream expose different tab sets. Remember each independently so
@@ -64,7 +64,7 @@
     return `${h}:${m}:${s}.${ms}`;
   }
 
-  function fmt_duration(ev: DebugEntry): string {
+  function fmt_duration(ev: CallEntry): string {
     if (ev.status === 'pending') return 'pending …';
     if (ev.status === 'cancelled') return 'cancelled';
     if (ev.duration_ms === undefined) return '—';
@@ -83,11 +83,11 @@
     return '0x' + n.toString(16).padStart(16, '0').toUpperCase();
   }
 
-  function endpoint_url(ev: DebugEntry): string {
+  function endpoint_url(ev: CallEntry): string {
     return ev.endpoint.url;
   }
 
-  function status_label(ev: DebugEntry): string {
+  function status_label(ev: CallEntry): string {
     if (ev.status === 'success') return 'Success ✓';
     if (ev.status === 'error')   return 'Error ✕';
     if (ev.status === 'cancelled') return 'Cancelled';
