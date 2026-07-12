@@ -1380,7 +1380,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
           << "poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),interface_idx,"
           << "func_idx:" << fn->idx << ",method_name:'" << fn->name << "',"
           << "endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,"
-             "transport:NPRPC.EndPoint.to_string(this.endpoint.type).replace('://','') as any},"
+             "transport:NPRPC.EndPoint.to_type_str(this.endpoint.type) as any,"
+             "url:this.endpoint.to_url()},"
           << "stream_id:String(stream_id),stream_kind:'";
 
       switch (fn->stream_kind) {
@@ -1506,8 +1507,9 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
         << "poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),interface_idx,"
         << "func_idx:" << fn->idx << ",method_name:'" << fn->name << "',"
         << "endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,"
-           "transport:NPRPC.EndPoint.to_string(this.endpoint.type).replace('://','') as any},"
-        << "request_args:{";  
+           "transport:NPRPC.EndPoint.to_type_str(this.endpoint.type) as any,"
+           "url:this.endpoint.to_url()},"
+        << "request_args:{";
     {
       bool _dbg_first = true;
       for (auto _dbg_a : fn->args) {
@@ -1721,7 +1723,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
         << "poa_idx:this.data.poa_idx,object_id:String(this.data.object_id),"
         << "interface_idx:0,func_idx:" << fn->idx << ",method_name:'" << fn->name << "',"
         << "endpoint:{hostname:this.endpoint.hostname,port:this.endpoint.port,"
-           "transport:'http'},"
+           "transport:this.endpoint.is_ssl()?'https':'http',url:this.endpoint.to_url(true)},"
         << "request_args:{";
     {
       bool _dbg_first = true;
@@ -2073,7 +2075,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
         << "poa_idx:obj.poa.index,object_id:String(obj.oid),"
         << "interface_idx:0,func_idx:" << fn->idx << ",method_name:'" << fn->name << "',"
         << "endpoint:{hostname:remote_endpoint.hostname,port:remote_endpoint.port,"
-           "transport:NPRPC.EndPoint.to_string(remote_endpoint.type).replace('://','') as any},"
+           "transport:NPRPC.EndPoint.to_type_str(remote_endpoint.type) as any,"
+           "url:remote_endpoint.to_url()},"
         << "request_args:";
     if (fn->in_s) {
       out << "ia";
@@ -2292,7 +2295,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
         << "poa_idx:obj.poa.index,object_id:String(obj.oid),"
         << "interface_idx:init.interface_idx,func_idx:" << fn->idx << ",method_name:'" << fn->name << "',"
         << "endpoint:{hostname:remote_endpoint.hostname,port:remote_endpoint.port,"
-           "transport:NPRPC.EndPoint.to_string(remote_endpoint.type).replace('://','') as any},"
+           "transport:NPRPC.EndPoint.to_type_str(remote_endpoint.type) as any,"
+           "url:remote_endpoint.to_url()},"
         << "stream_id:String(init.stream_id),stream_kind:'";
 
     switch (fn->stream_kind) {

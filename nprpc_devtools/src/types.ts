@@ -13,6 +13,7 @@ export interface RpcEndpointInfo {
   hostname : string;
   port     : number;
   transport: Transport;
+  url      : string;
 }
 
 export interface RpcEvent {

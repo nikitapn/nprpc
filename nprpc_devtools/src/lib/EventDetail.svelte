@@ -2,6 +2,12 @@
 
 <script lang="ts">
   import type { DebugEntry, StreamEvent, StreamMessageEvent } from '../types';
+  import {
+    detailTabs,
+    type DetailTab,
+    type RpcTab,
+    type StreamTab,
+  } from './state.svelte';
   import JsonTree from './JsonTree.svelte';
 
   let {
@@ -10,20 +16,28 @@
     event?: DebugEntry | null;
   } = $props();
 
-  type Tab = 'general' | 'request' | 'response' | 'init' | 'messages';
-  let active_tab = $state<Tab>('general');
-  let selected_message = $state<StreamMessageEvent | null>(null);
+  // RPC and stream expose different tab sets. Remember each independently so
+  // switching between entry kinds never leaves us on a non-existent tab
+  // (e.g. `init` on an RPC call, or `request` on a stream).
+  const RPC_TABS = new Set<string>(['general', 'request', 'response']);
+  const STREAM_TABS = new Set<string>(['general', 'init', 'messages']);
 
-  let previousEventId = $state<number | null>(null);
-  let previousStreamMessageKey = $state('');
+  const active_tab = $derived<DetailTab>(
+    event?.entry_kind === 'stream' ? detailTabs.stream : detailTabs.rpc
+  );
 
-  $effect(() => {
-    const eventId = event?.id ?? null;
-    if (eventId !== previousEventId) {
-      active_tab = 'general';
-      previousEventId = eventId;
+  function set_tab(tab: DetailTab) {
+    if (event?.entry_kind === 'stream') {
+      if (!STREAM_TABS.has(tab)) return;
+      detailTabs.stream = tab as StreamTab;
+    } else {
+      if (!RPC_TABS.has(tab)) return;
+      detailTabs.rpc = tab as RpcTab;
     }
-  });
+  }
+
+  let selected_message = $state<StreamMessageEvent | null>(null);
+  let previousStreamMessageKey = $state('');
 
   $effect(() => {
     if (!event || event.entry_kind !== 'stream') {
@@ -70,7 +84,7 @@
   }
 
   function endpoint_url(ev: DebugEntry): string {
-    return `${ev.endpoint.transport}://${ev.endpoint.hostname}:${ev.endpoint.port}`;
+    return ev.endpoint.url;
   }
 
   function status_label(ev: DebugEntry): string {
@@ -127,7 +141,7 @@
         class:active={active_tab === 'general'}
         role="tab"
         tabindex="0"
-        onclick={() => active_tab = 'general'}
+        onclick={() => set_tab('general')}
       >General</button>
       {#if is_stream}
         <button
@@ -136,7 +150,7 @@
           class:active={active_tab === 'init'}
           role="tab"
           tabindex="0"
-          onclick={() => active_tab = 'init'}
+          onclick={() => set_tab('init')}
         >Init</button>
         <button
           type="button"
@@ -144,7 +158,7 @@
           class:active={active_tab === 'messages'}
           role="tab"
           tabindex="0"
-          onclick={() => active_tab = 'messages'}
+          onclick={() => set_tab('messages')}
         >Messages</button>
       {:else}
         <button
@@ -153,7 +167,7 @@
           class:active={active_tab === 'request'}
           role="tab"
           tabindex="0"
-          onclick={() => active_tab = 'request'}
+          onclick={() => set_tab('request')}
         >Request</button>
         <button
           type="button"
@@ -162,7 +176,7 @@
           class:tab-error={has_error}
           role="tab"
           tabindex="0"
-          onclick={() => active_tab = 'response'}
+          onclick={() => set_tab('response')}
         >{has_error ? 'Error' : 'Response'}</button>
       {/if}
     </div>
@@ -236,9 +250,16 @@
             {/if}
 
             <!-- Transport -->
-            <tr class="section-header"><td colspan="2">Transport</td></tr>
+            <tr class="section-header">
+              <td class="label">Transport</td>
+              <td class="mono">
+                <span class="transport-badge transport-{event.endpoint.transport}">
+                  {event.endpoint.transport.toUpperCase()}
+                </span>
+              </td>
+            </tr>
             <tr>
-              <td class="label">Endpoint</td>
+              <td class="label">URL</td>
               <td class="mono">{endpoint_url(event)}</td>
             </tr>
             <tr>
@@ -248,14 +269,6 @@
             <tr>
               <td class="label">Port</td>
               <td class="mono">{event.endpoint.port}</td>
-            </tr>
-            <tr>
-              <td class="label">Protocol</td>
-              <td>
-                <span class="transport-badge transport-{event.endpoint.transport}">
-                  {event.endpoint.transport.toUpperCase()}
-                </span>
-              </td>
             </tr>
           </tbody>
         </table>
@@ -321,10 +334,25 @@
               <td class="mono">{fmt_object_id(event.object_id)}</td>
             </tr>
 
-            <tr class="section-header"><td colspan="2">Transport</td></tr>
+            <tr class="section-header">
+              <td class="label">Transport</td>
+              <td class="mono">
+                <span class="transport-badge transport-{event.endpoint.transport}">
+                  {event.endpoint.transport.toUpperCase()} STREAM
+                </span>
+              </td>
+            </tr>
             <tr>
-              <td class="label">Endpoint</td>
+              <td class="label">URL</td>
               <td class="mono">{endpoint_url(event)}</td>
+            </tr>
+            <tr>
+              <td class="label">Host</td>
+              <td class="mono">{event.endpoint.hostname}</td>
+            </tr>
+            <tr>
+              <td class="label">Port</td>
+              <td class="mono">{event.endpoint.port}</td>
             </tr>
             <tr>
               <td class="label">Init size</td>
@@ -592,10 +620,11 @@
     font-weight: 700;
     font-family: Menlo, Monaco, 'Courier New', monospace;
   }
-  .transport-ws   { background: #1a4775; color: #7ab8f5; }
-  .transport-wss  { background: #1a4a20; color: #6dbf67; }
-  .transport-http { background: #3a2a00; color: #ffb347; }
-  .transport-https{ background: #1a4a20; color: #6dbf67; }
+  .transport-ws   { background: #3a2a00; color: #9e9e9e; }
+  .transport-http { background: #3a2a00; color: #9e9e9e; }
+  .transport-https{ background: #4dd136; color: #000000; }
+  .transport-wss  { background: #4dd136; color: #000000; }
+  .transport-wt   { background: #4dd136; color: #000000; }
 
   .stream-shell {
     display: flex;

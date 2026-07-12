@@ -47,6 +47,18 @@ export class EndPoint {
   {
   }
 
+  public static to_type_str(type: EndPointType): string {
+    switch (type) {
+      case EndPointType.Http: return "http"
+      case EndPointType.SecuredHttp: return "https"
+      case EndPointType.WebSocket: return "ws"
+      case EndPointType.SecuredWebSocket: return "wss"
+      case EndPointType.WebTransport: return "wt"
+      default:
+        return "unknown";
+    }
+  }
+
   public static to_string(type: EndPointType): string {
     switch (type) {
       case EndPointType.Http:
@@ -79,6 +91,37 @@ export class EndPoint {
     return this.type === other.type &&
       this.hostname === other.hostname &&
       this.port === other.port;
+  }
+
+  public to_url(use_http: boolean = false): string {
+    if (use_http) {
+      switch (this.type) {
+        case EndPointType.Http:
+        case EndPointType.WebSocket:
+          return `http://${this.hostname}:${this.port}/rpc`;
+        case EndPointType.SecuredHttp:
+        case EndPointType.SecuredWebSocket:
+        case EndPointType.WebTransport:
+          return `https://${this.hostname}:${this.port}/rpc`;
+      default:
+        return `unknown://${this.hostname}:${this.port}`;
+      }
+    }
+
+    switch (this.type) {
+      case EndPointType.Http:
+        return `http://${this.hostname}:${this.port}/rpc`;
+      case EndPointType.SecuredHttp:
+        return `https://${this.hostname}:${this.port}/rpc`;
+      case EndPointType.WebSocket:
+        return `ws://${this.hostname}:${this.port}`;
+      case EndPointType.SecuredWebSocket:
+        return `wss://${this.hostname}:${this.port}`;
+      case EndPointType.WebTransport:
+        return `https://${this.hostname}:${this.port}/wt`;
+      default:
+        return `unknown://${this.hostname}:${this.port}`;
+    }
   }
 
   public to_string(): string {

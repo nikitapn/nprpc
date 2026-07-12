@@ -1967,7 +1967,7 @@ int Http3Connection::handle_expiry()
   auto now = timestamp_ns();
   int rv = ngtcp2_conn_handle_expiry(conn_, now);
   if (rv != 0) {
-    NPRPC_HTTP3_ERROR("ngtcp2_conn_handle_expiry: {}", ngtcp2_strerror(rv));
+    NPRPC_HTTP3_DEBUG("ngtcp2_conn_handle_expiry: {}", ngtcp2_strerror(rv));
     ngtcp2_ccerr_set_liberr(&last_error_, rv, nullptr, 0);
     return handle_error();
   }
