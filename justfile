@@ -63,7 +63,7 @@ _ensure-bpf binary:
 [private]
 _kill-test-procs:
     #!/usr/bin/env bash
-    pkill -9 npnameserver nprpc_server_test nprpc_test benchmark_server \
+    killall -9 npnameserver nprpc_server_test nprpc_test benchmark_server \
       grpc_benchmark_server capnp_benchmark_server 2>/dev/null || true
 
 # ── tests ────────────────────────────────────────────────────────────────────
@@ -138,8 +138,8 @@ run-benchmarks *args: (bt "nprpc_benchmarks")
     set -euo pipefail
     just _ensure-bpf "{{build_dir}}/benchmark/benchmark_server"
     just _kill-test-procs
-    "./{{build_dir}}/benchmark/nprpc_benchmarks" {{args}} 2>&1 \
-      | awk '/----------/{f=1} /NPRPC Benchmark Environment Teardown/{f=0} f'
+    "./{{build_dir}}/benchmark/nprpc_benchmarks" {{args}} 2>&1 #\
+      #| awk '/----------/{f=1} /NPRPC Benchmark Environment Teardown/{f=0} f'
 
 # ── docker / images ──────────────────────────────────────────────────────────
 
