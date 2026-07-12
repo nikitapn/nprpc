@@ -1,6 +1,6 @@
 {
   "name": "@nprpc/devtools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Chrome DevTools extension for inspecting NPRPC calls and streams",
   "repository": {
     "type": "git",

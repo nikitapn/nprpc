@@ -23,8 +23,28 @@
   // Structured-clone (used by postMessage) rejects BigInt values.
   // Tag them as { __bigint__: "<value>" } so the DevTools panel can
   // reconstruct the correct type and display them as  101n.
+  //
+  // ArrayBuffer / TypedArray would otherwise be walked via Object.keys
+  // into a huge plain object (one property per index), which freezes the
+  // JSON tree UI. Tag them as { __bytes__: { type, length, data } } so
+  // the panel can show a compact summary and paginate the bytes.
   function sanitize(v) {
     if (typeof v === 'bigint') return { __bigint__: String(v) };
+    if (v instanceof ArrayBuffer) {
+      const data = Array.from(new Uint8Array(v));
+      return { __bytes__: { type: 'ArrayBuffer', length: v.byteLength, data } };
+    }
+    if (ArrayBuffer.isView(v)) {
+      const view = /** @type {ArrayBufferView} */ (v);
+      const data = Array.from(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+      return {
+        __bytes__: {
+          type: v.constructor && v.constructor.name ? v.constructor.name : 'TypedArray',
+          length: view.byteLength,
+          data,
+        },
+      };
+    }
     if (Array.isArray(v)) return v.map(sanitize);
     if (v !== null && typeof v === 'object') {
       const out = {};

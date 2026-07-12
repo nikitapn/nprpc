@@ -210,6 +210,29 @@ statistics:
       --not-match-d='build|gen|Generated|node_modules|third_party|dist|\.build_.*|\.cache|\.github|\.svelte-kit|\.clang-format' \
       --not-match-f='nprpc_nameserver\.hpp|package-lock\.json|nprpc_node\.hpp|nprpc_base\.hpp'
 
+# ── nprpc_devtools ───────────────────────────────────────────────────────────
+
+# Install deps if needed, then vite-build the Chrome extension into nprpc_devtools/dist
+devtools-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd nprpc_devtools
+    if [[ ! -d node_modules ]]; then
+      npm ci
+    fi
+    npm run build
+
+# Build (via prepack) and create the npm tarball in nprpc_devtools/
+devtools-pack:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd nprpc_devtools
+    if [[ ! -d node_modules ]]; then
+      npm ci
+    fi
+    npm pack
+    echo "Packed tarball in nprpc_devtools/ (see nprpc-devtools-*.tgz)"
+
 # ── examples ─────────────────────────────────────────────────────────────────
 
 # Live-blog: generate stubs
