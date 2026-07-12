@@ -5332,8 +5332,9 @@ private:
     while (ingress_running_.load(std::memory_order_acquire)) {
       auto view = ingress_ring_->try_read_view();
       if (!view) {
-        struct timespec ts = {0, 50'000}; // 50 µs
-        nanosleep(&ts, nullptr);
+        // Spin briefly then sleep via condvar; zero cost for the producer
+        // (no mutex/syscall) unless we actually go to sleep.
+        ingress_ring_->wait_for_readable(std::chrono::milliseconds(10));
         continue;
       }
 
@@ -5344,8 +5345,9 @@ private:
 
       ShmIngressFrame hdr{};
       std::memcpy(&hdr, view.data, sizeof(hdr));
+      const size_t payload_len = hdr.payload_len;
 
-      if (view.size < sizeof(ShmIngressFrame) + hdr.payload_len ||
+      if (view.size < sizeof(ShmIngressFrame) + payload_len ||
           hdr.ep_len == 0 || hdr.ep_len > sizeof(hdr.ep_storage)) {
         ingress_ring_->commit_read(view);
         continue;
@@ -5354,7 +5356,7 @@ private:
       // Copy payload before releasing the ring slot.
       std::vector<uint8_t> pkt(
           view.data + sizeof(ShmIngressFrame),
-          view.data + sizeof(ShmIngressFrame) + hdr.payload_len);
+          view.data + sizeof(ShmIngressFrame) + payload_len);
       const auto ep = Http3Server::decode_ingress_ep(hdr);
       ingress_ring_->commit_read(view);
 
