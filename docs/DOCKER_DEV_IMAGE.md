@@ -17,7 +17,7 @@ Production-ready Docker image with pre-built NPRPC C++ libraries, Swift bindings
 ### Build the Image
 
 ```bash
-./build-dev-image.sh
+just build-dev-image
 ```
 
 This creates `nprpc-dev:latest` with all artifacts in `/opt/`:
@@ -136,7 +136,7 @@ Pre-configured in the image:
 ### Build with Different Tag
 
 ```bash
-IMAGE_NAME=mycompany/nprpc IMAGE_TAG=1.0.0 ./build-dev-image.sh
+just build-dev-image mycompany/nprpc 1.0.0
 ```
 
 ### Push to Registry

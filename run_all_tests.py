@@ -227,7 +227,7 @@ class Runner:
         swift_dir = self.root / "nprpc_swift"
 
         # 1. Generate stubs (requires npidl already built by CMake)
-        gen_ok, gen_out = self._run(["bash", "gen_stubs.sh"], cwd=swift_dir, timeout=60)
+        gen_ok, gen_out = self._run(["just", "gen-swift-stubs"], cwd=self.root, timeout=60)
         if not gen_ok:
             r = Result(stage="Swift gen stubs", success=False, duration=0, output=gen_out)
             self.results.append(r)

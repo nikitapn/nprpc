@@ -572,14 +572,11 @@ NPRPC provides native Swift bindings via Swift 6.2+ C++ interop. The full featur
 Swift must be built inside a dedicated Docker container because it requires NPRPC and Boost to be compiled with Swift's bundled Clang toolchain.
 
 ```bash
-cd nprpc_swift
-
 # Step 1 — build the Docker image (once)
-cd ..
-./build-dev-image.sh          # builds nprpc-dev:latest used by CMake examples
-cd nprpc_swift
+just build-dev-image          # builds nprpc-dev:latest used by CMake examples
 
 # OR build the Swift-specific image directly
+cd nprpc_swift
 docker build -f Dockerfile \
   --build-arg USER_ID=$(id -u) \
   --build-arg GROUP_ID=$(id -g) \
@@ -593,11 +590,14 @@ docker build -f Dockerfile \
 ./docker-build-nprpc.sh
 
 # Step 4 — generate Swift stubs from IDL (requires npidl built in Step 3)
-./gen_stubs.sh
+just gen-swift-stubs          # from repo root
 
 # Step 5 — build and optionally test the Swift package
 ./docker-build-swift.sh          # build only
 ./docker-build-swift.sh --test   # build + run tests (timeout 15 s)
+
+# Or all-in-one (stubs + docker build + test):
+# just run-swift-tests
 ```
 
 To rebuild the Docker image (after Dockerfile changes):
@@ -669,32 +669,34 @@ See [nprpc_swift/README.md](nprpc_swift/README.md) and [nprpc_swift/EXAMPLES.md]
 ## Building
 
 ```bash
-# Standard dev build (Ninja, RelWithDebInfo, all features)
-./configure.sh
-cmake --build .build_release -j$(nproc)
+# Standard dev build (Ninja, RelWithDebInfo, all features) — see `.env` for BUILD_DIR
+just configure
+just build
+
+# Or a single target
+just bt nprpc_test
+
+# Run tests
+just run-cpp-tests                    # C++ (ctest)
+just run-js-tests                     # TypeScript / Mocha
+just test-all                         # C++ + JS + Swift
+just run-cpp-tests -R NprpcTest.TestBasic   # filtered
 
 # Minimal build (library only)
 cmake -S . -B build
 cmake --build build -j$(nproc)
-
-# With QUIC + HTTP/3
-cmake -S . -B build -DNPRPC_ENABLE_QUIC=ON -DNPRPC_ENABLE_HTTP3=ON
-cmake --build build -j$(nproc)
-
-# Run C++ tests
-./run_cpp_test.sh        # or: ctest --output-on-failure --test-dir .build_release
 ```
 
-See [docs/BUILD.md](docs/BUILD.md) for all CMake options, the JS/TS build, and install instructions.
+See [docs/BUILD.md](docs/BUILD.md) for all CMake options, the JS/TS build, and install instructions. Run `just` for the full task list.
 
 ## Performance
 
 NPRPC is benchmarked against gRPC and Cap'n Proto RPC.
 
 ```bash
-./run_benchmark.sh                                    # all suites
-./run_benchmark.sh --benchmark_filter=EmptyCall       # latency
-./run_benchmark.sh --benchmark_filter=LargeData1MB    # throughput
+just run-benchmarks                                    # all suites
+just run-benchmarks --benchmark_filter=EmptyCall       # latency
+just run-benchmarks --benchmark_filter=LargeData1MB    # throughput
 ```
 
 See [benchmark/README.md](benchmark/README.md) for methodology and results.

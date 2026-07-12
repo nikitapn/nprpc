@@ -1,28 +1,5 @@
-#!/bin/bash
-# JavaScript Test Runner for NPRPC
-
-# Change to the test directory
-cd "$(dirname "$0")"
-
-echo "NPRPC JavaScript Test Runner"
-echo "============================"
-
-# Build the TypeScript code
-echo "Building TypeScript code..."
-npm run build
-
-if [ $? -ne 0 ]; then
-    echo "TypeScript build failed!"
-    exit 1
-fi
-
-killall -9 nprpc_server_test npnameserver 2>/dev/null || true
-
-# Run the tests
-echo "Running JavaScript tests..."
-npm test
-
-exit_code=$?
-
-echo "Tests completed with exit code: $exit_code"
-exit $exit_code
+#!/usr/bin/env bash
+# Deprecated: use `just run-js-tests` from the repo root.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+exec just run-js-tests "$@"

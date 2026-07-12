@@ -137,8 +137,8 @@ npm run clean
 
 ### Manual Test Runner
 ```bash
-# Use the test runner script
-./run-tests.sh
+# From the repository root:
+just run-js-tests
 ```
 
 ## Development Workflow
