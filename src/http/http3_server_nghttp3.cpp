@@ -606,6 +606,9 @@ public:
   int on_write();
   int handle_expiry();
   void schedule_timer();
+  // Coalesces multiple write triggers into a single deferred on_write() so a
+  // burst of inbound datagrams produces one GSO send instead of one per packet.
+  void schedule_write();
   void enqueue_packet(flat_buffer&& data, ngtcp2_pkt_info pi);
 
   const ngtcp2_cid& scid() const { return scid_; }
@@ -926,6 +929,11 @@ private:
   ngtcp2_ccerr last_error_{};
   bool closed_ = false;
   bool timer_active_ = false;
+  // True while a deferred on_write() is already queued on the strand.
+  bool write_pending_ = false;
+  // Last QUIC expiry we armed timer_ for; used to skip redundant re-arms.
+  // UINT64_MAX means "no active deadline armed".
+  ngtcp2_tstamp last_scheduled_expiry_ = UINT64_MAX;
 };
 
 //==============================================================================
@@ -1547,6 +1555,10 @@ bool Http3Connection::init()
   }
   settings.cc_algo = NGTCP2_CC_ALGO_CUBIC;
   settings.max_tx_udp_payload_size = MAX_UDP_PAYLOAD_SIZE;
+  // settings.max_tx_udp_payload_size = NGTCP2_MAX_TX_UDP_PAYLOAD_SIZE;
+  // static const std::uint16_t pmtud_probes[] = {NGTCP2_MAX_TX_UDP_PAYLOAD_SIZE};
+  // settings.pmtud_probes = pmtud_probes;
+  // settings.pmtud_probeslen = sizeof(pmtud_probes) / sizeof(pmtud_probes[0]);
 
   // Configure transport parameters
   ngtcp2_transport_params params;
@@ -1759,10 +1771,10 @@ int Http3Connection::on_read(const uint8_t* data,
 
   print_ssl_state("on_read end");
 
-  schedule_timer();
-
-  // Send any pending data (handshake responses, etc.)
-  on_write();
+  // Coalesce the post-read write: if several datagrams are processed back to
+  // back on the strand, they share a single deferred on_write() (which arms the
+  // timer itself), instead of each flushing a small GSO burst.
+  schedule_write();
 
   return 0;
 }
@@ -1956,10 +1968,24 @@ void Http3Connection::enqueue_packet(flat_buffer&& data,
           return;
         }
 
-        if (self->on_read(packet.data_ptr(), packet.size(), &pi) == 0) {
-          self->on_write();
-        }
+        // on_read() already schedules a coalesced write on success; no direct
+        // on_write() here (that produced two writes per inbound datagram).
+        self->on_read(packet.data_ptr(), packet.size(), &pi);
       });
+}
+
+void Http3Connection::schedule_write()
+{
+  if (write_pending_ || closed_) {
+    return;
+  }
+  write_pending_ = true;
+  boost::asio::post(strand_, [self = shared_from_this()]() {
+    self->write_pending_ = false;
+    if (!self->closed_) {
+      self->on_write();
+    }
+  });
 }
 
 int Http3Connection::handle_expiry()
@@ -1981,6 +2007,7 @@ void Http3Connection::schedule_timer()
 
   if (expiry <= now) {
     // Already expired, handle immediately
+    last_scheduled_expiry_ = UINT64_MAX;
     boost::asio::post(strand_, [self = shared_from_this()]() {
       if (!self->closed_) {
         self->handle_expiry();
@@ -1990,11 +2017,26 @@ void Http3Connection::schedule_timer()
     return;
   }
 
+  // schedule_timer() is called several times per datagram (from on_read and
+  // on_write). Re-arming the asio timer each time cancels and re-queues the
+  // pending wait for no reason. Skip when the deadline is unchanged.
+  if (expiry == last_scheduled_expiry_) {
+    return;
+  }
+  last_scheduled_expiry_ = expiry;
+
   auto timeout = std::chrono::nanoseconds(expiry - now);
   timer_.expires_after(timeout);
   timer_.async_wait(boost::asio::bind_executor(
       strand_, [self = shared_from_this()](boost::system::error_code ec) {
-        if (ec || self->closed_) {
+        // ec set => this wait was cancelled by a re-arm; a newer wait now owns
+        // last_scheduled_expiry_, so leave it untouched.
+        if (ec) {
+          return;
+        }
+        // Real firing: allow the next deadline to re-arm.
+        self->last_scheduled_expiry_ = UINT64_MAX;
+        if (self->closed_) {
           return;
         }
         self->handle_expiry();

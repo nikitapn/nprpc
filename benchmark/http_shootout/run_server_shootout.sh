@@ -13,6 +13,29 @@ TMP_DIR="$WORK_DIR/tmp"
 LOCAL_H2LOAD_BIN="$ROOT_DIR/third_party/nghttp2/build/src/h2load"
 SKIP_HTTP1="${SKIP_HTTP1:-0}"
 SKIP_CADDY="${SKIP_CADDY:-0}"
+SKIP_NGINX="${SKIP_NGINX:-0}"
+SKIP_NPRPC="${SKIP_NPRPC:-0}"
+
+# When enabled, attach strace to each server (nprpc/nginx/caddy, system mode
+# only) and report network syscall counts alongside the final results.
+# Disabled by default since it adds tracing overhead.
+TRACE_SYSCALLS="${TRACE_SYSCALLS:-0}"
+
+# Syscalls to count when TRACE_SYSCALLS=1. Default covers both the
+# recvmsg/sendmsg style (TCP, boost::asio's buffer-sequence path) and the
+# recvfrom/sendto style (nprpc's HTTP/3 UDP path uses async_receive_from /
+# async_send_to, which resolve to recvfrom/sendto on Linux -- not recvmsg).
+# Override to narrow/widen what gets counted.
+TRACE_SYSCALLS_FILTER="${TRACE_SYSCALLS_FILTER:-sendmsg,sendmmsg,recvmsg,recvmmsg,sendto,recvfrom}"
+
+# When enabled, capture each server's (system-mode nginx/caddy, plus nprpc)
+# QUIC/UDP traffic with tcpdump during the run, one pcap per server, for
+# later visualization with `run_server_shootout.sh plot`. Disabled by
+# default since it needs sudo and adds capture overhead.
+CAPTURE_PACKETS="${CAPTURE_PACKETS:-0}"
+
+# Script that turns a pcap into a packet-length-over-time chart.
+PACKET_PLOT_SCRIPT="${PACKET_PLOT_SCRIPT:-$SCRIPT_DIR/plot_packets.py}"
 
 # Payload sizes to benchmark.  Add or remove entries as needed.
 # Supported suffixes: kb (kibibytes), mb (mebibytes).
@@ -40,6 +63,12 @@ CADDY_MODE="${CADDY_MODE:-auto}"
 
 OHA_BIN="${OHA_BIN:-oha}"
 H2LOAD_BIN="${H2LOAD_BIN:-$LOCAL_H2LOAD_BIN}"
+H2LOAD_ARGS="--warm-up-time=3 -D 15 -c 32 -m 10"
+if [ "$CAPTURE_PACKETS" == "1" ]; then
+  H2LOAD_ARGS="--warm-up-time=0 -D 1 -c 2 -m 10"
+fi
+H2LOAD_ARGS="--alpn-list=h3 ${H2LOAD_ARGS}"
+
 
 NPRPC_PID=""
 NPRPC_ROUTER_PID=""
@@ -49,6 +78,8 @@ CADDY_PID=""
 NGINX_CID=""
 CADDY_CID=""
 NGINX_HTTP3_ENABLED=0
+declare -A STRACE_PIDS=()
+declare -A TCPDUMP_PIDS=()
 
 mkdir -p "$RESULTS_DIR" "$WWW_DIR" "$TMP_DIR"
 
@@ -64,6 +95,127 @@ require_cmd() {
     echo "Required command not found: $1" >&2
     exit 1
   }
+}
+
+start_strace() {
+  local name="$1"
+  shift
+  local -a pids=("$@")
+  [[ "$TRACE_SYSCALLS" == "1" ]] || return 0
+  if [[ ${#pids[@]} -eq 0 || -z "${pids[0]}" ]]; then
+    log "TRACE_SYSCALLS=1 but no PID available for $name; skipping strace"
+    return 0
+  fi
+  require_cmd strace
+  local out="$RESULTS_DIR/${name}.strace.txt"
+  local -a strace_args=(-f -c -e "trace=${TRACE_SYSCALLS_FILTER}")
+  local pid
+  for pid in "${pids[@]}"; do
+    strace_args+=(-p "$pid")
+  done
+  log "Attaching strace to $name (PIDs: ${pids[*]}) for syscall counts"
+  # -f only follows forks that happen *after* attach, so callers must pass
+  # any pre-existing worker PIDs explicitly (e.g. nginx forks its workers
+  # before we get a chance to attach).
+  # -n + </dev/null: fail fast instead of blocking on a sudo password
+  # prompt from a backgrounded job (assumes passwordless sudo is configured
+  # for strace; see NOPASSWD sudoers entry).
+  sudo -n strace "${strace_args[@]}" -o "$out" </dev/null >/dev/null 2>&1 &
+  STRACE_PIDS["$name"]=$!
+}
+
+collect_child_pids() {
+  local parent_pid="$1"
+  pgrep -P "$parent_pid" 2>/dev/null || true
+}
+
+start_packet_capture() {
+  local name="$1"
+  local port="$2"
+  [[ "$CAPTURE_PACKETS" == "1" ]] || return 0
+  require_cmd tcpdump
+  # Port is baked into the filename (not just tracked in-memory) so a later,
+  # separate `plot` invocation can recover it without needing this run's
+  # shell state.
+  local out="$RESULTS_DIR/${name}-${port}.pcap"
+  rm -f "$out"
+  log "Capturing UDP traffic for $name on port $port -> $(basename "$out")"
+  # -U: flush to the output file as packets arrive, so a SIGTERM below
+  # doesn't lose buffered-but-uncommitted packets.
+  sudo -n tcpdump -i any -n -U -w "$out" "udp port ${port}" \
+    </dev/null >/dev/null 2>&1 &
+  TCPDUMP_PIDS["$name"]=$!
+}
+
+stop_packet_capture_all() {
+  [[ "$CAPTURE_PACKETS" == "1" ]] || return 0
+  local name pid
+  for name in "${!TCPDUMP_PIDS[@]}"; do
+    pid="${TCPDUMP_PIDS[$name]}"
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -TERM "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+    unset 'TCPDUMP_PIDS[$name]'
+  done
+}
+
+plot_packet_captures() {
+  require_cmd python3
+  if [[ ! -f "$PACKET_PLOT_SCRIPT" ]]; then
+    log "PACKET_PLOT_SCRIPT not found: $PACKET_PLOT_SCRIPT"
+    exit 1
+  fi
+
+  local file base name port title found=0
+  local -a plot_pids=()
+  for file in "$RESULTS_DIR"/*.pcap; do
+    [[ -e "$file" ]] || continue
+    found=1
+    base="$(basename "$file" .pcap)"
+    port="${base##*-}"
+    name="${base%-*}"
+    title="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')"
+    log "Plotting $(basename "$file") (port $port)"
+    python3 "$PACKET_PLOT_SCRIPT" --pcap "$file" --port "$port" --title "$title" &
+    plot_pids+=($!)
+  done
+
+  if [[ "$found" -eq 0 ]]; then
+    log "No .pcap files found in $RESULTS_DIR (run with CAPTURE_PACKETS=1 first)"
+    return 1
+  fi
+
+  # Each plot opens its own window; wait for all of them to be closed.
+  wait "${plot_pids[@]}" 2>/dev/null || true
+}
+
+stop_strace_all() {
+  [[ "$TRACE_SYSCALLS" == "1" ]] || return 0
+  local name pid
+  for name in "${!STRACE_PIDS[@]}"; do
+    pid="${STRACE_PIDS[$name]}"
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -INT "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+    unset 'STRACE_PIDS[$name]'
+  done
+}
+
+print_syscall_report() {
+  [[ "$TRACE_SYSCALLS" == "1" ]] || return 0
+  local name file
+  echo
+  log "Syscall counts (${TRACE_SYSCALLS_FILTER}):"
+  for name in nprpc nginx caddy; do
+    file="$RESULTS_DIR/${name}.strace.txt"
+    if [[ -f "$file" ]]; then
+      echo "--- $name ---"
+      cat "$file"
+      echo
+    fi
+  done
 }
 
 ensure_nprpc_bpf_capabilities() {
@@ -97,6 +249,8 @@ ensure_nprpc_bpf_capabilities() {
 
 cleanup() {
   set +e
+  stop_strace_all
+  stop_packet_capture_all
   if [[ -n "$NPRPC_PID" ]] && kill -0 "$NPRPC_PID" 2>/dev/null; then
     kill -INT "$NPRPC_PID" 2>/dev/null || true
     wait "$NPRPC_PID" 2>/dev/null || true
@@ -226,6 +380,8 @@ start_nprpc() {
     SERVER_PID="$(pgrep -n -f benchmark_server || true)"
     if [ -n "$SERVER_PID" ]; then
       log "NPRPC benchmark server is already running with PID $SERVER_PID; skipping startup"
+      start_strace nprpc "$SERVER_PID"
+      start_packet_capture nprpc "$NPRPC_HTTP_PORT"
       return
     else
       log "NPRPC_DO_NOT_START_SERVER=1, but no running server found; cannot proceed"
@@ -257,6 +413,8 @@ start_nprpc() {
   wait_for_nprpc
 
   log "NPRPC benchmark_server PID=$NPRPC_PID"
+  start_strace nprpc "$NPRPC_PID"
+  start_packet_capture nprpc "$NPRPC_HTTP_PORT"
 }
 
 generate_nginx_conf() {
@@ -343,6 +501,15 @@ start_nginx_system() {
     >"$TMP_DIR/nginx-stdout.log" 2>&1 &
   NGINX_PID=$!
   sleep 2
+  # nginx's master process mostly just supervises; the actual client I/O
+  # (sendmsg/recvmsg) happens in worker processes, which have already been
+  # forked by the time we get here. Attach to the master *and* its current
+  # workers so strace's -f can also follow any future respawns.
+  local -a nginx_worker_pids=()
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] && nginx_worker_pids+=("$pid")
+  done < <(collect_child_pids "$NGINX_PID")
+  start_strace nginx "$NGINX_PID" "${nginx_worker_pids[@]}"
 }
 
 start_nginx() {
@@ -355,6 +522,7 @@ start_nginx() {
   fi
 
   generate_nginx_conf
+  start_packet_capture nginx "$NGINX_HTTPS_PORT"
 
   if [[ "$mode" == "system" ]]; then
     start_nginx_system
@@ -401,10 +569,12 @@ start_caddy_system() {
     >"$TMP_DIR/caddy-stdout.log" 2>&1 &
   CADDY_PID=$!
   sleep 2
+  start_strace caddy "$CADDY_PID"
 }
 
 start_caddy() {
   generate_caddyfile
+  start_packet_capture caddy "$CADDY_HTTPS_PORT"
   local mode
   mode="$(choose_mode "$CADDY_MODE" caddy)"
   if [[ "$mode" == "system" ]]; then
@@ -442,7 +612,7 @@ run_h2load() {
   local path="$4"
   require_cmd "$H2LOAD_BIN"
   log "Running h2load for $name"
-  "$H2LOAD_BIN" --alpn-list=h3 --warm-up-time=3 -D 15 -c 32 -m 10 \
+  "$H2LOAD_BIN" $H2LOAD_ARGS \
     "https://$host:$port$path" \
     > "$RESULTS_DIR/${name}.h2load.txt"
 }
@@ -522,6 +692,8 @@ start_nprpc_via_router() {
 
   wait_for_router
   log "npquicrouter PID=$NPRPC_ROUTER_PID backend PID=$NPRPC_ROUTER_BACKEND_PID"
+  start_strace nprpc "$NPRPC_ROUTER_BACKEND_PID"
+  start_packet_capture nprpc "$NPRPC_ROUTER_HTTP_PORT"
 }
 
 run_suite_with_router() {
@@ -540,6 +712,10 @@ run_suite_with_router() {
   for size in "${PAYLOAD_SIZES[@]}"; do
     run_h2load "nprpc-router-http3-${size}" "$BENCH_HOST" "$NPRPC_ROUTER_HTTP_PORT" "/${size}.bin"
   done
+
+  stop_strace_all
+  stop_packet_capture_all
+  print_syscall_report
 
   log "Router-variant results written to $RESULTS_DIR"
   RESULTS_DIR="$orig_results_dir"
@@ -666,6 +842,8 @@ capture_environment_report() {
 - caddy version: ${caddy_version:-not installed}
 - SKIP_HTTP1: ${SKIP_HTTP1}
 - SKIP_CADDY: ${SKIP_CADDY}
+- SKIP_NGINX: ${SKIP_NGINX}
+- SKIP_NPRPC: ${SKIP_NPRPC}
 EOF
 )
   echo "$result" > "$report"
@@ -706,37 +884,46 @@ run_suite() {
 
   prepare_assets
   build_benchmark_server
-  start_nprpc
-  start_nginx
+  [ "$SKIP_NPRPC" -ne 1 ] &&
+    start_nprpc
+
+  [ "$SKIP_NGINX" -ne 1 ] &&
+    start_nginx
+
   [ "$SKIP_CADDY" -ne 1 ] &&
     start_caddy
 
   capture_environment_report
 
-  if [[ "$SKIP_HTTP1" != "1" ]]; then
+  if [ "$SKIP_HTTP1" -ne 1 ]; then
     for size in "${PAYLOAD_SIZES[@]}"; do
-      run_oha "nprpc-http1-${size}" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/${size}.bin"
-      run_oha "nginx-http1-${size}" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/${size}.bin"
-      if [[ "$SKIP_CADDY" -ne 1 ]]; then
+      [ "$SKIP_NPRPC" -ne 1 ] &&
+        run_oha "nprpc-http1-${size}" "https://$BENCH_HOST:$NPRPC_HTTP_PORT/${size}.bin"
+      [ "$SKIP_NGINX" -ne 1 ] &&
+        run_oha "nginx-http1-${size}" "https://$BENCH_HOST:$NGINX_HTTPS_PORT/${size}.bin"
+      [ "$SKIP_CADDY" -ne 1 ] &&
         run_oha "caddy-http1-${size}" "https://$BENCH_HOST:$CADDY_HTTPS_PORT/${size}.bin"
-      fi
     done
   else
     log "Skipping HTTP/1.1 benchmarks as SKIP_HTTP1=1"
   fi
 
   for size in "${PAYLOAD_SIZES[@]}"; do
-    run_h2load "nprpc-http3-${size}" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/${size}.bin"
-    if [[ "$NGINX_HTTP3_ENABLED" == "1" ]]; then
+    [ "$SKIP_NPRPC" -ne 1 ] &&
+      run_h2load "nprpc-http3-${size}" "$BENCH_HOST" "$NPRPC_HTTP_PORT" "/${size}.bin"
+    if [[ "$NGINX_HTTP3_ENABLED" == "1" && "$SKIP_NGINX" -ne 1 ]]; then
       run_h2load "nginx-http3-${size}" "$BENCH_HOST" "$NGINX_HTTPS_PORT" "/${size}.bin"
     fi
-    if [[ "$SKIP_CADDY" -ne 1 ]]; then
+    [ "$SKIP_CADDY" -ne 1 ] &&
       run_h2load "caddy-http3-${size}" "$BENCH_HOST" "$CADDY_HTTPS_PORT" "/${size}.bin"
-    fi
   done
   if [[ "$NGINX_HTTP3_ENABLED" != "1" ]]; then
     log "Skipping nginx HTTP/3 benchmarks (http_v3_module not available in current mode)"
   fi
+
+  stop_strace_all
+  stop_packet_capture_all
+  print_syscall_report
 
   write_summary
   log "Results written to $RESULTS_DIR"
@@ -744,7 +931,7 @@ run_suite() {
 
 usage() {
   cat <<EOF
-Usage: $0 [prepare-assets|build|build-h2load|capture-environment|start-nprpc|run|run-router|compare|view]
+Usage: $0 [prepare-assets|build|build-h2load|capture-environment|start-nprpc|run|run-router|compare|view|plot]
 
 Commands:
   prepare-assets  Create shared static files for all servers.
@@ -756,17 +943,33 @@ Commands:
   run-router      Run HTTP/3 benchmark with nprpc behind npquicrouter (SHM + multi-worker eBPF).
   compare         Run both 'run' and 'run-router' back to back then view results.
   view            Summarize result files in benchmark/http_shootout/results.
+  plot            Plot packet-length-over-time charts from .pcap files captured with
+                  CAPTURE_PACKETS=1 (one window per server involved in the run).
 
 Requirements:
   - nginx and/or docker
   - caddy and/or docker
   - oha (HTTP/1.1/HTTPS load)
   - h2load (HTTP/3 load), or run ./benchmark/http_shootout/build_h2load.sh
+  - tcpdump + python3 with matplotlib/scapy (only for CAPTURE_PACKETS=1 / plot)
 Environment:
   - NGINX_MODE=auto|system|docker (default: auto)
   - CADDY_MODE=auto|system|docker (default: auto)
   - BENCH_HOST=localhost|127.0.0.1 (default: localhost)
   - NPRPC_ROUTER_NUM_WORKERS=N (default: 4) router UDP worker threads
+  - TRACE_SYSCALLS=1 (default: 0) attach strace to each server (system-mode
+    nginx/caddy, plus nprpc) and report network syscall counts alongside the
+    final results.
+  - TRACE_SYSCALLS_FILTER=<syscalls> (default:
+    sendmsg,sendmmsg,recvmsg,recvmmsg,sendto,recvfrom) comma list passed to
+    strace -e trace=. nprpc's HTTP/3 path uses async_receive_from/
+    async_send_to (recvfrom/sendto on Linux), not recvmsg, so the default
+    covers both that and the TCP recvmsg/sendmsg path.
+  - CAPTURE_PACKETS=1 (default: 0) capture each server's UDP/QUIC traffic
+    with tcpdump during 'run'/'run-router' (one .pcap per server, named
+    <server>-<port>.pcap in the results dir). Needs passwordless sudo for
+    tcpdump (see NOPASSWD sudoers entry). View with '$0 plot' afterwards.
+  - PACKET_PLOT_SCRIPT=path (default: benchmark/http_shootout/plot_packets.py)
   - NPRPC_ROUTER_BIN=path (default: BUILD_DIR/npquicrouter/npquicrouter)
 EOF
 }
@@ -804,6 +1007,9 @@ case "${1:-run}" in
     ;;
   view)
     python3 "$ROOT_DIR/benchmark/http_shootout/view_results.py" "$RESULTS_DIR"
+    ;;
+  plot)
+    plot_packet_captures
     ;;
   run-view)
     run_suite
