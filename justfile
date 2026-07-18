@@ -199,9 +199,9 @@ profile:
       --benchmark_min_time=5s
     perf report --no-children -g graph,0.5,caller
 
-# Profile HTTP/3 1MB serving (delegates to profile_http3_1mb.sh)
+# Profile HTTP/3 1MB serving (delegates to profile_http3.sh)
 profile-http3-1mb *args:
-    ./profile_http3_1mb.sh {{args}}
+    ./profile_http3.sh {{args}}
 
 # Line counts (cloc), excluding generated/third_party noise
 statistics:

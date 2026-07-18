@@ -28,7 +28,7 @@ SERVER_LAUNCH_PID=""
 PERF_PID=""
 
 log() {
-  printf '[profile_http3_1mb] %s\n' "$*"
+  printf '[profile_http3] %s\n' "$*"
 }
 
 require_cmd() {
@@ -123,6 +123,7 @@ configure_and_build() {
       -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
       -DCMAKE_C_FLAGS="-fno-omit-frame-pointer" \
       -DCMAKE_CXX_FLAGS="-fno-omit-frame-pointer" \
+      -DNPRPC_USE_BORINGSSL=ON \
       -DNPRPC_BUILD_TESTS=ON \
       -DNPRPC_BUILD_TOOLS=ON \
       -DNPRPC_ENABLE_QUIC=ON \

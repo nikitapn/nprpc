@@ -1,5 +1,0 @@
-#!/bin/bash
-
-SKIP_HTTP1=1
-SKIP_CADDY=1
-PAYLOAD_SIZES=("1kb" "64kb" "1mb")

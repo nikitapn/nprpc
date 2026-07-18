@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source $SCRIPT_DIR/.settings
+source $SCRIPT_DIR/.settings || true
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/.build_release}"
 RESULTS_DIR="${RESULTS_DIR:-$ROOT_DIR/benchmark/http_shootout/results}"
@@ -700,7 +700,13 @@ run_suite_with_router() {
   local results_suffix="${1:-router}"
   local orig_results_dir="$RESULTS_DIR"
   RESULTS_DIR="$orig_results_dir/$results_suffix"
+
   mkdir -p "$RESULTS_DIR"
+
+  if [ "$RESULTS_DIR" == "$ROOT_DIR/benchmark/http_shootout/results/router" ]; then
+    echo "Clearing default results directory: $RESULTS_DIR"
+    rm -rf "$RESULTS_DIR"/*
+  fi
 
   prepare_assets
   build_benchmark_server
@@ -943,6 +949,7 @@ Commands:
   run-router      Run HTTP/3 benchmark with nprpc behind npquicrouter (SHM + multi-worker eBPF).
   compare         Run both 'run' and 'run-router' back to back then view results.
   view            Summarize result files in benchmark/http_shootout/results.
+  view-router     Summarize result files in benchmark/http_shootout/results/router.
   plot            Plot packet-length-over-time charts from .pcap files captured with
                   CAPTURE_PACKETS=1 (one window per server involved in the run).
 
@@ -1004,9 +1011,13 @@ case "${1:-run}" in
     run_suite
     run_suite_with_router
     python3 "$ROOT_DIR/benchmark/http_shootout/view_results.py" "$RESULTS_DIR"
+    python3 "$ROOT_DIR/benchmark/http_shootout/view_results.py" "$RESULTS_DIR/router"
     ;;
   view)
     python3 "$ROOT_DIR/benchmark/http_shootout/view_results.py" "$RESULTS_DIR"
+    ;;
+  view-router)
+    python3 "$ROOT_DIR/benchmark/http_shootout/view_results.py" "$RESULTS_DIR/router"
     ;;
   plot)
     plot_packet_captures

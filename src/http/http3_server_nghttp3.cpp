@@ -292,6 +292,25 @@ std::string cid_to_string(const ngtcp2_cid* cid)
   return std::string(reinterpret_cast<const char*>(cid->data), cid->datalen);
 }
 
+std::string_view cid_to_view(const ngtcp2_cid* cid) noexcept
+{
+  return std::string_view(reinterpret_cast<const char*>(cid->data),
+                          cid->datalen);
+}
+
+// Transparent hash so the CID->connection map can be probed with a
+// std::string_view (no per-datagram std::string allocation on the hot path).
+// All keys hash through std::string_view, so stored std::string keys and
+// string_view lookups agree.
+struct CidKeyHash {
+  using is_transparent = void;
+  using is_avalanching = void;
+  [[nodiscard]] uint64_t operator()(std::string_view sv) const noexcept
+  {
+    return ankerl::unordered_dense::hash<std::string_view>{}(sv);
+  }
+};
+
 std::string cid_to_hex(const ngtcp2_cid* cid)
 {
   std::string hex;
@@ -1380,10 +1399,30 @@ private:
   boost::asio::ip::udp::endpoint remote_ep_; // For async_receive_from
   std::array<uint8_t, 65536> recv_buf_;
 
+#if defined(__linux__)
+  // Batched ingress via recvmmsg (+ UDP_GRO). One wakeup drains many datagrams
+  // and feeds each connection's strand; the coalesced on_write() then emits a
+  // single GSO burst per connection instead of one write per inbound datagram.
+  static constexpr int kRecvBatch = 32;
+  struct alignas(16) RecvCtrlBuf {
+    uint8_t bytes[CMSG_SPACE(sizeof(int))];
+  };
+  std::array<std::array<uint8_t, 65536>, kRecvBatch> recv_batch_bufs_;
+  std::array<sockaddr_storage, kRecvBatch> recv_batch_addrs_;
+  std::array<RecvCtrlBuf, kRecvBatch> recv_batch_ctrl_;
+  std::array<iovec, kRecvBatch> recv_batch_iov_;
+  std::array<mmsghdr, kRecvBatch> recv_batch_msgs_;
+  // Drains up to kRecvBatch datagrams; returns recvmmsg's result (n>=1 on
+  // success, <0 on EAGAIN/error). Splits UDP_GRO-coalesced buffers by segment.
+  int drain_recv_batch();
+#endif
+
   SSL_CTX* ssl_ctx_ = nullptr;
 
-  // Map from CID to connection (includes both SCID and additional CIDs)
-  ankerl::unordered_dense::map<std::string, std::shared_ptr<Http3Connection>>
+  // Map from CID to connection (includes both SCID and additional CIDs).
+  // Transparent hash/equal enable alloc-free string_view lookups.
+  ankerl::unordered_dense::map<std::string, std::shared_ptr<Http3Connection>,
+                               CidKeyHash, std::equal_to<>>
       connections_;
 
   std::mutex send_storage_mutex_;
@@ -4247,6 +4286,18 @@ bool Http3Server::start()
   // Get local endpoint
   local_ep_ = socket_.local_endpoint();
 
+#if defined(__linux__) && defined(UDP_GRO)
+  // Ask the kernel to coalesce inbound datagrams; drain_recv_batch() reads the
+  // per-message UDP_GRO segment size and re-splits before feeding ngtcp2.
+  {
+    int gro_on = 1;
+    if (::setsockopt(socket_.native_handle(), SOL_UDP, UDP_GRO, &gro_on,
+                     sizeof(gro_on)) != 0) {
+      NPRPC_HTTP3_DEBUG("UDP_GRO not enabled: {}", std::strerror(errno));
+    }
+  }
+#endif
+
   running_.store(true, std::memory_order_release);
 
   NPRPC_HTTP3_TRACE("Server listening on port {} (nghttp3/ngtcp2 backend)",
@@ -4850,12 +4901,105 @@ void Http3Server::remove_connection(std::shared_ptr<Http3Connection> conn)
   }
 }
 
+#if defined(__linux__)
+int Http3Server::drain_recv_batch()
+{
+  for (int i = 0; i < kRecvBatch; ++i) {
+    recv_batch_iov_[i].iov_base = recv_batch_bufs_[i].data();
+    recv_batch_iov_[i].iov_len = recv_batch_bufs_[i].size();
+    msghdr& mh = recv_batch_msgs_[i].msg_hdr;
+    mh.msg_name = &recv_batch_addrs_[i];
+    mh.msg_namelen = sizeof(sockaddr_storage);
+    mh.msg_iov = &recv_batch_iov_[i];
+    mh.msg_iovlen = 1;
+    mh.msg_control = recv_batch_ctrl_[i].bytes;
+    mh.msg_controllen = sizeof(recv_batch_ctrl_[i].bytes);
+    mh.msg_flags = 0;
+    recv_batch_msgs_[i].msg_len = 0;
+  }
+
+  int n = ::recvmmsg(socket_.native_handle(), recv_batch_msgs_.data(),
+                     kRecvBatch, MSG_DONTWAIT, nullptr);
+  if (n <= 0) {
+    return n; // <0 => EAGAIN/error (socket drained)
+  }
+
+  for (int i = 0; i < n; ++i) {
+    msghdr& mh = recv_batch_msgs_[i].msg_hdr;
+    const size_t len = recv_batch_msgs_[i].msg_len;
+    if (len == 0) {
+      continue;
+    }
+
+    // Reconstruct the source endpoint from the returned sockaddr.
+    boost::asio::ip::udp::endpoint ep;
+    if (mh.msg_namelen == 0 || mh.msg_namelen > ep.capacity()) {
+      continue;
+    }
+    std::memcpy(ep.data(), &recv_batch_addrs_[i], mh.msg_namelen);
+    ep.resize(mh.msg_namelen);
+
+    // A UDP_GRO cmsg carries the size of each coalesced segment.
+    unsigned int gso_size = 0;
+    for (cmsghdr* cm = CMSG_FIRSTHDR(&mh); cm; cm = CMSG_NXTHDR(&mh, cm)) {
+      if (cm->cmsg_level == SOL_UDP && cm->cmsg_type == UDP_GRO) {
+        int seg = 0;
+        std::memcpy(&seg, CMSG_DATA(cm), sizeof(seg));
+        if (seg > 0) {
+          gso_size = static_cast<unsigned int>(seg);
+        }
+        break;
+      }
+    }
+
+#if NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY
+    ++sanity_receive_callbacks_;
+#endif
+
+    const uint8_t* base = recv_batch_bufs_[i].data();
+    if (gso_size == 0 || gso_size >= len) {
+#if NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY
+      ++sanity_received_packets_;
+#endif
+      handle_packet(ep, base, len);
+    } else {
+      // Split the coalesced buffer back into individual QUIC datagrams.
+      for (size_t off = 0; off < len; off += gso_size) {
+        const size_t seg = std::min<size_t>(gso_size, len - off);
+#if NPRPC_ENABLE_HTTP3_REUSEPORT_SANITY
+        ++sanity_received_packets_;
+#endif
+        handle_packet(ep, base + off, seg);
+      }
+    }
+  }
+  return n;
+}
+#endif // __linux__
+
 void Http3Server::do_receive()
 {
   if (!running_.load(std::memory_order_acquire)) {
     return;
   }
 
+#if defined(__linux__)
+  socket_.async_wait(
+      boost::asio::socket_base::wait_read,
+      [this](boost::system::error_code ec) {
+        if (!ec) {
+          // asio's epoll reactor is edge-triggered, so we must consume the
+          // socket fully before re-arming or the remainder stalls until the
+          // next datagram. The rcvbuf (2 MB) bounds the backlog, and each
+          // recvmmsg drains up to kRecvBatch datagrams, so this is a few passes.
+          while (drain_recv_batch() >= kRecvBatch) {
+          }
+        }
+        if (running_.load(std::memory_order_acquire) && !ec) {
+          do_receive();
+        }
+      });
+#else
   socket_.async_receive_from(
       boost::asio::buffer(recv_buf_), remote_ep_,
       [this](boost::system::error_code ec, std::size_t bytes_recvd) {
@@ -4872,6 +5016,7 @@ void Http3Server::do_receive()
           do_receive();
         }
       });
+#endif
 }
 
 // static
@@ -5091,9 +5236,8 @@ int Http3Server::send_stateless_reset(
 std::shared_ptr<Http3Connection>
 Http3Server::find_connection(const ngtcp2_cid* dcid)
 {
-  std::string key = cid_to_string(dcid);
-
-  auto it = connections_.find(key);
+  // Probe with a string_view over the CID bytes — no allocation.
+  auto it = connections_.find(cid_to_view(dcid));
   return it != connections_.end() ? it->second : nullptr;
 }
 
