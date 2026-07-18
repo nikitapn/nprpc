@@ -707,8 +707,23 @@ class UdpRouter {
     const RouteTable& routes_;
     const int         timeout_sec_;
 
-    std::array<uint8_t, kRecvBufSize> recv_buf_{};
-    udp::endpoint                     sender_ep_;
+    // Used only by the non-Linux single-datagram fallback in recv().
+    [[maybe_unused]] std::array<uint8_t, kRecvBufSize> recv_buf_{};
+    [[maybe_unused]] udp::endpoint                     sender_ep_;
+
+#if defined(__linux__)
+    // Batched ingress via recvmmsg (+ UDP_GRO): one wakeup drains many client
+    // datagrams instead of one per async op. GRO-coalesced buffers are re-split
+    // per segment before routing, since segments may belong to different
+    // sessions' coalesced-QUIC-packet streams.
+    static constexpr int kRecvBatch = 32;
+    struct alignas(16) RecvCtrlBuf { uint8_t bytes[CMSG_SPACE(sizeof(int))]; };
+    std::array<std::array<uint8_t, kRecvBufSize>, kRecvBatch> batch_bufs_{};
+    std::array<sockaddr_storage, kRecvBatch>                  batch_addrs_{};
+    std::array<RecvCtrlBuf, kRecvBatch>                       batch_ctrl_{};
+    std::array<iovec, kRecvBatch>                             batch_iov_{};
+    std::array<mmsghdr, kRecvBatch>                           batch_msgs_{};
+#endif
 
     // Sessions keyed by client endpoint (string for hash stability)
     struct EpHash {
@@ -769,6 +784,18 @@ public:
     int socket_fd() noexcept { return listen_sock_.native_handle(); }
 
     void start() {
+#if defined(__linux__) && defined(UDP_GRO)
+        // Coalesce inbound client datagrams; drain_recv_batch() reads the
+        // per-message UDP_GRO segment size and re-splits before routing.
+        {
+            int gro_on = 1;
+            if (::setsockopt(listen_sock_.native_handle(), SOL_UDP, UDP_GRO,
+                             &gro_on, sizeof(gro_on)) != 0) {
+                std::cerr << "[UDP] UDP_GRO not enabled: "
+                          << std::strerror(errno) << "\n";
+            }
+        }
+#endif
         recv();
         schedule_gc();
         for (const auto& [name, writer] : shm_ingress_map_)
@@ -802,26 +829,109 @@ private:
     }
 
     void recv() {
+#if defined(__linux__)
+        listen_sock_.async_wait(
+            asio::socket_base::wait_read,
+            [this](boost::system::error_code ec) {
+                if (!ec) {
+                    // asio's epoll reactor is edge-triggered: drain the socket
+                    // fully before re-arming, or the remainder stalls until the
+                    // next datagram. recvmmsg returning < kRecvBatch means empty.
+                    while (drain_recv_batch() >= kRecvBatch) {
+                    }
+                }
+                if (ec != asio::error::operation_aborted) recv();
+            });
+#else
         listen_sock_.async_receive_from(
             asio::buffer(recv_buf_),
             sender_ep_,
             [this](boost::system::error_code ec, size_t n) {
-                if (!ec) on_packet(n);
+                if (!ec) on_packet(recv_buf_.data(), n, sender_ep_);
                 if (ec != asio::error::operation_aborted) recv();
             });
+#endif
     }
 
-    void on_packet(size_t n) {
-        const auto datagram = std::span<const uint8_t>(recv_buf_.data(), n);
-        const auto it       = sessions_.find(sender_ep_);
+#if defined(__linux__)
+    // Drains up to kRecvBatch client datagrams in one recvmmsg. Returns the
+    // recvmmsg result (n>=1 on success, <0 on EAGAIN/error). Each message may be
+    // a UDP_GRO super-buffer, re-split into individual datagrams before routing.
+    int drain_recv_batch() {
+        for (int i = 0; i < kRecvBatch; ++i) {
+            batch_iov_[i].iov_base = batch_bufs_[i].data();
+            batch_iov_[i].iov_len  = batch_bufs_[i].size();
+            msghdr& mh = batch_msgs_[i].msg_hdr;
+            mh.msg_name       = &batch_addrs_[i];
+            mh.msg_namelen    = sizeof(sockaddr_storage);
+            mh.msg_iov        = &batch_iov_[i];
+            mh.msg_iovlen     = 1;
+            mh.msg_control    = batch_ctrl_[i].bytes;
+            mh.msg_controllen = sizeof(batch_ctrl_[i].bytes);
+            mh.msg_flags      = 0;
+            batch_msgs_[i].msg_len = 0;
+        }
+
+        int n = ::recvmmsg(listen_sock_.native_handle(), batch_msgs_.data(),
+                           kRecvBatch, MSG_DONTWAIT, nullptr);
+        if (n <= 0) {
+            return n; // <0 => EAGAIN/error (socket drained)
+        }
+
+        for (int i = 0; i < n; ++i) {
+            msghdr& mh = batch_msgs_[i].msg_hdr;
+            const size_t len = batch_msgs_[i].msg_len;
+            if (len == 0) {
+                continue;
+            }
+
+            // Reconstruct the client endpoint from the returned sockaddr.
+            udp::endpoint sender;
+            if (mh.msg_namelen == 0 || mh.msg_namelen > sender.capacity()) {
+                continue;
+            }
+            std::memcpy(sender.data(), &batch_addrs_[i], mh.msg_namelen);
+            sender.resize(mh.msg_namelen);
+
+            // A UDP_GRO cmsg carries the size of each coalesced segment.
+            unsigned int gso_size = 0;
+            for (cmsghdr* cm = CMSG_FIRSTHDR(&mh); cm; cm = CMSG_NXTHDR(&mh, cm)) {
+                if (cm->cmsg_level == SOL_UDP && cm->cmsg_type == UDP_GRO) {
+                    int seg = 0;
+                    std::memcpy(&seg, CMSG_DATA(cm), sizeof(seg));
+                    if (seg > 0) {
+                        gso_size = static_cast<unsigned int>(seg);
+                    }
+                    break;
+                }
+            }
+
+            const uint8_t* base = batch_bufs_[i].data();
+            if (gso_size == 0 || gso_size >= len) {
+                on_packet(base, len, sender);
+            } else {
+                // Re-split the coalesced buffer into individual UDP datagrams.
+                for (size_t off = 0; off < len; off += gso_size) {
+                    const size_t seg = std::min<size_t>(gso_size, len - off);
+                    on_packet(base + off, seg, sender);
+                }
+            }
+        }
+        return n;
+    }
+#endif // __linux__
+
+    void on_packet(const uint8_t* data, size_t n, const udp::endpoint& sender) {
+        const auto datagram = std::span<const uint8_t>(data, n);
+        const auto it       = sessions_.find(sender);
 
         if (quic_debug_enabled && it == sessions_.end()) {
             // Log every new-session datagram: size and first few bytes.
-            std::cerr << "[QUIC] datagram n=" << n << " from " << sender_ep_
+            std::cerr << "[QUIC] datagram n=" << n << " from " << sender
                       << " bytes[0..3]=";
             for (size_t i = 0; i < std::min(n, size_t{4}); ++i)
                 std::cerr << std::hex << std::setw(2) << std::setfill('0')
-                          << (int)recv_buf_[i] << ' ';
+                          << (int)data[i] << ' ';
             std::cerr << std::dec << '\n';
         }
 
@@ -830,10 +940,10 @@ private:
             it->second->last_seen = std::chrono::steady_clock::now();
             if (it->second->shm_ingress) {
                 // SHM mode: write to this session's ingress ring.
-                const auto ep_data = sender_ep_.data();
+                const auto ep_data = sender.data();
                 it->second->shm_ingress->write_packet(
                     static_cast<const sockaddr*>(static_cast<const void*>(ep_data)),
-                    static_cast<socklen_t>(sender_ep_.size()),
+                    static_cast<socklen_t>(sender.size()),
                     datagram.data(), datagram.size());
             } else {
                 it->second->backend_sock->async_send(
@@ -851,7 +961,7 @@ private:
         std::string route_dcid_key;
 
         while (pkt_off < n) {
-            const auto pkt_span = std::span<const uint8_t>(recv_buf_.data() + pkt_off, n - pkt_off);
+            const auto pkt_span = std::span<const uint8_t>(data + pkt_off, n - pkt_off);
 
             // Compute packet boundary without decrypting (for coalesced-packet skipping).
             const size_t pkt_len = quic_initial_packet_len(pkt_span);
@@ -867,7 +977,7 @@ private:
 
                 auto& pend = pending_[dcid_key];
                 if (pend.client_ep == udp::endpoint{}) {
-                    pend.client_ep    = sender_ep_;
+                    pend.client_ep    = sender;
                     pend.initial_dcid = frag.dcid;
                 }
                 if (quic_debug_enabled) {
@@ -890,7 +1000,7 @@ private:
         // Queue the whole datagram under the first DCID found.
         auto& pend = pending_[route_dcid_key];
         if (pend.queued_pkts.size() < kMaxPendingPackets)
-            pend.queued_pkts.emplace_back(recv_buf_.data(), recv_buf_.data() + n);
+            pend.queued_pkts.emplace_back(data, data + n);
 
         // Try to assemble a contiguous CRYPTO buffer starting at offset 0.
         auto sni_opt = try_assemble_sni(pend.crypto_frags);

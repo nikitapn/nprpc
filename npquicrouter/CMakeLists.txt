@@ -77,6 +77,8 @@ if(UNIX)
   target_compile_options(npquicrouter PRIVATE
     -Wall -Wextra -fno-omit-frame-pointer
   )
+  # recvmmsg()/mmsghdr are guarded behind __USE_GNU in glibc.
+  target_compile_definitions(npquicrouter PRIVATE _GNU_SOURCE)
 endif()
 
 # ── SO_REUSEPORT eBPF multi-worker routing (optional) ────────────────────────
