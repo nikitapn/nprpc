@@ -1979,14 +1979,19 @@ int Http3Connection::on_write()
 
   ngtcp2_path_storage_zero(&ps);
 
-  auto nwrite = ngtcp2_conn_write_aggregate_pkt2(
+  // Pacing-correct high-level form: clamps the buffer to send_quantum (one
+  // pacing burst) and calls ngtcp2_conn_update_pkt_tx_time() internally with a
+  // single consistent ts. The low-level _pkt2 variant does neither and expects
+  // the caller to pace; driving it uncapped and hand-arming the pacer with the
+  // full burst length (and a second timestamp) mis-paced the flow and scattered
+  // the datagram sizes. Pacing is throughput-neutral on loopback but keeps us
+  // safe on real lossy paths.
+  auto nwrite = ngtcp2_conn_write_aggregate_pkt(
       conn_, &ps.path, &pi, txbuf_.data(), txbuf_.size(), &gso_size,
-      write_pkt_cb, MAX_PKTS_BURST, timestamp_ns());
+      write_pkt_cb, timestamp_ns());
   if (nwrite < 0) {
     return handle_error();
   }
-
-  ngtcp2_conn_update_pkt_tx_time(conn_, timestamp_ns());
 
   if (nwrite > 0) {
     server_->send_aggregated(remote_ep_, txbuf_.data(),
