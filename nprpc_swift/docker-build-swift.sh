@@ -43,8 +43,7 @@ if [ "$RUN_TESTS" = true ]; then
       mkdir -p .build
       printf "%s\n" "$TOOLCHAIN_VERSION" > "$TOOLCHAIN_FILE"
 
-      export LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib"
-      export LD_LIBRARY_PATH="/workspace/.build_ubuntu_swift"
+      export NPRPC_BUILD_DIR=.build_ubuntu_swift
       swift build
       set +e
       # Use stdbuf to disable output buffering so we see print() before timeout kills process
@@ -74,8 +73,7 @@ else
       mkdir -p .build
       printf "%s\n" "$TOOLCHAIN_VERSION" > "$TOOLCHAIN_FILE"
 
-      export LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib"
-      export LD_LIBRARY_PATH="/workspace/.build_ubuntu_swift"
+      export NPRPC_BUILD_DIR=.build_ubuntu_swift
       swift build
      '
   echo "✅ Swift package built successfully."

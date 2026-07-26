@@ -86,6 +86,18 @@ private class TestArraysServantImpl: FixedSizeArrayTestServant, @unchecked Senda
 
 // MARK: - Integration tests
 
+// Resolve the nprpc repo root from this file's own location rather than
+// hardcoding a path, so tests pass unmodified on any host checkout as well
+// as inside the Docker container, where the repo is mounted at /workspace.
+private let nprpcRepoRoot: String = {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()  // NPRPCTests/
+        .deletingLastPathComponent()  // Tests/
+        .deletingLastPathComponent()  // nprpc_swift/
+        .deletingLastPathComponent()  // repo root
+        .path
+}()
+
 final class IntegrationTests: XCTestCase {
     nonisolated(unsafe) static var rpc: Rpc?
     nonisolated(unsafe) static var poa: Poa?
@@ -98,8 +110,8 @@ final class IntegrationTests: XCTestCase {
                 .withHostname("localhost")
                 .withTcp(16000)
                 .withHttp(16001)
-                    .ssl(certFile: "/workspace/certs/out/localhost.crt",
-                         keyFile: "/workspace/certs/out/localhost.key")
+                    .ssl(certFile: "\(nprpcRepoRoot)/certs/out/localhost.crt",
+                         keyFile: "\(nprpcRepoRoot)/certs/out/localhost.key")
                     .enableHttp3()
                     .rootDir("/workspace")
                     .http3Workers(2)
@@ -116,8 +128,8 @@ final class IntegrationTests: XCTestCase {
                     .maxWebTransportRequestsPerSessionPerSecond(150, burst: 300)
                     .maxWebTransportStreamOpensPerSessionPerSecond(80, burst: 160)
                 .withQuic(16002)
-                    .ssl(certFile: "/workspace/certs/out/localhost.crt",
-                         keyFile: "/workspace/certs/out/localhost.key")
+                    .ssl(certFile: "\(nprpcRepoRoot)/certs/out/localhost.crt",
+                         keyFile: "\(nprpcRepoRoot)/certs/out/localhost.key")
                 .build()
             // Give the TCP listener time to start accepting connections
             Thread.sleep(forTimeInterval: 0.1)

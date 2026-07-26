@@ -291,7 +291,7 @@ private actor ChatHub {
   func broadcast(postId: UInt64, event: ChatServerEvent) {
     guard let participants = rooms[postId]?.values else { return }
     for participant in participants {
-      participant.writer.write(event)
+      try? participant.writer.write(event)
     }
   }
 }
@@ -306,7 +306,7 @@ private final class ChatServiceImpl: ChatServiceServant, @unchecked Sendable {
       message: ChatEnvelope(author: "system", body: "\(user_name) joined post #\(post_id).", created_at: "2026-03-09T09:00:00Z"),
       presence: PresenceEvent(user_name: user_name, kind: .Joined)
     )
-    await stream.writer.write(joined)
+    try? await stream.writer.write(joined)
 
     do {
       for try await incoming in stream.reader {
@@ -321,7 +321,7 @@ private final class ChatServiceImpl: ChatServiceServant, @unchecked Sendable {
         await chatHub.broadcast(postId: post_id, event: echoed)
       }
 
-      await stream.writer.write(
+      try await stream.writer.write(
         ChatServerEvent(
           message: ChatEnvelope(author: "system", body: "\(user_name) left the room.", created_at: "2026-03-09T09:01:00Z"),
           presence: PresenceEvent(user_name: user_name, kind: .Left)

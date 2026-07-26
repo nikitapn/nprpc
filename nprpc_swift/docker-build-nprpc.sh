@@ -77,9 +77,7 @@ docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace ${DOCKER_IMAGE_NAME}
     echo "=== Building Swift Package ==="
     cd nprpc_swift
 
-    export CPATH="/workspace/include:/workspace/.build_ubuntu_swift/include:/workspace/.build_ubuntu_swift/boost_install/include:/workspace/third_party/boringssl/include"
-    export LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib"
-    export LD_LIBRARY_PATH="/workspace/.build_ubuntu_swift:/workspace/.build_ubuntu_swift/boost_install/lib"
+    export NPRPC_BUILD_DIR=.build_ubuntu_swift
 
     swift build -v
 
