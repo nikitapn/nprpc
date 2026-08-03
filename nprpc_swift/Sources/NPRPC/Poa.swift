@@ -92,8 +92,31 @@ private let globalServantDispatch: @convention(c) (UnsafeMutableRawPointer?, Uns
     servant.sessionContext = sessionCtxPtr
     defer { servant.sessionContext = nil }
 
-    // Wrap rx buffer for servant dispatch
-    let buffer = FlatBuffer(wrapping: rxBuffer)
+    // Shared-memory sessions hand a zero-copy *view* into the receive ring.
+    // Generated servants overwrite that same buffer with the response and may
+    // grow it (exception strings, variable outputs). Growing a view reallocates
+    // into heap ownership and invalidates any previously captured data pointer
+    // (exception marshalling captures `exData` *before* marshal, so size/msg_id
+    // would land in the ring while the body lives on the heap). Copying also
+    // gives a naturally aligned heap base for Swift's typed loads.
+    //
+    // TCP/WS/QUIC already own a heap buffer — wrap it in place, no copy.
+    let buffer: FlatBuffer
+    if nprpc_flatbuffer_is_view(rxBuffer) {
+        let requestSize = nprpc_flatbuffer_size(rxBuffer)
+        let owned = FlatBuffer()
+        if requestSize > 0 {
+            owned.prepare(requestSize)
+            owned.commit(requestSize)
+            if let srcData = nprpc_flatbuffer_cdata(rxBuffer),
+               let dstData = owned.data {
+                memcpy(dstData, srcData, requestSize)
+            }
+        }
+        buffer = owned
+    } else {
+        buffer = FlatBuffer(wrapping: rxBuffer)
+    }
 
     // Extract endpoint from C++ EndPoint pointer
     let endpoint: NPRPCEndpoint
@@ -107,22 +130,19 @@ private let globalServantDispatch: @convention(c) (UnsafeMutableRawPointer?, Uns
         endpoint = NPRPCEndpoint(type: .Tcp, hostname: "localhost", port: 0)
     }
 
-    // Call servant dispatch - it writes response back to the same buffer
+    // Call servant dispatch - it writes the response into `buffer`
     servant.dispatch(buffer: buffer, remoteEndpoint: endpoint)
 
-    // Copy response from rx_buffer to tx_buffer
-    // The generated servant code writes output to the same buffer it receives
-    // But C++ expects response in tx_buffer
-    let responseSize = nprpc_flatbuffer_size(rxBuffer)
+    // Copy response into C++ tx_buffer (session owns the send path).
+    // For the owned/TCP wrap path, buffer.handle is rxBuffer itself.
+    let responseSize = buffer.size
     if responseSize > 0 {
-        // Clear tx buffer and prepare space
         let txSizeBefore = nprpc_flatbuffer_size(txBuffer)
         nprpc_flatbuffer_consume(txBuffer, txSizeBefore)
         nprpc_flatbuffer_prepare(txBuffer, responseSize)
         nprpc_flatbuffer_commit(txBuffer, responseSize)
 
-        // Copy data
-        if let srcData = nprpc_flatbuffer_cdata(rxBuffer),
+        if let srcData = buffer.constData,
            let dstData = nprpc_flatbuffer_data(txBuffer) {
             memcpy(dstData, srcData, responseSize)
         }

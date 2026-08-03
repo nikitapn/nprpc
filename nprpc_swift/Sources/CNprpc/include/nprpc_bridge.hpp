@@ -213,6 +213,9 @@ void nprpc_flatbuffer_destroy(void* fb);
 void* nprpc_flatbuffer_data(void* fb);
 const void* nprpc_flatbuffer_cdata(void* fb);
 size_t nprpc_flatbuffer_size(void* fb);
+// True when the buffer is a zero-copy view into external memory (e.g. SHM ring).
+// Owned heap buffers (TCP/WS/QUIC) return false.
+bool nprpc_flatbuffer_is_view(void* fb);
 void nprpc_flatbuffer_prepare(void* fb, size_t n);
 void nprpc_flatbuffer_commit(void* fb, size_t n);
 void nprpc_flatbuffer_consume(void* fb, size_t n);

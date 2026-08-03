@@ -112,6 +112,8 @@ template <typename T> class CommonConnection
   T* derived() noexcept { return static_cast<T*>(this); }
 
 protected:
+  // Work queue for ordered execution of async operations.
+  // Not thread-safe; must be accessed only on the strand
   std::deque<std::shared_ptr<IOWork>> wq_;
 
   void add_work(std::shared_ptr<IOWork> w)

@@ -499,6 +499,11 @@ size_t nprpc_flatbuffer_size(void* fb) {
     return static_cast<nprpc::flat_buffer*>(fb)->size();
 }
 
+bool nprpc_flatbuffer_is_view(void* fb) {
+    if (!fb) return false;
+    return static_cast<nprpc::flat_buffer*>(fb)->is_view_mode();
+}
+
 void nprpc_flatbuffer_prepare(void* fb, size_t n) {
     static_cast<nprpc::flat_buffer*>(fb)->prepare(n);
 }

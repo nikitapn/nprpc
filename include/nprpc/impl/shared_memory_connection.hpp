@@ -26,10 +26,8 @@ class SharedMemoryConnection
 {
   boost::asio::io_context& ioc_;
   std::unique_ptr<SharedMemoryChannel> channel_;
-  // SpinMutex mutex_;
-  // AdaptiveSpinMutex mutex_;
+  // Guards wq_ from CommonConnection
   std::mutex mutex_;
-  uint32_t pending_requests_ = 0;
 
   // Insert work into wq_ ordered by slot_idx (wrap-aware 16-bit).  Must be
   // called with mutex_ held.  Arms the front work's timeout if the new

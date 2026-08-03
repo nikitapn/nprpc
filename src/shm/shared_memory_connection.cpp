@@ -188,8 +188,6 @@ void SharedMemoryConnection::send_receive_async(
 {
   assert(*(uint32_t*)buffer.data().data() == buffer.size());
 
-  pending_requests_++;
-
   struct work_impl : IOWork {
     flat_buffer buf;
     SharedMemoryConnection& this_;
@@ -205,20 +203,12 @@ void SharedMemoryConnection::send_receive_async(
 
     void on_failed(const boost::system::error_code& ec) noexcept override
     {
-      {
-        std::lock_guard lock(this_.mutex_);
-        this_.pending_requests_--;
-      }
       if (handler)
         handler.value()(ec, buf);
     }
 
     void on_executed() noexcept override
     {
-      {
-        std::lock_guard lock(this_.mutex_);
-        this_.pending_requests_--;
-      }
       if (handler)
         handler.value()(boost::system::error_code{}, buf);
     }
