@@ -58,6 +58,78 @@ namespace nprpc::impl {
 
 namespace nprpc_swift {
 
+// Per-thread free-list of owned flat_buffer shells (option B: async-safe pool).
+// Lives outside extern "C" so the helper type is not forced into C linkage.
+//
+// Why not the TLS bump arena?  Swift always uses send_receive_async: the
+// buffer is moved into the session while the caller's thread continues.  A
+// TLS bump reset would reclaim slab pages still referenced by in-flight
+// requests.  A free-list of heap flat_buffers is safe: moved storage rides
+// with the request; completed response shells return capacity to the pool.
+namespace {
+
+constexpr std::size_t kFlatBufferPoolMaxSlots = 8;
+// Don't pin multi‑MB slabs forever after a rare large call.
+constexpr std::size_t kFlatBufferPoolMaxCapacity = 2 * 1024 * 1024;
+
+struct FlatBufferTlsPool {
+  nprpc::flat_buffer* slots[kFlatBufferPoolMaxSlots] = {};
+  std::size_t count = 0;
+
+  nprpc::flat_buffer* acquire()
+  {
+    if (count > 0) {
+      nprpc::flat_buffer* p = slots[--count];
+      slots[count] = nullptr;
+      p->clear();
+      p->set_arena(nullptr);
+      return p;
+    }
+    return new nprpc::flat_buffer();
+  }
+
+  void release(nprpc::flat_buffer* p)
+  {
+    if (!p)
+      return;
+
+    if (p->is_view_mode() || p->has_write_reservation() || p->has_pending_read()) {
+      delete p;
+      return;
+    }
+
+    // After std::move into async send the caller's shell is capacity 0.
+    // Pooling those LIFO-buries high-capacity response shells.
+    if (p->capacity() == 0) {
+      delete p;
+      return;
+    }
+
+    if (p->capacity() > kFlatBufferPoolMaxCapacity) {
+      delete p;
+      return;
+    }
+
+    p->clear();
+    p->set_arena(nullptr);
+    p->clear_reservation();
+
+    if (count < kFlatBufferPoolMaxSlots) {
+      slots[count++] = p;
+    } else {
+      delete p;
+    }
+  }
+};
+
+} // namespace
+
+FlatBufferTlsPool& flat_buffer_tls_pool() noexcept
+{
+  thread_local FlatBufferTlsPool pool;
+  return pool;
+}
+
 namespace {
 const char* copy_string_to_c_heap(const std::string& value) {
     auto* buffer = new char[value.size() + 1];
@@ -476,13 +548,24 @@ const char* nprpc_get_thread_name() {
     return nprpc::impl::get_thread_name_cstr();
 }
 
-// FlatBuffer operations
-void* nprpc_flatbuffer_create() {
-    return new nprpc::flat_buffer();
+void* nprpc_flatbuffer_acquire()
+{
+  return nprpc_swift::flat_buffer_tls_pool().acquire();
 }
 
-void nprpc_flatbuffer_destroy(void* fb) {
-    delete static_cast<nprpc::flat_buffer*>(fb);
+void nprpc_flatbuffer_release(void* fb)
+{
+  nprpc_swift::flat_buffer_tls_pool().release(static_cast<nprpc::flat_buffer*>(fb));
+}
+
+void* nprpc_flatbuffer_create()
+{
+  return nprpc_flatbuffer_acquire();
+}
+
+void nprpc_flatbuffer_destroy(void* fb)
+{
+  nprpc_flatbuffer_release(fb);
 }
 
 void* nprpc_flatbuffer_data(void* fb) {
@@ -743,8 +826,10 @@ int nprpc_object_send_async_receive(
                 std::string msg = ec.message();
                 callback(context, -3, msg.c_str(), nullptr);
             } else {
-                // Create a new flat_buffer with the response data and transfer ownership to Swift
-                auto* response = new nprpc::flat_buffer(std::move(buf));
+                // Prefer a pooled shell so response capacity can be reused on
+                // the next acquire() (e.g. repeated large RPCs).
+                auto* response = static_cast<nprpc::flat_buffer*>(nprpc_flatbuffer_acquire());
+                *response = std::move(buf);
                 callback(context, 0, nullptr, response);
             }
         };

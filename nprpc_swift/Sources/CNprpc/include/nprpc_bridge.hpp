@@ -208,8 +208,18 @@ uint32_t nprpc_get_thread_id();
 const char* nprpc_get_thread_name();
 
 // FlatBuffer operations
+//
+// create/destroy use a per-thread free-list (see nprpc_flatbuffer_acquire/release)
+// so Swift client request buffers (and returned responses) recycle heap capacity
+// instead of new/delete on every RPC.  Safe for async: storage travels with
+// std::move into the session; the empty shell returns to the pool.
 void* nprpc_flatbuffer_create();
 void nprpc_flatbuffer_destroy(void* fb);
+
+// Explicit pool API (create/destroy are thin wrappers over these).
+void* nprpc_flatbuffer_acquire();
+void nprpc_flatbuffer_release(void* fb);
+
 void* nprpc_flatbuffer_data(void* fb);
 const void* nprpc_flatbuffer_cdata(void* fb);
 size_t nprpc_flatbuffer_size(void* fb);

@@ -1,0 +1,81 @@
+{
+  "benchmarks" : [
+    {
+      "bytesPerOp" : 0,
+      "iterations" : 190464,
+      "name" : "Latency\/EmptyCall",
+      "nsPerOp" : 5252.905667212702,
+      "opsPerSec" : 190370.8277576247,
+      "totalSeconds" : 1.000489425,
+      "transport" : "SharedMemory"
+    },
+    {
+      "bytesPerOp" : 0,
+      "iterations" : 193024,
+      "name" : "Latency\/CallWithReturn",
+      "nsPerOp" : 5187.818867083886,
+      "opsPerSec" : 192759.23574450237,
+      "totalSeconds" : 1.001373549,
+      "transport" : "SharedMemory"
+    },
+    {
+      "bytesPerOp" : 100,
+      "iterations" : 186112,
+      "mbPerSec" : 17.731811132969604,
+      "name" : "Latency\/SmallStringCall",
+      "nsPerOp" : 5378.324353077716,
+      "opsPerSec" : 185931.51590564733,
+      "totalSeconds" : 1.000970702,
+      "transport" : "SharedMemory"
+    },
+    {
+      "bytesPerOp" : 0,
+      "iterations" : 155648,
+      "name" : "Latency\/NestedDataCall",
+      "nsPerOp" : 6429.81193462171,
+      "opsPerSec" : 155525.5441633432,
+      "totalSeconds" : 1.000787368,
+      "transport" : "SharedMemory"
+    },
+    {
+      "bytesPerOp" : 2048,
+      "iterations" : 163840,
+      "mbPerSec" : 319.9062581890691,
+      "name" : "Bandwidth\/PayloadSize\/1024",
+      "nsPerOp" : 6105.3041320800785,
+      "opsPerSec" : 163792.00419280338,
+      "totalSeconds" : 1.000293029,
+      "transport" : "SharedMemory"
+    },
+    {
+      "bytesPerOp" : 131072,
+      "iterations" : 30976,
+      "mbPerSec" : 3869.126790314639,
+      "name" : "Bandwidth\/PayloadSize\/65536",
+      "nsPerOp" : 32307.031217716947,
+      "opsPerSec" : 30953.014322517112,
+      "totalSeconds" : 1.000742599,
+      "transport" : "SharedMemory"
+    },
+    {
+      "bytesPerOp" : 2097152,
+      "iterations" : 2028,
+      "mbPerSec" : 3917.4551669591237,
+      "name" : "Latency\/LargeData1MB",
+      "nsPerOp" : 510535.51725838264,
+      "opsPerSec" : 1958.7275834795619,
+      "totalSeconds" : 1.035366029,
+      "transport" : "SharedMemory"
+    }
+  ],
+  "meta" : {
+    "client" : "async",
+    "commit" : "e2ba6a7",
+    "date" : "2026-08-04T10:47:30Z",
+    "language" : "swift",
+    "minTimeSeconds" : 1,
+    "note" : "Swift client uses send_receive_async; C++ latency benches are mostly sync. Compare SHM first.",
+    "server" : "swift",
+    "warmupIterations" : 200
+  }
+}

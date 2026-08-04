@@ -5,21 +5,33 @@ import CNprpc
 
 /// Swift wrapper for nprpc::flat_buffer
 /// Marked as @unchecked Sendable because ownership is explicitly transferred between tasks
-/// and the underlying C++ memory is safely encapsulated
+/// and the underlying C++ memory is safely encapsulated.
+///
+/// Owned buffers use a C++ per-thread free-list (`nprpc_flatbuffer_acquire` /
+/// `release`) so repeated RPCs recycle heap capacity instead of `new`/`delete`
+/// every call.  Safe with async: `send_receive_async` moves storage into the
+/// session; the empty shell returns to the pool on deinit.
 public class FlatBuffer: @unchecked Sendable {
     public var handle: UnsafeMutableRawPointer
     private var owned: Bool
     
-    /// Create a new FlatBuffer (Swift owns it)
+    /// Create a FlatBuffer from the per-thread pool (Swift owns it).
     public init() {
-        self.handle = nprpc_flatbuffer_create()
+        self.handle = nprpc_flatbuffer_acquire()
         self.owned = true
+    }
+
+    /// Explicit pool acquire (same as `init()`; kept for call sites that want
+    /// the intent spelled out next to `release()`).
+    public static func acquire() -> FlatBuffer {
+        FlatBuffer()
     }
     
     /// Wrap an existing C++ flat_buffer
     /// - Parameters:
     ///   - wrapping: Opaque pointer to C++ flat_buffer
-    ///   - owned: If true, Swift will free the buffer on deinit (default: false)
+    ///   - owned: If true, Swift will return the buffer to the pool (or free it)
+    ///     on deinit (default: false)
     internal init(wrapping: UnsafeMutableRawPointer, owned: Bool = false) {
         self.handle = wrapping
         self.owned = owned
@@ -27,7 +39,7 @@ public class FlatBuffer: @unchecked Sendable {
     
     deinit {
         if owned {
-            nprpc_flatbuffer_destroy(handle)
+            nprpc_flatbuffer_release(handle)
         }
     }
     
