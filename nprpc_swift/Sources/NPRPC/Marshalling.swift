@@ -7,65 +7,67 @@ import Foundation
 
 // MARK: - String Marshalling
 
+/// Marshal a Swift String as a flat vector of UTF-8 bytes (offset + count + payload).
+/// Uses the string's contiguous UTF-8 storage when available — no intermediate `Array`.
+@inline(__always)
 public func marshal_string(buffer: FlatBuffer, offset: Int, string: String) {
-    let utf8 = Array(string.utf8)
-    let dataOffset = _alloc(buffer: buffer, vectorOffset: offset, count: utf8.count, elementSize: 1, align: 1)
-
-    if utf8.count > 0 {
+    // `withUTF8` is mutating (may re-encode into a contiguous buffer in-place).
+    var s = string
+    s.withUTF8 { utf8 in
+        let count = utf8.count
+        let dataOffset = _alloc(
+            buffer: buffer, vectorOffset: offset, count: count, elementSize: 1, align: 1)
+        guard count > 0, let base = utf8.baseAddress else { return }
         guard let data = buffer.data else { return }
-        utf8.withUnsafeBytes { bytes in
-            data.advanced(by: dataOffset).copyMemory(
-                from: bytes.baseAddress!,
-                byteCount: utf8.count
-            )
-        }
+        data.advanced(by: dataOffset).copyMemory(from: base, byteCount: count)
     }
 }
 
+/// Unmarshal a UTF-8 flat string. Builds `String` directly from the wire bytes
+/// (no intermediate `Data` allocation).
+@inline(__always)
 public func unmarshal_string(buffer: UnsafeRawPointer, offset: Int) -> String {
     let dataOffset = Int(buffer.load(fromByteOffset: offset, as: UInt32.self)) + offset
     let count = Int(buffer.load(fromByteOffset: offset + 4, as: UInt32.self))
     guard count > 0 else { return "" }
 
-    let dataPtr = buffer.advanced(by: dataOffset)
-    let data = Data(bytes: dataPtr, count: count)
-    return String(data: data, encoding: .utf8) ?? ""
+    let bytes = UnsafeRawBufferPointer(start: buffer.advanced(by: dataOffset), count: count)
+    return String(decoding: bytes, as: UTF8.self)
 }
 
 // MARK: - Vector Marshalling
 
+/// Marshal a contiguous array of trivial/fundamental elements into a flat vector.
+@inline(__always)
 public func marshal_fundamental_vector<T>(buffer: FlatBuffer, offset: Int, vector: [T]) {
     let elementSize = MemoryLayout<T>.stride
     let alignment = MemoryLayout<T>.alignment
-    let dataOffset = _alloc(buffer: buffer, vectorOffset: offset, count: vector.count, elementSize: elementSize, align: alignment)
+    let count = vector.count
+    let dataOffset = _alloc(
+        buffer: buffer, vectorOffset: offset, count: count, elementSize: elementSize, align: alignment)
 
-    if vector.count > 0 {
-        // Get fresh pointer after allocation
-        guard let data = buffer.data else { return }
-        vector.withUnsafeBytes { bytes in
-            data.advanced(by: dataOffset).copyMemory(
-                from: bytes.baseAddress!,
-                byteCount: vector.count * elementSize
-            )
-        }
+    guard count > 0 else { return }
+    // Fresh pointer after allocation (may have reallocated).
+    guard let data = buffer.data else { return }
+    vector.withUnsafeBytes { bytes in
+        guard let base = bytes.baseAddress else { return }
+        data.advanced(by: dataOffset).copyMemory(
+            from: base,
+            byteCount: count * elementSize
+        )
     }
 }
 
+/// Unmarshal a flat vector of fundamental elements with a single bulk copy
+/// (same path as `unmarshal_fundamental_array`).
+@inline(__always)
 public func unmarshal_fundamental_vector<T>(buffer: UnsafeRawPointer, offset: Int) -> [T] {
     let dataOffset = Int(buffer.load(fromByteOffset: offset + 0, as: UInt32.self)) + offset
     let count = Int(buffer.load(fromByteOffset: offset + 4, as: UInt32.self))
     guard count > 0 else { return [] }
 
-    let elementSize = MemoryLayout<T>.stride
-    var result: [T] = []
-    result.reserveCapacity(count)
-
-    for i in 0..<count {
-        let element = buffer.load(fromByteOffset: dataOffset + i * elementSize, as: T.self)
-        result.append(element)
-    }
-
-    return result
+    let pointer = buffer.advanced(by: dataOffset).assumingMemoryBound(to: T.self)
+    return Array(UnsafeBufferPointer(start: pointer, count: count))
 }
 
 /// MARK: - String Vector Marshalling (special case of vector of fundamental type)
