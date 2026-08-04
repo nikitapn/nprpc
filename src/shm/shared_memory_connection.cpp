@@ -7,6 +7,8 @@
 #include <nprpc/impl/shared_memory_connection.hpp>
 #include <nprpc/impl/shared_memory_listener.hpp>
 
+#include "logging.hpp"
+
 namespace nprpc::impl {
 
 namespace {
@@ -279,25 +281,47 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
   // can reserve directly without re-looking up the connection.
   ctx_.shm_channel = channel_.get();
 
-  // Copy response into the flat_buffer so the ring buffer read can be
-  // committed immediately in the read_loop.  Deferring commit_read via
-  // set_view_from_read was unsound: the read_loop would call try_read_view()
-  // again before commit_read ran and re-present the same message to the next
-  // wq_ entry, corrupting the request/response pairing.
+  // Demux inbound frames:
+  //  - Stream control/data (chunks, complete, error, cancel, window) go to
+  //    Session::handle_request → stream_manager (no wq_ entry).
+  //  - RPC replies match wq_.front() by ring-slot ordering.
   //
   // Response ↔ request matching relies on wq_ being ordered by ring slot
   // (enqueue_ordered) and commits happening on the caller thread before the
-  // server can reply — so the next ring message always belongs to wq_.front().
+  // server can reply — so the next *RPC* ring message always belongs to
+  // wq_.front().  Stream frames may interleave and must not touch wq_.
   channel_->on_data_received_view =
       [this](const LockFreeRingBuffer::ReadView& read_view) {
+        if (read_view.size < sizeof(impl::flat::Header)) {
+          return;
+        }
+
+        const auto* hdr =
+            reinterpret_cast<const impl::flat::Header*>(read_view.data);
+        const auto msg_id = hdr->msg_id;
+
+        // Stream frames (not StreamInitialization — that is a request/reply
+        // RPC and is matched via wq_ on the initiator side).
+        const bool is_stream_frame =
+            msg_id == MessageId::StreamDataChunk ||
+            msg_id == MessageId::StreamCompletion ||
+            msg_id == MessageId::StreamError ||
+            msg_id == MessageId::StreamCancellation ||
+            msg_id == MessageId::StreamWindowUpdate;
+
+        if (is_stream_frame) {
+          flat_buffer rx;
+          auto mb = rx.prepare(read_view.size);
+          std::memcpy(mb.data(), read_view.data, read_view.size);
+          rx.commit(read_view.size);
+          flat_buffer tx; // unused for fire-and-forget stream frames
+          handle_request(rx, tx);
+          return;
+        }
+
         std::lock_guard lock(mutex_);
         if (wq_.empty()) {
           return; // read_loop will still call commit_read
-        }
-
-        // Validate header size (security check)
-        if (read_view.size < sizeof(impl::flat::Header)) {
-          return;
         }
 
         auto& current_buffer = current_rx_buffer();
@@ -310,18 +334,37 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
         pop_and_execute_next_task();
       };
 
-  // Set up data receive handler
+  // Set up data receive handler (copy path — same demux rules)
   channel_->on_data_received = [this](std::vector<char>&& data) {
-    std::lock_guard lock(mutex_);
-    if (wq_.empty()) {
-      std::cerr << "SharedMemoryConnection: Received unsolicited response"
+    if (data.size() < sizeof(impl::flat::Header)) {
+      std::cerr << "SharedMemoryConnection: Message too small: " << data.size()
                 << std::endl;
       return;
     }
 
-    // Validate header size (security check)
-    if (data.size() < sizeof(impl::flat::Header)) {
-      std::cerr << "SharedMemoryConnection: Message too small: " << data.size()
+    const auto* hdr =
+        reinterpret_cast<const impl::flat::Header*>(data.data());
+    const auto msg_id = hdr->msg_id;
+    const bool is_stream_frame =
+        msg_id == MessageId::StreamDataChunk ||
+        msg_id == MessageId::StreamCompletion ||
+        msg_id == MessageId::StreamError ||
+        msg_id == MessageId::StreamCancellation ||
+        msg_id == MessageId::StreamWindowUpdate;
+
+    if (is_stream_frame) {
+      flat_buffer rx;
+      auto mb = rx.prepare(data.size());
+      std::memcpy(mb.data(), data.data(), data.size());
+      rx.commit(data.size());
+      flat_buffer tx;
+      handle_request(rx, tx);
+      return;
+    }
+
+    std::lock_guard lock(mutex_);
+    if (wq_.empty()) {
+      std::cerr << "SharedMemoryConnection: Received unsolicited response"
                 << std::endl;
       return;
     }
@@ -332,7 +375,6 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
     std::memcpy(mb.data(), data.data(), data.size());
     current_buffer.commit(data.size());
 
-    // Mark current operation as complete
     (*wq_.front()).on_executed();
     pop_and_execute_next_task();
   };
@@ -344,6 +386,23 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
 }
 
 SharedMemoryConnection::~SharedMemoryConnection() { close(); }
+
+void SharedMemoryConnection::send_stream_message(flat_buffer&& buffer)
+{
+  // Fire-and-forget: write into the send ring without enqueuing on wq_.
+  // Stream frames are not request/response paired.
+  if (!channel_ || buffer.size() == 0)
+    return;
+  auto rsv = channel_->reserve_write(buffer.size());
+  if (!rsv) {
+    NPRPC_LOG_ERROR(
+        "SharedMemoryConnection: ring full, dropped stream frame size={}",
+        buffer.size());
+    return;
+  }
+  std::memcpy(rsv.data, buffer.data().data(), buffer.size());
+  channel_->commit_write(rsv, buffer.size());
+}
 
 bool SharedMemoryConnection::prepare_write_buffer(flat_buffer& buffer,
                                                   size_t max_size,

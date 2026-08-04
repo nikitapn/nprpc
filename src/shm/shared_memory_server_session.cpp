@@ -59,9 +59,27 @@ public:
                                        flat_buffer&)>>&&,
       uint32_t) override
   {
-    // Server sessions don't make outbound calls
+    // Server sessions don't make outbound RPC calls
     assert(false &&
            "send_receive_async should not be called on server session");
+  }
+
+  // Fire-and-forget stream frames (chunks / complete / error / cancel /
+  // window updates).  Must not go through send_receive_async — that path
+  // is for client RPCs that wait for a reply.
+  void send_stream_message(flat_buffer&& buffer) override
+  {
+    if (!channel_ || buffer.size() == 0)
+      return;
+    auto rsv = channel_->reserve_write(buffer.size());
+    if (!rsv) {
+      NPRPC_LOG_ERROR(
+          "SharedMemoryServerSession: ring full, dropped stream frame size={}",
+          buffer.size());
+      return;
+    }
+    std::memcpy(rsv.data, buffer.data().data(), buffer.size());
+    channel_->commit_write(rsv, buffer.size());
   }
 
   /**
@@ -77,57 +95,50 @@ public:
     flat_buffer tx_buffer;
 
     try {
-      // Zero-copy read: create a view directly into the ring buffer
-      flat_buffer rx_buffer(const_cast<std::uint8_t*>(read_view.data),
-                            read_view.size, read_view.size);
+      // Always copy out of the ring into an owned buffer.
+      //
+      // 1. StreamDataChunk is std::move'd into StreamManager and delivered
+      //    as a raw pointer to Swift deserializers — ring payload offsets
+      //    are not 4-byte aligned after variable-size messages, so typed
+      //    loads trap (Swift UnsafeRawPointer.load).
+      // 2. StreamInit / FunctionCall responses may grow the buffer; writing
+      //    into a ring view is unsafe (see Poa.swift owned-copy path).
+      flat_buffer rx_buffer;
+      {
+        auto mb = rx_buffer.prepare(read_view.size);
+        std::memcpy(mb.data(), read_view.data, read_view.size);
+        rx_buffer.commit(read_view.size);
+      }
 
-      // Dispatch the RPC request (calls servant methods)
-      // This synchronously deserializes rx_buffer and calls the servant
-      handle_request(rx_buffer, tx_buffer);
+      // Dispatch (RPC / StreamInit / stream control).  Stream data frames
+      // return needs_reply=false and leave tx empty.
+      const bool needs_reply = handle_request(rx_buffer, tx_buffer);
 
       // NOTE: read_view is committed by the channel's read_loop after this
       // callback returns (same contract as the client-side callback);
       // committing here as well would advance the read cursor twice.
 
+      if (!needs_reply || tx_buffer.size() == 0)
+        return;
+
       // Send response back through the channel
       if (tx_buffer.has_write_reservation() && tx_buffer.is_view_mode()) {
-        // Zero-copy path: reconstruct the reservation and commit
         LockFreeRingBuffer::WriteReservation reservation;
         reservation.data = tx_buffer.data_ptr();
         reservation.max_size = tx_buffer.max_size();
         reservation.slot_idx = tx_buffer.reservation_write_idx();
         reservation.valid = true;
-
-        // std::cout << "[nprpc][D] SERVER committing zero-copy
-        // response: size="
-        // << tx_buffer.size()
-        //           << " write_idx=" << reservation.write_idx << "
-        //           data=" << (void*)reservation.data << std::endl;
-
-        // Dump first 32 bytes for debugging
-        // std::cout << "[nprpc][D] SERVER response first 32 bytes: ";
-        // for (size_t i = 0; i < std::min(tx_buffer.size(),
-        // size_t(32)); ++i) {
-        //     printf("%02x ", (unsigned char)tx_buffer.data_ptr()[i]);
-        // }
-        // std::cout << std::endl;
-
         channel_->commit_write(reservation, tx_buffer.size());
         tx_buffer.release_write_view();
       } else {
-        // Should not happen for now...
-        // NPRPC_LOG_ERROR("SharedMemoryServerSession: Unexpected non-zero-copy response path");
-        // std::abort();
-        // Fallback path: buffer was converted to owned mode or didn't
-        // have reservation Need to get a new reservation and copy the
-        // data
         auto new_reservation = channel_->reserve_write(tx_buffer.size());
         if (new_reservation) {
           std::memcpy(new_reservation.data, tx_buffer.data_ptr(),
                       tx_buffer.size());
           channel_->commit_write(new_reservation, tx_buffer.size());
         } else {
-          NPRPC_LOG_ERROR("SharedMemoryServerSession: Failed to allocate response buffer");
+          NPRPC_LOG_ERROR(
+              "SharedMemoryServerSession: Failed to allocate response buffer");
         }
       }
     } catch (const std::exception& e) {
