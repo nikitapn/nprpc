@@ -25,6 +25,19 @@ Each benchmark runs across all transport types:
 - **Zero-Copy**: Shared memory zero-copy performance baseline
 - **Serialization Overhead**: Comparison with memcpy baseline
 
+### 4. Swift↔Swift baseline (`nprpc_swift` package)
+
+Same IDL (`idl/nprpc_benchmark.npidl`), in-process Swift client + servant over **shared memory** by default. Used to track FlatBuffer bridge optimizations.
+
+```bash
+cd nprpc_swift
+swift run -c release nprpc-swift-benchmark -- \
+  --transport shm --min-time 1.0 \
+  --json ../benchmark/results/swift/baseline.json
+```
+
+See [results/swift/README.md](results/swift/README.md). Note: Swift clients are async-only; C++ latency cases are mostly sync — prefer SHM when comparing.
+
 ## Prerequisites
 
 Install Google Benchmark:

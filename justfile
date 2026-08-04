@@ -141,6 +141,39 @@ run-benchmarks *args: (bt "nprpc_benchmarks")
     "./{{build_dir}}/benchmark/nprpc_benchmarks" {{args}} 2>&1 #\
       #| awk '/----------/{f=1} /NPRPC Benchmark Environment Teardown/{f=0} f'
 
+# Swift↔Swift benches (SHM default). Ex: just run-swift-benchmarks -- --filter EmptyCall
+run-swift-benchmarks *args: gen-swift-stubs (bt "nprpc")
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export NPRPC_BUILD_DIR="{{build_dir}}"
+    cd nprpc_swift
+    swift run -c release nprpc-swift-benchmark -- {{args}}
+
+# Record Swift SHM baseline to benchmark/results/swift/ (JSON+CSV + latest aliases)
+run-swift-benchmarks-baseline *args: gen-swift-stubs (bt "nprpc")
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export NPRPC_BUILD_DIR="{{build_dir}}"
+    out_dir="benchmark/results/swift"
+    mkdir -p "$out_dir"
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    json="${out_dir}/baseline_${stamp}.json"
+    csv="${out_dir}/baseline_${stamp}.csv"
+    cd nprpc_swift
+    # User args first; force transport + output paths last so baselines stay predictable.
+    swift run -c release nprpc-swift-benchmark -- \
+      {{args}} \
+      --transport shm \
+      --json "../${json}" \
+      --csv "../${csv}"
+    # Keep stable names pointing at the latest run for easy diffs.
+    cp -f "../${json}" "../${out_dir}/baseline.json"
+    cp -f "../${csv}" "../${out_dir}/baseline.csv"
+    echo "Baseline written:"
+    echo "  ${json}"
+    echo "  ${csv}"
+    echo "  ${out_dir}/baseline.json (latest)"
+
 # ── docker / images ──────────────────────────────────────────────────────────
 
 # Build the nprpc-dev Docker image (`just build-dev-image` or `just build-dev-image myrepo/nprpc 1.0`)

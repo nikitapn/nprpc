@@ -923,7 +923,8 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     out << bl() << "let buffer = FlatBuffer()\n";
     out << bl() << "buffer.prepare(" << capacity << ")\n";
     out << bl() << "buffer.commit(" << fixed_size << ")\n";
-    out << bl() << "guard let data = buffer.data else { " << error_stmt << " "; 
+    // Use bufData (not `data`) so IDL args named `data` are not shadowed.
+    out << bl() << "guard let bufData = buffer.data else { " << error_stmt << " ";
     if (can_throw) {
       out << "BufferError(message: \"Failed to get buffer data\")";
     }
@@ -931,17 +932,17 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
     // Write message header
     out << bl() << "// Write message header\n";
-    out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)\n";
-    out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)\n";
-    out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request\n";
-    out << bl() << "data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved\n\n";
+    out << bl() << "bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)\n";
+    out << bl() << "bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)\n";
+    out << bl() << "bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request\n";
+    out << bl() << "bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved\n\n";
 
     // Write call header
     out << bl() << "// Write call header\n";
-    out << bl() << "data.storeBytes(of: poaIdx, toByteOffset: " << size_of_header << ", as: UInt16.self)\n";
-    out << bl() << "data.storeBytes(of: UInt8(0), toByteOffset: " << (size_of_header + 2) << ", as: UInt8.self)  // interface_idx\n";
-    out << bl() << "data.storeBytes(of: UInt8(" << fn->idx << "), toByteOffset: " << (size_of_header + 3) << ", as: UInt8.self)  // function_idx\n";
-    out << bl() << "data.storeBytes(of: objectId, toByteOffset: " << (size_of_header + 8) << ", as: UInt64.self)\n\n";
+    out << bl() << "bufData.storeBytes(of: poaIdx, toByteOffset: " << size_of_header << ", as: UInt16.self)\n";
+    out << bl() << "bufData.storeBytes(of: UInt8(0), toByteOffset: " << (size_of_header + 2) << ", as: UInt8.self)  // interface_idx\n";
+    out << bl() << "bufData.storeBytes(of: UInt8(" << fn->idx << "), toByteOffset: " << (size_of_header + 3) << ", as: UInt8.self)  // function_idx\n";
+    out << bl() << "bufData.storeBytes(of: objectId, toByteOffset: " << (size_of_header + 8) << ", as: UInt64.self)\n\n";
 
     // Marshal input arguments
     if (fn->in_s) {

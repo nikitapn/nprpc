@@ -28,4 +28,8 @@ fi
   nprpc_swift/Tests/IDL/nprpc_test.npidl \
   --output-dir nprpc_swift/Tests/NPRPCTests/Generated
 
+"$NPIDL" --swift \
+  benchmark/idl/nprpc_benchmark.npidl \
+  --output-dir nprpc_swift/Sources/NPRPCBenchmark/Generated
+
 echo "Generated Swift stubs for NPRPC"

@@ -36,7 +36,10 @@ let package = Package(
     products: [
         .library(
             name: "NPRPC",
-            targets: ["NPRPC"])
+            targets: ["NPRPC"]),
+        .executable(
+            name: "nprpc-swift-benchmark",
+            targets: ["NPRPCBenchmark"]),
     ],
     targets: [
         // C++ bridge module - exposes nprpc headers to Swift
@@ -83,6 +86,15 @@ let package = Package(
             name: "NPRPCTests",
             dependencies: ["NPRPC"],
             exclude: [ ],
+            swiftSettings: [
+                .interoperabilityMode(.Cxx)
+            ]
+        ),
+        // Swift↔Swift microbenchmarks (same IDL as C++ benchmark/)
+        .executableTarget(
+            name: "NPRPCBenchmark",
+            dependencies: ["NPRPC"],
+            path: "Sources/NPRPCBenchmark",
             swiftSettings: [
                 .interoperabilityMode(.Cxx)
             ]
