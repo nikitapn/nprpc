@@ -741,16 +741,19 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
       }
 
       out << ")";
+      // raises(...) applies to StreamInit: servant may throw before the stream
+      // starts; the client receives a typed Exception reply.
+      const char* throws_kw = fn->is_throwing() ? " throws" : "";
 
       switch (fn->stream_kind) {
       case StreamKind::Server:
-        out << " -> AsyncStream<";
+        out << throws_kw << " -> AsyncStream<";
         emit_type(fn->stream_decl->stream_out_type(), out);
         out << ">\n";
         break;
       case StreamKind::Client:
       case StreamKind::Bidi:
-        out << " async\n";
+        out << " async" << throws_kw << "\n";
         break;
       default:
         assert(false);
@@ -1176,6 +1179,12 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
   }
 
   out << bl() << "let result = nprpc_session_stream_send_init(session, buffer.handle, self.timeout)\n";
+  // result mirrors handle_standart_reply: 0=Success, 1=Exception, other=error.
+  // On Exception the reply body remains in `buffer` (send_receive overwrote it).
+  if (fn->is_throwing()) {
+    out << bl() << "if result == 1 { throw " << ctx_->current_file()
+        << "_throwException(buffer: buffer) }\n";
+  }
   out << bl() << "if result != 0 { throw RuntimeError(message: \"StreamInit failed (code: \\(result))\") }\n";
 
   switch (fn->stream_kind) {
@@ -1240,15 +1249,16 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       }
 
       out << ")";
+      const char* throws_kw = fn->is_throwing() ? " throws" : "";
       switch (fn->stream_kind) {
       case StreamKind::Server:
-        out << " -> AsyncStream<";
+        out << throws_kw << " -> AsyncStream<";
         emit_type(fn->stream_decl->stream_out_type(), out);
         out << "> " << bb();
         break;
       case StreamKind::Client:
       case StreamKind::Bidi:
-        out << " async " << bb();
+        out << " async" << throws_kw << " " << bb();
         break;
       default:
         assert(false);
@@ -1536,24 +1546,22 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstInterfaceDecl* ifs,
   auto* stream_decl = fn->stream_decl;
   assert(stream_decl != nullptr);
 
-  // For streaming dispatch, we need to:
-  // 1. Read stream_id from the StreamInit message (different from CallHeader layout)
-  // 2. Build any reader/writer wrappers needed for the stream kind
-  // 3. Invoke the servant method
-  // 4. Pump output chunks when needed
+  // Streaming dispatch:
+  // 1. Read stream_id / args from StreamInit
+  // 2. Build reader/writer wrappers
+  // 3. Invoke servant (raises → typed Exception reply on init failure)
+  // 4. Pump / Task for ongoing stream work
 
   out << bl() << "// Streaming method dispatch\n";
   out << bl() << "guard let data = buffer.data else { return }\n";
   out << bl() << "let streamId = data.load(fromByteOffset: (" <<
     size_of_header << " + MemoryLayout<NPRPC.impl.StreamInit>.offset(of: \\NPRPC.impl.StreamInit.stream_id)!), as: UInt64.self)\n\n";
 
-  // Unmarshal input arguments if any
-  // Input args start after StreamInit
   constexpr auto args_offset = get_stream_init_arguments_offset();
   if (fn->in_s) {
     if (!ifs->trusted) {
       out << bl() << "// Validate input buffer for untrusted interface\n";
-        out << bl() << "guard check_"
+      out << bl() << "guard check_"
           << make_safety_check_name(fn->in_s)
           << "(buffer: data, bufferSize: buffer.size, offset: " << args_offset
           << ") else " << bb();
@@ -1588,16 +1596,66 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstInterfaceDecl* ifs,
     }
   }
 
-  // Get stream_manager from session context (stream_manager is heap-allocated and stays alive)
-  out << bl() << "// Get stream_manager for streaming (heap-allocated, survives after dispatch returns)\n";
   out << bl() << "guard let sessionCtx = self.sessionContext,\n";
   out << bl() << "      let streamManager = nprpc_get_stream_manager(sessionCtx) else {\n";
   out << bl() << "  makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)\n";
   out << bl() << "  return\n";
   out << bl() << "}\n";
+
+  // Build argument list for the servant call (shared).
+  auto emit_call_args = [&](std::ostream& os, const char* reader_name) {
+    bool first = true;
+    int ix = 0;
+    for (auto arg : fn->args) {
+      if (arg->modifier == ArgumentModifier::Out)
+        continue;
+      if (!first)
+        os << ", ";
+      first = false;
+      if (arg->type->id == FieldType::Stream) {
+        os << arg->name << ": " << reader_name;
+        continue;
+      }
+      ++ix;
+      os << arg->name << ": ia._" << ix;
+    }
+    if (fn->stream_kind == StreamKind::Bidi) {
+      if (!first)
+        os << ", ";
+      os << "stream: stream";
+    }
+  };
+
+  // Exception catch blocks for StreamInit (mirrors regular RPC dispatch).
+  auto emit_stream_init_exception_catches = [&]() {
+    if (!fn->is_throwing())
+      return;
+    auto declared_exceptions = fn->exceptions;
+    if (declared_exceptions.empty() && fn->ex)
+      declared_exceptions.push_back(fn->ex);
+    const auto offset = size_of_header;
+    for (auto* ex : declared_exceptions) {
+      const auto initial_size = offset + ex->size;
+      out << bl() << "catch let e as " << ex->name << " {\n" << bb(false);
+      out << bl() << "let obuf = buffer\n";
+      out << bl() << "obuf.consume(obuf.size)\n";
+      out << bl() << "obuf.prepare(" << initial_size << ")\n";
+      out << bl() << "obuf.commit(" << initial_size << ")\n";
+      out << bl() << "guard let exData = obuf.data else { return }\n";
+      out << bl() << "marshal_" << ex->name << "(buffer: obuf, offset: "
+          << offset << ", data: e)\n";
+      out << bl() << "exData.storeBytes(of: UInt32(obuf.size), toByteOffset: 0, as: UInt32.self)\n";
+      out << bl() << "exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)\n";
+      out << bl() << "exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)\n";
+      out << eb();
+    }
+    out << bl() << "catch {\n" << bb(false);
+    out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)\n";
+    out << eb();
+  };
+
   switch (fn->stream_kind) {
-  case StreamKind::Server:
-    // Consumer's advertised window (StreamInit.initial_credits, offset 28).
+  case StreamKind::Server: {
     out << bl() << "let initialCredits = data.load(fromByteOffset: "
         << (size_of_header + 28) << ", as: UInt32.self)\n";
     out << bl() << "let writer = NPRPC.createStreamManagerWriter(streamManager: streamManager, streamId: streamId, initialPayloadCapacity: "
@@ -1605,64 +1663,16 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstInterfaceDecl* ifs,
         << ", initialCredits: initialCredits, serializer: ";
     emit_stream_serializer(stream_decl->stream_out_type(), out);
     out << ")\n";
-    out << bl() << "let source = " << swift_method_name(fn->name) << "(";
-    break;
-  case StreamKind::Client:
-    out << bl() << "let reader = NPRPC.createStreamManagerReader(streamManager: streamManager, streamId: streamId, buffer: buffer, unreliable: " << (fn->is_reliable ? "false" : "true") << ", deserializer: ";
-    emit_stream_deserializer(stream_decl->stream_in_type(), "remoteEndpoint",
-                             out);
+
+    // Server streams return AsyncStream synchronously — try/catch covers raises.
+    if (fn->is_throwing())
+      out << bl() << "do {\n" << bb(false);
+
+    out << bl() << "let source = "
+        << (fn->is_throwing() ? "try " : "")
+        << swift_method_name(fn->name) << "(";
+    emit_call_args(out, "reader");
     out << ")\n";
-    out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)\n";
-    out << bl() << "Task {\n" << bb(false);
-    out << bl() << "await " << swift_method_name(fn->name) << "(";
-    break;
-  case StreamKind::Bidi:
-    // Consumer's advertised window (StreamInit.initial_credits, offset 28).
-    out << bl() << "let initialCredits = data.load(fromByteOffset: "
-        << (size_of_header + 28) << ", as: UInt32.self)\n";
-    out << bl() << "let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: "
-        << estimate_stream_initial_payload_capacity(stream_decl->stream_out_type())
-      << ", unreliable: " << (fn->is_reliable ? "false" : "true")
-        << ", initialCredits: initialCredits"
-        << ", serializer: ";
-    emit_stream_serializer(stream_decl->stream_out_type(), out);
-    out << ", deserializer: ";
-    emit_stream_deserializer(stream_decl->stream_in_type(), "remoteEndpoint",
-                             out);
-    out << ")\n";
-    out << bl() << "nprpc_stream_manager_defer_stream_start(streamManager, streamId)\n";
-    out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)\n";
-    out << bl() << "Task {\n" << bb(false);
-    out << bl() << "await " << swift_method_name(fn->name) << "(";
-    break;
-  default:
-    assert(false);
-  }
-
-  bool first = true;
-  int ix = 0;
-  for (auto arg : fn->args) {
-    if (arg->modifier == ArgumentModifier::Out) continue;
-    if (!first) out << ", ";
-    first = false;
-
-    if (arg->type->id == FieldType::Stream) {
-      out << arg->name << ": reader";
-      continue;
-    }
-
-    ++ix;
-    out << arg->name << ": ia._" << ix;
-  }
-
-  if (fn->stream_kind == StreamKind::Bidi) {
-    if (!first) out << ", ";
-    out << "stream: stream";
-  }
-  out << ")\n";
-
-  switch (fn->stream_kind) {
-  case StreamKind::Server:
     out << bl() << "nprpc_stream_manager_defer_stream_start(streamManager, streamId)\n";
     out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)\n";
     out << bl() << "Task {\n" << bb(false);
@@ -1671,11 +1681,134 @@ void SwiftBuilder::emit_servant_stream_dispatch(AstInterfaceDecl* ifs,
     out << eb();
     out << bl() << "writer.close()\n";
     out << eb() << "\n";
+
+    if (fn->is_throwing()) {
+      out << eb(); // do
+      emit_stream_init_exception_catches();
+    }
     break;
-  case StreamKind::Client:
-  case StreamKind::Bidi:
-    out << eb() << "\n";
+  }
+  case StreamKind::Client: {
+    out << bl() << "let reader = NPRPC.createStreamManagerReader(streamManager: streamManager, streamId: streamId, buffer: buffer, unreliable: "
+        << (fn->is_reliable ? "false" : "true") << ", deserializer: ";
+    emit_stream_deserializer(stream_decl->stream_in_type(), "remoteEndpoint",
+                             out);
+    out << ")\n";
+
+    if (fn->is_throwing()) {
+      // Probe init-time throws (before first stream read) so they become
+      // the StreamInit Exception reply, matching C++ Task::done() rethrow.
+      out << bl() << "switch nprpcProbeStreamInit(\n";
+      out << bl() << "  body: { [self] in\n";
+      out << bl() << "    try await self." << swift_method_name(fn->name) << "(";
+      emit_call_args(out, "reader");
+      out << ")\n";
+      out << bl() << "  },\n";
+      out << bl() << "  installFirstAccess: { reader.onFirstAccess = $0 }\n";
+      out << bl() << ") {\n";
+      out << bl() << "case .started:\n";
+      out << bl() << "  makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)\n";
+      out << bl() << "case .initError(let error):\n";
+      out << bl() << "  do {\n";
+      out << bl() << "    throw error\n";
+      // Exception catches are indented one level for the case body
+      {
+        auto declared_exceptions = fn->exceptions;
+        if (declared_exceptions.empty() && fn->ex)
+          declared_exceptions.push_back(fn->ex);
+        const auto offset = size_of_header;
+        for (auto* ex : declared_exceptions) {
+          const auto initial_size = offset + ex->size;
+          out << bl() << "  } catch let e as " << ex->name << " {\n";
+          out << bl() << "    let obuf = buffer\n";
+          out << bl() << "    obuf.consume(obuf.size)\n";
+          out << bl() << "    obuf.prepare(" << initial_size << ")\n";
+          out << bl() << "    obuf.commit(" << initial_size << ")\n";
+          out << bl() << "    guard let exData = obuf.data else { return }\n";
+          out << bl() << "    marshal_" << ex->name
+              << "(buffer: obuf, offset: " << offset << ", data: e)\n";
+          out << bl() << "    exData.storeBytes(of: UInt32(obuf.size), toByteOffset: 0, as: UInt32.self)\n";
+          out << bl() << "    exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)\n";
+          out << bl() << "    exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)\n";
+        }
+        out << bl() << "  } catch {\n";
+        out << bl() << "    makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)\n";
+        out << bl() << "  }\n";
+      }
+      out << bl() << "}\n";
+    } else {
+      out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)\n";
+      out << bl() << "Task {\n" << bb(false);
+      out << bl() << "await " << swift_method_name(fn->name) << "(";
+      emit_call_args(out, "reader");
+      out << ")\n";
+      out << eb() << "\n";
+    }
     break;
+  }
+  case StreamKind::Bidi: {
+    out << bl() << "let initialCredits = data.load(fromByteOffset: "
+        << (size_of_header + 28) << ", as: UInt32.self)\n";
+    out << bl() << "let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: "
+        << estimate_stream_initial_payload_capacity(stream_decl->stream_out_type())
+        << ", unreliable: " << (fn->is_reliable ? "false" : "true")
+        << ", initialCredits: initialCredits"
+        << ", serializer: ";
+    emit_stream_serializer(stream_decl->stream_out_type(), out);
+    out << ", deserializer: ";
+    emit_stream_deserializer(stream_decl->stream_in_type(), "remoteEndpoint",
+                             out);
+    out << ")\n";
+    out << bl() << "nprpc_stream_manager_defer_stream_start(streamManager, streamId)\n";
+
+    if (fn->is_throwing()) {
+      out << bl() << "switch nprpcProbeStreamInit(\n";
+      out << bl() << "  body: { [self] in\n";
+      out << bl() << "    try await self." << swift_method_name(fn->name) << "(";
+      emit_call_args(out, "reader");
+      out << ")\n";
+      out << bl() << "  },\n";
+      out << bl() << "  installFirstAccess: { stream.reader.onFirstAccess = $0 }\n";
+      out << bl() << ") {\n";
+      out << bl() << "case .started:\n";
+      out << bl() << "  makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)\n";
+      out << bl() << "case .initError(let error):\n";
+      out << bl() << "  do {\n";
+      out << bl() << "    throw error\n";
+      {
+        auto declared_exceptions = fn->exceptions;
+        if (declared_exceptions.empty() && fn->ex)
+          declared_exceptions.push_back(fn->ex);
+        const auto offset = size_of_header;
+        for (auto* ex : declared_exceptions) {
+          const auto initial_size = offset + ex->size;
+          out << bl() << "  } catch let e as " << ex->name << " {\n";
+          out << bl() << "    let obuf = buffer\n";
+          out << bl() << "    obuf.consume(obuf.size)\n";
+          out << bl() << "    obuf.prepare(" << initial_size << ")\n";
+          out << bl() << "    obuf.commit(" << initial_size << ")\n";
+          out << bl() << "    guard let exData = obuf.data else { return }\n";
+          out << bl() << "    marshal_" << ex->name
+              << "(buffer: obuf, offset: " << offset << ", data: e)\n";
+          out << bl() << "    exData.storeBytes(of: UInt32(obuf.size), toByteOffset: 0, as: UInt32.self)\n";
+          out << bl() << "    exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)\n";
+          out << bl() << "    exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)\n";
+        }
+        out << bl() << "  } catch {\n";
+        out << bl() << "    makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)\n";
+        out << bl() << "  }\n";
+      }
+      out << bl() << "}\n";
+    } else {
+      out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)\n";
+      out << bl() << "Task {\n" << bb(false);
+      out << bl() << "await " << swift_method_name(fn->name) << "(";
+      emit_call_args(out, "reader");
+      out << ")\n";
+      out << eb() << "\n";
+    }
+    break;
+  }
   default:
     assert(false);
   }

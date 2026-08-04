@@ -125,6 +125,25 @@ private final class BidiEchoServant: TestStreamsServant, @unchecked Sendable {
             stream.writer.abort()
         }
     }
+
+    // StreamInit-time rejections (raises)
+    override func getByteStreamOrThrow(size: UInt64) throws -> AsyncStream<UInt8> {
+        throw AssertionFailed(message: "GetByteStreamOrThrow rejected")
+    }
+
+    override func uploadObjectStreamCanThrow(
+        expected_count: UInt64,
+        data: NPRPCStreamReader<AAA>
+    ) async throws {
+        throw AssertionFailed(message: "UploadObjectStreamCanThrow rejected")
+    }
+
+    override func echoByteStreamOrThrow(
+        xor_mask: UInt8,
+        stream: NPRPCBidiStream<UInt8, UInt8>
+    ) async throws {
+        throw AssertionFailed(message: "EchoByteStreamOrThrow rejected")
+    }
 }
 
 // MARK: - Tests
@@ -360,5 +379,37 @@ final class BidiStreamIPCTests: XCTestCase {
             seen += 1
         }
         XCTAssertEqual(seen, 8)
+    }
+
+    // MARK: StreamInit raises(...)
+
+    /// Server stream: servant throws before returning the AsyncStream.
+    func testServerStreamInitThrows() async throws {
+        do {
+            _ = try client.getByteStreamOrThrow(size: 10)
+            XCTFail("expected AssertionFailed")
+        } catch let e as AssertionFailed {
+            XCTAssertEqual(e.message, "GetByteStreamOrThrow rejected")
+        }
+    }
+
+    /// Client stream: servant throws before first read of the upload.
+    func testClientStreamInitThrows() async throws {
+        do {
+            _ = try client.uploadObjectStreamCanThrow(expected_count: 1)
+            XCTFail("expected AssertionFailed")
+        } catch let e as AssertionFailed {
+            XCTAssertEqual(e.message, "UploadObjectStreamCanThrow rejected")
+        }
+    }
+
+    /// Bidi stream: servant throws before first stream I/O.
+    func testBidiStreamInitThrows() async throws {
+        do {
+            _ = try client.echoByteStreamOrThrow(xor_mask: 0)
+            XCTFail("expected AssertionFailed")
+        } catch let e as AssertionFailed {
+            XCTAssertEqual(e.message, "EchoByteStreamOrThrow rejected")
+        }
     }
 }

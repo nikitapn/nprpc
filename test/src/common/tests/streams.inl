@@ -80,6 +80,12 @@ public:
         // Coroutine ends naturally, triggering stream completion
     }
 
+    nprpc::StreamWriter<uint8_t> GetByteStreamOrThrow(uint64_t size) override {
+        (void)size;
+        throw nprpc::test::AssertionFailed{"GetByteStreamOrThrow rejected"};
+        co_return;
+    }
+
     nprpc::StreamWriter<std::string> GetStringStream(uint32_t count) override {
         for (uint32_t i = 0; i < count; ++i) {
             co_yield std::string("item_") + std::to_string(i);
@@ -367,6 +373,13 @@ public:
             stream.writer.write(static_cast<uint8_t>(*byte ^ xor_mask));
         }
         stream.writer.close();
+        co_return;
+    }
+
+    ::nprpc::Task<> EchoByteStreamOrThrow(uint8_t xor_mask, nprpc::BidiStream<uint8_t, uint8_t> stream) override {
+        (void)xor_mask;
+        (void)stream;
+        throw nprpc::test::AssertionFailed{"EchoByteStreamOrThrow rejected"};
         co_return;
     }
 

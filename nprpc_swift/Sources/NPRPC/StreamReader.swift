@@ -80,6 +80,11 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     // createObjectStreamReader, which doesn't have a stream_manager pointer
     // to retain (window updates are already skipped on that path).
     private var streamManagerHandle: UnsafeMutableRawPointer?
+    /// Fired once when the consumer first enters `next()` (before awaiting a
+    /// chunk).  Used by stream-init exception probing on the servant side.
+    public var onFirstAccess: (@Sendable () -> Void)?
+    private var firstAccessFired = false
+    private let firstAccessLock = NSLock()
 
     public init(streamId: UInt64, buffer: FlatBuffer, deserializer: @escaping (UnsafeRawPointer, Int) -> T) {
         self.streamId = streamId
@@ -99,7 +104,19 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     }
 
     public func makeAsyncIterator() -> WindowedIterator {
-        WindowedIterator(base: stream.makeAsyncIterator(), windowUpdateFn: windowUpdateFn)
+        WindowedIterator(
+            base: stream.makeAsyncIterator(),
+            windowUpdateFn: windowUpdateFn,
+            onFirstAccess: { [weak self] in self?.fireFirstAccess() }
+        )
+    }
+
+    private func fireFirstAccess() {
+        firstAccessLock.lock()
+        defer { firstAccessLock.unlock() }
+        guard !firstAccessFired else { return }
+        firstAccessFired = true
+        onFirstAccess?()
     }
 
     /// Custom iterator that sends the window update *after* consuming a chunk,
@@ -112,8 +129,24 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     public struct WindowedIterator: AsyncIteratorProtocol {
         var base: AsyncThrowingStream<T, Error>.AsyncIterator
         let windowUpdateFn: (() -> Void)?
+        let onFirstAccess: (() -> Void)?
+        private var first = true
+
+        init(
+            base: AsyncThrowingStream<T, Error>.AsyncIterator,
+            windowUpdateFn: (() -> Void)?,
+            onFirstAccess: (() -> Void)?
+        ) {
+            self.base = base
+            self.windowUpdateFn = windowUpdateFn
+            self.onFirstAccess = onFirstAccess
+        }
 
         public mutating func next() async throws -> T? {
+            if first {
+                first = false
+                onFirstAccess?()
+            }
             let value = try await base.next()
             if value != nil { windowUpdateFn?() }
             return value
@@ -472,6 +505,80 @@ public struct NPRPCBidiStream<TWrite: Sendable, TRead: Sendable>: @unchecked Sen
         self.writer = writer
         self.reader = reader
     }
+}
+
+// MARK: - StreamInit exception probe (servant side)
+//
+// Client/bidi stream servant methods are `async throws`.  C++ can detect
+// "threw before first suspend" via Task::done() + rethrow_if_exception.
+// Swift has no equivalent, so we use a first-access gate on the stream
+// reader: if the method throws before it ever awaits the next chunk, that
+// is an *init-time* failure and must become the StreamInit Exception reply.
+// If it reaches the first `for try await` / `.next()`, the stream has
+// started and StreamInit already succeeded (or is about to).
+
+/// Result of probing whether a stream servant method failed during init.
+public enum StreamInitProbeResult: Sendable {
+    /// Method suspended on first stream read (or completed without error).
+    case started
+    /// Method threw before any stream I/O — encode as StreamInit Exception.
+    case initError(any Error)
+}
+
+/// Runs `body` and waits until either the first stream access (via
+/// `installFirstAccess`) or an init-time throw / clean return.
+///
+/// Wire `installFirstAccess` to `reader.onFirstAccess = fn`.
+public func nprpcProbeStreamInit(
+    body: @escaping @Sendable () async throws -> Void,
+    installFirstAccess: (@escaping @Sendable () -> Void) -> Void
+) -> StreamInitProbeResult {
+    final class Probe: @unchecked Sendable {
+        private let lock = NSLock()
+        private let sem = DispatchSemaphore(value: 0)
+        private var done = false
+        private var initError: (any Error)?
+
+        func markStarted() {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !done else { return }
+            done = true
+            sem.signal()
+        }
+
+        func markInitError(_ error: any Error) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !done else { return }
+            done = true
+            initError = error
+            sem.signal()
+        }
+
+        func wait() -> StreamInitProbeResult {
+            sem.wait()
+            lock.lock()
+            defer { lock.unlock() }
+            if let initError { return .initError(initError) }
+            return .started
+        }
+    }
+
+    let probe = Probe()
+    installFirstAccess { probe.markStarted() }
+
+    Task {
+        do {
+            try await body()
+            // Completed without ever touching the stream (or after access).
+            probe.markStarted()
+        } catch {
+            probe.markInitError(error)
+        }
+    }
+
+    return probe.wait()
 }
 
 private final class CallbackBox {
