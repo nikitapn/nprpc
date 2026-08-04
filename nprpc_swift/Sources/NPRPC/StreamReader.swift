@@ -341,9 +341,16 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
     private let sendError: (UInt64, UInt32) -> Void
     private let sendCancel: ((UInt64) -> Void)?
     // When non-nil, writes go through credit-based backpressure.
-    // The closure serializes the value, enqueues with the C++ layer, and
-    // calls the provided callback with whether the chunk was actually sent
-    // (false if the owning session had already died) once it's queued/sent.
+    //
+    // Contract: the closure MUST fully consume (copy) `buffer`'s bytes before
+    // returning — either into a wire message or into an owned queue.  The
+    // success callback may fire later (credit wait), but the buffer storage
+    // may be reused for the next write as soon as the closure returns.
+    // C++ `write_chunk_or_queue` already does this (memcpy into flat_buffer or
+    // pending_writes).  Test sinks must copy if they keep data past return.
+    //
+    // The callback receives whether the chunk was actually sent (false if the
+    // owning session had already died).
     internal let asyncSendChunk: ((FlatBuffer, UInt64, @escaping (Bool) -> Void) -> Void)?
     private var sequence: UInt64 = 0
     private var closed = false
@@ -406,29 +413,6 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
         }
     }
 
-    // Synchronous helper: serializes `value` into a snapshot buffer and
-    // advances the sequence counter.  Returns nil if the writer is closed.
-    // Must not be called from an async context (uses NSLock).
-    private func prepareChunk(_ value: T) -> (FlatBuffer, UInt64)? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !closed else { return nil }
-        buffer.consume(buffer.size)
-        buffer.prepare(initialPayloadCapacity)
-        serializer(buffer, 0, value)
-        let seq = sequence
-        sequence += 1
-        let snapshot = FlatBuffer()
-        if let src = buffer.constData, buffer.size > 0 {
-            snapshot.prepare(buffer.size)
-            snapshot.commit(buffer.size)
-            if let dst = snapshot.data {
-                dst.copyMemory(from: src, byteCount: buffer.size)
-            }
-        }
-        return (snapshot, seq)
-    }
-
     private func markClosed() {
         lock.lock()
         closed = true
@@ -438,19 +422,44 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
     /// Async write that respects credit-based backpressure when available.
     /// Falls back to synchronous write if no async hook was configured.
     /// Throws under the same conditions as the synchronous write(_:).
+    ///
+    /// Serializes into the writer's reusable buffer and hands it to
+    /// `asyncSendChunk` under the lock (no per-chunk snapshot copy).  The
+    /// C++ path copies the payload before returning; we then await only the
+    /// credit/send completion callback.
     public func write(_ value: T) async throws {
         guard let asyncSend = asyncSendChunk else {
             try performSyncWrite(value)
             return
         }
 
-        guard let (snapshot, seq) = prepareChunk(value) else {
-            throw RuntimeError(message: "NPRPCStreamWriter: stream is closed")
+        // nil => writer already closed; otherwise send success flag.
+        let outcome: Bool? = await withCheckedContinuation { (cont: CheckedContinuation<Bool?, Never>) in
+            lock.lock()
+            if closed {
+                lock.unlock()
+                cont.resume(returning: nil)
+                return
+            }
+
+            buffer.consume(buffer.size)
+            buffer.prepare(initialPayloadCapacity)
+            serializer(buffer, 0, value)
+            let seq = sequence
+            sequence += 1
+
+            // Invoke under lock so concurrent writers cannot overwrite `buffer`
+            // until the sink has copied the bytes.  Callback may fire sync
+            // (credits available) or later (parked on window update); resume
+            // is not re-entrant into this task while we still hold the lock.
+            asyncSend(buffer, seq) { ok in
+                cont.resume(returning: ok)
+            }
+            lock.unlock()
         }
 
-        // Suspend until the credit gate opens and the chunk is queued/sent.
-        let sent = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            asyncSend(snapshot, seq) { ok in cont.resume(returning: ok) }
+        guard let sent = outcome else {
+            throw RuntimeError(message: "NPRPCStreamWriter: stream is closed")
         }
         if !sent {
             markClosed()
@@ -622,6 +631,9 @@ public func createStreamManagerWriter<T: Sendable>(
             nprpc_stream_manager_send_cancel(streamManager, streamId)
         },
         asyncSendChunk: { buffer, sequence, callback in
+            // C++ write_chunk_or_queue copies `data` before returning (either
+            // into the wire flat_buffer or into pending_writes).  Safe for
+            // NPRPCStreamWriter to reuse `buffer` after this closure returns.
             guard let data = buffer.constData else { callback(true); return }
             let boxPtr = Unmanaged.passRetained(CallbackBox(callback)).toOpaque()
             nprpc_stream_manager_write_chunk_async(
