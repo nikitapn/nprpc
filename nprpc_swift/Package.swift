@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import Foundation
@@ -52,10 +52,8 @@ let package = Package(
                 .unsafeFlags(["-I", "\(buildPath)/include"]),
                 // Docker-only: Clang 17-built Boost (host builds use system Boost instead)
                 .unsafeFlags(["-I", "\(boostInstallPath)/include"]),
-                .unsafeFlags(["-I", "\(nprpcRoot)/third_party/boringssl/include"])
             ],
             linkerSettings: [
-                // Link against libnprpc.so (BoringSSL is statically absorbed inside it)
                 .linkedLibrary("nprpc"),
                 // Library search paths: nprpc build dir, plus Docker's in-tree Boost (no-op on host)
                 .unsafeFlags(["-L", buildPath]),
@@ -70,7 +68,6 @@ let package = Package(
                 .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "\(boostInstallPath)/lib"])
             ]
         ),
-        
         // Main Swift wrapper library
         .target(
             name: "NPRPC",
@@ -81,25 +78,13 @@ let package = Package(
                 .interoperabilityMode(.Cxx)
             ]
         ),
-
-        // Tests
+        // Integration tests
         .testTarget(
             name: "NPRPCTests",
             dependencies: ["NPRPC"],
             exclude: [ ],
             swiftSettings: [
                 .interoperabilityMode(.Cxx)
-            ],
-            linkerSettings: [
-                // BoringSSL is built with -fvisibility=hidden so ERR_* symbols
-                // are not exported from libnprpc.so. Link the static archives
-                // directly here so the test binary resolves them at link time.
-                // This only affects the test binary — consumer packages (which
-                // link libnprpc.so and don't include ssl/impl/error.ipp directly)
-                // are unaffected since test targets don't propagate linker settings.
-                .unsafeFlags(["-L", "\(buildPath)/third_party/boringssl"]),
-                .linkedLibrary("ssl"),
-                .linkedLibrary("crypto"),
             ]
         ),
     ],

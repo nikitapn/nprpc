@@ -5,6 +5,7 @@
 
 #include <nprpc/common.hpp>
 #include <nprpc/endpoint.hpp>
+#include <nprpc/impl/ssl.hpp>
 
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/asio/strand.hpp>

@@ -11,6 +11,7 @@
 #endif
 #include "logging.hpp"
 #include <nprpc_nameserver.hpp>
+#include <nprpc/impl/websocket_session.hpp>
 
 #if defined(__linux__)
 namespace nprpc::impl {
@@ -28,7 +29,6 @@ std::shared_ptr<Session> make_uring_client_connection(
 #include <fstream>
 #include <functional>
 #include <sstream>
-#include <thread>
 
 #ifdef _WIN32
 #include <boost/asio/ssl/context.hpp>
@@ -61,6 +61,9 @@ void add_windows_root_certs(boost::asio::ssl::context& ctx)
 #endif // BOOST_OS_WINDOWS
 
 namespace nprpc::impl {
+
+net::ssl::context ssl_context_server{net::ssl::context::tlsv13_server};
+net::ssl::context ssl_context_client{net::ssl::context::tlsv13_client};
 
 namespace {
 size_t default_stream_pool_size() noexcept
@@ -185,7 +188,7 @@ NPRPC_API Rpc* RpcBuilderBase::build()
     //       return "test";
     //     });
 
-    g_cfg.ssl_context_server.set_options(
+    ssl_context_server.set_options(
         boost::asio::ssl::context::default_workarounds |
         boost::asio::ssl::context::no_sslv2 |
         boost::asio::ssl::context::no_sslv3 |
@@ -195,16 +198,16 @@ NPRPC_API Rpc* RpcBuilderBase::build()
         boost::asio::ssl::context::no_compression // Prevent CRIME attacks
     );
 
-    g_cfg.ssl_context_server.use_certificate_chain(
+    ssl_context_server.use_certificate_chain(
         boost::asio::buffer(cert.data(), cert.size()));
 
-    g_cfg.ssl_context_server.use_private_key(
+    ssl_context_server.use_private_key(
         boost::asio::buffer(key.data(), key.size()),
         boost::asio::ssl::context::file_format::pem);
 
     if (cfg_->http_dhparams_file.size() > 0) {
       std::string const dh = read_file_to_string(cfg_->http_dhparams_file);
-      g_cfg.ssl_context_server.use_tmp_dh(
+      ssl_context_server.use_tmp_dh(
           boost::asio::buffer(dh.data(), dh.size()));
     }
   }
@@ -212,15 +215,15 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   // Configure SSL client settings based on RpcBuilder options
   if (cfg_->http_ssl_client_disable_verification) {
     NPRPC_LOG_INFO("SSL client verification disabled (for testing only)");
-    g_cfg.ssl_context_client.set_verify_mode(ssl::verify_none);
+    ssl_context_client.set_verify_mode(net::ssl::verify_none);
   } else {
 #ifdef _WIN32
     // On Windows, add system root certificates to the SSL context
-    add_windows_root_certs(ctx_client);
+    add_windows_root_certs(ssl_context_client);
 #else
     // On other platforms, set default verification paths
     boost::system::error_code ec;
-    g_cfg.ssl_context_client.set_default_verify_paths(ec);
+    ssl_context_client.set_default_verify_paths(ec);
     if (ec) {
       NPRPC_LOG_WARN(
           "Warning: Failed to set default SSL verification paths: {}",
@@ -231,7 +234,7 @@ NPRPC_API Rpc* RpcBuilderBase::build()
 #endif // _WIN32
     if (!cfg_->ssl_client_self_signed_cert_path.empty()) {
       try {
-        g_cfg.ssl_context_client.load_verify_file(
+        ssl_context_client.load_verify_file(
             cfg_->ssl_client_self_signed_cert_path);
         NPRPC_LOG_INFO("Loaded self-signed certificate for SSL client: {}",
                        cfg_->ssl_client_self_signed_cert_path);
@@ -241,7 +244,7 @@ NPRPC_API Rpc* RpcBuilderBase::build()
         throw;
       }
     }
-    g_cfg.ssl_context_client.set_verify_mode(ssl::verify_peer);
+    ssl_context_client.set_verify_mode(net::ssl::verify_peer);
   }
 
   nprpc::impl::get_logger()->set_level(cfg_->log_level);

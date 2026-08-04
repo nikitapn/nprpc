@@ -1,10 +1,12 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
-#include <nprpc/impl/async_connect.hpp>
+#include <iostream>
 
 #include <nprpc/exception.hpp>
+#include <nprpc/impl/async_connect.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/ssl.hpp>
 
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/post.hpp>
@@ -88,6 +90,8 @@ void AsyncConnector<Type>::on_resolve(const beast::error_code& ec,
   asyncon(results);
 }
 
+extern net::ssl::context ssl_context_client;
+
 template <typename Type>
 void AsyncConnector<Type>::on_connect(
     const beast::error_code& ec,
@@ -126,7 +130,7 @@ void AsyncConnector<Type>::on_connect(
     // Create SSL stream from TCP stream
     auto ssl_stream =
         std::make_unique<beast::ssl_stream<beast_tcp_stream_strand>>(
-            std::move(*stream.release()), g_cfg.ssl_context_client);
+            std::move(*stream.release()), ssl_context_client);
 
     // Set SNI hostname for verification
     if (!SSL_set_tlsext_host_name(ssl_stream->native_handle(), host_.c_str())) {
@@ -138,7 +142,7 @@ void AsyncConnector<Type>::on_connect(
 
     // Perform SSL handshake
     ssl_stream->async_handshake(
-        ssl::stream_base::client,
+        net::ssl::stream_base::client,
         net::bind_executor(ioc_, [self = this->shared_from_this(),
                                   ssl_stream = std::move(ssl_stream)](
                                      const beast::error_code& ec) mutable {

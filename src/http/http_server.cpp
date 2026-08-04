@@ -13,19 +13,22 @@
 
 #include <boost/beast/http.hpp>
 
-#include <format>
 #include <queue>
-#include <vector>
+#include <format>
 
 #include "../logging.hpp"
 
 namespace nprpc::impl {
+
+extern net::ssl::context ssl_context_server;
 
 namespace {
 
 constexpr std::size_t kHttpResponseChunkSize = 64 * 1024;
 
 } // namespace
+
+namespace http = beast::http;
 
 //==============================================================================
 // cached_file_body - A Beast body type for zero-copy cached file responses
@@ -133,7 +136,7 @@ handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req,
     res.set(http::field::content_type, "application/octet-stream");
     add_cors(res);
     for (const auto& sc : set_cookies)
-      res.insert(http::field::set_cookie, sc);
+    res.insert(http::field::set_cookie, sc);
     add_alt_svc_header(res);
     res.keep_alive(req.keep_alive());
     res.body() = std::move(body_data);
@@ -521,7 +524,7 @@ public:
     const auto remote_ip = remote_ep.address();
 
     // See if it is a WebSocket Upgrade
-    if (websocket::is_upgrade(parser_->get())) {
+    if (beast::websocket::is_upgrade(parser_->get())) {
       auto& req = parser_->get();
       auto const origin = std::string(req[http::field::origin]);
       auto const host = std::string(req[http::field::host]);
@@ -695,7 +698,7 @@ class ssl_http_session : public http_session<ssl_http_session>,
 public:
   // Create the http_session
   ssl_http_session(beast_tcp_stream_strand&& stream,
-                   ssl::context& ctx,
+                   net::ssl::context& ctx,
                    flat_buffer&& buffer,
                    std::shared_ptr<std::string const> const& doc_root)
       : http_session<ssl_http_session>(std::move(buffer), doc_root)
@@ -712,7 +715,7 @@ public:
     // Perform the SSL handshake
     // Note, this is the buffered version of the handshake.
     stream_.async_handshake(
-        ssl::stream_base::server, buffer_.data(),
+        net::ssl::stream_base::server, buffer_.data(),
         beast::bind_front_handler(&ssl_http_session::on_handshake,
                                   shared_from_this()));
   }
@@ -766,13 +769,13 @@ private:
 class detect_session : public std::enable_shared_from_this<detect_session>
 {
   beast_tcp_stream_strand stream_;
-  ssl::context& ctx_;
+  net::ssl::context& ctx_;
   std::shared_ptr<std::string const> doc_root_;
   flat_buffer buffer_;
 
 public:
   explicit detect_session(beast_tcp_stream_strand&& socket,
-                          ssl::context& ctx,
+                          net::ssl::context& ctx,
                           std::shared_ptr<std::string const> const& doc_root)
       : stream_(std::move(socket))
       , ctx_(ctx)
@@ -827,14 +830,14 @@ public:
 class listener : public std::enable_shared_from_this<listener>
 {
   net::io_context& ioc_;
-  ssl::context& ctx_;
+  net::ssl::context& ctx_;
   tcp::acceptor acceptor_;
   std::shared_ptr<std::string const> doc_root_;
   bool running_ = true;
 
 public:
   listener(net::io_context& ioc,
-           ssl::context& ctx,
+           net::ssl::context& ctx,
            tcp::endpoint endpoint,
            std::shared_ptr<std::string const> const& doc_root)
       : ioc_(ioc)
@@ -925,7 +928,7 @@ void init_http_server(boost::asio::io_context& ioc)
 
   // Create and launch a listening port
   g_http_listener = std::make_shared<listener>(
-      ioc, g_cfg.ssl_context_server,
+      ioc, ssl_context_server,
       tcp::endpoint{net::ip::make_address(g_cfg.listen_address),
                     g_cfg.listen_http_port},
       std::make_shared<std::string const>(g_cfg.http_root_dir));

@@ -6,6 +6,7 @@
 // This file implements HTTP/3 and WebTransport using ngtcp2 + nghttp3 backend
 #if defined(NPRPC_HTTP3_ENABLED) && defined(NPRPC_HTTP3_BACKEND_NGHTTP3)
 
+#include <nprpc/impl/ssl.hpp>
 #include <nprpc/impl/http_file_cache.hpp>
 #include <nprpc/impl/http_request_throttler.hpp>
 #include <nprpc/impl/http_rpc_session.hpp>

@@ -4,12 +4,6 @@
 #pragma once
 
 #include <atomic>
-#include <boost/asio/awaitable.hpp>
-#include <boost/asio/deadline_timer.hpp>
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <boost/asio/strand.hpp>
-#include <boost/core/exchange.hpp>
 #include <cassert>
 #include <chrono>
 #include <deque>
@@ -23,14 +17,18 @@
 #include <variant>
 #include <vector>
 
+#include <boost/asio/awaitable.hpp>
+#include <boost/asio/deadline_timer.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/asio/strand.hpp>
+#include <boost/core/exchange.hpp>
 #include <boost/asio/thread_pool.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
-#include <boost/beast/websocket/ssl.hpp>
 
 #include <nprpc/impl/id_to_ptr.hpp>
 #include <nprpc/impl/session.hpp>
-#include <nprpc/impl/websocket_session.hpp>
 #include <nprpc/config_default.hpp>
 #include <nprpc/nprpc.hpp>
 
@@ -80,8 +78,6 @@ struct Config {
   // SHM channels for npquicrouter integration (see BuildConfig).
   std::string shm_egress_channel;
   std::string shm_ingress_channel;
-  ssl::context ssl_context_server{ssl::context::tlsv13_server};
-  ssl::context ssl_context_client{ssl::context::tlsv13_client};
 };
 
 NPRPC_API void fill_guid(std::array<std::uint8_t, 16>& guid) noexcept;

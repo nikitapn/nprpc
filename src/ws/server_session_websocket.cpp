@@ -34,7 +34,7 @@ class websocket_session_with_acceptor : public Derived
 
   // Start accepting handshake for the WebSocket session.
   template <class Body, class Allocator>
-  void do_accept(http::request<Body, http::basic_fields<Allocator>> req)
+  void do_accept(beast::http::request<Body, beast::http::basic_fields<Allocator>> req)
   {
     // Disable auto-fragmentation: Beast's default splits every message into
     // 4 KB fragments, causing 2,560 async_write calls for a 10 MB payload.
@@ -57,19 +57,19 @@ class websocket_session_with_acceptor : public Derived
 
     // Set suggested timeout settings for the websocket
     this->ws().set_option(
-        websocket::stream_base::timeout::suggested(beast::role_type::server));
+        beast::websocket::stream_base::timeout::suggested(beast::role_type::server));
 
     // Set maximum message size to prevent memory exhaustion attacks
     this->ws().read_message_max(g_cfg.http_websocket_max_message_size);
 
     // Set a decorator to change the Server of the handshake
     this->ws().set_option(
-        websocket::stream_base::decorator([](websocket::response_type& res) {
-          res.set(http::field::server, std::string(BOOST_BEAST_VERSION_STRING));
+        beast::websocket::stream_base::decorator([](beast::websocket::response_type& res) {
+          res.set(beast::http::field::server, std::string(BOOST_BEAST_VERSION_STRING));
         }));
 
     if (g_cfg.http_websocket_compression_enabled) {
-      websocket::permessage_deflate opt;
+      beast::websocket::permessage_deflate opt;
       opt.client_enable = true;
       opt.server_enable = true;
       this->ws().set_option(opt);
@@ -77,7 +77,7 @@ class websocket_session_with_acceptor : public Derived
 
     // Instead of Beast's per-read/write timeouts (expensive under io_uring),
     // rely on session-level timers
-    websocket::stream_base::timeout ws_timeout;
+    beast::websocket::stream_base::timeout ws_timeout;
     ws_timeout.handshake_timeout = std::chrono::seconds(30);
     ws_timeout.idle_timeout = std::chrono::seconds(300);
     ws_timeout.keep_alive_pings = true;
@@ -105,12 +105,12 @@ class websocket_session_with_acceptor : public Derived
 public:
   // Start the asynchronous operation
   template <class Body, class Allocator>
-  void run(http::request<Body, http::basic_fields<Allocator>> req,
-           boost::asio::ip::address throttle_ip = {})
+  void run(beast::http::request<Body, beast::http::basic_fields<Allocator>> req,
+           net::ip::address throttle_ip = {})
   {
     // Capture cookies from the HTTP Upgrade request so servants can call
     // nprpc::http::get_cookie() on any call dispatched over this WS session.
-    auto cookie_it = req.find(http::field::cookie);
+    auto cookie_it = req.find(beast::http::field::cookie);
     if (cookie_it != req.end()) {
       upgrade_cookies_ = std::string(cookie_it->value());
       this->ctx_.cookies = upgrade_cookies_;
@@ -147,9 +147,9 @@ public:
 template <>
 void make_accepting_websocket_session(
     plain_stream stream,
-    http::request<http::string_body, http::basic_fields<std::allocator<char>>>
+    beast::http::request<beast::http::string_body, beast::http::basic_fields<std::allocator<char>>>
         req,
-  boost::asio::ip::address throttle_ip)
+  net::ip::address throttle_ip)
 {
   std::make_shared<
       websocket_session_with_acceptor<AcceptingPlainWebSocketSession>>(
@@ -160,9 +160,9 @@ void make_accepting_websocket_session(
 template <>
 void make_accepting_websocket_session(
     ssl_stream stream,
-    http::request<http::string_body, http::basic_fields<std::allocator<char>>>
+    beast::http::request<beast::http::string_body, beast::http::basic_fields<std::allocator<char>>>
         req,
-  boost::asio::ip::address throttle_ip)
+  net::ip::address throttle_ip)
 {
   std::make_shared<
       websocket_session_with_acceptor<AcceptingSSLWebSocketSession>>(

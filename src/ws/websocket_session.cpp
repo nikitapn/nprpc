@@ -85,7 +85,7 @@ void WebSocketSession<Derived>::on_read(
 {
   reading_.store(false);
 
-  if (ec == websocket::error::closed) {
+  if (ec == beast::websocket::error::closed) {
     close();
     return;
   }
@@ -202,7 +202,7 @@ void WebSocketSession<Derived>::on_write(beast::error_code ec,
 {
   boost::ignore_unused(bytes_transferred);
 
-  if (ec == websocket::error::closed) {
+  if (ec == beast::websocket::error::closed) {
     close();
     return;
   }

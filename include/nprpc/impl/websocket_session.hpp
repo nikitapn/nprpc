@@ -5,13 +5,15 @@
 
 #include <nprpc/common.hpp>
 #include <nprpc/impl/session.hpp>
+#include <nprpc/impl/ssl.hpp>
 
 #include <atomic>
 #include <chrono>
 #include <deque>
 #include <functional>
-#include <boost/asio/ip/address.hpp>
 #include <unordered_map>
+
+#include <boost/asio/ip/address.hpp>
 
 namespace nprpc::impl {
 
@@ -199,14 +201,14 @@ public:
 template <class Body, class Allocator>
 void make_accepting_websocket_session(
   plain_stream ws,
-  http::request<Body, http::basic_fields<Allocator>> req,
-  boost::asio::ip::address throttle_ip = {});
+  beast::http::request<Body, beast::http::basic_fields<Allocator>> req,
+  net::ip::address throttle_ip = {});
 
 template <class Body, class Allocator>
 void make_accepting_websocket_session(
   ssl_stream stream,
-  http::request<Body, http::basic_fields<Allocator>> req,
-  boost::asio::ip::address throttle_ip = {});
+  beast::http::request<Body, beast::http::basic_fields<Allocator>> req,
+  net::ip::address throttle_ip = {});
 
 class ClientPlainWebSocketSession
     : public PlainWebSocketSessionT<ClientPlainWebSocketSession>,

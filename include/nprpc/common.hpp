@@ -8,25 +8,18 @@
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/ssl/context.hpp>
+
 #include <boost/asio/strand.hpp>
 #include <boost/beast/core.hpp>
-#include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
-#include <boost/beast/websocket/ssl.hpp>
-#include <iostream>
 
 namespace nprpc::impl {
 
 namespace net = boost::asio;
-namespace ssl = boost::asio::ssl;
 namespace beast = boost::beast;
 
 using tcp = net::ip::tcp;
 using error_code = boost::system::error_code;
-
-namespace http = boost::beast::http;
-namespace websocket = boost::beast::websocket;
 
 using tcp_stream_strand =
     net::basic_stream_socket<net::ip::tcp,
@@ -38,11 +31,9 @@ using beast_tcp_stream_strand =
 
 using plain_stream = beast_tcp_stream_strand;
 
-using ssl_stream = beast::ssl_stream<beast_tcp_stream_strand>;
 
-using plain_ws = websocket::stream<beast_tcp_stream_strand>;
+using plain_ws = beast::websocket::stream<beast_tcp_stream_strand>;
 
-using ssl_ws = websocket::stream<beast::ssl_stream<beast_tcp_stream_strand>>;
 
 // Report a failure
 void fail(beast::error_code ec, char const* what);

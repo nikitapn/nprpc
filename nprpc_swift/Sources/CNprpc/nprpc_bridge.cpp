@@ -4,6 +4,8 @@
 #include "include/nprpc_bridge.hpp"
 
 // Include full nprpc headers in implementation
+// Should never include boost/asio/ssl.hpp or boost/beast/ssl.hpp in the Swift bridge headers
+// because they pull in OpenSSL symbols
 #include <nprpc/nprpc.hpp>
 #include <nprpc/basic.hpp>
 #include <nprpc/endpoint.hpp>
