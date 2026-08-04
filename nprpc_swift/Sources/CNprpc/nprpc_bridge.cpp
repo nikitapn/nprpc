@@ -16,10 +16,12 @@
 #include <nprpc/impl/session.hpp>
 #include <nprpc/session_context.h>
 #include <nprpc/http_auth.hpp>
+#include <nprpc/impl/misc/thread_identity.hpp>
 
-// Use nprpc's internal logger for synchronized output
-#include "../../../src/logging.hpp"
-#include "nprpc_base.hpp"
+// Self-contained bridge logging (no monorepo src/ dependency)
+#include "include/nprpc_bridge_log.hpp"
+// Generated base types — installed as a public header with libnprpc
+#include <nprpc_base.hpp>
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>

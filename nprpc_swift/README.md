@@ -1,120 +1,122 @@
 # NPRPC Swift Bindings
 
-Swift bindings for NPRPC using Swift 6.2+ C++ interoperability.
+Swift bindings for [NPRPC](https://github.com/) using Swift 6+ C++ interoperability.
 
 ## Requirements
 
-- Swift 6.2 or later (for C++ interop)
-- NPRPC C++ library built (`libnprpc.so`)
-- Linux (tested) or macOS
+- Swift 6.3+ (C++ interop)
+- **libnprpc** installed system-wide **or** a monorepo CMake build (developer mode)
+- Linux (primary) or macOS
+- System Boost (same version/ABI as the libnprpc you link)
 
-## Building
+## Consumer install (GitHub / SPM-friendly)
 
-First, ensure NPRPC is built:
+Build and install the C++ library once:
 
 ```bash
-cd ..
-cmake -S . -B .build_release -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B .build_release -DCMAKE_BUILD_TYPE=Release -DNPRPC_BUILD_TESTS=OFF
 cmake --build .build_release -j$(nproc)
+sudo cmake --install .build_release
+sudo ldconfig
 ```
 
-Then build the Swift package:
+Headers land under the install prefix’s `include/` (e.g. `/usr/local/include`),
+the shared library under `lib/` (e.g. `/usr/local/lib`).
+
+Then either build this package in isolation:
 
 ```bash
 cd nprpc_swift
 swift build
-```
-
-## Running the Proof of Concept
-
-```bash
-swift run nprpc-poc
-```
-
-Expected output:
-```
-============================================================
-NPRPC Swift Proof of Concept
-============================================================
-
-Test 1: Basic C++ function call
-  40 + 2 = 42
-  ✓ PASSED
-
-Test 2: String passing to/from C++
-  Greeting: Hello from NPRPC C++, Swift!
-  ✓ PASSED
-
-...
-```
-
-## Running Tests
-
-```bash
 swift test
 ```
 
-## Project Structure
+or depend on it from another package (no `unsafeFlags` in consumer mode):
+
+```swift
+// Package.swift
+dependencies: [
+    .package(url: "https://github.com/<org>/nprpc.git", from: "1.0.0"),
+    // if the Swift package lives at monorepo path nprpc_swift/:
+    // use a dedicated tag/path as you publish it
+],
+targets: [
+    .target(name: "MyApp", dependencies: [
+        .product(name: "NPRPC", package: "nprpc"), // adjust package name
+    ]),
+]
+```
+
+`Package.swift` uses **no `unsafeFlags`** when it does not detect a monorepo
+tree and `NPRPC_ROOT` is unset (or when `NPRPC_SYSTEM_ONLY=1`). Linking is
+simply `-lnprpc` on the default search path.
+
+## Developer / monorepo mode
+
+When this package lives next to the nprpc CMake tree (`../include/nprpc/...`),
+`Package.swift` **auto-detects** the monorepo root and adds include/lib/rpath
+flags for the in-tree build (defaults to `.build_relwith_debinfo`).
+
+Override explicitly:
+
+```bash
+export NPRPC_ROOT=/path/to/nprpc
+export NPRPC_BUILD_DIR=.build_relwith_debinfo   # or absolute path
+cd nprpc_swift && swift build
+```
+
+From the monorepo root:
+
+```bash
+just run-swift-benchmarks
+# or
+cd nprpc_swift && NPRPC_BUILD_DIR=.build_relwith_debinfo swift test
+```
+
+> **Note:** monorepo mode uses SPM `unsafeFlags` for `-I`/`-L`/`-rpath`. That is
+> fine for local development. Published / dependency use must rely on a
+> **system install** so the resolved package has no unsafe flags.
+
+## Generate stubs
+
+```bash
+# from monorepo root
+./nprpc_swift/gen_stubs.sh
+# or
+just gen-swift-stubs
+```
+
+## Benchmarks
+
+```bash
+just run-swift-benchmarks
+just run-swift-benchmarks-baseline
+```
+
+Results: `benchmark/results/swift/`.
+
+## Layout
 
 ```
 nprpc_swift/
-├── Package.swift              # Swift Package Manager manifest
+├── Package.swift                 # system-default; monorepo via env/auto-detect
 ├── Sources/
-│   ├── CNprpc/                # C++ bridge module
+│   ├── CNprpc/                   # C++ bridge (C API for Swift)
 │   │   ├── include/
-│   │   │   ├── module.modulemap   # Exposes C++ to Swift
-│   │   │   └── nprpc_bridge.hpp   # Bridge header
-│   │   └── nprpc_bridge.cpp       # Bridge implementation
-│   ├── NPRPC/                 # Main Swift module
-│   │   └── NPRPC.swift        # Swift wrappers
-│   └── NPRPCPoC/              # Proof of concept executable
-│       └── main.swift
-└── Tests/
-    └── NPRPCTests/
-        └── NPRPCTests.swift
+│   │   │   ├── module.modulemap
+│   │   │   ├── nprpc_bridge.hpp
+│   │   │   └── nprpc_bridge_log.hpp
+│   │   └── nprpc_bridge.cpp
+│   ├── NPRPC/                    # Swift API
+│   └── NPRPCBenchmark/           # Swift↔Swift microbenchmarks
+└── Tests/NPRPCTests/
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│           Your Swift Code               │
-│  (async/await, Swift types, protocols)  │
-├─────────────────────────────────────────┤
-│            NPRPC Module                 │
-│  (Swift wrappers: Rpc, EndPoint, etc)   │
-├─────────────────────────────────────────┤
-│            CNprpc Module                │
-│  (C++ bridge: nprpc_bridge.hpp/cpp)     │
-├─────────────────────────────────────────┤
-│          libnprpc.so (C++)              │
-│  (All transports, serialization, POA)   │
-└─────────────────────────────────────────┘
+Your Swift code
+    → NPRPC (async wrappers, marshalling)
+    → CNprpc (C bridge + FlatBuffer helpers)
+    → libnprpc.so (transports, POA, streams)
 ```
-
-## Phase 0 Status: Proof of Concept
-
-- [x] Package.swift with C++ interop settings
-- [x] Module map exposing C++ headers
-- [x] Basic C++ bridge (add, greet, array)
-- [x] Swift wrappers (EndPoint, RpcConfiguration, Rpc)
-- [x] Proof of concept executable
-- [x] Unit tests
-
-## Next Steps (Phase 1)
-
-1. Integrate with actual `nprpc::Rpc` (currently stubbed)
-2. Add `ObjectPtr<T>` wrapper
-3. Add `Poa` wrapper for servant activation
-4. Bridge exceptions to Swift errors
-5. Add async/await wrappers
-
-## Notes on C++ Interop
-
-Swift 5.9+ has native C++ interoperability. Key points:
-
-- `std::string` ↔ `String` conversion works via `std.string()`
-- `std::vector<T>` accessible via subscript and `.size()`
-- C++ classes can be used directly in Swift
-- `std::optional<T>` exposed as optional in Swift
-- Must use `.interoperabilityMode(.Cxx)` in Package.swift
