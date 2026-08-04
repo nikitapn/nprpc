@@ -18,6 +18,64 @@
 #include "common/helper.inl"
 
 namespace nprpctest {
+
+// Unit tests for StreamWriter::probe_init() — no network required.
+// Server streams use suspend_always; raises(...) needs a one-shot resume so
+// init throws become StreamInit Exception replies instead of silent later errors.
+namespace {
+
+nprpc::StreamWriter<uint8_t> writer_that_throws_on_init()
+{
+  throw nprpc::test::AssertionFailed{"probe rejected"};
+  co_return;
+}
+
+nprpc::StreamWriter<uint8_t> writer_that_yields_one()
+{
+  co_yield static_cast<uint8_t>(42);
+}
+
+nprpc::StreamWriter<uint8_t> writer_empty_stream()
+{
+  co_return;
+}
+
+} // namespace
+
+TEST_F(NprpcTest, TestStreamWriterProbeInitThrows)
+{
+  auto writer = writer_that_throws_on_init();
+  try {
+    writer.probe_init();
+    FAIL() << "Expected probe_init to rethrow AssertionFailed";
+  } catch (const nprpc::test::AssertionFailed& ex) {
+    EXPECT_EQ(std::string_view(ex.message), "probe rejected"sv);
+  }
+}
+
+TEST_F(NprpcTest, TestStreamWriterProbeInitBuffersFirstYield)
+{
+  auto writer = writer_that_yields_one();
+  EXPECT_NO_THROW(writer.probe_init());
+  EXPECT_FALSE(writer.is_done());
+  // First resume consumes the buffered yield without advancing past it.
+  // With no manager attached, the value is not sent and remains pending —
+  // resume() still clears has_value only when manager is set. Call resume
+  // twice: first may no-op (no manager), second still not done until body ends.
+  writer.resume();
+  EXPECT_FALSE(writer.is_done());
+}
+
+TEST_F(NprpcTest, TestStreamWriterProbeInitEmptyStream)
+{
+  auto writer = writer_empty_stream();
+  EXPECT_NO_THROW(writer.probe_init());
+  EXPECT_FALSE(writer.is_done()); // pending empty completion
+  // Without a manager, resume still clears the pending-completion flag.
+  writer.resume();
+  EXPECT_TRUE(writer.is_done());
+}
+
 TEST_F(NprpcTest, TestEmptyStreamCompletion)
 {
   boost::asio::io_context io_context;
@@ -102,6 +160,15 @@ TEST_F(NprpcTest, TestStreams)
       EXPECT_EQ(received.size(), kStreamSize);
       for (uint64_t i = 0; i < received.size(); ++i) {
         EXPECT_EQ(received[i], static_cast<uint8_t>(i & 0xFF));
+      }
+
+      // StreamInit raises(...): servant throws before first co_yield.
+      try {
+        auto bad = obj->GetByteStreamOrThrow(10);
+        (void)bad;
+        FAIL() << "Expected GetByteStreamOrThrow to throw AssertionFailed";
+      } catch (const nprpc::test::AssertionFailed& ex) {
+        EXPECT_EQ(std::string_view(ex.message), "GetByteStreamOrThrow rejected"sv);
       }
     } catch (nprpc::Exception& ex) {
       FAIL() << "Exception in TestStreams: " << ex.what();
@@ -668,6 +735,16 @@ TEST_F(NprpcTest, TestBidiStream)
       EXPECT_FALSE(alias_output[1].maybe_id.has_value());
       EXPECT_FALSE(alias_output[1].maybe_ids.has_value());
       EXPECT_FALSE(alias_output[1].maybe_payload.has_value());
+
+      // StreamInit raises(...): servant throws before first stream I/O.
+      try {
+        auto [bad_w, bad_r] = obj->EchoByteStreamOrThrow(0);
+        (void)bad_w;
+        (void)bad_r;
+        FAIL() << "Expected EchoByteStreamOrThrow to throw AssertionFailed";
+      } catch (const nprpc::test::AssertionFailed& ex) {
+        EXPECT_EQ(std::string_view(ex.message), "EchoByteStreamOrThrow rejected"sv);
+      }
     } catch (nprpc::Exception& ex) {
       FAIL() << "Exception in TestBidiStream: " << ex.what();
     }

@@ -2693,6 +2693,11 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
         }
         oc << ");\n";
 
+        // StreamWriter suspends at initial_suspend; resume once so raises(...)
+        // throws before StreamInit Success is answered.
+        if (fn->ex)
+          oc << "        writer.probe_init();\n";
+
         oc << "        writer.set_manager(ctx.stream_manager, "
               "init.stream_id());\n";
         oc << "        ctx.stream_manager->register_stream(init.stream_id(), "

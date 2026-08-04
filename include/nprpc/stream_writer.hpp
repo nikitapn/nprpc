@@ -94,11 +94,63 @@ public:
       coro_.destroy();
   }
 
+  // Probe init-time exceptions for server streams with raises(...).
+  //
+  // StreamWriter uses suspend_always, so constructing the coroutine never
+  // runs the body.  Servants that throw before the first co_yield would
+  // otherwise only fail after StreamInit Success was already sent.
+  //
+  // Resumes once (or until first yield / completion).  Rethrows any
+  // exception stored by unhandled_exception.  If the body yields a value,
+  // it is buffered in the promise for the first real resume() after the
+  // Success reply.  If the body completes empty, a deferred completion is
+  // sent on the first resume().
+  void probe_init()
+  {
+    if (!coro_ || probed_)
+      return;
+    probed_ = true;
+    if (coro_.done())
+      return;
+
+    coro_.resume();
+
+    if (coro_.done()) {
+      if (coro_.promise().exception_)
+        std::rethrow_exception(coro_.promise().exception_);
+      // Empty stream completed during probe — deliver complete on first resume.
+      pending_probe_completion_ = true;
+    }
+    // else: suspended at first co_yield with has_value_ possibly set.
+  }
+
   // Resume execution (called by StreamManager when ready to send)
   void resume() override
   {
     if (!coro_)
       return;
+
+    // Empty stream finished during probe_init — send complete once credits start.
+    if (pending_probe_completion_) {
+      pending_probe_completion_ = false;
+      if (coro_.promise().manager_) {
+        coro_.promise().manager_->send_complete(
+            coro_.promise().stream_id_,
+            stream_final_sequence_for_sent_chunks(sequence_));
+      }
+      return;
+    }
+
+    // First value already produced by probe_init — send without re-resuming.
+    if (!coro_.done() && coro_.promise().has_value_) {
+      if (auto* manager = coro_.promise().manager_) {
+        send_value(*manager,
+                   coro_.promise().stream_id_,
+                   coro_.promise().current_value_);
+        coro_.promise().has_value_ = false;
+      }
+      return;
+    }
 
     if (coro_ && !coro_.done()) {
       coro_.resume();
@@ -135,6 +187,9 @@ public:
 
   bool is_done() const override
   {
+    // Need one more resume() to emit the empty-stream completion.
+    if (pending_probe_completion_)
+      return false;
     if (coro_)
       return coro_.done();
     return client_closed_;
@@ -197,6 +252,8 @@ private:
   uint64_t client_stream_id_ = 0;
   uint64_t sequence_ = 0;
   bool client_closed_ = true;
+  bool probed_ = false;
+  bool pending_probe_completion_ = false;
 
   void send_value(impl::StreamManager& manager,
                   uint64_t stream_id,
