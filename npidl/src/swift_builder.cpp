@@ -1468,8 +1468,11 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
 
     // Marshal output
     if (!fn->out_s) {
-      out << bl() << "// Send success\n";
-      out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)\n";
+      // [unreliable] fire-and-forget: client never waits — leave buffer empty.
+      if (fn->is_reliable) {
+        out << bl() << "// Send success\n";
+        out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)\n";
+      }
     } else {
       if (fn->out_s->flat) {
         const auto offset = size_of_header;

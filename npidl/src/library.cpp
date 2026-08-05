@@ -1515,21 +1515,26 @@ class Parser : public IParser
                         f->name);
         }
 
-        // [unreliable] requires stream (streams are inherently async) or void return with no raises
+        // [unreliable] = client fire-and-forget (no reply waiter) for RPC, or
+        // best-effort stream delivery (QUIC DATAGRAM). Non-stream methods must
+        // be void with only `in` arguments and no raises — the client never
+        // waits for Success / Exception / out params.
         if (!f->is_stream && !f->is_reliable) {
-          // Unreliable non-stream methods must be void (no out params, no return value)
-          bool is_void_like = (f->ret_value->id == FieldType::Void);
-          for (auto& arg : f->args) {
-            if (arg->modifier == ArgumentModifier::Out) { is_void_like = false; break; }
-          }
-          if (!is_void_like)
+          if (!f->is_void())
             throw_error("Function '" + f->name +
-                        "' marked [unreliable] must have no return value and no out parameters");
+                        "' marked [unreliable] must return void "
+                        "(client never waits for a reply)");
+          for (auto& arg : f->args) {
+            if (arg->modifier == ArgumentModifier::Out)
+              throw_error("Function '" + f->name +
+                          "' marked [unreliable] cannot have out parameters "
+                          "(client never waits for a reply)");
+          }
         }
-
         if (f->is_throwing() && !f->is_reliable)
-          throw_error("Function' " + f->name +
-                      "' cannot throw exceptions when marked [unreliable]");
+          throw_error("Function '" + f->name +
+                      "' marked [unreliable] cannot raise exceptions "
+                      "(client never waits for a reply)");
 
         ifs->fns.emplace_back(f);
         continue;

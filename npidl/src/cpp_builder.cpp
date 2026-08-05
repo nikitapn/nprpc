@@ -2845,10 +2845,14 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
         // const auto fixed_size = get_arguments_offset() +
         // fn->in_s->size;
         oc << "      if ( !check_" << make_safety_check_name(fn->in_s)
-           << "(*ctx.rx_buffer, ia) ) {\n"
-              "        ::nprpc::impl::make_simple_answer(ctx, "
-              "::nprpc::impl::MessageId::Error_BadInput);\n"
-              "        break;\n"
+           << "(*ctx.rx_buffer, ia) ) {\n";
+        // [unreliable] is fire-and-forget: client never waits, so do not reply
+        // even on validation failure (orphan replies confuse SHM/QUIC paths).
+        if (fn->is_reliable) {
+          oc << "        ::nprpc::impl::make_simple_answer(ctx, "
+                "::nprpc::impl::MessageId::Error_BadInput);\n";
+        }
+        oc << "        break;\n"
               "      }\n";
       }
     }
@@ -3105,8 +3109,13 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
 
     if (!fn->out_s) {
-      oc << "      ::nprpc::impl::make_simple_answer(ctx, "
-            "nprpc::impl::MessageId::Success);\n";
+      // Void reliable methods ACK with Success. [unreliable] methods are
+      // fire-and-forget (client uses send_unreliable / no waiter) — leave
+      // tx empty so the session does not send a reply.
+      if (fn->is_reliable) {
+        oc << "      ::nprpc::impl::make_simple_answer(ctx, "
+              "nprpc::impl::MessageId::Success);\n";
+      }
     } else {
       if (fn->out_s->flat) { // it means that we are writing output data
                              // in the input buffer,

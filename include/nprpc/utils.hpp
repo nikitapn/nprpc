@@ -35,7 +35,7 @@ template <typename T, typename U> struct wrapper1 {
   static constexpr bool is_pointer = false;
 
   auto operator->() noexcept { return &ref_; }
-  auto const operator->() const noexcept { return &ref_; }
+  auto operator->() const noexcept { return &ref_; }
 
   wrapper1(_T& ref)
       : ref_(ref)
@@ -50,7 +50,7 @@ template <typename T> struct wrapper1<T, std::true_type> {
   static constexpr bool is_pointer = true;
 
   auto operator->() noexcept { return ref_.get(); }
-  auto const operator->() const noexcept { return ref_.get(); }
+  auto operator->() const noexcept { return ref_.get(); }
 
   wrapper1(_T& ref)
       : ref_(ref)

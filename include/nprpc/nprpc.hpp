@@ -9,9 +9,12 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <exception>
+#include <functional>
 #include <optional>
 #include <stop_token>
 #include <string_view>
+#include <utility>
 
 #include <boost/asio/io_context.hpp>
 
@@ -107,7 +110,99 @@ namespace PoaPolicy {
 enum class Lifespan { Transient = 0, Persistent = 1 };
 
 enum class ObjectIdPolicy { SystemGenerated = 0, UserSupplied = 1 };
+
+/// Where servant dispatch may run relative to the transport I/O thread
+/// (SHM ring consumer, TCP read loop, etc.).
+enum class TransportAffinity {
+  /// Prefer the transport thread when there is no DispatchExecutor.
+  /// Best for extreme low-latency servants that only do cheap work.
+  /// Default.
+  AllowBlockTransport = 0,
+  /// Never run dispatch on the transport thread: always hand off
+  /// (even without a custom DispatchExecutor). Use for servants that
+  /// might block, allocate heavily, or touch UI — keeps the ring/read
+  /// path free.
+  NeverBlockTransport = 1,
+};
 } // namespace PoaPolicy
+
+/**
+ * @brief Optional dispatch executor for servant callbacks / SHM offload.
+ *
+ * Two uses:
+ *  1. **Fire-and-forget hop (preferred for SHM UI POAs):** the ring thread
+ *     calls @c post(ctx, work, arg) to run a full handle_request+reply job
+ *     on the target queue (Swift: DispatchQueue.async / dispatch_async_f).
+ *     No Asio hop, no blocking the ring.
+ *  2. **invoke_sync:** post+wait when a caller is not already on the queue.
+ *     With @c is_running_on set, work already on the queue runs inline
+ *     (avoids nested async / deadlock).
+ *
+ * Default (all null) = no custom executor; transport affinity decides
+ * ring-inline vs Asio offload.
+ *
+ * Swift / Foundation example for DispatchQueue.main:
+ *   post:           dispatch_async_f(queue, arg, fn)  or  queue.async { fn(arg) }
+ *   is_running_on:  Thread.isMainThread / queue-specific key
+ */
+struct DispatchExecutor {
+  using WorkFn = void (*)(void* arg);
+  using PostFn = void (*)(void* ctx, WorkFn fn, void* arg);
+  /// Return true if the calling thread is already the executor's thread.
+  using IsRunningOnFn = bool (*)(void* ctx);
+
+  PostFn post = nullptr;
+  IsRunningOnFn is_running_on = nullptr;
+  void* ctx = nullptr;
+
+  explicit operator bool() const noexcept { return post != nullptr; }
+
+  /**
+   * @brief Run @p fn on this executor; blocks until it finishes.
+   *
+   * If the executor is empty or @c is_running_on reports the current
+   * thread, @p fn runs inline. Exceptions thrown by @p fn are rethrown
+   * on the calling thread.
+   *
+   * Prefer fire-and-forget @c post from the SHM ring for whole requests;
+   * use this when already inside a stack that must wait for the result.
+   */
+  template <typename F>
+  void invoke_sync(F&& fn) const
+  {
+    if (!post || (is_running_on && is_running_on(ctx))) {
+      std::forward<F>(fn)();
+      return;
+    }
+
+    struct State {
+      std::function<void()> work;
+      std::atomic<bool> done{false};
+      std::exception_ptr eptr;
+    };
+
+    auto* st = new State{std::function<void()>(std::forward<F>(fn))};
+    post(
+        ctx,
+        [](void* p) {
+          auto* s = static_cast<State*>(p);
+          try {
+            s->work();
+          } catch (...) {
+            s->eptr = std::current_exception();
+          }
+          s->done.store(true, std::memory_order_release);
+          s->done.notify_one();
+        },
+        st);
+
+    st->done.wait(false);
+    auto eptr = st->eptr;
+    delete st;
+    if (eptr)
+      std::rethrow_exception(eptr);
+  }
+};
 
 class NPRPC_API PoaBuilder
 {
@@ -115,6 +210,9 @@ class NPRPC_API PoaBuilder
   PoaPolicy::Lifespan lifespan_policy_ = PoaPolicy::Lifespan::Transient;
   PoaPolicy::ObjectIdPolicy object_id_policy_ =
       PoaPolicy::ObjectIdPolicy::SystemGenerated;
+  PoaPolicy::TransportAffinity transport_affinity_ =
+      PoaPolicy::TransportAffinity::AllowBlockTransport;
+  DispatchExecutor dispatch_executor_{};
   Rpc* rpc_ = nullptr;
 
 public:
@@ -144,6 +242,22 @@ public:
     return *this;
   }
 
+  /// Prefer / forbid servant dispatch on the transport (e.g. SHM ring) thread.
+  PoaBuilder& with_transport_affinity(PoaPolicy::TransportAffinity affinity)
+  {
+    transport_affinity_ = affinity;
+    return *this;
+  }
+
+  /// Route servant dispatch through @p ex (post+wait). Empty = inline.
+  /// Setting a non-empty executor implies off-transport dispatch for SHM
+  /// (same effect as NeverBlockTransport for the ring hand-off decision).
+  PoaBuilder& with_dispatch_executor(DispatchExecutor ex)
+  {
+    dispatch_executor_ = ex;
+    return *this;
+  }
+
   // Build the POA
   Poa* build();
 };
@@ -151,8 +265,40 @@ public:
 class NPRPC_API Poa
 {
   poa_idx_t idx_;
+  DispatchExecutor dispatch_executor_{};
+  PoaPolicy::TransportAffinity transport_affinity_ =
+      PoaPolicy::TransportAffinity::AllowBlockTransport;
 
 public:
+  /// Optional executor used for servant dispatch (empty = transport thread).
+  const DispatchExecutor& dispatch_executor() const noexcept
+  {
+    return dispatch_executor_;
+  }
+
+  void set_dispatch_executor(DispatchExecutor ex) noexcept
+  {
+    dispatch_executor_ = ex;
+  }
+
+  PoaPolicy::TransportAffinity transport_affinity() const noexcept
+  {
+    return transport_affinity_;
+  }
+
+  void set_transport_affinity(PoaPolicy::TransportAffinity a) noexcept
+  {
+    transport_affinity_ = a;
+  }
+
+  /// True when transport layers should not run this POA's dispatch inline
+  /// (custom executor and/or NeverBlockTransport).
+  bool requires_off_transport_dispatch() const noexcept
+  {
+    return static_cast<bool>(dispatch_executor_) ||
+           transport_affinity_ ==
+               PoaPolicy::TransportAffinity::NeverBlockTransport;
+  }
   /**
    * @brief Activate an object servant in this POA.
    * @param obj The object servant to activate.

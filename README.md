@@ -11,7 +11,7 @@ NPRPC is a high-performance, multi-transport RPC framework for distributed syste
 - **Browser-first** — WebSocket, HTTP, and WebTransport endpoints; `host.json` bootstrap for static deployments
 - **SSR support** — built-in SvelteKit SSR via shared memory IPC (see [docs/SSR_ARCHITECTURE.md](docs/SSR_ARCHITECTURE.md))
 - **Cookie auth** — httpOnly cookie-based auth for HTTP/WebSocket (see [docs/HTTP_AUTH.md](docs/HTTP_AUTH.md))
-- **POA** — Portable Object Adapter for lifecycle management and session-scoped activation
+- **POA** — Portable Object Adapter for lifecycle, transports, and dispatch placement (see [docs/POA.md](docs/POA.md))
 - **Nameserver** — service discovery and named object binding
 
 ## Transport Overview
@@ -520,7 +520,7 @@ case .msgB(let b): print("B: \(b.code)")
 - `out` — output parameter
 - `raises(E1, E2)` — exception specification
 - `async` — fire-and-forget (no reply)
-- `[unreliable]` — best-effort delivery (QUIC/WebTransport only, others ignore)
+- `[unreliable]` — fire-and-forget RPC (must be `void`, only `in` args, no `raises`) or best-effort streams (QUIC DATAGRAM when available; other transports may still deliver the bytes)
 - `[force_helpers=1]` — emit helper `from_flat` / `to_flat` functions for a `message`
 - `[trusted=true]` — disable strict bounds checking for untrusted input
 
@@ -679,8 +679,14 @@ just bt nprpc_test
 # Run tests
 just run-cpp-tests                    # C++ (ctest)
 just run-js-tests                     # TypeScript / Mocha
-just test-all                         # C++ + JS + Swift
+just run-swift-tests                  # Swift in Docker (rebuilds nprpc)
+just run-swift-tests-host             # Swift on host (reuses CMake build; sudo setcap)
+just test-all --swift-host            # C++ + JS + host Swift  ← pre-merge gate
+just test-all                         # C++ + JS + Docker Swift
 just run-cpp-tests -R NprpcTest.TestBasic   # filtered
+
+# Pre-merge: always run the full suite (C++ / JS / Swift) before merging to main.
+# See docs/BUILD.md "Pre-merge workflow".
 
 # Minimal build (library only)
 cmake -S . -B build

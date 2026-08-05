@@ -120,3 +120,5 @@ Your Swift code
     → CNprpc (C bridge + FlatBuffer helpers)
     → libnprpc.so (transports, POA, streams)
 ```
+
+POA creation, activation flags, and dispatch placement (main queue / serial queue / ring-inline) are documented in **[docs/POA.md](../docs/POA.md)**.

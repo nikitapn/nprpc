@@ -43,7 +43,7 @@ get_object(SessionContext& ctx, uint16_t poa_idx, uint64_t object_id)
       make_simple_answer(ctx, MessageId::Error_PoaNotExist);
       break;
     }
-    auto obj = poa->get_object(object_id);
+    auto obj = (*poa)->get_object(object_id);
     if (!obj) {
       make_simple_answer(ctx, MessageId::Error_ObjectNotExist);
       break;
@@ -52,6 +52,27 @@ get_object(SessionContext& ctx, uint16_t poa_idx, uint64_t object_id)
   } while (true);
 
   return std::nullopt;
+}
+
+// Run servant dispatch on the POA's optional DispatchExecutor (post+wait).
+// SessionContext TLS is established on the thread that actually runs the
+// servant so get_context() works under a main-queue hop.
+template <typename SessionT, typename Fn>
+void invoke_servant_dispatch(ObjectServant& servant,
+                             SessionT& session,
+                             Fn&& body)
+{
+  const auto& ex = servant.poa()->dispatch_executor();
+  ex.invoke_sync([&] {
+    set_context(session);
+    try {
+      std::forward<Fn>(body)();
+    } catch (...) {
+      reset_context();
+      throw;
+    }
+    reset_context();
+  });
 }
 
 Session::Session(boost::asio::any_io_executor executor)
@@ -92,6 +113,22 @@ Session::Session(boost::asio::any_io_executor executor)
 }
 
 bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
+{
+  // Sync entry point used by TCP/QUIC/epoll/uring today.  Keep as a thin
+  // wrapper so all logic lives in one place with the async form.
+  return handle_request_body(rx_buffer, tx_buffer);
+}
+
+nprpc::Task<bool> Session::handle_request_async(flat_buffer& rx_buffer,
+                                                flat_buffer& tx_buffer)
+{
+  // Future: co_await resume_on(poa.dispatch_executor) around servant
+  // dispatch.  For now the body is fully synchronous so this Task never
+  // suspends (await_ready() is true for co_awaiters).
+  co_return handle_request_body(rx_buffer, tx_buffer);
+}
+
+bool Session::handle_request_body(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
 {
   bool needs_reply = true;  // Most messages need a reply
 
@@ -135,13 +172,14 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
       if (auto real_obj = (*obj).get(); real_obj) {
         if (!validate(*real_obj))
           return needs_reply;
-        set_context(*this);
         try {
-          // Dispatch to servant (servant must handle StreamInit msg_id)
-          real_obj->dispatch(ctx_, false);
-          // Preserve explicit servant replies such as Error_BadInput.
-          if (tx_buffer.size() < sizeof(impl::flat::Header))
-            make_simple_answer(ctx_, MessageId::Success);
+          invoke_servant_dispatch(*real_obj, *this, [&] {
+            // Dispatch to servant (servant must handle StreamInit msg_id)
+            real_obj->dispatch(ctx_, false);
+            // Preserve explicit servant replies such as Error_BadInput.
+            if (tx_buffer.size() < sizeof(impl::flat::Header))
+              make_simple_answer(ctx_, MessageId::Success);
+          });
         } catch (const std::exception& e) {
           NPRPC_SESSION_LOG_ERROR("Exception during stream dispatch: {}", e.what());
           if (tx_buffer.size() < sizeof(impl::flat::Header)) {
@@ -151,7 +189,6 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
         if (tx_buffer.size() >= sizeof(impl::flat::Header)) {
           static_cast<impl::flat::Header*>(tx_buffer.data().data())->request_id = request_id;
         }
-        reset_context();
         not_found = false;
       }
     }
@@ -220,11 +257,12 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
       if (auto real_obj = (*obj).get(); real_obj) {
         if (!validate(*real_obj))
           return needs_reply;
-        set_context(*this);
         // save request ID for later use
         auto request_id = header->request_id;
         try {
-          real_obj->dispatch(ctx_, false);
+          invoke_servant_dispatch(*real_obj, *this, [&] {
+            real_obj->dispatch(ctx_, false);
+          });
         } catch (const std::exception& e) {
           NPRPC_SESSION_LOG_ERROR("Exception during dispatch: {}", e.what());
           // TODO: find out why Web client does not handle
@@ -238,7 +276,6 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
           static_cast<impl::flat::Header*>(tx_buffer.data().data())->request_id =
               request_id;
         }
-        reset_context();
         not_found = false;
       }
     }
@@ -295,6 +332,13 @@ bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
     NPRPC_SESSION_LOG_ERROR("Unknown message ID: {}", static_cast<uint32_t>(header->msg_id));
     make_simple_answer(ctx_, nprpc::impl::MessageId::Error_UnknownMessageId);
     break;
+  }
+
+  // Fire-and-forget / [unreliable] servants leave tx empty (no Success ACK).
+  // Treat that as no reply so TCP/QUIC do not enqueue a zero-length write.
+  if (needs_reply &&
+      tx_buffer.size() < sizeof(impl::flat::Header)) {
+    needs_reply = false;
   }
 
   if (needs_reply) {

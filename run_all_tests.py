@@ -4,12 +4,19 @@ Unified build and test runner for NPRPC.
 
 Stages (all enabled by default, skip with --skip-<stage>):
   cmake   - cmake --build (C++ + TS/JS via nprpc_js_test target)
-    cpp     - run C++ tests via ctest
+  cpp     - run C++ tests via ctest
   js      - build + run Mocha tests in test/js
-  swift   - gen stubs + docker-build + docker test
+  swift   - gen stubs + Docker build/test (default), or host swift test
 
 Usage:
   python3 run_all_tests.py [options]
+
+  # Fast local loop: reuse the host CMake build for Swift (no Docker rebuild)
+  python3 run_all_tests.py --swift-host
+
+  # Pre-merge gate (all suites; Swift may be host or Docker)
+  python3 run_all_tests.py
+  python3 run_all_tests.py --swift-host
 
 Options:
   --build-dir DIR        CMake build dir (default: .build_relwith_debinfo from .env)
@@ -17,8 +24,10 @@ Options:
   --skip-cpp             Skip C++ tests
   --skip-js              Skip JavaScript/TypeScript tests
   --skip-swift           Skip Swift tests
+  --swift-host           Run Swift tests on the host against --build-dir
+                         (skips Docker rebuild of nprpc; needs host Swift + setcap)
   --cmake-target TARGET  CMake build target (default: all)
-    --cpp-filter FILTER    CTest regex filter for C++ tests (e.g. 'HTTP3Transport|HttpUtils')
+  --cpp-filter FILTER    CTest regex filter for C++ tests (e.g. 'HTTP3Transport|HttpUtils')
   --color                Force coloured output even when not a TTY
   -v, --verbose          Show full output from sub-commands (default: only on failure)
   -h, --help             Show this help message
@@ -74,13 +83,22 @@ def _env_build_dir() -> str:
 
 
 def ensure_nprpc_bpf_capabilities(binary: Path) -> None:
+    """Grant cap_net_admin,cap_bpf so HTTP/3 reuseport eBPF can attach."""
     if not binary.exists():
+        return
+
+    # Resolve symlinks (Swift SPM places xctest under both triple and debug/)
+    binary = binary.resolve()
+    if not binary.is_file():
         return
 
     getcap = shutil.which("getcap")
     setcap = shutil.which("setcap")
     if not getcap or not setcap:
-        raise RuntimeError("getcap/setcap is required to grant HTTP/3 reuseport BPF capabilities")
+        raise RuntimeError(
+            "getcap/setcap is required to grant HTTP/3 reuseport BPF capabilities "
+            f"(missing for {binary})"
+        )
 
     current_caps = subprocess.run(
         [getcap, str(binary)],
@@ -92,12 +110,26 @@ def ensure_nprpc_bpf_capabilities(binary: Path) -> None:
     if "cap_net_admin" in current_caps and "cap_bpf" in current_caps:
         return
 
+    print(c(C.DIM, f"  setcap cap_net_admin,cap_bpf+ep → {binary}"))
     if os.geteuid() == 0:
         subprocess.run([setcap, "cap_net_admin,cap_bpf+ep", str(binary)], check=True)
         return
 
-    # subprocess.run(["sudo", "-v"], check=True)
     subprocess.run(["sudo", setcap, "cap_net_admin,cap_bpf+ep", str(binary)], check=True)
+
+
+def find_swift_test_binaries(swift_dir: Path) -> list[Path]:
+    """Locate NPRPCPackageTests.xctest products under nprpc_swift/.build."""
+    build_root = swift_dir / ".build"
+    if not build_root.is_dir():
+        return []
+    found: dict[Path, Path] = {}
+    for path in build_root.rglob("NPRPCPackageTests.xctest"):
+        if path.is_file() or path.is_symlink():
+            resolved = path.resolve()
+            if resolved.is_file():
+                found[resolved] = resolved
+    return sorted(found.values())
 
 
 @dataclass
@@ -223,18 +255,30 @@ class Runner:
 
         return self._stage("JS tests (mocha)", ["npm", "test"], cwd=js_dir, timeout=120)
 
-    def stage_swift(self) -> Result:
+    def _gen_swift_stubs(self) -> Result | None:
+        """Generate Swift stubs. Returns a failed Result on error, else None."""
+        gen_ok, gen_out = self._run(["just", "gen-swift-stubs"], cwd=self.root, timeout=60)
+        if gen_ok:
+            return None
+        r = Result(stage="Swift gen stubs", success=False, duration=0, output=gen_out)
+        self.results.append(r)
+        print(gen_out)
+        return r
+
+    def stage_swift(self, host: bool = False) -> Result:
+        if host:
+            return self.stage_swift_host()
+        return self.stage_swift_docker()
+
+    def stage_swift_docker(self) -> Result:
+        """Full Docker path: rebuild nprpc with Swift's Clang, then swift test."""
         swift_dir = self.root / "nprpc_swift"
 
-        # 1. Generate stubs (requires npidl already built by CMake)
-        gen_ok, gen_out = self._run(["just", "gen-swift-stubs"], cwd=self.root, timeout=60)
-        if not gen_ok:
-            r = Result(stage="Swift gen stubs", success=False, duration=0, output=gen_out)
-            self.results.append(r)
-            print(gen_out)
-            return r
+        failed = self._gen_swift_stubs()
+        if failed is not None:
+            return failed
 
-        # 2. Build Boost in Docker (only if not already present)
+        # Build Boost in Docker (only if not already present)
         boost_marker = self.root / ".build_ubuntu_swift" / "boost_install" / "include" / "boost"
         if not boost_marker.exists():
             print(c(C.DIM, "  Boost not found – running docker-build-boost.sh …"))
@@ -245,7 +289,6 @@ class Runner:
                 print(out)
                 return r
 
-        # 3. Build nprpc + Swift package in Docker
         r_build = self._stage(
             "Swift docker build",
             ["bash", "docker-build-nprpc.sh"],
@@ -255,12 +298,108 @@ class Runner:
         if not r_build.success:
             return r_build
 
-        # 4. Run Swift tests in Docker
         return self._stage(
-            "Swift tests",
+            "Swift tests (docker)",
             ["bash", "docker-build-swift.sh", "--test"],
             cwd=swift_dir,
             timeout=120,
+        )
+
+    def stage_swift_host(self) -> Result:
+        """Host path: link against the existing CMake build_dir and run swift test.
+
+        Avoids the long Docker rebuild of nprpc. The XCTest binary needs
+        cap_net_admin+cap_bpf for HTTP/3 reuseport (sudo setcap).
+        """
+        swift_dir = self.root / "nprpc_swift"
+
+        if not shutil.which("swift"):
+            r = Result(
+                stage="Swift tests (host)",
+                success=False,
+                duration=0,
+                output="swift not found on PATH; install Swift or use Docker (omit --swift-host)\n",
+            )
+            self.results.append(r)
+            print(r.output)
+            return r
+
+        lib = self.build_dir / "libnprpc.so"
+        if not lib.exists():
+            r = Result(
+                stage="Swift tests (host)",
+                success=False,
+                duration=0,
+                output=(
+                    f"libnprpc.so not found at {lib}\n"
+                    "Build the host CMake tree first (omit --skip-cmake) or pass --build-dir.\n"
+                ),
+            )
+            self.results.append(r)
+            print(r.output)
+            return r
+
+        failed = self._gen_swift_stubs()
+        if failed is not None:
+            return failed
+
+        # Relative to monorepo root so Package.swift resolves NPRPC_BUILD_DIR
+        # the same way as manual `cd nprpc_swift && NPRPC_BUILD_DIR=... swift test`.
+        try:
+            build_dir_env = str(self.build_dir.relative_to(self.root))
+        except ValueError:
+            build_dir_env = str(self.build_dir)
+
+        env = {
+            "NPRPC_ROOT": str(self.root),
+            "NPRPC_BUILD_DIR": build_dir_env,
+        }
+
+        r_build = self._stage(
+            "Swift build (host)",
+            ["swift", "build", "--build-tests"],
+            cwd=swift_dir,
+            env=env,
+            timeout=600,
+        )
+        if not r_build.success:
+            return r_build
+        # Collapse build into the final test result line
+        self.results.pop()
+
+        binaries = find_swift_test_binaries(swift_dir)
+        if not binaries:
+            r = Result(
+                stage="Swift tests (host)",
+                success=False,
+                duration=0,
+                output="NPRPCPackageTests.xctest not found under nprpc_swift/.build after swift build\n",
+            )
+            self.results.append(r)
+            print(r.output)
+            return r
+
+        try:
+            for binary in binaries:
+                ensure_nprpc_bpf_capabilities(binary)
+        except (RuntimeError, subprocess.CalledProcessError) as exc:
+            r = Result(
+                stage="Swift tests (host) setcap",
+                success=False,
+                duration=0,
+                output=f"Failed to grant eBPF capabilities to Swift test binary: {exc}\n",
+            )
+            self.results.append(r)
+            print(r.output)
+            return r
+
+        # --skip-build keeps setcap intact (a rebuild would strip file capabilities)
+        return self._stage(
+            "Swift tests (host)",
+            ["swift", "test", "--skip-build"],
+            cwd=swift_dir,
+            env=env,
+            timeout=180,
         )
 
     # ------------------------------------------------------------------
@@ -302,6 +441,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-cpp",    action="store_true", help="Skip C++ tests")
     p.add_argument("--skip-js",     action="store_true", help="Skip JS/TS tests")
     p.add_argument("--skip-swift",  action="store_true", help="Skip Swift tests")
+    p.add_argument(
+        "--swift-host",
+        action="store_true",
+        help=(
+            "Run Swift tests on the host against the CMake build dir "
+            "(no Docker rebuild; requires host Swift and sudo setcap for eBPF)"
+        ),
+    )
     p.add_argument("--cmake-target", default="all",
                    help="CMake target to build (default: all)")
     p.add_argument("--cpp-filter",  default=None,
@@ -325,6 +472,10 @@ def main() -> int:
     print(c(C.BOLD, f"\nNPRPC unified build + test runner"))
     print(c(C.DIM,  f"root      : {root}"))
     print(c(C.DIM,  f"build_dir : {build_dir}"))
+    if args.swift_host and not args.skip_swift:
+        print(c(C.DIM,  f"swift     : host (NPRPC_BUILD_DIR={build_dir})"))
+    elif not args.skip_swift:
+        print(c(C.DIM,  "swift     : docker"))
 
     runner = Runner(root=root, build_dir=build_dir, verbose=args.verbose)
 
@@ -353,7 +504,7 @@ def main() -> int:
     if args.skip_swift:
         runner.results.append(Result("Swift tests", True, 0, skip=True))
     else:
-        runner.stage_swift()
+        runner.stage_swift(host=args.swift_host)
 
     # --- Summary -----------------------------------------------------------
     ok = runner.print_summary()

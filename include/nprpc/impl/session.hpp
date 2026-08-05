@@ -58,6 +58,10 @@ protected:
 
   virtual void timeout_action() = 0;
 
+  // Shared implementation for handle_request / handle_request_async.
+  bool handle_request_body(nprpc::flat_buffer& rx_buffer,
+                           nprpc::flat_buffer& tx_buffer);
+
 public:
   virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms) = 0;
 
@@ -137,6 +141,14 @@ public:
   // Returns true if a reply should be sent, false for fire-and-forget messages
   bool handle_request(nprpc::flat_buffer& rx_buffer,
                       nprpc::flat_buffer& tx_buffer);
+
+  // Awaitable form of handle_request.  Today the body is still synchronous
+  // (including optional POA DispatchExecutor post+wait); the Task gives
+  // transports a place to co_await without blocking their I/O thread once
+  // true async dispatch (resume_on executor) lands.  Default-POA / no-hop
+  // paths complete without suspending.
+  nprpc::Task<bool> handle_request_async(nprpc::flat_buffer& rx_buffer,
+                                         nprpc::flat_buffer& tx_buffer);
 
   // Send a message for streaming (async, fire-and-forget)
   // Default implementation uses send_receive_async with no handler

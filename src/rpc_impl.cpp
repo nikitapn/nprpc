@@ -311,7 +311,9 @@ NPRPC_API Rpc* RpcBuilderBase::build()
 
 Poa* RpcImpl::create_poa_impl(uint32_t objects_max,
                               PoaPolicy::Lifespan lifespan,
-                              PoaPolicy::ObjectIdPolicy object_id_policy)
+                              PoaPolicy::ObjectIdPolicy object_id_policy,
+                              DispatchExecutor dispatch_executor,
+                              PoaPolicy::TransportAffinity transport_affinity)
 {
   std::lock_guard<std::mutex> lk(poas_mut_);
 
@@ -321,8 +323,12 @@ Poa* RpcImpl::create_poa_impl(uint32_t objects_max,
     throw std::runtime_error("Maximum number of POAs reached");
 
   auto index = std::distance(std::begin(poas_created_), it);
-  auto poa = std::make_shared<PoaImpl>(
-      objects_max, static_cast<uint16_t>(index), lifespan, object_id_policy);
+  auto poa = std::make_shared<PoaImpl>(objects_max,
+                                       static_cast<uint16_t>(index),
+                                       lifespan,
+                                       object_id_policy,
+                                       dispatch_executor,
+                                       transport_affinity);
   poas_[index] = poa;
   (*it) = true; // Mark this POA as created
 
@@ -760,7 +766,7 @@ NPRPC_API std::optional<ObjectGuard> RpcImpl::get_object(poa_idx_t poa_idx,
   auto poa = g_rpc->get_poa(poa_idx);
   if (!poa)
     return std::nullopt;
-  return poa->get_object(object_id);
+  return (*poa)->get_object(object_id);
 }
 
 bool RpcImpl::has_session(const EndPoint& endpoint) const noexcept

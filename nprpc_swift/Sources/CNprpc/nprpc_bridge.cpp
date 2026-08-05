@@ -364,7 +364,12 @@ std::string RpcHandle::get_debug_info() const {
     return oss.str();
 }
 
-void* RpcHandle::create_poa(uint32_t max_objects, uint32_t lifespan, uint32_t id_policy) {
+void* RpcHandle::create_poa(uint32_t max_objects,
+                            uint32_t lifespan,
+                            uint32_t id_policy,
+                            void (*post)(void*, void (*)(void*), void*),
+                            bool (*is_running_on)(void*),
+                            void* executor_ctx) {
     if (!initialized_ || !impl_) return nullptr;
 
     try {
@@ -384,6 +389,14 @@ void* RpcHandle::create_poa(uint32_t max_objects, uint32_t lifespan, uint32_t id
         builder.with_object_id_policy(id_policy == 0
             ? nprpc::PoaPolicy::ObjectIdPolicy::SystemGenerated
             : nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied);
+
+        if (post) {
+            nprpc::DispatchExecutor ex;
+            ex.post = post;
+            ex.is_running_on = is_running_on;
+            ex.ctx = executor_ctx;
+            builder.with_dispatch_executor(ex);
+        }
 
         return builder.build();
     } catch (const std::exception& e) {
@@ -979,6 +992,22 @@ void* nprpc_rpc_create_poa(void* rpc_handle, uint32_t max_objects, uint32_t life
 
     auto* handle = static_cast<nprpc_swift::RpcHandle*>(rpc_handle);
     return handle->create_poa(max_objects, lifespan, id_policy);
+}
+
+void* nprpc_rpc_create_poa_with_executor(
+    void* rpc_handle,
+    uint32_t max_objects,
+    uint32_t lifespan,
+    uint32_t id_policy,
+    void (*post)(void* ctx, void (*fn)(void* arg), void* arg),
+    bool (*is_running_on)(void* ctx),
+    void* executor_ctx)
+{
+    if (!rpc_handle) return nullptr;
+
+    auto* handle = static_cast<nprpc_swift::RpcHandle*>(rpc_handle);
+    return handle->create_poa(max_objects, lifespan, id_policy,
+                              post, is_running_on, executor_ctx);
 }
 
 bool nprpc_rpc_add_to_host_json(

@@ -92,7 +92,7 @@ run-js-tests: (bt "nprpc_server_test")
     killall -9 nprpc_server_test npnameserver 2>/dev/null || true
     npm test
 
-# Generate Swift stubs then run Swift package tests (Docker)
+# Generate Swift stubs then run Swift package tests (Docker — rebuilds nprpc)
 run-swift-tests: gen-swift-stubs
     #!/usr/bin/env bash
     set -euo pipefail
@@ -104,7 +104,14 @@ run-swift-tests: gen-swift-stubs
     bash docker-build-nprpc.sh
     bash docker-build-swift.sh --test
 
-# Run C++, JS, and Swift test suites (wrapper around run_all_tests.py)
+# Host Swift tests against the local CMake build (no Docker; needs sudo setcap)
+run-swift-tests-host *args:
+    python3 run_all_tests.py --skip-cmake --skip-cpp --skip-js --swift-host {{args}}
+
+# Run C++, JS, and Swift test suites (wrapper around run_all_tests.py).
+# Pre-merge: always run the full suite before merging to main, e.g.:
+#   just test-all --swift-host    # preferred local loop
+#   just test-all                 # Docker Swift (slower, closer to clean CI)
 test-all *args:
     python3 run_all_tests.py {{args}}
 
