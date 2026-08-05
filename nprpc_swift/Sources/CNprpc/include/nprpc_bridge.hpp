@@ -141,9 +141,17 @@ public:
     /// @param max_objects Maximum number of objects (0 = default)
     /// @param lifespan 0 = persistent, 1 = transient
     /// @param id_policy 0 = system-generated, 1 = user-supplied
+    /// @param post optional DispatchExecutor::post (nullptr = inline)
+    /// @param is_running_on optional DispatchExecutor::is_running_on
+    /// @param executor_ctx opaque ctx for post / is_running_on
     /// @return Opaque pointer to nprpc::Poa or nullptr on error
     SWIFT_RETURNS_INDEPENDENT_VALUE
-    void* create_poa(uint32_t max_objects, uint32_t lifespan, uint32_t id_policy);
+    void* create_poa(uint32_t max_objects,
+                     uint32_t lifespan,
+                     uint32_t id_policy,
+                     void (*post)(void*, void (*)(void*), void*) = nullptr,
+                     bool (*is_running_on)(void*) = nullptr,
+                     void* executor_ctx = nullptr);
 
     bool add_to_host_json(
         const std::string& name,
@@ -362,6 +370,19 @@ int nprpc_create_object_from_flat(
 //   id_policy: 0 = system-generated, 1 = user-supplied
 // Returns: opaque pointer to nprpc::Poa or nullptr on error
 void* nprpc_rpc_create_poa(void* rpc_handle, uint32_t max_objects, uint32_t lifespan, uint32_t id_policy);
+
+// Create a POA with an optional dispatch executor (post+wait hop for servants).
+// post / is_running_on / executor_ctx form nprpc::DispatchExecutor; all null
+// means inline dispatch on the transport thread (same as nprpc_rpc_create_poa).
+// The caller owns executor_ctx lifetime for the life of the POA.
+void* nprpc_rpc_create_poa_with_executor(
+    void* rpc_handle,
+    uint32_t max_objects,
+    uint32_t lifespan,
+    uint32_t id_policy,
+    void (*post)(void* ctx, void (*fn)(void* arg), void* arg),
+    bool (*is_running_on)(void* ctx),
+    void* executor_ctx);
 
 bool nprpc_rpc_add_to_host_json(
     void* rpc_handle,

@@ -8,10 +8,11 @@
 #include <chrono>
 #include <cstdio>
 #include <deque>
+#include <expected>
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <optional>
+#include <shared_mutex>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -354,20 +355,34 @@ public:
   get_nameserver(std::string_view nameserver_ip) override;
   //	void check_unclaimed_objects(boost::system::error_code ec);
 
-  PoaImpl* get_poa(uint16_t idx)
+  enum class PoaLookupError : uint8_t {
+    OutOfRange = 1, // idx >= max_poa_objects
+    Empty = 2,      // slot never created / already destroyed
+  };
+
+  /// Look up a POA by index.  Does not throw — out-of-range and empty slots
+  /// are both reported via std::expected (callers already treat failure as
+  /// Error_PoaNotExist).
+  [[nodiscard]] std::expected<PoaImpl*, PoaLookupError>
+  get_poa(uint16_t idx) const noexcept
   {
-    if (idx >= max_poa_objects) {
-      throw std::out_of_range("Poa index out of range");
-    }
-    return poas_[idx].get();
+    if (idx >= max_poa_objects)
+      return std::unexpected(PoaLookupError::OutOfRange);
+    if (auto* p = poas_[idx].get())
+      return p;
+    return std::unexpected(PoaLookupError::Empty);
   }
 
   explicit RpcImpl();
 
 protected:
-  Poa* create_poa_impl(uint32_t max_objects,
-                       PoaPolicy::Lifespan lifespan,
-                       PoaPolicy::ObjectIdPolicy object_id_policy);
+  Poa* create_poa_impl(
+      uint32_t max_objects,
+      PoaPolicy::Lifespan lifespan,
+      PoaPolicy::ObjectIdPolicy object_id_policy,
+      DispatchExecutor dispatch_executor = {},
+      PoaPolicy::TransportAffinity transport_affinity =
+          PoaPolicy::TransportAffinity::AllowBlockTransport);
 };
 
 class ObjectGuard
@@ -449,7 +464,10 @@ public:
   PoaImpl(uint32_t objects_max,
           uint16_t idx,
           PoaPolicy::Lifespan lifespan,
-          PoaPolicy::ObjectIdPolicy object_id_policy)
+          PoaPolicy::ObjectIdPolicy object_id_policy,
+          DispatchExecutor dispatch_executor = {},
+          PoaPolicy::TransportAffinity transport_affinity =
+              PoaPolicy::TransportAffinity::AllowBlockTransport)
       : Poa(idx)
       , max_objects_{objects_max}
       , id_to_ptr_{object_id_policy == PoaPolicy::ObjectIdPolicy::UserSupplied
@@ -463,6 +481,8 @@ public:
                                           objects_max}}
       , pl_lifespan_{lifespan}
   {
+    set_dispatch_executor(dispatch_executor);
+    set_transport_affinity(transport_affinity);
   }
 
 private:

@@ -1,13 +1,16 @@
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <numeric>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
-#include <condition_variable>
-#include <filesystem>
-#include <fstream>
 
 #include <gtest/gtest.h>
 
@@ -535,6 +538,112 @@ TEST_F(NprpcTest, UserSuppliedObjectIdPolicy)
 
   custom_poa->deactivate_object(manual_id);
   rpc->destroy_poa(custom_poa);
+}
+
+// POA DispatchExecutor: servant runs on a dedicated worker (post+wait).
+TEST_F(NprpcTest, PoaDispatchExecutor)
+{
+#include "common/tests/basic.inl"
+
+  struct QueueCtx {
+    std::mutex m;
+    std::condition_variable cv;
+    std::deque<std::function<void()>> jobs;
+    std::atomic<bool> stop{false};
+    std::thread::id worker_id{};
+  } qctx;
+
+  std::thread worker([&] {
+    qctx.worker_id = std::this_thread::get_id();
+    for (;;) {
+      std::function<void()> job;
+      {
+        std::unique_lock lk(qctx.m);
+        qctx.cv.wait(lk, [&] { return qctx.stop.load() || !qctx.jobs.empty(); });
+        if (qctx.stop.load() && qctx.jobs.empty())
+          return;
+        job = std::move(qctx.jobs.front());
+        qctx.jobs.pop_front();
+      }
+      job();
+    }
+  });
+
+  // Wait until worker_id is set
+  while (qctx.worker_id == std::thread::id{})
+    std::this_thread::yield();
+
+  nprpc::DispatchExecutor ex;
+  ex.ctx = &qctx;
+  ex.post = [](void* c, void (*fn)(void*), void* arg) {
+    auto* x = static_cast<QueueCtx*>(c);
+    {
+      std::lock_guard lk(x->m);
+      x->jobs.push_back([fn, arg] { fn(arg); });
+    }
+    x->cv.notify_one();
+  };
+  ex.is_running_on = [](void* c) {
+    auto* x = static_cast<QueueCtx*>(c);
+    return std::this_thread::get_id() == x->worker_id;
+  };
+
+  // invoke_sync unit check (no network)
+  {
+    std::thread::id ran_on{};
+    ex.invoke_sync([&] { ran_on = std::this_thread::get_id(); });
+    EXPECT_EQ(ran_on, qctx.worker_id);
+    EXPECT_NE(ran_on, std::this_thread::get_id());
+  }
+
+  auto* custom_poa =
+      rpc->create_poa()
+          .with_max_objects(8)
+          .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+          .with_dispatch_executor(ex)
+          .build();
+
+  EXPECT_TRUE(custom_poa->dispatch_executor());
+
+  std::atomic<std::thread::id> servant_tid{};
+  class TrackingServant : public TestBasicImpl {
+  public:
+    std::atomic<std::thread::id>* tid;
+    uint32_t ReturnU32() override
+    {
+      tid->store(std::this_thread::get_id());
+      return 42;
+    }
+  } servant;
+  servant.tid = &servant_tid;
+
+  try {
+    auto oid = custom_poa->activate_object(
+        &servant, nprpc::ObjectActivationFlags::tcp);
+    auto nameserver = rpc->get_nameserver("127.0.0.1");
+    nameserver->Bind(oid, "nprpc_dispatch_executor_test");
+
+    nprpc::Object* raw = nullptr;
+    ASSERT_TRUE(nameserver->Resolve("nprpc_dispatch_executor_test", raw));
+    auto obj = nprpc::ObjectPtr(nprpc::narrow<nprpc::test::TestBasic>(raw));
+    obj->set_preferred_transport(nprpc::EndPointType::Tcp);
+    ASSERT_TRUE(obj->select_endpoint());
+
+    EXPECT_EQ(obj->ReturnU32(), 42u);
+    EXPECT_EQ(servant_tid.load(), qctx.worker_id);
+  } catch (nprpc::Exception& ex) {
+    FAIL() << "Exception in PoaDispatchExecutor: " << ex.what();
+  }
+
+  custom_poa->deactivate_object(servant.oid());
+  rpc->destroy_poa(custom_poa);
+
+  {
+    std::lock_guard lk(qctx.m);
+    qctx.stop = true;
+  }
+  qctx.cv.notify_one();
+  worker.join();
 }
 
 // Bad input validation test

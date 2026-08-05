@@ -303,7 +303,8 @@ Poa* PoaBuilder::build()
 {
   log_build_info_once();
   return static_cast<impl::RpcImpl*>(rpc_)->create_poa_impl(
-      objects_max_, lifespan_policy_, object_id_policy_);
+      objects_max_, lifespan_policy_, object_id_policy_, dispatch_executor_,
+      transport_affinity_);
 }
 
 } // namespace nprpc

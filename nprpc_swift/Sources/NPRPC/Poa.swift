@@ -4,6 +4,7 @@
 // Swift wrapper for NPRPC POA (Portable Object Adapter)
 
 import CNprpc
+import Dispatch
 import Foundation
 
 #if canImport(Glibc)
@@ -75,6 +76,62 @@ public enum PoaLifetime {
 
     /// POA is destroyed when all objects are deactivated
     case transient
+}
+
+/// Where servant `dispatch` runs for objects activated on a POA.
+///
+/// - `inlineOnTransportThread`: current default — dispatch on the SHM/TCP/WS
+///   reader thread (lowest latency; not MainActor-safe).
+/// - `main`: post+wait onto `DispatchQueue.main` so UI servants run on the
+///   main looper without an extra hop inside the method.
+/// - `queue`: same for a custom serial `DispatchQueue`.
+///
+/// The transport thread blocks until dispatch finishes (reply is still sync).
+/// Avoid blocking the main queue on NPRPC work that itself waits on main.
+public enum PoaDispatchExecutor: Sendable {
+    case inlineOnTransportThread
+    case main
+    case queue(DispatchQueue)
+}
+
+/// Retains a `DispatchQueue` for the C `DispatchExecutor` callbacks for the
+/// lifetime of the Swift `Poa` wrapper.
+fileprivate final class DispatchExecutorBox: @unchecked Sendable {
+    let queue: DispatchQueue
+    let specificKey = DispatchSpecificKey<UInt8>()
+
+    init(_ queue: DispatchQueue) {
+        self.queue = queue
+        // Any block running on this queue sees the key — used by is_running_on.
+        queue.setSpecific(key: specificKey, value: 1)
+    }
+}
+
+/// Carries opaque C tokens across a `@Sendable` Dispatch hop.
+/// Safe: the C++ caller blocks in `invoke_sync` until `fn(arg)` returns.
+fileprivate struct UncheckedWork: @unchecked Sendable {
+    let fn: (@convention(c) (UnsafeMutableRawPointer?) -> Void)
+    let arg: UnsafeMutableRawPointer?
+}
+
+// C-compatible trampolines for nprpc::DispatchExecutor
+private let poaDispatchPost: @convention(c) (
+    UnsafeMutableRawPointer?,
+    (@convention(c) (UnsafeMutableRawPointer?) -> Void)?,
+    UnsafeMutableRawPointer?
+) -> Void = { ctx, fn, arg in
+    guard let ctx, let fn else { return }
+    let box = Unmanaged<DispatchExecutorBox>.fromOpaque(ctx).takeUnretainedValue()
+    let work = UncheckedWork(fn: fn, arg: arg)
+    box.queue.async {
+        work.fn(work.arg)
+    }
+}
+
+private let poaDispatchIsRunningOn: @convention(c) (UnsafeMutableRawPointer?) -> Bool = { ctx in
+    guard let ctx else { return false }
+    let box = Unmanaged<DispatchExecutorBox>.fromOpaque(ctx).takeUnretainedValue()
+    return DispatchQueue.getSpecific(key: box.specificKey) != nil
 }
 
 // MARK: - Global dispatch function for C++ callback
@@ -159,24 +216,28 @@ private let globalServantDispatch: @convention(c) (UnsafeMutableRawPointer?, Uns
 ///
 /// Example:
 /// ```swift
-/// let poa = try rpc.createPoa(
-///     maxObjects: 100,
-///     lifetime: .Persistent,
-///     idPolicy: .systemGenerated
+/// // Background / high-throughput servants (default)
+/// let poa = try rpc.createPoa(maxObjects: 100)
+///
+/// // UI servants — dispatch lands on the main queue
+/// let uiPoa = try rpc.createPoa(
+///     maxObjects: 32,
+///     dispatch: .main
 /// )
-/// 
+///
 /// let servant = MyServantImpl()
-/// let objectId = try poa.activateObject(
-///     servant,
-///     flags: .networkOnly
-/// )
+/// let objectId = try uiPoa.activateObject(servant, flags: .networkOnly)
 /// ```
 public final class Poa {
     /// Opaque handle to C++ nprpc::Poa
     internal let handle: UnsafeMutableRawPointer
 
-    internal init(handle: UnsafeMutableRawPointer) {
+    /// Keeps the DispatchQueue alive for C++ DispatchExecutor callbacks.
+    fileprivate let executorBox: DispatchExecutorBox?
+
+    fileprivate init(handle: UnsafeMutableRawPointer, executorBox: DispatchExecutorBox? = nil) {
         self.handle = handle
+        self.executorBox = executorBox
     }
 
     /// POA index
@@ -289,12 +350,14 @@ extension Rpc {
     ///   - maxObjects: Maximum number of objects (0 = unlimited)
     ///   - lifetime: Lifetime policy
     ///   - idPolicy: Object ID assignment policy
+    ///   - dispatch: Thread/queue where servant `dispatch` runs
     /// - Returns: New POA instance
     /// - Throws: RuntimeError if creation fails
     public func createPoa(
         maxObjects: UInt32 = 0,
         lifetime: PoaLifetime = .Persistent,
-        idPolicy: ObjectIdPolicy = .systemGenerated
+        idPolicy: ObjectIdPolicy = .systemGenerated,
+        dispatch: PoaDispatchExecutor = .inlineOnTransportThread
     ) throws -> Poa {
         guard self.isInitialized, let rpcHandle = self.handle else {
             throw RuntimeError(message: "Rpc not initialized")
@@ -302,14 +365,60 @@ extension Rpc {
 
         let lifespanValue: UInt32 = (lifetime == .Persistent) ? 0 : 1
         let idPolicyValue: UInt32 = (idPolicy == .systemGenerated) ? 0 : 1
-
-        // Use the C bridge function instead of C++ method 
-        // Convert typed pointer to raw pointer for C function
         let rawHandle = UnsafeMutableRawPointer(rpcHandle)
-        guard let poaHandle = nprpc_rpc_create_poa(rawHandle, maxObjects, lifespanValue, idPolicyValue) else {
-            throw RuntimeError(message: "Failed to create POA")
+
+        switch dispatch {
+        case .inlineOnTransportThread:
+            guard let poaHandle = nprpc_rpc_create_poa(
+                rawHandle, maxObjects, lifespanValue, idPolicyValue
+            ) else {
+                throw RuntimeError(message: "Failed to create POA")
+            }
+            return Poa(handle: poaHandle)
+
+        case .main:
+            return try createPoaWithQueue(
+                rawHandle: rawHandle,
+                maxObjects: maxObjects,
+                lifespanValue: lifespanValue,
+                idPolicyValue: idPolicyValue,
+                queue: .main
+            )
+
+        case .queue(let queue):
+            return try createPoaWithQueue(
+                rawHandle: rawHandle,
+                maxObjects: maxObjects,
+                lifespanValue: lifespanValue,
+                idPolicyValue: idPolicyValue,
+                queue: queue
+            )
+        }
+    }
+
+    private func createPoaWithQueue(
+        rawHandle: UnsafeMutableRawPointer,
+        maxObjects: UInt32,
+        lifespanValue: UInt32,
+        idPolicyValue: UInt32,
+        queue: DispatchQueue
+    ) throws -> Poa {
+        let box = DispatchExecutorBox(queue)
+        // Unretained: Poa holds the box strongly for the wrapper lifetime.
+        let ctx = Unmanaged.passUnretained(box).toOpaque()
+
+        guard let poaHandle = nprpc_rpc_create_poa_with_executor(
+            rawHandle,
+            maxObjects,
+            lifespanValue,
+            idPolicyValue,
+            poaDispatchPost,
+            poaDispatchIsRunningOn,
+            ctx
+        ) else {
+            throw RuntimeError(message: "Failed to create POA with dispatch executor")
         }
 
-        return Poa(handle: poaHandle)
+        return Poa(handle: poaHandle, executorBox: box)
     }
 }
