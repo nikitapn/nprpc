@@ -77,6 +77,9 @@ target_link_libraries(nprpc_server_test
 # Add JavaScript tests if enabled
 if(NPRPC_BUILD_JS AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/js)
   add_subdirectory(js)
+  # Keep C++ server and JS stubs in lockstep: building the JS test server
+  # also regenerates/copies TypeScript stubs from the IDL so they cannot drift.
+  add_dependencies(nprpc_server_test nprpc_test_js_gen)
 endif()
 
 # Enable testing

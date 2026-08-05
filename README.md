@@ -679,8 +679,14 @@ just bt nprpc_test
 # Run tests
 just run-cpp-tests                    # C++ (ctest)
 just run-js-tests                     # TypeScript / Mocha
-just test-all                         # C++ + JS + Swift
+just run-swift-tests                  # Swift in Docker (rebuilds nprpc)
+just run-swift-tests-host             # Swift on host (reuses CMake build; sudo setcap)
+just test-all --swift-host            # C++ + JS + host Swift  ← pre-merge gate
+just test-all                         # C++ + JS + Docker Swift
 just run-cpp-tests -R NprpcTest.TestBasic   # filtered
+
+# Pre-merge: always run the full suite (C++ / JS / Swift) before merging to main.
+# See docs/BUILD.md "Pre-merge workflow".
 
 # Minimal build (library only)
 cmake -S . -B build

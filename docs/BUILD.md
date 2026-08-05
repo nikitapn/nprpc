@@ -135,12 +135,42 @@ sudo cmake --install .
 If you built with tests enabled:
 
 ```bash
-# Run all tests
+# C++ only
 ctest --output-on-failure
-
-# Or use custom targets
+# Or:
 cmake --build . --target run_nprpc_tests
+just run-cpp-tests
+
+# JS/TS
+just run-js-tests
+
+# Swift (Docker rebuild of nprpc — slow)
+just run-swift-tests
+
+# Swift on the host (reuses the CMake build dir; needs Swift + sudo setcap)
+just run-swift-tests-host
+# or:
+python3 run_all_tests.py --skip-cmake --skip-cpp --skip-js --swift-host
 ```
+
+#### Pre-merge workflow
+
+**Always run the full test suite before merging to `main`.** That means C++,
+JS/TS, and Swift — not only the suite you touched.
+
+```bash
+# Preferred local gate (reuses host CMake build for Swift; may prompt for sudo setcap)
+just test-all --swift-host
+
+# Full Docker Swift path (no host Swift toolchain required; slower)
+just test-all
+```
+
+`run_all_tests.py` is the single entry point (`just test-all` is a thin wrapper).
+Host Swift mode builds `NPRPCPackageTests.xctest` against `--build-dir`, then
+runs `sudo setcap cap_net_admin,cap_bpf+ep` on that binary so HTTP/3 reuseport
+eBPF can attach, and finally `swift test --skip-build` so capabilities are not
+stripped by a rebuild.
 
 ## Using NPRPC in Your Project
 

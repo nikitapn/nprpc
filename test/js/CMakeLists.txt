@@ -3,18 +3,24 @@
 set(NPRPC_TEST_JS_SRC ${CMAKE_BINARY_DIR}/nprpc_test_stub/src/gen/js/nprpc_test.ts)
 set(NPRPC_TEST_JS_DST ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/nprpc_test.ts)
 
-# Copy generated test interfaces
+# Copy generated test interfaces.
+# Depend on nprpc_test_gen (not only the .ts path) so IDL changes always
+# regenerate C++/TS stubs before the copy — same pattern as nprpc_js → nprpc_stub_gen.
+# File-level DEPENDS on NPRPC_TEST_JS_SRC keeps the copy out-of-date when the
+# generator updates that file.
 add_custom_command(
   OUTPUT ${NPRPC_TEST_JS_DST}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/src/gen
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${NPRPC_TEST_JS_SRC} ${NPRPC_TEST_JS_DST}
-  DEPENDS ${NPRPC_TEST_JS_SRC}
+  DEPENDS
+    nprpc_test_gen
+    ${NPRPC_TEST_JS_SRC}
   COMMENT "Copying nprpc_test_stub generated TypeScript to test/js/src/gen"
   VERBATIM
 )
 
 add_custom_target(nprpc_test_js_gen ALL
-  DEPENDS ${NPRPC_TEST_JS_DST} npidl
+  DEPENDS ${NPRPC_TEST_JS_DST}
 )
 
 # Collect TypeScript source files for dependency tracking
