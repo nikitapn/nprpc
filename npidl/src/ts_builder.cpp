@@ -2175,9 +2175,12 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
     out << bl() << "(globalThis as any).__nprpc_debug?.call_end(__dbg_id,{status:'success',duration_ms:Date.now()-__dbg_t0});\n";
 
     if (!fn->out_s) {
-      out << bl()
-          << "NPRPC.make_simple_answer(buf, "
-             "NPRPC.impl.MessageId.Success);\n";
+      // [unreliable] fire-and-forget: client never waits — do not ACK.
+      if (fn->is_reliable) {
+        out << bl()
+            << "NPRPC.make_simple_answer(buf, "
+               "NPRPC.impl.MessageId.Success);\n";
+      }
     } else {
       if (fn->out_s->flat) { // it means that we are writing output data
                              // in the input buffer

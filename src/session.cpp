@@ -334,6 +334,13 @@ bool Session::handle_request_body(flat_buffer& rx_buffer, flat_buffer& tx_buffer
     break;
   }
 
+  // Fire-and-forget / [unreliable] servants leave tx empty (no Success ACK).
+  // Treat that as no reply so TCP/QUIC do not enqueue a zero-length write.
+  if (needs_reply &&
+      tx_buffer.size() < sizeof(impl::flat::Header)) {
+    needs_reply = false;
+  }
+
   if (needs_reply) {
     NPRPC_SESSION_LOG_TRACE("Sending reply");
     // dump_message(tx_buffer, true);

@@ -520,7 +520,7 @@ case .msgB(let b): print("B: \(b.code)")
 - `out` — output parameter
 - `raises(E1, E2)` — exception specification
 - `async` — fire-and-forget (no reply)
-- `[unreliable]` — best-effort delivery (QUIC/WebTransport only, others ignore)
+- `[unreliable]` — fire-and-forget RPC (must be `void`, only `in` args, no `raises`) or best-effort streams (QUIC DATAGRAM when available; other transports may still deliver the bytes)
 - `[force_helpers=1]` — emit helper `from_flat` / `to_flat` functions for a `message`
 - `[trusted=true]` — disable strict bounds checking for untrusted input
 
