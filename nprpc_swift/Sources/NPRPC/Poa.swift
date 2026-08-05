@@ -80,14 +80,14 @@ public enum PoaLifetime {
 
 /// Where servant `dispatch` runs for objects activated on a POA.
 ///
-/// - `inlineOnTransportThread`: current default — dispatch on the SHM/TCP/WS
-///   reader thread (lowest latency; not MainActor-safe).
-/// - `main`: post+wait onto `DispatchQueue.main` so UI servants run on the
-///   main looper without an extra hop inside the method.
-/// - `queue`: same for a custom serial `DispatchQueue`.
+/// - `inlineOnTransportThread`: default — SHM ring / transport thread
+///   (lowest latency; not MainActor-safe).
+/// - `main`: SHM ring fire-and-forgets the whole request onto
+///   `DispatchQueue.main` (no Asio hop). Servant + reply run on main.
+/// - `queue`: same for a custom **serial** `DispatchQueue` (required for
+///   FIFO SHM reply matching).
 ///
-/// The transport thread blocks until dispatch finishes (reply is still sync).
-/// Avoid blocking the main queue on NPRPC work that itself waits on main.
+/// Avoid blocking main on NPRPC work that itself waits on main.
 public enum PoaDispatchExecutor: Sendable {
     case inlineOnTransportThread
     case main
@@ -108,13 +108,14 @@ fileprivate final class DispatchExecutorBox: @unchecked Sendable {
 }
 
 /// Carries opaque C tokens across a `@Sendable` Dispatch hop.
-/// Safe: the C++ caller blocks in `invoke_sync` until `fn(arg)` returns.
+/// Used for both fire-and-forget SHM offload and invoke_sync post+wait.
 fileprivate struct UncheckedWork: @unchecked Sendable {
     let fn: (@convention(c) (UnsafeMutableRawPointer?) -> Void)
     let arg: UnsafeMutableRawPointer?
 }
 
-// C-compatible trampolines for nprpc::DispatchExecutor
+// C-compatible trampolines for nprpc::DispatchExecutor.
+// Equivalent to dispatch_async_f(queue, arg, fn) — ring posts here and returns.
 private let poaDispatchPost: @convention(c) (
     UnsafeMutableRawPointer?,
     (@convention(c) (UnsafeMutableRawPointer?) -> Void)?,

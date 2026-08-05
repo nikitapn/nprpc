@@ -11,7 +11,7 @@ NPRPC is a high-performance, multi-transport RPC framework for distributed syste
 - **Browser-first** — WebSocket, HTTP, and WebTransport endpoints; `host.json` bootstrap for static deployments
 - **SSR support** — built-in SvelteKit SSR via shared memory IPC (see [docs/SSR_ARCHITECTURE.md](docs/SSR_ARCHITECTURE.md))
 - **Cookie auth** — httpOnly cookie-based auth for HTTP/WebSocket (see [docs/HTTP_AUTH.md](docs/HTTP_AUTH.md))
-- **POA** — Portable Object Adapter for lifecycle management and session-scoped activation
+- **POA** — Portable Object Adapter for lifecycle, transports, and dispatch placement (see [docs/POA.md](docs/POA.md))
 - **Nameserver** — service discovery and named object binding
 
 ## Transport Overview

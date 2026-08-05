@@ -127,21 +127,23 @@ enum class TransportAffinity {
 } // namespace PoaPolicy
 
 /**
- * @brief Optional dispatch executor for servant callbacks.
+ * @brief Optional dispatch executor for servant callbacks / SHM offload.
  *
- * When set on a POA, FunctionCall / StreamInit dispatch runs on this
- * executor (post + wait) so UI servants can land on the main thread
- * without an extra hop inside user code.
+ * Two uses:
+ *  1. **Fire-and-forget hop (preferred for SHM UI POAs):** the ring thread
+ *     calls @c post(ctx, work, arg) to run a full handle_request+reply job
+ *     on the target queue (Swift: DispatchQueue.async / dispatch_async_f).
+ *     No Asio hop, no blocking the ring.
+ *  2. **invoke_sync:** post+wait when a caller is not already on the queue.
+ *     With @c is_running_on set, work already on the queue runs inline
+ *     (avoids nested async / deadlock).
  *
- * Default (all null) = run inline on the transport thread (current behaviour).
+ * Default (all null) = no custom executor; transport affinity decides
+ * ring-inline vs Asio offload.
  *
  * Swift / Foundation example for DispatchQueue.main:
- *   post:           DispatchQueue.main.async { fn(arg) }
- *   is_running_on:  Thread.isMainThread
- *
- * is_running_on is optional but strongly recommended: if the caller is
- * already on the executor thread, work runs inline to avoid deadlock
- * (post + wait on the same serial queue).
+ *   post:           dispatch_async_f(queue, arg, fn)  or  queue.async { fn(arg) }
+ *   is_running_on:  Thread.isMainThread / queue-specific key
  */
 struct DispatchExecutor {
   using WorkFn = void (*)(void* arg);
@@ -161,6 +163,9 @@ struct DispatchExecutor {
    * If the executor is empty or @c is_running_on reports the current
    * thread, @p fn runs inline. Exceptions thrown by @p fn are rethrown
    * on the calling thread.
+   *
+   * Prefer fire-and-forget @c post from the SHM ring for whole requests;
+   * use this when already inside a stack that must wait for the result.
    */
   template <typename F>
   void invoke_sync(F&& fn) const
