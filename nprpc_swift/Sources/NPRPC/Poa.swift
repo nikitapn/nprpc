@@ -86,16 +86,61 @@ public enum PoaLifetime {
 ///   `DispatchQueue.main` (no Asio hop). Servant + reply run on main.
 /// - `queue`: same for a custom **serial** `DispatchQueue` (required for
 ///   FIFO SHM reply matching).
+/// - `loop`: same for a thread that is not a `DispatchQueue` at all — see
+///   `PoaExecutor`.
 ///
 /// Avoid blocking main on NPRPC work that itself waits on main.
 public enum PoaDispatchExecutor: Sendable {
     case inlineOnTransportThread
     case main
     case queue(DispatchQueue)
+    case loop(any PoaExecutor)
 }
 
-/// Retains a `DispatchQueue` for the C `DispatchExecutor` callbacks for the
-/// lifetime of the Swift `Poa` wrapper.
+/// A serial execution context that is a **thread with its own event loop**
+/// rather than a `DispatchQueue`.
+///
+/// `.main` and `.queue` cover everything GCD owns, but they cannot express the
+/// case they are most wanted for: a thread that blocks in someone else's
+/// `wait` — a GLFW/X11 pump, an epoll loop, a game loop — and that owns state
+/// which may only be touched from *that thread*. GCD cannot pin a serial queue
+/// to a chosen thread (only `.main` is pinned, and draining it means the loop
+/// can never block), so such a loop can neither be a hop target nor be woken by
+/// one.
+///
+/// Conforming types supply the two things the C `DispatchExecutor` needs:
+///
+/// ```swift
+/// final class RenderLoop: PoaExecutor {
+///     func post(_ work: @escaping @Sendable () -> Void) {
+///         queue.append(work)     // drained once per loop iteration
+///         wakeTheLoop()          // must unblock the loop's wait
+///     }
+///     var isRunningOnExecutor: Bool { Thread.current === loopThread }
+/// }
+/// ```
+///
+/// **`post` must wake the loop.** The ring fires and forgets: nothing else will
+/// tell the loop that work is waiting, so a `post` that only enqueues leaves
+/// the servant unrun until the loop happens to wake for its own reasons — on an
+/// idle process, never.
+///
+/// **The loop must be serial and must drain in FIFO order**, for the same
+/// reason `.queue` demands a serial queue: a shared-memory session matches
+/// replies by ring slot order.
+///
+/// `isRunningOnExecutor` keeps `invoke_sync` from posting to a loop it is
+/// already on, which would wait for a drain that cannot happen until it
+/// returns.
+public protocol PoaExecutor: AnyObject, Sendable {
+    /// Enqueue `work` on the loop **and wake it**.
+    func post(_ work: @escaping @Sendable () -> Void)
+    /// True when the calling thread is the loop's own.
+    var isRunningOnExecutor: Bool { get }
+}
+
+/// Holds a `DispatchQueue` for the C `DispatchExecutor` callbacks, plus the
+/// specific key `is_running_on` tests. See `Poa.executorBox` for who owns it.
 fileprivate final class DispatchExecutorBox: @unchecked Sendable {
     let queue: DispatchQueue
     let specificKey = DispatchSpecificKey<UInt8>()
@@ -105,6 +150,13 @@ fileprivate final class DispatchExecutorBox: @unchecked Sendable {
         // Any block running on this queue sees the key — used by is_running_on.
         queue.setSpecific(key: specificKey, value: 1)
     }
+}
+
+/// Holds a `PoaExecutor` for the C `DispatchExecutor` callbacks. Same role as
+/// `DispatchExecutorBox`, for a hop target GCD does not own.
+fileprivate final class LoopExecutorBox: @unchecked Sendable {
+    let executor: any PoaExecutor
+    init(_ executor: any PoaExecutor) { self.executor = executor }
 }
 
 /// Carries opaque C tokens across a `@Sendable` Dispatch hop.
@@ -133,6 +185,27 @@ private let poaDispatchIsRunningOn: @convention(c) (UnsafeMutableRawPointer?) ->
     guard let ctx else { return false }
     let box = Unmanaged<DispatchExecutorBox>.fromOpaque(ctx).takeUnretainedValue()
     return DispatchQueue.getSpecific(key: box.specificKey) != nil
+}
+
+// Same two trampolines for a `PoaExecutor`. The C side cannot tell the
+// difference: it holds an opaque ctx and two function pointers either way.
+private let poaLoopPost: @convention(c) (
+    UnsafeMutableRawPointer?,
+    (@convention(c) (UnsafeMutableRawPointer?) -> Void)?,
+    UnsafeMutableRawPointer?
+) -> Void = { ctx, fn, arg in
+    guard let ctx, let fn else { return }
+    let box = Unmanaged<LoopExecutorBox>.fromOpaque(ctx).takeUnretainedValue()
+    let work = UncheckedWork(fn: fn, arg: arg)
+    box.executor.post {
+        work.fn(work.arg)
+    }
+}
+
+private let poaLoopIsRunningOn: @convention(c) (UnsafeMutableRawPointer?) -> Bool = { ctx in
+    guard let ctx else { return false }
+    return Unmanaged<LoopExecutorBox>.fromOpaque(ctx)
+        .takeUnretainedValue().executor.isRunningOnExecutor
 }
 
 // MARK: - Global dispatch function for C++ callback
@@ -233,10 +306,17 @@ public final class Poa {
     /// Opaque handle to C++ nprpc::Poa
     internal let handle: UnsafeMutableRawPointer
 
-    /// Keeps the DispatchQueue alive for C++ DispatchExecutor callbacks.
-    fileprivate let executorBox: DispatchExecutorBox?
+    /// The hop target — a `DispatchQueue` box or a `PoaExecutor` box.
+    ///
+    /// Held here for reflection and for symmetry, but *not* what keeps it
+    /// alive: the C++ POA outlives this wrapper (there is no `destroyPoa`, and
+    /// callers routinely let the returned `Poa` go out of scope after
+    /// activating), and it dereferences the box on every request. So the box
+    /// is retained into the C context instead, deliberately for the life of
+    /// the process. At most `max_poa_objects` of them can ever exist.
+    fileprivate let executorBox: AnyObject?
 
-    fileprivate init(handle: UnsafeMutableRawPointer, executorBox: DispatchExecutorBox? = nil) {
+    fileprivate init(handle: UnsafeMutableRawPointer, executorBox: AnyObject? = nil) {
         self.handle = handle
         self.executorBox = executorBox
     }
@@ -394,6 +474,25 @@ extension Rpc {
                 idPolicyValue: idPolicyValue,
                 queue: queue
             )
+
+        case .loop(let executor):
+            let box = LoopExecutorBox(executor)
+            // Retained for the life of the C++ POA, which outlives this
+            // wrapper — see `Poa.executorBox`.
+            let ctx = Unmanaged.passRetained(box).toOpaque()
+
+            guard let poaHandle = nprpc_rpc_create_poa_with_executor(
+                rawHandle,
+                maxObjects,
+                lifespanValue,
+                idPolicyValue,
+                poaLoopPost,
+                poaLoopIsRunningOn,
+                ctx
+            ) else {
+                throw RuntimeError(message: "Failed to create POA with loop executor")
+            }
+            return Poa(handle: poaHandle, executorBox: box)
         }
     }
 
@@ -405,8 +504,9 @@ extension Rpc {
         queue: DispatchQueue
     ) throws -> Poa {
         let box = DispatchExecutorBox(queue)
-        // Unretained: Poa holds the box strongly for the wrapper lifetime.
-        let ctx = Unmanaged.passUnretained(box).toOpaque()
+        // Retained for the life of the C++ POA, which outlives this wrapper —
+        // see `Poa.executorBox`.
+        let ctx = Unmanaged.passRetained(box).toOpaque()
 
         guard let poaHandle = nprpc_rpc_create_poa_with_executor(
             rawHandle,

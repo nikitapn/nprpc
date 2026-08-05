@@ -95,6 +95,7 @@ let workPoa = try rpc.createPoa(
 | `.inlineOnTransportThread` | Default — lowest latency |
 | `.main` | Fire-and-forget hop to `DispatchQueue.main` |
 | `.queue(DispatchQueue)` | Hop to a **serial** custom queue |
+| `.loop(any PoaExecutor)` | Hop to a thread that is not a queue — see below |
 
 ---
 
@@ -211,6 +212,59 @@ auto* uiPoa = rpc->create_poa()
 ```
 
 Swift does not require you to fill `DispatchExecutor` by hand — `createPoa(dispatch:)` installs the GCD trampolines.
+
+### `PoaExecutor` (Swift) — a loop that is not a queue
+
+`.main` and `.queue` cover everything GCD owns. They cannot express the case
+they are most wanted for: **a thread with its own event loop** — a GLFW/X11
+pump, an epoll loop, a game loop — that blocks in someone else's `wait` and
+owns state which may only be touched from *that thread*.
+
+GCD cannot pin a serial queue to a chosen thread (only `.main` is pinned, and
+draining it means the loop can never block), so such a loop can be neither a
+hop target nor woken by one. `PoaExecutor` is the escape hatch, and it is the
+same two function pointers the C++ `DispatchExecutor` takes:
+
+```swift
+final class RenderLoop: PoaExecutor {
+  func post(_ work: @escaping @Sendable () -> Void) {
+    lock.lock(); pending.append(work); lock.unlock()
+    wakeTheLoop()                       // e.g. glfwPostEmptyEvent
+  }
+  var isRunningOnExecutor: Bool { Thread.current === loopThread }
+
+  func drain() {                        // once per loop iteration
+    lock.lock(); let work = pending; pending.removeAll(); lock.unlock()
+    for item in work { item() }
+  }
+}
+
+let poa = try rpc.createPoa(maxObjects: 8, dispatch: .loop(renderLoop))
+```
+
+Three rules, in order of how much they hurt when broken:
+
+1. **`post` must wake the loop.** The ring fires and forgets; nothing else will
+   tell the loop that a request is waiting. A `post` that only enqueues leaves
+   the servant unrun until the loop wakes for its own reasons — on an idle
+   process, never.
+2. **Drain in FIFO order**, for the same reason `.queue` demands a serial
+   queue: a shared-memory session matches replies by ring slot order.
+3. **`isRunningOnExecutor` must be honest.** It is what keeps `invoke_sync`
+   from posting to a loop it is already on and then waiting for a drain that
+   cannot happen until it returns.
+
+```text
+SHM ring
+  └─ PoaExecutor.post → enqueue + wake
+       │
+render thread (blocked in pumpEvents / epoll_wait)
+  ├─ wakes
+  ├─ drain()  → handle_request + reply   ← servant runs HERE, on the GPU thread
+  └─ renders the frame
+```
+
+**Hops to servant:** 1 (`ring → loop`).
 
 ### `requires_off_transport_dispatch()`
 
@@ -378,6 +432,7 @@ ring ──post(f&f)──► main ──servant + reply──► …
 |-----------|----------------|---------------------------|------------|
 | Default / AllowBlock | Ring consumer | Yes (cheap work only) | 0 |
 | `.main` / GCD executor | Main (or custom serial) | No | 1 |
+| `.loop(PoaExecutor)` | Your loop's own thread | No | 1 |
 | NeverBlock, no executor | Asio worker | No | 1 |
 | Executor **and** nested wait without `is_running_on` | — | Can deadlock | — |
 
@@ -409,6 +464,7 @@ Guidelines:
 
 - **Benchmark / Ping / pure compute on SHM** → default POA.
 - **Swift UI** → `dispatch: .main` (or a dedicated serial queue if you must leave main free for rendering only).
+- **A render / event loop that owns a device** (Vulkan, GL, a window) → `dispatch: .loop(…)`, so servants land on the only thread allowed to touch it.
 - **Do not** block main on NPRPC that waits on main again.
 - **Do not** use concurrent (global) queues for SHM offload if multiple replies can interleave on one connection—use **serial** queues.
 
@@ -486,5 +542,6 @@ auto* poa = rpc->create_poa()
 - **POA** = servant container + activation flags + optional **where** dispatch runs.
 - **Default** = transport/ring inline for minimum latency.
 - **Swift UI** = `createPoa(dispatch: .main)` → ring posts once to main; servant and reply run there.
+- **Swift render loop** = `createPoa(dispatch: .loop(x))` where `x: PoaExecutor` enqueues *and wakes* — for a thread GCD cannot be.
 - **Affinity** = force offload without a custom queue (`NeverBlockTransport`).
 - Prefer **serial** hop targets so SHM reply order stays correct.
