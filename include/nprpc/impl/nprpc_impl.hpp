@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cstdio>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -518,8 +519,17 @@ NPRPC_API void dump_message(flat_buffer& buffer, bool rx);
 // -1 - not handled
 inline int handle_standart_reply(flat_buffer& buf)
 {
-  if (buf.size() < sizeof(impl::flat::Header))
+  if (buf.size() < sizeof(impl::flat::Header)) {
+    // Empty buffer after a "successful" send_receive typically means the
+    // transport delivered a reply into a zero-copy write view that was then
+    // discarded (see SharedMemoryConnection::send_receive).
+    std::fprintf(stderr,
+                 "[nprpc] handle_standart_reply: reply buffer too small "
+                 "(size=%zu, need>=%zu)\n",
+                 buf.size(), sizeof(impl::flat::Header));
+    std::fflush(stderr);
     throw ExceptionBadInput();
+  }
   auto header = static_cast<const impl::flat::Header*>(buf.cdata().data());
   assert(header->size == buf.size());
   switch (header->msg_id) {

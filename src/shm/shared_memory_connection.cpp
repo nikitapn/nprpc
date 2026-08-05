@@ -150,6 +150,22 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
   w->slot_idx = slot;
   w->has_slot_order = true;
 
+  // Zero-copy path: the request bytes already live in the ring reservation.
+  // Drop the write-view *before* publishing the slot and *before* a response
+  // can arrive.  Otherwise the read thread may memcpy the reply into the
+  // still-attached send-ring view, and release_write_view() then wipes that
+  // reply — caller sees buf.size()==0 and throws ExceptionBadInput.
+  LockFreeRingBuffer::WriteReservation pending_zc_rsv{};
+  size_t pending_zc_size = 0;
+  if (zero_copy) {
+    pending_zc_rsv.data = buffer.data_ptr();
+    pending_zc_rsv.max_size = buffer.max_size();
+    pending_zc_rsv.slot_idx = slot;
+    pending_zc_rsv.valid = true;
+    pending_zc_size = buffer.size();
+    buffer.release_write_view(); // buffer is now empty owned; safe for reply
+  }
+
   // Enqueue under the same mutex the response callback uses, so a reply
   // cannot land while we are not yet in the queue.
   {
@@ -160,13 +176,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
   // Commit after enqueue: the ring consumer may now see this slot, but
   // our work is already positioned so the response is matched correctly.
   if (zero_copy) {
-    LockFreeRingBuffer::WriteReservation rsv;
-    rsv.data = buffer.data_ptr();
-    rsv.max_size = buffer.max_size();
-    rsv.slot_idx = slot;
-    rsv.valid = true;
-    channel_->commit_write(rsv, buffer.size());
-    buffer.release_write_view();
+    channel_->commit_write(pending_zc_rsv, pending_zc_size);
   } else {
     channel_->commit_write(pending_copy_rsv, buffer.size());
   }
@@ -293,6 +303,9 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
   channel_->on_data_received_view =
       [this](const LockFreeRingBuffer::ReadView& read_view) {
         if (read_view.size < sizeof(impl::flat::Header)) {
+          NPRPC_LOG_ERROR(
+              "SharedMemoryConnection: RX too small: size={} channel={}",
+              read_view.size, channel_->channel_id());
           return;
         }
 
@@ -321,6 +334,11 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
 
         std::lock_guard lock(mutex_);
         if (wq_.empty()) {
+          NPRPC_LOG_ERROR(
+              "SharedMemoryConnection: unsolicited RPC reply size={} "
+              "msg_id={} request_id={} channel={}",
+              read_view.size, static_cast<unsigned>(msg_id), hdr->request_id,
+              channel_->channel_id());
           return; // read_loop will still call commit_read
         }
 
