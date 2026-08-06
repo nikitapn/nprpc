@@ -5,6 +5,7 @@
 
 #include <nprpc/export.hpp>
 #include <nprpc/impl/lock_free_ring_buffer.hpp>
+#include <nprpc/impl/process_identity.hpp>
 
 #include <boost/asio.hpp>
 #include <boost/uuid/uuid.hpp>
@@ -14,6 +15,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -49,7 +51,12 @@ private:
   boost::asio::io_context& ioc_;
 
   std::unique_ptr<std::thread> read_thread_;
+  std::mutex read_thread_mut_; // guards read_thread_ across stop_reading()/dtor
   std::atomic<bool> running_{true};
+
+  // Who is on the other end. Empty until the handshake supplies it (server
+  // side) — see set_peer_process().
+  ProcessIdentity peer_process_;
 
   // Buffer for receiving messages
   std::vector<char> recv_buffer_;
@@ -79,6 +86,44 @@ public:
    * so the read loop never sees a null callback.
    */
   void start_reading();
+
+  /**
+   * @brief Stop the receive thread and join it.
+   *
+   * Returns true once the thread is provably gone, which is the point where
+   * the on_data_received[_view] callbacks can safely be released — they are
+   * live objects the read thread invokes, and they typically own the strong
+   * reference that keeps the session alive while a message is in flight.
+   *
+   * Returns false if called from the read thread itself (a callback tearing
+   * down its own channel): the loop is flagged to exit but nothing is joined,
+   * so the caller must leave the callbacks alone and let ~SharedMemoryChannel
+   * finish the job from another thread.  Idempotent.
+   */
+  bool stop_reading();
+
+  //--------------------------------------------------------------------------
+  // Peer liveness
+  //--------------------------------------------------------------------------
+
+  /**
+   * @brief Record which process sits at the other end of this channel.
+   *
+   * Supplied by the connection handshake (SharedMemoryHandshake). Without it
+   * peer_alive() can only see the graceful-close flag.
+   */
+  void set_peer_process(const ProcessIdentity& id) { peer_process_ = id; }
+  const ProcessIdentity& peer_process() const noexcept { return peer_process_; }
+
+  /**
+   * @brief Whether the other end is still there.
+   *
+   * False once the peer closed its channel cleanly (writer_detached on the
+   * ring we read from) or its process died (killed, crashed, exited without
+   * unwinding).  Cheap enough to poll at ~1 Hz per channel; safe to call from
+   * any thread.
+   */
+  bool peer_alive() const;
 
   // Non-copyable, movable
   SharedMemoryChannel(const SharedMemoryChannel&) = delete;

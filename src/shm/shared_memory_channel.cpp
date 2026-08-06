@@ -54,40 +54,70 @@ SharedMemoryChannel::SharedMemoryChannel(boost::asio::io_context& ioc,
 
 void SharedMemoryChannel::start_reading()
 {
+  std::lock_guard lk(read_thread_mut_);
   if (read_thread_) {
     return; // already started
   }
   read_thread_ = std::make_unique<std::thread>([this]() { read_loop(); });
 }
 
-SharedMemoryChannel::~SharedMemoryChannel()
+bool SharedMemoryChannel::stop_reading()
 {
   running_ = false;
 
-  // Signal the condition variable multiple times to wake up the read thread
-  // This is needed because the thread might be blocked in timed_wait
-  // We notify multiple times to catch different timing windows
-  for (int i = 0; i < 3; ++i) {
-    if (recv_ring_) {
-      try {
-        recv_ring_->header()->data_available.notify_all();
-      } catch (...) {
-        // Ignore errors - shared memory might already be destroyed
-        break;
-      }
-    }
-    // Small delay to let the thread check running_ flag
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  std::unique_ptr<std::thread> thread;
+  {
+    std::lock_guard lk(read_thread_mut_);
+    if (!read_thread_)
+      return true; // never started, or already stopped by someone else
+    if (read_thread_->get_id() == std::this_thread::get_id())
+      return false; // a callback is stopping its own channel — cannot join
+    thread = std::move(read_thread_);
+  }
 
-    // Check if thread has already exited
-    if (!read_thread_ || !read_thread_->joinable()) {
-      break;
+  // Nudge the reader in case it is asleep on the condvar.  Even if it misses
+  // the notification the wait times out after 100 ms and the loop rechecks
+  // running_, so the join below is bounded either way.
+  if (recv_ring_) {
+    try {
+      recv_ring_->header()->data_available.notify_all();
+    } catch (...) {
+      // Ignore errors - shared memory might already be destroyed
     }
   }
 
-  if (read_thread_ && read_thread_->joinable()) {
-    read_thread_->join();
+  if (thread->joinable())
+    thread->join();
+
+  return true;
+}
+
+bool SharedMemoryChannel::peer_alive() const
+{
+  if (!recv_ring_)
+    return false;
+
+  // Clean shutdown on the other side: it told us before going.
+  if (recv_ring_->header()->writer_detached.load(std::memory_order_acquire) != 0)
+    return false;
+
+  // Unclean: the process is simply not there any more.
+  return process_alive(peer_process_);
+}
+
+SharedMemoryChannel::~SharedMemoryChannel()
+{
+  // Announce the close to the peer before the mapping goes away, so it can
+  // reap its side immediately instead of waiting for its next liveness poll.
+  if (send_ring_) {
+    try {
+      send_ring_->header()->writer_detached.store(1u, std::memory_order_release);
+    } catch (...) {
+      // Ignore - shared memory might already be gone
+    }
   }
+
+  stop_reading();
 
   cleanup_rings();
 }

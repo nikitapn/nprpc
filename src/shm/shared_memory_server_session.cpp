@@ -5,7 +5,10 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
+#include <boost/asio/steady_timer.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -14,6 +17,7 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/session.hpp>
 #include <nprpc/impl/shared_memory_channel.hpp>
+#include <nprpc/impl/stream_manager.hpp>
 
 namespace nprpc::impl {
 
@@ -38,6 +42,13 @@ struct ShmDrainKick {
  *          No Asio hop; servant dispatch runs on that queue (is_running_on
  *          makes invoke_sync a no-op).
  *        - Else (NeverBlock without executor): asio::post(ioc) drain.
+ *
+ * Death detection:
+ *   Shared memory has no connection to break — a client that is SIGKILLed
+ *   leaves the rings mapped and silent, which looks exactly like an idle
+ *   client.  A timer polls the channel's peer (graceful detach flag, then
+ *   process liveness) and tears the session down the way a WebSocket close
+ *   does: streams aborted, session dropped from RpcImpl.
  */
 class SharedMemoryServerSession
     : public Session,
@@ -50,6 +61,13 @@ class SharedMemoryServerSession
   std::mutex mu_;
   std::deque<flat_buffer> pending_;
   bool processing_ = false;
+
+  // Peer liveness polling.  Cheap (a flag load plus, at most, one /proc
+  // read), so the interval is set by how fast a dead client should be
+  // reaped, not by cost.
+  static constexpr auto kLivenessPollInterval = std::chrono::milliseconds(500);
+  boost::asio::steady_timer liveness_timer_;
+  std::atomic<bool> peer_dead_{false};
 
   // ---- message peeks -------------------------------------------------------
 
@@ -245,14 +263,75 @@ class SharedMemoryServerSession
     }
   }
 
+  // ---- peer liveness -------------------------------------------------------
+
+  void arm_liveness_timer()
+  {
+    liveness_timer_.expires_after(kLivenessPollInterval);
+    liveness_timer_.async_wait(
+        [self = shared_from_this()](const boost::system::error_code& ec) {
+          if (ec) // cancelled by shutdown()
+            return;
+          if (self->is_closed() || self->peer_dead_.load())
+            return;
+          if (!self->channel_ || self->channel_->peer_alive()) {
+            self->arm_liveness_timer();
+            return;
+          }
+          self->on_peer_dead();
+        });
+  }
+
+  // Tear down a session whose client is gone.  Idempotent.
+  //
+  // Runs on the io_context: it joins the channel's read thread (so it must
+  // not be the read thread) and drops the session out of RpcImpl, which
+  // leaves the timer handler's own `self` as the last reference — the
+  // session dies when that handler returns.
+  void on_peer_dead()
+  {
+    if (peer_dead_.exchange(true))
+      return;
+
+    NPRPC_LOG_WARN("SharedMemoryServerSession: peer of channel {} is gone "
+                   "(pid {}), closing session",
+                   channel_->channel_id(), channel_->peer_process().pid);
+
+    // Stops the reader, releases queued work and the channel's reference
+    // back to us.
+    shutdown();
+
+    // Fail every stream this session carries.  The Session destructor would
+    // eventually do this through ~StreamManager, but only once the last
+    // external (Swift bridge) holder lets go — a reader blocked on a dead
+    // client must be woken now, not then.
+    if (ctx_.stream_manager)
+      ctx_.stream_manager->cancel_all();
+
+    // Drop out of RpcImpl::opened_sessions_, as a WebSocket close does.
+    close();
+  }
+
 public:
   virtual void timeout_action() final {}
 
   virtual void shutdown() override
   {
+    try {
+      liveness_timer_.cancel();
+    } catch (...) {
+    }
+
     if (channel_) {
-      channel_->on_data_received = nullptr;
-      channel_->on_data_received_view = nullptr;
+      // Join the reader before releasing the callbacks: the read thread is
+      // executing them, and they hold the strong reference that keeps this
+      // session alive while a message is in flight.  stop_reading() returns
+      // false only if we *are* the read thread, in which case the callbacks
+      // must stay put and ~SharedMemoryChannel finishes the teardown.
+      if (channel_->stop_reading()) {
+        channel_->on_data_received = nullptr;
+        channel_->on_data_received_view = nullptr;
+      }
     }
     {
       std::lock_guard lock(mu_);
@@ -332,6 +411,7 @@ public:
       : Session(ioc.get_executor())
       , channel_(std::move(channel))
       , ioc_(ioc)
+      , liveness_timer_(ioc)
   {
     ctx_.remote_endpoint =
         EndPoint(EndPointType::SharedMemory, channel_->channel_id(), 0);
@@ -349,6 +429,7 @@ public:
           on_message_received(read_view);
         };
     channel_->start_reading();
+    arm_liveness_timer();
   }
 
   ~SharedMemoryServerSession()
