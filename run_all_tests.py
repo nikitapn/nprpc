@@ -393,6 +393,9 @@ class Runner:
             print(r.output)
             return r
 
+        # Kill leftover test processes from previous runs that might still hold ports open
+        subprocess.run(["pkill", "-9", "-f", "NPRPCPackageTests"], capture_output=True)
+
         # --skip-build keeps setcap intact (a rebuild would strip file capabilities)
         return self._stage(
             "Swift tests (host)",

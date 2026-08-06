@@ -5,6 +5,7 @@
 
 #include <nprpc/export.hpp>
 #include <nprpc/impl/lock_free_ring_buffer.hpp>
+#include <nprpc/impl/process_identity.hpp>
 
 #include <boost/asio.hpp>
 #include <boost/uuid/uuid.hpp>
@@ -12,8 +13,10 @@
 #include <boost/uuid/uuid_io.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -49,7 +52,17 @@ private:
   boost::asio::io_context& ioc_;
 
   std::unique_ptr<std::thread> read_thread_;
+  std::mutex read_thread_mut_; // guards read_thread_ across stop_reading()/dtor
   std::atomic<bool> running_{true};
+
+  // Who is on the other end.  Adopted from the ring we read (the peer
+  // publishes it when opening) or, on the server side where the rings exist
+  // before the client does, from the handshake — see set_peer_process().
+  ProcessIdentity peer_process_;
+
+  // Read-thread only: periodic-poll state.
+  std::chrono::steady_clock::time_point last_poll_{};
+  bool peer_lost_ = false;
 
   // Buffer for receiving messages
   std::vector<char> recv_buffer_;
@@ -79,6 +92,64 @@ public:
    * so the read loop never sees a null callback.
    */
   void start_reading();
+
+  /**
+   * @brief Stop the receive thread and join it.
+   *
+   * Returns true once the thread is provably gone, which is the point where
+   * the on_data_received[_view] callbacks can safely be released — they are
+   * live objects the read thread invokes, and they typically own the strong
+   * reference that keeps the session alive while a message is in flight.
+   *
+   * Returns false if called from the read thread itself (a callback tearing
+   * down its own channel): the loop is flagged to exit but nothing is joined,
+   * so the caller must leave the callbacks alone and let ~SharedMemoryChannel
+   * finish the job from another thread.  Idempotent.
+   */
+  bool stop_reading();
+
+  //--------------------------------------------------------------------------
+  // Peer liveness
+  //--------------------------------------------------------------------------
+
+  /**
+   * @brief Record which process sits at the other end of this channel.
+   *
+   * Supplied by the connection handshake (SharedMemoryHandshake). Without it
+   * peer_alive() can only see the graceful-close flag.
+   */
+  void set_peer_process(const ProcessIdentity& id) { peer_process_ = id; }
+  const ProcessIdentity& peer_process() const noexcept { return peer_process_; }
+
+  /**
+   * @brief Whether the other end is still there.
+   *
+   * False once the peer closed its channel cleanly (writer_detached on the
+   * ring we read from) or its process died (killed, crashed, exited without
+   * unwinding).  Cheap enough to poll at ~1 Hz per channel; safe to call from
+   * any thread.
+   */
+  bool peer_alive() const;
+
+  /**
+   * @brief Called once, from the read thread, when the peer goes away.
+   *
+   * The handler runs on the read thread, so it must not do anything that
+   * waits for that thread (destroying this channel, joining it): wake
+   * whoever is blocked here and hand the rest to another executor.
+   */
+  std::function<void()> on_peer_lost;
+
+  /**
+   * @brief Housekeeping tick from the read thread, at most every 500 ms.
+   *
+   * The read loop is already awake on this cadence (its wait times out every
+   * 100 ms), so this costs a rate-limiting clock read per iteration and
+   * nothing else — which is what makes it a good home for work that would
+   * otherwise need a timer per operation, such as expiring requests whose
+   * reply never came.  Same threading rules as on_peer_lost.
+   */
+  std::function<void()> on_periodic_poll;
 
   // Non-copyable, movable
   SharedMemoryChannel(const SharedMemoryChannel&) = delete;
@@ -175,8 +246,20 @@ public:
   LockFreeRingBuffer* get_recv_ring() const { return recv_ring_.get(); }
 
 private:
+  // How often the read loop does its housekeeping: probe the peer, and run
+  // on_periodic_poll.  Also the granularity of anything built on that tick.
+  static constexpr auto kPollInterval = std::chrono::milliseconds(500);
+
   void read_loop();
   void cleanup_rings();
+
+  // Publish our identity on the ring we produce into, and adopt the peer's
+  // from the ring we consume, if it is already there.
+  void exchange_identities();
+
+  // Read thread, once per loop iteration: rate-limits itself to
+  // kPollInterval, then runs on_periodic_poll and probes the peer.
+  void poll_periodic();
 };
 
 } // namespace nprpc::impl

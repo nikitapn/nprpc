@@ -1323,6 +1323,15 @@ public:
   bool start();
   void stop();
 
+  // Run `work` on ioc_ and wait for it to finish.
+  //
+  // stop() runs from outside the io_context, normally while this worker's
+  // thread is turning it — but also on the failed-start path, where that
+  // thread does not exist yet and a plain wait would never return.  If the
+  // handler has not run shortly, drive the io_context from here instead.
+  template <class Work>
+  void run_on_io_and_wait(Work&& work);
+
   boost::asio::io_context& io_context() { return ioc_; }
   boost::asio::ip::udp::socket& socket() { return socket_; }
   uint8_t worker_id() const noexcept { return worker_id_; }
@@ -4002,8 +4011,15 @@ public:
 
     rc = bpf_object__load(object_.get());
     if (rc != 0) {
-      NPRPC_HTTP3_ERROR("Failed to load HTTP/3 reuseport BPF object: {}",
-                        rc);
+      NPRPC_HTTP3_ERROR("Failed to load HTTP/3 reuseport BPF object: {} ({})",
+                        rc, std::strerror(errno));
+      if (errno == EPERM || errno == EACCES) {
+        NPRPC_HTTP3_ERROR(
+            "Loading BPF needs privileges this process does not have. Grant "
+            "them with `sudo setcap cap_net_admin,cap_bpf+ep <executable>`, "
+            "run as root, or set the HTTP/3 worker count to 1 (single worker "
+            "needs no reuseport program). HTTP/3 stays disabled otherwise.");
+      }
       return false;
     }
 
@@ -4348,6 +4364,27 @@ bool Http3Server::start()
   return true;
 }
 
+template <class Work>
+void Http3Server::run_on_io_and_wait(Work&& work)
+{
+  std::promise<void> done;
+  auto finished = done.get_future();
+
+  boost::asio::dispatch(ioc_, [&]() {
+    work();
+    done.set_value();
+  });
+
+  // The common case (a worker thread is running ioc_) completes on the first
+  // wait.  Otherwise nobody will ever run the handler, so run it here.
+  while (finished.wait_for(std::chrono::milliseconds(20)) !=
+         std::future_status::ready) {
+    if (ioc_.stopped())
+      ioc_.restart();
+    ioc_.poll();
+  }
+}
+
 void Http3Server::stop()
 {
   if (!running_.exchange(false, std::memory_order_acq_rel)) {
@@ -4359,30 +4396,20 @@ void Http3Server::stop()
   // We dispatch onto the io_context (not the individual strands) because stop()
   // is called from outside; each initiate_shutdown() posts to its own strand
   // internally via on_write/start_closing_period.
-  {
-    std::promise<void> shutdown_notices_sent;
-    auto wait_for_notices = shutdown_notices_sent.get_future();
-    boost::asio::dispatch(ioc_, [this, &shutdown_notices_sent]() {
-      for (auto& [key, conn] : connections_) {
-        conn->initiate_shutdown();
-      }
-      shutdown_notices_sent.set_value();
-    });
-    wait_for_notices.wait();
-  }
+  run_on_io_and_wait([this]() {
+    for (auto& [key, conn] : connections_) {
+      conn->initiate_shutdown();
+    }
+  });
 
   boost::system::error_code ec;
   socket_.close(ec);
 
-  std::promise<void> connections_cleared;
-  auto wait_for_clear = connections_cleared.get_future();
-  boost::asio::dispatch(ioc_, [this, &connections_cleared]() {
+  run_on_io_and_wait([this]() {
     connections_.clear();
     send_inbox_head_ = nullptr;
     send_in_progress_ = false;
-    connections_cleared.set_value();
   });
-  wait_for_clear.wait();
 
   if (ssl_ctx_) {
     SSL_CTX_free(ssl_ctx_);

@@ -224,6 +224,25 @@ target_link_libraries(test_shared_memory_listener
 
 add_test(NAME SharedMemoryListener COMMAND test_shared_memory_listener)
 
+# Test executable for shared memory peer-death detection
+add_executable(test_shared_memory_peer_liveness
+  src/test_shared_memory_peer_liveness.cpp
+)
+
+target_include_directories(test_shared_memory_peer_liveness
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+target_link_libraries(test_shared_memory_peer_liveness
+  PRIVATE
+    nprpc::nprpc
+    GTest::gtest
+    Threads::Threads
+)
+
+add_test(NAME SharedMemoryPeerLiveness COMMAND test_shared_memory_peer_liveness)
+
 # Test executable for HTTP utility helpers
 add_executable(test_http_utils
   src/test_http_utils.cpp
@@ -350,5 +369,6 @@ add_dependencies(nprpc_test
   test_lock_free_ring_buffer
   test_shared_memory_endpoint
   test_shared_memory_listener
+  test_shared_memory_peer_liveness
   test_http_utils
 )

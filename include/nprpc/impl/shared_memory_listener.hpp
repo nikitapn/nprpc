@@ -5,6 +5,7 @@
 
 #include <nprpc/export.hpp>
 #include <nprpc/impl/lock_free_ring_buffer.hpp>
+#include <nprpc/impl/process_identity.hpp>
 
 #include <atomic>
 #include <boost/asio.hpp>
@@ -25,19 +26,33 @@ class SharedMemoryChannel;
  */
 struct SharedMemoryHandshake {
   static constexpr uint32_t MAGIC = 0x534D454D; // "SMEM"
-  static constexpr uint32_t VERSION = 1;
+  // v2 added client_pid / client_start_token.  Bumped rather than made
+  // optional: a client that cannot name its process cannot be reaped when it
+  // dies, and the server would keep the session (and its streams) forever.
+  static constexpr uint32_t VERSION = 2;
 
   uint32_t magic;
   uint32_t version;
   char channel_id[64];    // UUID for the dedicated client-server channel
   char ready_flag_shm[64]; // Name of the client-owned one-page shm with the ready atomic
+  // Identity of the connecting process, so the server can notice when it
+  // dies without closing the channel — see ProcessIdentity.
+  uint32_t client_pid;
+  uint64_t client_start_token;
 
   SharedMemoryHandshake()
       : magic(MAGIC)
       , version(VERSION)
+      , client_pid(0)
+      , client_start_token(0)
   {
     channel_id[0]     = '\0';
     ready_flag_shm[0] = '\0';
+  }
+
+  ProcessIdentity client_process() const noexcept
+  {
+    return ProcessIdentity{client_pid, client_start_token};
   }
 
   bool is_valid() const

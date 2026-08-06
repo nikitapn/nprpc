@@ -141,6 +141,19 @@ struct alignas(64) RingBufferHeader {
   // Producers check this before acquiring the mutex: if 0, skip the notify.
   std::atomic<uint32_t> waiting_readers{0};
 
+  // Set to 1 by the producer's channel when it closes down cleanly, so the
+  // consumer can tell "peer went away" from "peer has nothing to say".  Only
+  // covers the graceful case — a killed process never gets to set it, which
+  // is what the peer-process liveness probe is for (see ProcessIdentity).
+  std::atomic<uint32_t> writer_detached{0};
+
+  // Which process produces into this ring, published when its channel opens.
+  // The consumer probes it to catch a producer that died without ever
+  // reaching writer_detached.  Publish start_token first, then pid: a
+  // non-zero pid (acquire) is the signal that both fields are readable.
+  std::atomic<uint64_t> writer_start_token{0};
+  std::atomic<uint32_t> writer_pid{0};
+
   RingBufferHeader(size_t buf_size, uint32_t max_msg_sz)
       : buffer_size(buf_size)
       , max_message_size(max_msg_sz)

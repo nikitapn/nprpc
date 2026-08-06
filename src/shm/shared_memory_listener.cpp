@@ -149,6 +149,10 @@ void SharedMemoryListener::handle_connection_request(
     NPRPC_LOG_INFO("SharedMemoryListener: Channel created successfully: {}",
                    channel_id);
 
+    // Tell the channel whose process it is talking to, so the session can
+    // reap itself if that process dies without closing the channel.
+    channel->set_peer_process(handshake.client_process());
+
     // Wire up on_data_received BEFORE signaling the client.
     // The channel's read_thread starts inside the ctor, so once the client
     // is unblocked it can immediately send data — the handler must already
@@ -215,6 +219,11 @@ connect_to_shared_memory_listener(boost::asio::io_context& ioc,
 
   // Prepare handshake
   SharedMemoryHandshake handshake;
+  // Name ourselves so the server can detect it if this process is killed
+  // while the channel is open.
+  const auto self_id = current_process_identity();
+  handshake.client_pid = self_id.pid;
+  handshake.client_start_token = self_id.start_token;
   std::strncpy(handshake.channel_id, channel_id.c_str(),
                sizeof(handshake.channel_id) - 1);
   handshake.channel_id[sizeof(handshake.channel_id) - 1] = '\0';
