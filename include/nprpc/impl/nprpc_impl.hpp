@@ -103,6 +103,18 @@ struct IOWork {
   // transports (has_slot_order == false → push_back).
   uint64_t slot_idx = 0;
   bool has_slot_order = false;
+
+  // When the reply stops being worth waiting for; default-constructed means
+  // no deadline.  Stamped once when the work is queued and swept
+  // periodically, rather than arming a timer per request — on shared memory
+  // an asio timer per request measured ~1.7 us, a fifth of the round trip.
+  std::chrono::steady_clock::time_point deadline{};
+
+  // The caller gave up, but the peer may still reply.  The entry stays
+  // queued as a tombstone so later replies keep matching their own requests
+  // by position; buffer() must never be touched once this is set — on the
+  // blocking path it refers to the caller's stack, which is already gone.
+  bool abandoned = false;
 };
 
 template <typename T> class CommonConnection

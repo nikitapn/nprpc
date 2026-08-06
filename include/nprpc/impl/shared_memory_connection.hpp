@@ -46,6 +46,16 @@ class SharedMemoryConnection
   // wake up and throw ExceptionCommFailure, as they do on a broken socket.
   void fail_all_pending(const boost::system::error_code& ec);
 
+  // Time out requests whose reply never came.  Driven by the channel's
+  // periodic poll instead of a timer per request, which on this transport
+  // cost about a fifth of the round-trip latency; the deadline itself is a
+  // clock read at enqueue.  Granularity is the poll interval (500 ms).
+  void sweep_expired_requests();
+
+  // mutex_ held: drop a reply whose caller already timed out.  Returns true
+  // if the reply was consumed and must not be delivered.
+  bool consume_reply_for_abandoned();
+
 protected:
   virtual void timeout_action() final;
 

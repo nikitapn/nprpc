@@ -23,6 +23,17 @@ namespace {
                               static_cast<uint16_t>(b)) < 0;
 }
 
+// A zero timeout means "wait indefinitely", as it does on the other
+// transports; steady_clock so a wall-clock jump cannot expire a request.
+[[nodiscard]] inline std::chrono::steady_clock::time_point
+deadline_from_now(uint32_t timeout_ms) noexcept
+{
+  if (timeout_ms == 0)
+    return {};
+  return std::chrono::steady_clock::now() +
+         std::chrono::milliseconds(timeout_ms);
+}
+
 } // namespace
 
 void SharedMemoryConnection::timeout_action()
@@ -85,6 +96,7 @@ void SharedMemoryConnection::shutdown()
       channel_->on_data_received = nullptr;
       channel_->on_data_received_view = nullptr;
       channel_->on_peer_lost = nullptr;
+      channel_->on_periodic_poll = nullptr;
     }
   }
   Session::shutdown();
@@ -105,14 +117,49 @@ void SharedMemoryConnection::enqueue_ordered(std::shared_ptr<IOWork> w)
     it = wq_.end(); // push_back
   }
 
-  const bool becomes_front = (it == wq_.begin());
   wq_.insert(it, std::move(w));
+  // Nothing to arm: the deadline was stamped on the work before it got
+  // here, and sweep_expired_requests() enforces it off the hot path.
+}
 
-  // Arm the timeout for the request that is next to receive a response.
-  // Messages are already committed by the time responses can arrive, so
-  // operator() only sets the deadline.
-  if (becomes_front)
-    (*wq_.front())();
+void SharedMemoryConnection::sweep_expired_requests()
+{
+  const auto now = std::chrono::steady_clock::now();
+  std::vector<std::shared_ptr<IOWork>> expired;
+
+  {
+    std::lock_guard lock(mutex_);
+    for (auto& w : wq_) {
+      if (w->abandoned || w->deadline == std::chrono::steady_clock::time_point{})
+        continue;
+      if (now < w->deadline)
+        continue;
+      // Tombstone rather than remove: replies are matched to requests by
+      // position in this queue, so dropping the entry would hand a late
+      // reply to the wrong caller.
+      w->abandoned = true;
+      expired.push_back(w);
+    }
+  }
+
+  // Outside the lock — on_failed() runs the caller's completion handler.
+  for (auto& w : expired) {
+    NPRPC_LOG_WARN("SharedMemoryConnection: request on channel {} timed out",
+                   channel_->channel_id());
+    w->on_failed(boost::asio::error::timed_out);
+  }
+}
+
+bool SharedMemoryConnection::consume_reply_for_abandoned()
+{
+  // mutex_ must be held.  A reply belongs to wq_.front(); if that caller has
+  // already given up, swallow the reply so the queue stays aligned with the
+  // ring.  Never touch its buffer() — on the blocking path it refers to a
+  // stack frame that no longer exists.
+  if (wq_.empty() || !wq_.front()->abandoned)
+    return false;
+  wq_.pop_front();
+  return true;
 }
 
 void SharedMemoryConnection::send_receive(flat_buffer& buffer,
@@ -138,8 +185,8 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
 
     void operator()() noexcept override
     {
-      // Already committed; only arm the per-request timeout.
-      this_.set_timeout(timeout_ms);
+      // Already committed, and the deadline is stamped before enqueue —
+      // nothing to do when this work reaches the front of the queue.
     }
 
     void on_failed(const boost::system::error_code& ec) noexcept override
@@ -213,6 +260,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
   auto w = std::make_shared<work_impl>(buffer, *this, timeout_ms);
   w->slot_idx = slot;
   w->has_slot_order = true;
+  w->deadline = deadline_from_now(timeout_ms);
 
   // Zero-copy path: the request bytes already live in the ring reservation.
   // Drop the write-view *before* publishing the slot and *before* a response
@@ -251,8 +299,14 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
     return;
   }
 
-  fail(ec, "send_receive");
-  close();
+  // A timeout is this request's problem, not the connection's — as on
+  // WebSocket, the session keeps serving other calls.  The entry stays
+  // queued as a tombstone, so a late reply is swallowed rather than handed
+  // to whoever asked next.  Any other error means the transport is done.
+  if (ec != boost::asio::error::timed_out) {
+    fail(ec, "send_receive");
+    close();
+  }
   throw nprpc::ExceptionCommFailure();
 }
 
@@ -274,7 +328,7 @@ void SharedMemoryConnection::send_receive_async(
 
     void operator()() noexcept override
     {
-      this_.set_timeout(timeout_ms);
+      // See the blocking path: the deadline is stamped before enqueue.
     }
 
     void on_failed(const boost::system::error_code& ec) noexcept override
@@ -322,6 +376,7 @@ void SharedMemoryConnection::send_receive_async(
   std::memcpy(rsv.data, w->buf.data().data(), w->buf.size());
   w->slot_idx = rsv.slot_idx;
   w->has_slot_order = true;
+  w->deadline = deadline_from_now(timeout_ms);
 
   {
     std::lock_guard lock(mutex_);
@@ -411,6 +466,9 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
           return; // read_loop will still call commit_read
         }
 
+        if (consume_reply_for_abandoned())
+          return; // reply arrived after its caller gave up
+
         auto& current_buffer = current_rx_buffer();
         current_buffer.consume(current_buffer.size());
         auto mb = current_buffer.prepare(read_view.size);
@@ -456,6 +514,9 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
       return;
     }
 
+    if (consume_reply_for_abandoned())
+      return; // reply arrived after its caller gave up
+
     auto& current_buffer = current_rx_buffer();
     current_buffer.consume(current_buffer.size());
     auto mb = current_buffer.prepare(data.size());
@@ -469,6 +530,10 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
   // A shared-memory server that dies leaves the rings mapped and silent, so
   // the read thread probes it and reports here.
   channel_->on_peer_lost = [this]() { on_server_dead(); };
+
+  // Same tick expires requests whose reply never came — see
+  // sweep_expired_requests() for why this is not a timer per request.
+  channel_->on_periodic_poll = [this]() { sweep_expired_requests(); };
 
   // All callbacks are wired — now it is safe to start the receive thread.
   channel_->start_reading();

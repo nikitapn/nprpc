@@ -123,15 +123,20 @@ void SharedMemoryChannel::exchange_identities()
   }
 }
 
-void SharedMemoryChannel::check_peer_liveness()
+void SharedMemoryChannel::poll_periodic()
 {
+  // Runs once per read-loop iteration, so the gate is all the busy path
+  // pays: one steady_clock read (vDSO, no syscall) per message.
+  const auto now = std::chrono::steady_clock::now();
+  if (now - last_poll_ < kPollInterval)
+    return;
+  last_poll_ = now;
+
+  if (on_periodic_poll)
+    on_periodic_poll();
+
   if (peer_lost_ || !on_peer_lost)
     return;
-
-  const auto now = std::chrono::steady_clock::now();
-  if (now - last_liveness_check_ < kPeerLivenessInterval)
-    return;
-  last_liveness_check_ = now;
 
   if (peer_alive())
     return;
@@ -238,6 +243,11 @@ void SharedMemoryChannel::read_loop()
   // << recv_ring_name_ << std::endl;
   while (running_) {
     try {
+      // Housekeeping (peer liveness, request expiry).  Rate-limited inside,
+      // and deliberately not confined to the idle branches: a peer that
+      // answers other requests while stuck on one still has to be noticed.
+      poll_periodic();
+
       // Try zero-copy read first if callback is set
       if (on_data_received_view) {
         recv_ring_->wait_for_readable(std::chrono::milliseconds(100));
@@ -251,10 +261,6 @@ void SharedMemoryChannel::read_loop()
           // again.
           on_data_received_view(view);
           this->commit_read(view);
-        } else {
-          // Ring is empty — the only state a dead peer can leave us in, and
-          // the only one where probing costs nothing.
-          check_peer_liveness();
         }
         continue;
       }
@@ -283,8 +289,6 @@ void SharedMemoryChannel::read_loop()
             on_data_received(std::move(data));
           }
         });
-      } else {
-        check_peer_liveness();
       }
     } catch (const std::exception& e) {
       if (running_) {

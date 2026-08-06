@@ -60,8 +60,8 @@ private:
   // before the client does, from the handshake — see set_peer_process().
   ProcessIdentity peer_process_;
 
-  // Read-thread only: liveness polling state.
-  std::chrono::steady_clock::time_point last_liveness_check_{};
+  // Read-thread only: periodic-poll state.
+  std::chrono::steady_clock::time_point last_poll_{};
   bool peer_lost_ = false;
 
   // Buffer for receiving messages
@@ -134,13 +134,22 @@ public:
   /**
    * @brief Called once, from the read thread, when the peer goes away.
    *
-   * The read loop probes the peer whenever it finds the ring empty — a dead
-   * peer sends nothing, so nothing is spent on the busy path.  The handler
-   * runs on the read thread, so it must not do anything that waits for that
-   * thread (destroying this channel, joining it): wake whoever is blocked
-   * here and hand the rest to another executor.
+   * The handler runs on the read thread, so it must not do anything that
+   * waits for that thread (destroying this channel, joining it): wake
+   * whoever is blocked here and hand the rest to another executor.
    */
   std::function<void()> on_peer_lost;
+
+  /**
+   * @brief Housekeeping tick from the read thread, at most every 500 ms.
+   *
+   * The read loop is already awake on this cadence (its wait times out every
+   * 100 ms), so this costs a rate-limiting clock read per iteration and
+   * nothing else — which is what makes it a good home for work that would
+   * otherwise need a timer per operation, such as expiring requests whose
+   * reply never came.  Same threading rules as on_peer_lost.
+   */
+  std::function<void()> on_periodic_poll;
 
   // Non-copyable, movable
   SharedMemoryChannel(const SharedMemoryChannel&) = delete;
@@ -237,8 +246,9 @@ public:
   LockFreeRingBuffer* get_recv_ring() const { return recv_ring_.get(); }
 
 private:
-  // How often the read loop probes a silent peer.
-  static constexpr auto kPeerLivenessInterval = std::chrono::milliseconds(500);
+  // How often the read loop does its housekeeping: probe the peer, and run
+  // on_periodic_poll.  Also the granularity of anything built on that tick.
+  static constexpr auto kPollInterval = std::chrono::milliseconds(500);
 
   void read_loop();
   void cleanup_rings();
@@ -247,8 +257,9 @@ private:
   // from the ring we consume, if it is already there.
   void exchange_identities();
 
-  // Read thread: probe a silent peer and fire on_peer_lost once.
-  void check_peer_liveness();
+  // Read thread, once per loop iteration: rate-limits itself to
+  // kPollInterval, then runs on_periodic_poll and probes the peer.
+  void poll_periodic();
 };
 
 } // namespace nprpc::impl
