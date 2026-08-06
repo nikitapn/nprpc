@@ -13,6 +13,7 @@
 #include <boost/uuid/uuid_io.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -54,9 +55,14 @@ private:
   std::mutex read_thread_mut_; // guards read_thread_ across stop_reading()/dtor
   std::atomic<bool> running_{true};
 
-  // Who is on the other end. Empty until the handshake supplies it (server
-  // side) — see set_peer_process().
+  // Who is on the other end.  Adopted from the ring we read (the peer
+  // publishes it when opening) or, on the server side where the rings exist
+  // before the client does, from the handshake — see set_peer_process().
   ProcessIdentity peer_process_;
+
+  // Read-thread only: liveness polling state.
+  std::chrono::steady_clock::time_point last_liveness_check_{};
+  bool peer_lost_ = false;
 
   // Buffer for receiving messages
   std::vector<char> recv_buffer_;
@@ -124,6 +130,17 @@ public:
    * any thread.
    */
   bool peer_alive() const;
+
+  /**
+   * @brief Called once, from the read thread, when the peer goes away.
+   *
+   * The read loop probes the peer whenever it finds the ring empty — a dead
+   * peer sends nothing, so nothing is spent on the busy path.  The handler
+   * runs on the read thread, so it must not do anything that waits for that
+   * thread (destroying this channel, joining it): wake whoever is blocked
+   * here and hand the rest to another executor.
+   */
+  std::function<void()> on_peer_lost;
 
   // Non-copyable, movable
   SharedMemoryChannel(const SharedMemoryChannel&) = delete;
@@ -220,8 +237,18 @@ public:
   LockFreeRingBuffer* get_recv_ring() const { return recv_ring_.get(); }
 
 private:
+  // How often the read loop probes a silent peer.
+  static constexpr auto kPeerLivenessInterval = std::chrono::milliseconds(500);
+
   void read_loop();
   void cleanup_rings();
+
+  // Publish our identity on the ring we produce into, and adopt the peer's
+  // from the ring we consume, if it is already there.
+  void exchange_identities();
+
+  // Read thread: probe a silent peer and fire on_peer_lost once.
+  void check_peer_liveness();
 };
 
 } // namespace nprpc::impl

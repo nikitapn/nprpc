@@ -6,6 +6,7 @@
 #include <nprpc/common.hpp>
 #include <nprpc/impl/shared_memory_connection.hpp>
 #include <nprpc/impl/shared_memory_listener.hpp>
+#include <nprpc/impl/stream_manager.hpp>
 
 #include "logging.hpp"
 
@@ -29,6 +30,64 @@ void SharedMemoryConnection::timeout_action()
   // For shared memory, timeout means the other side is unresponsive
   // std::cerr << "SharedMemoryConnection timeout" << std::endl;
   // close();
+}
+
+void SharedMemoryConnection::fail_all_pending(
+    const boost::system::error_code& ec)
+{
+  std::deque<std::shared_ptr<IOWork>> pending;
+  {
+    std::lock_guard lock(mutex_);
+    pending.swap(wq_);
+  }
+  // Outside the lock: on_failed() hands control to the caller's completion
+  // handler, which may well come straight back into this connection.
+  for (auto& w : pending)
+    w->on_failed(ec);
+}
+
+void SharedMemoryConnection::on_server_dead()
+{
+  if (server_dead_.exchange(true))
+    return;
+
+  NPRPC_LOG_WARN("SharedMemoryConnection: server of channel {} is gone "
+                 "(pid {}), failing outstanding work",
+                 channel_->channel_id(), channel_->peer_process().pid);
+
+  // On the read thread, so do the waking here — a caller blocked in
+  // send_receive() is waiting for a reply that can never arrive, and
+  // nothing else will ever notice on a transport with no socket to break.
+  fail_all_pending(boost::asio::error::connection_aborted);
+
+  if (ctx_.stream_manager)
+    ctx_.stream_manager->cancel_all();
+
+  // The rest joins the read thread, so it cannot run here.  If nothing ever
+  // runs this io_context the session simply stays registered — everyone who
+  // was waiting has already been released above.
+  if (auto self = weak_from_this().lock()) {
+    boost::asio::post(ioc_, [self]() {
+      // close() before shutdown(): shutdown() marks the session closed, and
+      // close() is what actually drops it out of RpcImpl.
+      if (!self->is_closed())
+        self->close();
+      self->shutdown();
+    });
+  }
+}
+
+void SharedMemoryConnection::shutdown()
+{
+  if (channel_) {
+    // Join the reader before releasing the callbacks it is executing.
+    if (channel_->stop_reading()) {
+      channel_->on_data_received = nullptr;
+      channel_->on_data_received_view = nullptr;
+      channel_->on_peer_lost = nullptr;
+    }
+  }
+  Session::shutdown();
 }
 
 void SharedMemoryConnection::enqueue_ordered(std::shared_ptr<IOWork> w)
@@ -114,6 +173,11 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
     {
     }
   };
+
+  if (server_dead_.load()) {
+    // No point claiming a ring slot nobody will ever read.
+    throw nprpc::ExceptionCommFailure();
+  }
 
   if (buffer.size() == 0 || buffer.size() > max_message_size) {
     fail(boost::system::error_code(boost::asio::error::message_size,
@@ -242,6 +306,11 @@ void SharedMemoryConnection::send_receive_async(
 
   auto w = std::make_shared<work_impl>(
       std::move(buffer), *this, std::move(completion_handler), timeout_ms);
+
+  if (server_dead_.load()) {
+    w->on_failed(boost::asio::error::connection_aborted);
+    return;
+  }
 
   // Claim slot on the caller thread (async path is currently always copy).
   auto rsv = channel_->reserve_write(w->buf.size());
@@ -397,13 +466,26 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
     pop_and_execute_next_task();
   };
 
+  // A shared-memory server that dies leaves the rings mapped and silent, so
+  // the read thread probes it and reports here.
+  channel_->on_peer_lost = [this]() { on_server_dead(); };
+
   // All callbacks are wired — now it is safe to start the receive thread.
   channel_->start_reading();
 
   start_timeout_timer();
 }
 
-SharedMemoryConnection::~SharedMemoryConnection() { close(); }
+SharedMemoryConnection::~SharedMemoryConnection()
+{
+  // Stop the reader before anything else goes away: its callbacks capture
+  // `this` and touch members (mutex_, wq_) that are destroyed before
+  // channel_ is, so letting it run into the destructor is a use-after-free.
+  if (channel_)
+    channel_->stop_reading();
+  if (!is_closed())
+    close();
+}
 
 void SharedMemoryConnection::send_stream_message(flat_buffer&& buffer)
 {

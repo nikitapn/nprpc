@@ -5,10 +5,8 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
-#include <boost/asio/steady_timer.hpp>
 
 #include <atomic>
-#include <chrono>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -62,11 +60,6 @@ class SharedMemoryServerSession
   std::deque<flat_buffer> pending_;
   bool processing_ = false;
 
-  // Peer liveness polling.  Cheap (a flag load plus, at most, one /proc
-  // read), so the interval is set by how fast a dead client should be
-  // reaped, not by cost.
-  static constexpr auto kLivenessPollInterval = std::chrono::milliseconds(500);
-  boost::asio::steady_timer liveness_timer_;
   std::atomic<bool> peer_dead_{false};
 
   // ---- message peeks -------------------------------------------------------
@@ -265,28 +258,11 @@ class SharedMemoryServerSession
 
   // ---- peer liveness -------------------------------------------------------
 
-  void arm_liveness_timer()
-  {
-    liveness_timer_.expires_after(kLivenessPollInterval);
-    liveness_timer_.async_wait(
-        [self = shared_from_this()](const boost::system::error_code& ec) {
-          if (ec) // cancelled by shutdown()
-            return;
-          if (self->is_closed() || self->peer_dead_.load())
-            return;
-          if (!self->channel_ || self->channel_->peer_alive()) {
-            self->arm_liveness_timer();
-            return;
-          }
-          self->on_peer_dead();
-        });
-  }
-
   // Tear down a session whose client is gone.  Idempotent.
   //
   // Runs on the io_context: it joins the channel's read thread (so it must
   // not be the read thread) and drops the session out of RpcImpl, which
-  // leaves the timer handler's own `self` as the last reference — the
+  // leaves the posting handler's own `self` as the last reference — the
   // session dies when that handler returns.
   void on_peer_dead()
   {
@@ -317,11 +293,6 @@ public:
 
   virtual void shutdown() override
   {
-    try {
-      liveness_timer_.cancel();
-    } catch (...) {
-    }
-
     if (channel_) {
       // Join the reader before releasing the callbacks: the read thread is
       // executing them, and they hold the strong reference that keeps this
@@ -331,6 +302,7 @@ public:
       if (channel_->stop_reading()) {
         channel_->on_data_received = nullptr;
         channel_->on_data_received_view = nullptr;
+        channel_->on_peer_lost = nullptr;
       }
     }
     {
@@ -411,7 +383,6 @@ public:
       : Session(ioc.get_executor())
       , channel_(std::move(channel))
       , ioc_(ioc)
-      , liveness_timer_(ioc)
   {
     ctx_.remote_endpoint =
         EndPoint(EndPointType::SharedMemory, channel_->channel_id(), 0);
@@ -428,8 +399,12 @@ public:
             const LockFreeRingBuffer::ReadView& read_view) {
           on_message_received(read_view);
         };
+    // Fired on the read thread; the teardown joins that thread, so it has to
+    // happen somewhere else.
+    channel_->on_peer_lost = [this, self = shared_from_this()]() {
+      boost::asio::post(ioc_, [self]() { self->on_peer_dead(); });
+    };
     channel_->start_reading();
-    arm_liveness_timer();
   }
 
   ~SharedMemoryServerSession()

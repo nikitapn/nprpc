@@ -41,6 +41,9 @@ SharedMemoryChannel::SharedMemoryChannel(boost::asio::io_context& ioc,
 
       NPRPC_LOG_INFO("Opened ring buffers: {} , {}", send_ring_name_, recv_ring_name_);
     }
+
+    exchange_identities();
+
     // NOTE: read_thread_ is NOT started here.
     // Call start_reading() after wiring up on_data_received[_view].
 
@@ -90,6 +93,51 @@ bool SharedMemoryChannel::stop_reading()
     thread->join();
 
   return true;
+}
+
+void SharedMemoryChannel::exchange_identities()
+{
+  const auto self = current_process_identity();
+
+  if (send_ring_) {
+    auto* header = send_ring_->header();
+    header->writer_start_token.store(self.start_token,
+                                     std::memory_order_relaxed);
+    // Release: a non-zero pid tells the consumer both fields are readable.
+    header->writer_pid.store(self.pid, std::memory_order_release);
+  }
+
+  // Whoever already produces into the ring we read is our peer.  The server
+  // creates the rings and publishes before the client can open them, so a
+  // client always learns the server here; the server's own client is still
+  // absent at this point and arrives via the handshake instead.
+  if (recv_ring_ && !peer_process_.valid()) {
+    auto* header = recv_ring_->header();
+    const uint32_t pid = header->writer_pid.load(std::memory_order_acquire);
+    if (pid != 0) {
+      peer_process_ = ProcessIdentity{
+          pid, header->writer_start_token.load(std::memory_order_relaxed)};
+      NPRPC_LOG_INFO("SharedMemoryChannel {}: peer process is pid {}",
+                     channel_id_, pid);
+    }
+  }
+}
+
+void SharedMemoryChannel::check_peer_liveness()
+{
+  if (peer_lost_ || !on_peer_lost)
+    return;
+
+  const auto now = std::chrono::steady_clock::now();
+  if (now - last_liveness_check_ < kPeerLivenessInterval)
+    return;
+  last_liveness_check_ = now;
+
+  if (peer_alive())
+    return;
+
+  peer_lost_ = true;
+  on_peer_lost();
 }
 
 bool SharedMemoryChannel::peer_alive() const
@@ -203,6 +251,10 @@ void SharedMemoryChannel::read_loop()
           // again.
           on_data_received_view(view);
           this->commit_read(view);
+        } else {
+          // Ring is empty — the only state a dead peer can leave us in, and
+          // the only one where probing costs nothing.
+          check_peer_liveness();
         }
         continue;
       }
@@ -231,6 +283,8 @@ void SharedMemoryChannel::read_loop()
             on_data_received(std::move(data));
           }
         });
+      } else {
+        check_peer_liveness();
       }
     } catch (const std::exception& e) {
       if (running_) {

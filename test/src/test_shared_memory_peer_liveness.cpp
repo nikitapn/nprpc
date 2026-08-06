@@ -236,6 +236,64 @@ TEST(SharedMemoryPeerLiveness, KilledClientProcessIsDetected)
   ::close(to_parent[0]);
 }
 
+// The mirror image: the client learns who the server is from the ring it
+// reads (the server publishes its identity when it creates the rings), so a
+// server that is killed is detected the same way.
+TEST(SharedMemoryPeerLiveness, KilledServerProcessIsDetected)
+{
+  const auto listener_name = unique_listener_name("dead_server");
+
+  int to_parent[2];
+  ASSERT_EQ(::pipe(to_parent), 0);
+
+  const pid_t server = ::fork();
+  ASSERT_NE(server, -1);
+
+  if (server == 0) {
+    ::close(to_parent[0]);
+    try {
+      boost::asio::io_context server_ioc;
+      std::unique_ptr<SharedMemoryChannel> accepted;
+      SharedMemoryListener listener(
+          server_ioc, listener_name,
+          [&](std::unique_ptr<SharedMemoryChannel> channel) {
+            accepted = std::move(channel);
+          });
+      listener.start();
+
+      const char ok = 'y';
+      write_all(to_parent[1], &ok, 1);
+      for (;;)
+        ::pause();
+    } catch (...) {
+      const char ok = 'n';
+      write_all(to_parent[1], &ok, 1);
+    }
+    ::_exit(1);
+  }
+
+  ::close(to_parent[1]);
+  char listening = 0;
+  ASSERT_TRUE(read_all(to_parent[0], &listening, 1)) << "server never started";
+  ASSERT_EQ(listening, 'y');
+
+  boost::asio::io_context ioc;
+  auto client_channel = connect_to_shared_memory_listener(ioc, listener_name);
+  ASSERT_TRUE(client_channel != nullptr);
+
+  // Learned from the ring the server produces into, not from a handshake.
+  EXPECT_EQ(client_channel->peer_process().pid, static_cast<uint32_t>(server));
+  EXPECT_TRUE(client_channel->peer_alive());
+
+  ASSERT_EQ(::kill(server, SIGKILL), 0);
+  int status = 0;
+  ASSERT_EQ(::waitpid(server, &status, 0), server);
+
+  EXPECT_FALSE(client_channel->peer_alive());
+
+  ::close(to_parent[0]);
+}
+
 int main(int argc, char** argv)
 {
   ::testing::InitGoogleTest(&argc, argv);
