@@ -812,6 +812,39 @@ int nprpc_object_send_async(
     }
 }
 
+// Fire-and-forget for IDL `[unreliable]` methods. Must use send_unreliable /
+// send_datagram — never the reply-waiting send_receive_async path.
+int nprpc_object_send_unreliable(void* obj_ptr, void* buffer_ptr) {
+    if (!obj_ptr || !buffer_ptr) {
+        return -1;
+    }
+
+    auto* obj = static_cast<nprpc::Object*>(obj_ptr);
+    auto* buffer = static_cast<nprpc::flat_buffer*>(buffer_ptr);
+
+    if (obj->get_endpoint().empty()) {
+        if (!obj->select_endpoint()) {
+            return -2;
+        }
+    }
+
+    if (!nprpc::impl::g_rpc) {
+        return -3;
+    }
+
+    try {
+        nprpc::impl::g_rpc->send_unreliable(obj->get_endpoint(),
+                                            std::move(*buffer));
+        return 0;
+    } catch (const std::exception& e) {
+        NPRPC_LOG_ERROR("[SWB] nprpc_object_send_unreliable exception: {}",
+                        e.what());
+        return -3;
+    } catch (...) {
+        return -3;
+    }
+}
+
 // Object async RPC call with response - for async methods with output parameters
 int nprpc_object_send_async_receive(
     void* obj_ptr,

@@ -312,6 +312,14 @@ int nprpc_object_send_async_receive(
     uint32_t timeout_ms
 );
 
+// Fire-and-forget RPC for IDL `[unreliable]` methods.
+// Writes the request and returns immediately — never waits for a reply and
+// must not place a waiter on the transport's reply queue. Buffer storage is
+// moved/consumed (same as the async send paths).
+// Returns: 0 = sent (or best-effort handed to the transport), negative = failed
+//   -1 invalid args, -2 no endpoint, -3 transport error
+int nprpc_object_send_unreliable(void* obj_ptr, void* buffer_ptr);
+
 // Object string serialization (NPRPC IOR format)
 // Returns: newly allocated string that caller must free with nprpc_free_string()
 const char* nprpc_object_to_string(void* obj_ptr);

@@ -971,14 +971,10 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
     // Send Request
     if (!fn->is_reliable) {
-      // Unreliable (fire-and-forget) - no reply expected
+      // Unreliable: write and return. Must not use sendAsync — that enqueues
+      // a reply waiter the server never satisfies (see NPRPCObject.sendUnreliable).
       out << bl() << "// Send unreliable (no reply expected)\n";
-      // Fire-and-forget: wrap in do/catch since sendAsync can throw
-      out << bl() << "do {\n";
-      out << bl() << "  try await sendAsync(buffer: buffer, timeout: timeout)\n";
-      out << bl() << "} catch {\n";
-      out << bl() << "  // Fire-and-forget: ignore communication errors\n";
-      out << bl() << "}\n";
+      out << bl() << "sendUnreliable(buffer: buffer)\n";
     } else {
       // Reliable: use async/await so callers don't block Swift's cooperative pool.
       out << bl() << "// Send and receive\n";

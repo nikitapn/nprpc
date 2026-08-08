@@ -87,6 +87,11 @@ public:
   // Fire-and-forget stream frames (must not wait for a reply / touch wq_).
   void send_stream_message(flat_buffer&& buffer) override;
 
+  // Fire-and-forget RPC (`[unreliable]` methods / `send_unreliable`). Same
+  // rule as stream frames: write the ring and return. The base Session
+  // fallback enqueues on wq_ and waits for a reply the server never sends.
+  bool send_datagram(flat_buffer&& buffer) override;
+
   //--------------------------------------------------------------------------
   // Zero-copy API
   //--------------------------------------------------------------------------

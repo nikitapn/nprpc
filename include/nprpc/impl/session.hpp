@@ -90,7 +90,11 @@ public:
    */
   virtual bool send_datagram(flat_buffer&& buffer)
   {
-    // Default: fall back to async send (fire-and-forget)
+    // Default fallback for transports without a native datagram path.
+    // Prefer overrides that write without a reply waiter (SHM, QUIC): a
+    // waiter here is wrong for IDL `[unreliable]` methods, which never
+    // get a reply. timeout_ms=0 means "never expire", so a missing reply
+    // would hang the reply-matching queue forever on SHM.
     send_receive_async(std::move(buffer), std::nullopt, 0);
     return true;
   }

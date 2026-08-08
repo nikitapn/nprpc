@@ -140,6 +140,23 @@ open class NPRPCObject: Codable, @unchecked Sendable {
 
     // MARK: - RPC Communication
 
+    /// Fire-and-forget send for IDL `[unreliable]` methods.
+    ///
+    /// Writes the request and returns. Unlike `sendAsync` / `sendAsyncReceive`,
+    /// this never waits for a reply and must not occupy the transport's
+    /// reply-wait queue — the server deliberately sends nothing back for
+    /// `[unreliable]` (e.g. LavaUI `Present`). Using a reply waiter there
+    /// times out after ~1s and, on shared memory, steals later real replies
+    /// that are matched by queue position.
+    ///
+    /// - Parameter buffer: Request buffer; storage is consumed (moved) like
+    ///   the other send paths.
+    /// - Returns: `true` if the transport accepted the write.
+    @discardableResult
+    public func sendUnreliable(buffer: FlatBuffer) -> Bool {
+        nprpc_object_send_unreliable(handle, buffer.handle) == 0
+    }
+
     /// Send a request asynchronously with async/await support
     /// - Parameters:
     ///   - buffer: The FlatBuffer containing the request (ownership transferred)

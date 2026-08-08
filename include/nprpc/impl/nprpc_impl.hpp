@@ -311,8 +311,10 @@ public:
    * @brief Send unreliable message (fire-and-forget, no reply expected)
    *
    * Used for [unreliable] methods across all transports:
+   * - Shared memory: write the ring with no reply waiter
    * - QUIC: Uses QUIC DATAGRAM extension (RFC 9221)
-   * - TCP/WebSocket: Falls back to regular async call (reliable)
+   * - TCP/WebSocket: Falls back to async send (transport still delivers
+   *   the frame; do not use a reply waiter for void unreliable methods)
    *
    * @param endpoint Target endpoint
    * @param buffer Message buffer to send (moved)

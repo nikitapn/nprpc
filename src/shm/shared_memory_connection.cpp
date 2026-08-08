@@ -556,17 +556,31 @@ void SharedMemoryConnection::send_stream_message(flat_buffer&& buffer)
 {
   // Fire-and-forget: write into the send ring without enqueuing on wq_.
   // Stream frames are not request/response paired.
+  (void)send_datagram(std::move(buffer));
+}
+
+bool SharedMemoryConnection::send_datagram(flat_buffer&& buffer)
+{
+  // Used by `[unreliable]` RPC methods and by stream frames. Must not put a
+  // waiter on wq_: the peer deliberately sends no reply, and a waiter would
+  // either time out (and log) or sit forever and steal later replies that
+  // are matched by queue position on this transport.
   if (!channel_ || buffer.size() == 0)
-    return;
+    return false;
+  if (server_dead_.load())
+    return false;
+
   auto rsv = channel_->reserve_write(buffer.size());
   if (!rsv) {
     NPRPC_LOG_ERROR(
-        "SharedMemoryConnection: ring full, dropped stream frame size={}",
+        "SharedMemoryConnection: ring full, dropped fire-and-forget frame "
+        "size={}",
         buffer.size());
-    return;
+    return false;
   }
   std::memcpy(rsv.data, buffer.data().data(), buffer.size());
   channel_->commit_write(rsv, buffer.size());
+  return true;
 }
 
 bool SharedMemoryConnection::prepare_write_buffer(flat_buffer& buffer,
