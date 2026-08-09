@@ -243,6 +243,30 @@ target_link_libraries(test_shared_memory_peer_liveness
 
 add_test(NAME SharedMemoryPeerLiveness COMMAND test_shared_memory_peer_liveness)
 
+# Test executable for stream backpressure (full ring / credit exhaustion)
+add_executable(test_stream_backpressure
+  src/test_stream_backpressure.cpp
+)
+
+add_dependencies(test_stream_backpressure nprpc_test_gen)
+
+target_include_directories(test_stream_backpressure
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${nprpc_test_stub_INCLUDE_DIR}
+)
+
+target_link_libraries(test_stream_backpressure
+  PRIVATE
+    nprpc::nprpc
+    GTest::gtest_main
+    Threads::Threads
+)
+
+add_test(NAME StreamBackpressure COMMAND test_stream_backpressure)
+
+set_tests_properties(StreamBackpressure PROPERTIES TIMEOUT 60)
+
 # Test executable for HTTP utility helpers
 add_executable(test_http_utils
   src/test_http_utils.cpp

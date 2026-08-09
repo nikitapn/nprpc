@@ -115,7 +115,7 @@ public:
       uint32_t timeout_ms) override;
 
   // Override for streaming - just queue the message for writing, no response expected
-  virtual void send_stream_message(flat_buffer&& buffer) override;
+  virtual bool send_stream_message(flat_buffer&& buffer) override;
 
   WebSocketSession(net::any_io_executor executor)
       : Session(executor)

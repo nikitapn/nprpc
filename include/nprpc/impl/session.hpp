@@ -154,19 +154,26 @@ public:
   nprpc::Task<bool> handle_request_async(nprpc::flat_buffer& rx_buffer,
                                          nprpc::flat_buffer& tx_buffer);
 
-  // Send a message for streaming (async, fire-and-forget)
-  // Default implementation uses send_receive_async with no handler
-  virtual void send_stream_message(flat_buffer&& buffer)
+  // Send a message for streaming (async, fire-and-forget).
+  //
+  // Returns false when the message provably did not go out — the shared
+  // memory transport writes into a fixed-size ring and can say so, which is
+  // the only way a producer learns its consumer stopped consuming.  A
+  // transport that queues internally (TCP, WebSocket, QUIC) has nothing to
+  // report at this point and answers true; its backpressure shows up as
+  // memory growth in its own write queue instead.
+  virtual bool send_stream_message(flat_buffer&& buffer)
   {
     send_receive_async(std::move(buffer), std::nullopt, 0);
+    return true;
   }
 
   // Send a control message on main stream (for stream control: complete/error/cancel)
   // Default implementation is same as send_stream_message
   // QUIC sessions override to send on main bidirectional stream, not native data streams
-  virtual void send_main_stream_message(flat_buffer&& buffer)
+  virtual bool send_main_stream_message(flat_buffer&& buffer)
   {
-    send_stream_message(std::move(buffer));
+    return send_stream_message(std::move(buffer));
   }
 
   virtual void shutdown()

@@ -100,15 +100,17 @@ Session::Session(boost::asio::any_io_executor executor)
   ctx_.stream_manager->set_send_callback(
       [cell = self_cell_](flat_buffer&& fb) {
         if (auto self = cell->lock()) {
-          self->send_main_stream_message(std::move(fb));
+          return self->send_main_stream_message(std::move(fb));
         }
+        return false;
       });
   // Set up native stream callback for data - uses native QUIC streams if available
   ctx_.stream_manager->set_send_native_stream_callback(
       [cell = self_cell_](flat_buffer&& fb) {
         if (auto self = cell->lock()) {
-          self->send_stream_message(std::move(fb));
+          return self->send_stream_message(std::move(fb));
         }
+        return false;
       });
 }
 

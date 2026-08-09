@@ -168,13 +168,17 @@ class Session_Socket : public nprpc::impl::Session,
   // Called by the stream_manager send callback when the server produces stream
   // chunks destined for this client.  The post() ensures the enqueue runs on
   // the socket strand even if called from the stream executor thread.
-  void send_stream_message(flat_buffer&& buffer) override
+  // The write queue behind enqueue_write is unbounded, so there is no
+  // refusal to report from here: a peer that stops reading shows up as that
+  // queue growing, not as a failed send.
+  bool send_stream_message(flat_buffer&& buffer) override
   {
     net::post(
         socket_.get_executor(),
         [self = shared_from_this(), buf = std::move(buffer)]() mutable {
           self->enqueue_write(std::move(buf));
         });
+    return true;
   }
 
 public:

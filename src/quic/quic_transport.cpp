@@ -1462,11 +1462,11 @@ public:
 
   // Override for streaming - send on native QUIC stream
   // Uses dedicated QUIC streams per NPRPC stream for zero head-of-line blocking
-  virtual void send_stream_message(flat_buffer&& buffer) override
+  virtual bool send_stream_message(flat_buffer&& buffer) override
   {
     if (!connection_) {
       NPRPC_QUIC_ERROR("QuicServerSession: No connection for stream message");
-      return;
+      return false;
     }
     
     auto data = buffer.cdata();
@@ -1476,7 +1476,7 @@ public:
     // stream_id is at offset 16
     if (data.size() < 24) {
       NPRPC_QUIC_ERROR("QuicServerSession: Stream message too small to contain stream_id");
-      return;
+      return false;
     }
     
     uint64_t stream_id = *reinterpret_cast<const uint64_t*>(
@@ -1497,26 +1497,30 @@ public:
       // Fallback to main stream (for compatibility)
       if (!connection_->send(data.data(), data.size())) {
         NPRPC_QUIC_ERROR("QuicServerSession: Fallback send also failed");
+        return false;
       }
-    } else {
-      NPRPC_QUIC_TRACE("QuicServerSession: Sent {} bytes on native QUIC stream_id={}", 
-                     data.size(), stream_id);
+      return true;
     }
+    NPRPC_QUIC_TRACE("QuicServerSession: Sent {} bytes on native QUIC stream_id={}", 
+                   data.size(), stream_id);
+    return true;
   }
 
   // Override for control messages - send on main QUIC stream (always reliable)
-  virtual void send_main_stream_message(flat_buffer&& buffer) override
+  virtual bool send_main_stream_message(flat_buffer&& buffer) override
   {
     if (!connection_) {
       NPRPC_QUIC_ERROR("QuicServerSession: No connection for main stream message");
-      return;
+      return false;
     }
     
     NPRPC_QUIC_TRACE("QuicServerSession::send_main_stream_message: size={}", buffer.size());
     
     if (!connection_->send_zero_copy(std::move(buffer))) {
       NPRPC_QUIC_ERROR("QuicServerSession: Failed to send on main stream");
+      return false;
     }
+    return true;
   }
 
   void on_message_received(std::vector<uint8_t>&& data)
@@ -1773,16 +1777,17 @@ public:
    * @brief Send stream message (fire-and-forget)
    * Override Session's default to use the QUIC connection directly
    */
-  virtual void send_stream_message(flat_buffer&& buffer) override
+  virtual bool send_stream_message(flat_buffer&& buffer) override
   {
     NPRPC_QUIC_TRACE("QuicClientSession::send_stream_message called, size={}", buffer.size());
-    if (connection_ && connected_) {
-      if (!connection_->send_zero_copy(std::move(buffer))) {
-        NPRPC_QUIC_ERROR("QuicClientSession: Failed to send stream message");
-      } else {
-        NPRPC_QUIC_TRACE("QuicClientSession: Stream message sent successfully");
-      }
+    if (!connection_ || !connected_)
+      return false;
+    if (!connection_->send_zero_copy(std::move(buffer))) {
+      NPRPC_QUIC_ERROR("QuicClientSession: Failed to send stream message");
+      return false;
     }
+    NPRPC_QUIC_TRACE("QuicClientSession: Stream message sent successfully");
+    return true;
   }
 
   /**

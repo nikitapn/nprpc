@@ -238,6 +238,38 @@ upstream control traffic.
   that advertises 32 and batches at 16 will deadlock against an old producer
   that ignores `initial_credits` (window 8 < threshold 16).
 
+#### When the consumer stops consuming
+
+The properties above describe a consumer that is merely slow. A consumer that
+has *stopped* — parked in a debugger, killed, or wedged — grants no credits
+and drains no ring, and the producer has to be told rather than left to
+accumulate. Two independent mechanisms answer that, because they fail at
+different layers:
+
+- **A full transport.** The shared-memory ring is finite (1024 header slots,
+  16 MB payload) and refuses a write once it fills; it never blocks. That
+  refusal now travels back: `Session::send_stream_message` returns `bool`,
+  `StreamManager::dispatch_buffer` passes it through, `send_chunk` returns it,
+  and `StreamWriter::write` returns it and closes the stream. A reliable
+  stream cannot survive a hole — the consumer would see a sequence gap — so
+  the honest response to one dropped chunk is to end the stream, not to keep
+  writing into a wall. Transports that queue internally (TCP, WebSocket,
+  QUIC) have nothing to report at that point and answer `true`; their
+  backpressure shows up as growth in their own write queue.
+
+- **Exhausted credits.** A write with no credits is parked in
+  `StreamInfo::pending_writes` and released by a window update. Parking is
+  capped at `StreamManager::kMaxParkedWrites` (1024); past that a write is
+  refused immediately, since queueing it only costs another payload copy and
+  its caller would wait exactly as long. Every parked write owns a callback
+  that some caller is suspended on — the Swift `await writer.write(...)`
+  resumes from it — so teardown (`cancel_all`, `on_stream_cancel`, the
+  coroutine writer's exit) invokes every parked callback with `false` before
+  dropping the entry. Dropping one silently is not a lost message; it is a
+  caller that never wakes up.
+
+Both are covered by `test/src/test_stream_backpressure.cpp`.
+
 #### Implementation map
 
 | Piece | Location |

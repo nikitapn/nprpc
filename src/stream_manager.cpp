@@ -95,14 +95,13 @@ bool StreamManager::dispatch_buffer(uint64_t stream_id, flat_buffer&& fb)
         return false;
       }
     } else if (send_native_stream_callback_) {
-      send_native_stream_callback_(std::move(fb));
+      return report_send(stream_id, send_native_stream_callback_(std::move(fb)));
     } else if (send_callback_) {
-      send_callback_(std::move(fb));
+      return report_send(stream_id, send_callback_(std::move(fb)));
     } else {
       NPRPC_LOG_ERROR("StreamManager::dispatch_buffer: no send callback set for stream chunk");
       return false;
     }
-    return true;
   }
 
   // StreamCompletion/StreamError must go on the same native transport stream
@@ -112,23 +111,34 @@ bool StreamManager::dispatch_buffer(uint64_t stream_id, flat_buffer&& fb)
   if (header->msg_id == MessageId::StreamCompletion ||
       header->msg_id == MessageId::StreamError) {
     if (send_native_stream_callback_) {
-      send_native_stream_callback_(std::move(fb));
+      return report_send(stream_id, send_native_stream_callback_(std::move(fb)));
     } else if (send_callback_) {
-      send_callback_(std::move(fb));
+      return report_send(stream_id, send_callback_(std::move(fb)));
     } else {
       NPRPC_LOG_ERROR("StreamManager::dispatch_buffer: no send callback set");
       return false;
     }
-    return true;
   }
 
   if (send_callback_) {
-    send_callback_(std::move(fb));
-  } else {
-    NPRPC_LOG_ERROR("StreamManager::dispatch_buffer: no send callback set");
-    return false;
+    return report_send(stream_id, send_callback_(std::move(fb)));
   }
-  return true;
+  NPRPC_LOG_ERROR("StreamManager::dispatch_buffer: no send callback set");
+  return false;
+}
+
+bool StreamManager::report_send(uint64_t stream_id, bool sent)
+{
+  if (!sent) {
+    // Worth a log line rather than only a return value: the immediate caller
+    // may be a fire-and-forget path (send_complete, the coroutine writer)
+    // that has nowhere to put the failure.
+    NPRPC_LOG_WARN(
+        "StreamManager: transport refused a stream message, stream_id={} "
+        "(peer not draining or session gone)",
+        stream_id);
+  }
+  return sent;
 }
 
 void StreamManager::defer_stream_start(uint64_t stream_id)
@@ -276,14 +286,18 @@ void StreamManager::start_stream(uint64_t stream_id)
         }
 
         // Tear down: remove timer pointer and erase the writer entry
+        std::vector<std::function<void(bool)>> parked;
         {
           std::lock_guard lock(mutex_);
+          parked = take_parked_callbacks(stream_id);
           auto it = writers_.find(stream_id);
           if (it != writers_.end()) {
             it->second.credit_timer = nullptr;
             writers_.erase(it);
           }
         }
+        for (auto& cb : parked)
+          cb(false);
       },
       boost::asio::detached);
   }
@@ -469,12 +483,32 @@ void StreamManager::on_stream_error(uint64_t stream_id, uint32_t error_code, fla
   }
 }
 
+std::vector<std::function<void(bool)>>
+StreamManager::take_parked_callbacks(uint64_t stream_id)
+{
+  // mutex_ must be held by the caller.
+  std::vector<std::function<void(bool)>> callbacks;
+  auto it = writers_.find(stream_id);
+  if (it == writers_.end())
+    return callbacks;
+
+  auto& parked = it->second.pending_writes;
+  callbacks.reserve(parked.size());
+  for (auto& pw : parked) {
+    if (pw.callback)
+      callbacks.push_back(std::move(pw.callback));
+  }
+  parked.clear();
+  return callbacks;
+}
+
 void StreamManager::on_stream_cancel(uint64_t stream_id)
 {
   NPRPC_STREAM_MANAGER_LOG_TRACE("on_stream_cancel called: stream_id={}", stream_id);
   StreamReaderBase* reader = nullptr;
   std::unique_ptr<StreamReaderBase> owned_reader;
   std::unique_ptr<StreamWriterBase> writer;
+  std::vector<std::function<void(bool)>> parked;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -485,12 +519,20 @@ void StreamManager::on_stream_cancel(uint64_t stream_id)
       readers_.erase(reader_it);
     }
 
+    parked = take_parked_callbacks(stream_id);
+
     auto writer_it = writers_.find(stream_id);
     if (writer_it != writers_.end()) {
       writer = std::move(writer_it->second.writer);
       writers_.erase(writer_it);
     }
   }
+
+  // Before the reader/writer teardown: whoever is suspended on one of these
+  // is waiting on a write to a stream that no longer exists, and nothing
+  // else will ever wake them.
+  for (auto& cb : parked)
+    cb(false);
 
   if (reader) {
     reader->on_complete();
@@ -789,6 +831,7 @@ void StreamManager::write_chunk_or_queue(uint64_t stream_id,
 
   flat_buffer fb_to_send;
   bool send_now = false;
+  bool queue_full = false;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -799,6 +842,11 @@ void StreamManager::write_chunk_or_queue(uint64_t stream_id,
     } else if (it->second.pending_writes.empty() && it->second.credits > 0) {
       --it->second.credits;
       send_now = true;
+    } else if (it->second.pending_writes.size() >= kMaxParkedWrites) {
+      // The consumer has been silent for kMaxParkedWrites chunks.  Queueing
+      // one more would buy nothing: it is the same unread backlog, one
+      // payload copy larger, and its caller would wait on it just as long.
+      queue_full = true;
     } else {
       // No credits: enqueue.
       StreamInfo::PendingWrite pw;
@@ -810,6 +858,15 @@ void StreamManager::write_chunk_or_queue(uint64_t stream_id,
     }
   }
 
+  if (queue_full) {
+    NPRPC_LOG_WARN(
+        "StreamManager: stream_id={} has {} writes parked for credits; "
+        "refusing further writes until the consumer grants a window",
+        stream_id, kMaxParkedWrites);
+    if (callback) callback(false);
+    return;
+  }
+
   if (send_now) {
     const bool ok = send_chunk(stream_id, data, sequence);
     if (callback) callback(ok);
@@ -819,10 +876,20 @@ void StreamManager::write_chunk_or_queue(uint64_t stream_id,
 void StreamManager::cancel_all()
 {
   std::vector<std::pair<StreamReaderBase*, std::unique_ptr<StreamReaderBase>>> readers;
+  std::vector<std::function<void(bool)>> parked;
   {
     std::lock_guard<std::mutex> lock(mutex_);
 
     for (auto& [id, info] : writers_) {
+      // Every write still waiting for credits belongs to a caller that is
+      // suspended on its callback.  The session is going away, so the
+      // window update that would have released them is never coming.
+      for (auto& pw : info.pending_writes) {
+        if (pw.callback)
+          parked.push_back(std::move(pw.callback));
+      }
+      info.pending_writes.clear();
+
       // External (Swift/C-bridge) writers registered via
       // register_external_writer() have no StreamWriterBase — they never
       // set info.writer, it stays null by design (see the StreamInfo
@@ -847,6 +914,9 @@ void StreamManager::cancel_all()
     }
     readers_.clear();
   }
+
+  for (auto& cb : parked)
+    cb(false);
 
   for (auto& [reader, _] : readers) {
     flat_buffer empty_fb;

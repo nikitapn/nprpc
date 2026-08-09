@@ -396,9 +396,12 @@ void WebSocketSession<Derived>::send_receive_async(
 }
 
 template <class Derived>
-void WebSocketSession<Derived>::send_stream_message(flat_buffer&& buffer)
+bool WebSocketSession<Derived>::send_stream_message(flat_buffer&& buffer)
 {
-  // Fire-and-forget message for streaming - no response expected
+  // Fire-and-forget message for streaming - no response expected.  The
+  // write queue is unbounded and lives on the socket strand, so there is
+  // nothing to report synchronously: a socket that stops draining shows up
+  // as write_queue_ growth, not as a refusal here.
   boost::asio::post(
       derived().ws().get_executor(),
       [this, buffer = std::move(buffer)]() mutable {
@@ -407,6 +410,7 @@ void WebSocketSession<Derived>::send_stream_message(flat_buffer&& buffer)
         write_queue_.emplace_back(std::move(buffer), nullptr);
         do_write();
       });
+  return true;
 }
 
 template <class Derived> void WebSocketSession<Derived>::start_read_loop()

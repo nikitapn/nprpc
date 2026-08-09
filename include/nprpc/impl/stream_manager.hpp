@@ -45,10 +45,23 @@ public:
   // window/2 chunk periods.
   static constexpr uint32_t kDefaultReaderWindow = 32;
 
-  // Callback type for sending on main stream (control messages, always reliable)
-  using SendCallback = std::function<void(flat_buffer&&)>;
+  // How many chunks may wait for credits before a write is refused outright.
+  //
+  // A parked write holds a heap copy of its payload and a callback its caller
+  // is waiting on, and it is released only by a window update from the
+  // consumer.  A consumer that has stopped consuming sends none, so without a
+  // ceiling the queue is bounded by nothing but the producer's patience: the
+  // reproduction reached ~780 MiB in 200k writes.  Past the ceiling the write
+  // fails immediately, which is a message the producer can act on.
+  static constexpr size_t kMaxParkedWrites = 1024;
+
+  // Callback types for sending.  false means the message provably did not go
+  // out (a full shared-memory ring, a dead session) — the caller must treat
+  // the chunk as lost rather than sent, since on a reliable stream the
+  // consumer will see a sequence gap.
+  using SendCallback = std::function<bool(flat_buffer&&)>;
   // Callback type for sending on native QUIC stream (reliable stream data)
-  using SendNativeStreamCallback = std::function<void(flat_buffer&&)>;
+  using SendNativeStreamCallback = std::function<bool(flat_buffer&&)>;
   // Callback type for sending datagrams (unreliable stream data)
   using SendDatagramCallback = std::function<bool(flat_buffer&&)>;
 
@@ -206,8 +219,16 @@ private:
   // Internal helper to determine if a stream is unreliable
   bool is_stream_unreliable(uint64_t stream_id) const;
   bool is_stream_started(uint64_t stream_id) const;
-  // Returns false without dispatching if the owning session has died.
+  // Returns false without dispatching if the owning session has died, and
+  // false after dispatching if the transport refused the message.
   bool dispatch_buffer(uint64_t stream_id, flat_buffer&& fb);
+  // Logs a refused send and passes `sent` through, so every dispatch route
+  // reports the same way.
+  bool report_send(uint64_t stream_id, bool sent);
+  // Moves every write parked for credits out of `writers_[stream_id]`.
+  // Callers must invoke the returned callbacks with false *outside* mutex_:
+  // they resume whoever was waiting on the write, which can re-enter here.
+  std::vector<std::function<void(bool)>> take_parked_callbacks(uint64_t stream_id);
   void start_stream(uint64_t stream_id);
 };
 

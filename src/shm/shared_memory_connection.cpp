@@ -552,11 +552,13 @@ SharedMemoryConnection::~SharedMemoryConnection()
     close();
 }
 
-void SharedMemoryConnection::send_stream_message(flat_buffer&& buffer)
+bool SharedMemoryConnection::send_stream_message(flat_buffer&& buffer)
 {
   // Fire-and-forget: write into the send ring without enqueuing on wq_.
-  // Stream frames are not request/response paired.
-  (void)send_datagram(std::move(buffer));
+  // Stream frames are not request/response paired.  The ring's answer is
+  // still worth passing back — it is how a client writing into a bidi
+  // stream learns the server stopped reading.
+  return send_datagram(std::move(buffer));
 }
 
 bool SharedMemoryConnection::send_datagram(flat_buffer&& buffer)

@@ -1098,32 +1098,35 @@ public:
     assert(false && "send_receive_async not supported on WebTransport server control session");
   }
 
-  void send_stream_message(flat_buffer&& buffer) override
+  bool send_stream_message(flat_buffer&& buffer) override
   {
     const auto stream_id = extract_stream_id(buffer);
     if (!stream_id) {
       NPRPC_LOG_ERROR("[HTTP/3][WT] Missing stream_id in native stream message");
-      return;
+      return false;
     }
 
     auto it = native_stream_bindings_.find(*stream_id);
     if (it == native_stream_bindings_.end()) {
+      // Held until the WebTransport stream is bound, then flushed in order.
       pending_native_writes_[*stream_id].emplace_back(std::move(buffer));
-      return;
+      return true;
     }
 
     queue_buffer(it->second, std::move(buffer));
+    return true;
   }
 
-  void send_main_stream_message(flat_buffer&& buffer) override
+  bool send_main_stream_message(flat_buffer&& buffer) override
   {
     if (control_stream_id_ < 0) {
       NPRPC_LOG_ERROR("[HTTP/3][WT] Control stream is not bound for session {}",
                       session_stream_id_);
-      return;
+      return false;
     }
 
     queue_buffer(control_stream_id_, std::move(buffer));
+    return true;
   }
 
   void bind_control_stream(int64_t transport_stream_id)

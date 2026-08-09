@@ -218,16 +218,32 @@ public:
     }
   }
 
-  void write(const T& value)
+  /// Writes one element.  Returns false if it did not go out.
+  ///
+  /// A refusal means the transport could not take the chunk — most often a
+  /// shared-memory ring the consumer has stopped draining, which fills after
+  /// a bounded number of undelivered messages and then refuses every one.
+  /// The stream is closed at that point rather than carried on with: this is
+  /// a reliable stream, so the consumer would otherwise be handed a sequence
+  /// gap it cannot distinguish from reordering, and the producer would keep
+  /// serialising into a ring that has no room for it.
+  ///
+  /// Ignoring the result is safe but means never learning the consumer went
+  /// away, which is what a periodic publisher (a compositor telling a shell
+  /// what changed) wants to know soonest.
+  bool write(const T& value)
   {
     if (!client_manager_ || client_closed_)
-      return;
-    send_value(*client_manager_, client_stream_id_, value);
+      return false;
+    if (send_value(*client_manager_, client_stream_id_, value))
+      return true;
+    client_closed_ = true;
+    return false;
   }
 
-  void write(T&& value)
+  bool write(T&& value)
   {
-    write(static_cast<const T&>(value));
+    return write(static_cast<const T&>(value));
   }
 
   void close()
@@ -255,21 +271,21 @@ private:
   bool probed_ = false;
   bool pending_probe_completion_ = false;
 
-  void send_value(impl::StreamManager& manager,
+  bool send_value(impl::StreamManager& manager,
                   uint64_t stream_id,
                   const T& value)
   {
     if constexpr (std::is_trivially_copyable_v<T>) {
       const auto* data_ptr = reinterpret_cast<const uint8_t*>(&value);
-      manager.send_chunk(stream_id,
-                         std::span<const uint8_t>(data_ptr, sizeof(T)),
-                         sequence_++);
+      return manager.send_chunk(stream_id,
+                                std::span<const uint8_t>(data_ptr, sizeof(T)),
+                                sequence_++);
     } else {
       // All non-trivial stream payloads use the npidl-generated codec so
       // strings, vectors, and structs share one consistent wire format.
       auto __buf = nprpc_stream::serialize<T>(value);
       auto __span = __buf.data();
-      manager.send_chunk(
+      return manager.send_chunk(
           stream_id,
           std::span<const uint8_t>(
               reinterpret_cast<const uint8_t*>(__span.data()),

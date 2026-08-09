@@ -335,19 +335,24 @@ public:
            "send_receive_async should not be called on server session");
   }
 
-  void send_stream_message(flat_buffer&& buffer) override
+  bool send_stream_message(flat_buffer&& buffer) override
   {
     if (!channel_ || buffer.size() == 0)
-      return;
+      return false;
     auto rsv = channel_->reserve_write(buffer.size());
     if (!rsv) {
+      // The ring is the client's to drain, so a full one means the client
+      // stopped reading — parked, overloaded, or dead without the liveness
+      // probe having noticed yet.  Say so; the producer decides what a lost
+      // chunk means for its stream.
       NPRPC_LOG_ERROR(
           "SharedMemoryServerSession: ring full, dropped stream frame size={}",
           buffer.size());
-      return;
+      return false;
     }
     std::memcpy(rsv.data, buffer.data().data(), buffer.size());
     channel_->commit_write(rsv, buffer.size());
+    return true;
   }
 
   void on_message_received(const LockFreeRingBuffer::ReadView& read_view)
