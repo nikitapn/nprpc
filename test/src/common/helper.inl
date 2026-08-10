@@ -140,6 +140,12 @@ public:
                 .set_log_level(nprpc::LogLevel::trace)
                 .with_hostname("localhost")
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
+                // TestLargeMessage and TestNested send megabytes in one call,
+                // which the default ring is deliberately too small for — see
+                // config_default.hpp.  Raised here alongside the WebSocket and
+                // WebTransport limits, for the same reason and by the same
+                // amount.
+                .shm_channel_sizes(16 * 1024 * 1024, 12 * 1024 * 1024)
                 .with_tcp(22222)
                 .with_http(22223)
                     .max_request_body_size(10'000)

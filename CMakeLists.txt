@@ -312,6 +312,7 @@ add_library(nprpc
   src/shm/shared_memory_channel.cpp
   src/shm/shared_memory_connection.cpp
   src/shm/shared_memory_listener.cpp
+  src/shm/shared_memory_reaper.cpp
   src/shm/shared_memory_server_session.cpp
   src/shm/shared_memory_init.cpp
   # TCP transport

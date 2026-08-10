@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include <nprpc/config_default.hpp>
+#include <nprpc/impl/process_identity.hpp>
+
 #include <atomic>
 #include <boost/interprocess/managed_shared_memory.hpp>
 #include <boost/interprocess/sync/interprocess_condition.hpp>
@@ -11,6 +14,8 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <optional>
+#include <string>
 
 namespace nprpc::impl {
 
@@ -165,15 +170,28 @@ class LockFreeRingBuffer
 {
 public:
   // Configuration for continuous circular buffer (variable-sized messages)
-  static constexpr size_t DEFAULT_BUFFER_SIZE = 16 * 1024 * 1024;
-  static constexpr uint32_t MAX_MESSAGE_SIZE = 12 * 1024 * 1024;
+  static constexpr size_t DEFAULT_BUFFER_SIZE = NPRPC_DEFAULT_SHM_RING_BUFFER_SIZE;
 
-  // Create new ring buffer in shared memory
+  // Create new ring buffer in shared memory.
+  //
+  // max_message_size 0 means "as large as this ring can carry", which is one
+  // byte short of buffer_size — the claim reserves size + 1.  A caller that
+  // wants messages to queue rather than fill the ring passes a fraction of
+  // buffer_size instead; SharedMemoryChannel passes half.
   static std::unique_ptr<LockFreeRingBuffer>
-  create(const std::string& name, size_t buffer_size = DEFAULT_BUFFER_SIZE, size_t max_message_size = MAX_MESSAGE_SIZE);
+  create(const std::string& name, size_t buffer_size = DEFAULT_BUFFER_SIZE, size_t max_message_size = 0);
 
   // Open existing ring buffer
   static std::unique_ptr<LockFreeRingBuffer> open(const std::string& name);
+
+  // Who produces into this ring, read without mapping the ring itself.
+  //
+  // For a sweep deciding whether a segment is still in use: nullopt means
+  // "not a ring of ours, or unreadable", which must be left alone; a value
+  // with pid 0 means the ring exists but nobody has claimed it yet, which
+  // must also be left alone.  Only a pid whose process is provably gone is
+  // evidence of anything.
+  static std::optional<ProcessIdentity> peek_owner(const std::string& name);
 
   // Remove shared memory region (call when destroying channel)
   static void remove(const std::string& name);

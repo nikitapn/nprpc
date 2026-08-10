@@ -362,6 +362,44 @@ auto* svc = nprpc::narrow<MyInterface>(obj);
 svc->MyMethod(data);
 ```
 
+#### What a client costs
+
+Every accepted client gets two rings — one each way — created by the server
+and **resident from the moment they exist**, not faulted in as they fill. The
+default is 1 MiB each, so 2 MiB per connected client whether it is busy or
+idle, and the largest single message is half a ring:
+
+```cpp
+auto* rpc = nprpc::RpcBuilder()
+  .shm_channel_sizes(4 * 1024 * 1024, 3 * 1024 * 1024) // ring, max message
+  .build();
+```
+
+Only the server says this. It writes both numbers into the ring header at
+creation and whoever opens the ring adopts them, so clients need no matching
+configuration and two differently-configured builds cannot disagree about the
+same ring.
+
+Raise it when replies are large — a message the ring cannot hold is refused
+rather than queued, with an error naming this call. But before raising it for
+everybody, consider that one big payload is usually better carried in a
+segment of its own than paid for on every connection, idle ones included.
+
+#### What happens when a process dies
+
+The server removes a client's rings when the channel closes, which covers
+every orderly ending and none of the others: killed, crashed, or `exit()`
+without unwinding, it runs no destructor and its rings stay in `/dev/shm`
+holding real memory until the machine reboots. A day of restarts during
+development is measured in gigabytes.
+
+Nothing in the dying process can fix that, so the next server to start does
+it: `SharedMemoryListener` sweeps stale segments before creating its own. A
+segment goes only when a process named in it is provably gone — by pid *and*
+start time, so a recycled pid cannot condemn a live channel — and no other
+end of the same channel is still alive. Anything unreadable, or not yet
+claimed by a writer, is left where it is.
+
 ### Session-Scoped Activation
 
 Pass the current session context to restrict an object to the caller's connection:

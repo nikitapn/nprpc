@@ -27,6 +27,12 @@ SharedMemoryListener::SharedMemoryListener(boost::asio::io_context& ioc,
     throw std::invalid_argument("Accept handler cannot be null");
   }
 
+  // Before creating anything of our own: clear out what previous servers left
+  // behind when they died without unwinding.  Ours is not among it — this
+  // listener's name was generated moments ago — so the sweep can run first
+  // and is cheaper for doing so.
+  reap_stale_shm_segments();
+
   // Create well-known accept ring buffer
   // Remove any existing ring from crashed server
   std::string accept_ring_name = make_shm_name(listener_name_, "accept");
@@ -34,9 +40,24 @@ SharedMemoryListener::SharedMemoryListener(boost::asio::io_context& ioc,
 
   try {
     // Small ring buffer for handshakes (10KB total - enough for ~10
-    // handshakes) With variable-sized messages, this is much more efficient
+    // handshakes) With variable-sized messages, this is much more efficient.
+    // No explicit message limit: a handshake is a fixed struct of a few
+    // hundred bytes, so what this ring can carry is limit enough.
     accept_ring_ = LockFreeRingBuffer::create(accept_ring_name,
                                               10 * 1024); // 10KB total buffer
+
+    // Name ourselves in it.  The field is called "writer" because a channel's
+    // producer is what fills it in, and on an accept ring the owner is the
+    // consumer instead — but ownership is the only thing a sweep asks about,
+    // and without this an accept ring belongs to nobody and outlives every
+    // server that ever made one.
+    {
+      const auto self = current_process_identity();
+      auto* header = accept_ring_->header();
+      header->writer_start_token.store(self.start_token,
+                                       std::memory_order_relaxed);
+      header->writer_pid.store(self.pid, std::memory_order_release);
+    }
 
     NPRPC_LOG_INFO("SharedMemoryListener created: {}", listener_name_);
   } catch (const std::exception& e) {

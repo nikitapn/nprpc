@@ -77,6 +77,23 @@ struct SharedMemoryHandshake {
  * 5. Server sends handshake back to confirm
  * 6. Both sides now use the dedicated channel for RPC communication
  */
+/**
+ * @brief Remove shared memory left behind by processes that are gone.
+ *
+ * A server creates its clients' rings and removes them again when the channel
+ * closes — but only if it lives long enough to run the destructor. Killed,
+ * crashed, or exit()ed without unwinding, it leaves two resident rings per
+ * client behind for good.
+ *
+ * A segment is removed only when one of the processes named in it is provably
+ * dead and none of the others is alive; an unreadable segment, or one whose
+ * writer has not identified itself yet, is left alone. Called at listener
+ * startup, which is the first moment a process is in a position to notice.
+ *
+ * @return how many segments were removed.
+ */
+NPRPC_API size_t reap_stale_shm_segments();
+
 class NPRPC_API SharedMemoryListener
 {
 public:

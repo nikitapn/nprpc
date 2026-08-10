@@ -539,6 +539,12 @@ struct BuildConfig {
   std::string shm_egress_channel;
   std::string shm_ingress_channel;
 
+  // Size of each shared-memory ring this server creates for an accepted
+  // client, and the largest single message one will carry.  Two rings per
+  // client, resident from creation — see config_default.hpp.
+  size_t shm_ring_buffer_size = NPRPC_DEFAULT_SHM_RING_BUFFER_SIZE;
+  size_t shm_max_message_size = NPRPC_DEFAULT_SHM_MAX_MESSAGE_SIZE;
+
   // TCP transport tuning
   bool use_epoll_tcp = false; // Use raw epoll server instead of Asio (Linux only)
   bool use_uring_tcp = false; // Use io_uring server instead of Asio (Linux only)
@@ -578,6 +584,29 @@ public:
   RpcBuilderBase& disable_ssl_client_verification() noexcept
   {
     cfg_->http_ssl_client_disable_verification = true;
+    return *this;
+  }
+
+  /// How much shared memory each accepted client costs this server.
+  ///
+  /// Two rings of @p ring_bytes are created per client and both are resident
+  /// for the life of the connection, so this is a per-client memory price
+  /// paid whether the client is busy or idle.  Raise it for a server whose
+  /// messages are large — the ring must be able to hold a whole one — and
+  /// note that a single oversized call (an image, a document) is usually
+  /// better carried in its own segment than paid for on every connection.
+  ///
+  /// @param ring_bytes size of each ring, per direction.
+  /// @param max_message_bytes largest single message; must be smaller than
+  ///        @p ring_bytes, and is clamped with a warning if it is not.
+  ///
+  /// Client processes need no matching call: the sizes are written into the
+  /// ring header at creation and adopted by whoever opens it.
+  RpcBuilderBase& shm_channel_sizes(size_t ring_bytes,
+                                    size_t max_message_bytes) noexcept
+  {
+    cfg_->shm_ring_buffer_size = ring_bytes;
+    cfg_->shm_max_message_size = max_message_bytes;
     return *this;
   }
 

@@ -130,6 +130,16 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size, size_t m
     if (buffer_size >= (uint64_t(1) << kCursorSlotShift))
       throw std::runtime_error("buffer_size exceeds 48-bit payload cursor range");
 
+    // A message the ring cannot hold would be a send that fails every time
+    // rather than one that waits, so the limit is capped at what a claim can
+    // actually reserve.  0 asks for exactly that cap.
+    if (max_message_size == 0 || max_message_size >= buffer_size)
+      max_message_size = buffer_size - 1;
+    // The header stores it in 32 bits; a ring bigger than 4 GiB would
+    // otherwise wrap it round to something small and confusing.
+    if (max_message_size > 0xFFFFFFFFull)
+      max_message_size = 0xFFFFFFFFull;
+
     size_t page_size   = get_page_size();
     size_t hdr_ring_sz = header_ring_bytes();
     size_t ring_window = round_up_page(buffer_size);
@@ -141,7 +151,8 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size, size_t m
     boost::interprocess::managed_shared_memory shm(
         boost::interprocess::create_only, name.c_str(), total_size);
 
-    auto* header = shm.construct<RingBufferHeader>("header")(buffer_size, max_message_size);
+    auto* header = shm.construct<RingBufferHeader>("header")(
+        buffer_size, static_cast<uint32_t>(max_message_size));
     if (!header)
       throw std::runtime_error("Failed to construct RingBufferHeader");
 
@@ -184,6 +195,32 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size, size_t m
   } catch (const boost::interprocess::interprocess_exception& e) {
     NPRPC_LOG_ERROR("Failed to create ring buffer '{}': {}", name, e.what());
     throw;
+  }
+}
+
+std::optional<ProcessIdentity>
+LockFreeRingBuffer::peek_owner(const std::string& name)
+{
+  try {
+    // open_only maps the segment but touches none of the payload, and the
+    // mapping goes away with `shm` at the end of this scope.  No mirror
+    // windows, no slot header mapping: the header is all a sweep reads.
+    boost::interprocess::managed_shared_memory shm(
+        boost::interprocess::open_only, name.c_str());
+
+    auto result = shm.find<RingBufferHeader>("header");
+    if (result.first == nullptr)
+      return std::nullopt;
+
+    const RingBufferHeader* header = result.first;
+    // Acquire on the pid: a non-zero one says the token is readable too.
+    const uint32_t pid = header->writer_pid.load(std::memory_order_acquire);
+    return ProcessIdentity{
+        pid, header->writer_start_token.load(std::memory_order_relaxed)};
+  } catch (...) {
+    // Someone else's segment, a truncated one, a name that stopped existing
+    // between the directory listing and here.  All of them mean "not mine".
+    return std::nullopt;
   }
 }
 
@@ -325,7 +362,10 @@ bool LockFreeRingBuffer::claim_slot_and_payload(size_t size,
 bool LockFreeRingBuffer::try_write(const void* data, size_t size)
 {
   if (size == 0 || size > header_->max_message_size) {
-    NPRPC_LOG_ERROR("Message size {} out of range (max {})", size, header_->max_message_size);
+    NPRPC_LOG_ERROR("Message size {} exceeds this ring's {} byte limit; raise "
+                    "it with RpcBuilder::shm_channel_sizes on the server that "
+                    "created the channel",
+                    size, header_->max_message_size);
     return false;
   }
 
@@ -478,8 +518,10 @@ LockFreeRingBuffer::WriteReservation
 LockFreeRingBuffer::try_reserve_write(size_t min_size)
 {
   if (min_size == 0 || min_size > header_->max_message_size) {
-    NPRPC_LOG_ERROR("Requested size {} out of range (max {})", min_size,
-                    header_->max_message_size);
+    NPRPC_LOG_ERROR("Requested size {} exceeds this ring's {} byte message "
+                    "limit; raise it with RpcBuilder::shm_channel_sizes on the "
+                    "server that created the channel",
+                    min_size, header_->max_message_size);
     return {};
   }
 

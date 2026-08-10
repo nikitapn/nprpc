@@ -29,3 +29,20 @@
 #define NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_PER_SESSION_PER_SECOND 0
 #define NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_BURST 0
 #define NPRPC_DEFAULT_WATCH_FILES false
+
+// Shared-memory transport.  Every accepted client costs two rings of
+// NPRPC_DEFAULT_SHM_RING_BUFFER_SIZE, and they are resident from the moment
+// they are created rather than faulted in on use — so this number multiplies
+// by the number of connected clients whether they say anything or not.
+//
+// 1 MiB suits what actually crosses a control plane: calls, replies and
+// stream frames measured in tens or hundreds of bytes.  A server that ships
+// whole images or documents through the ring wants a bigger one, and should
+// say so with RpcBuilderBase::shm_channel_sizes rather than have everybody
+// pay for it.
+#define NPRPC_DEFAULT_SHM_RING_BUFFER_SIZE (1024 * 1024)
+// Half a ring, so a full-sized message never has to wait for the ring to
+// drain completely before it can be claimed.  Must stay below the ring size:
+// a message the ring cannot hold can never be sent (see validation in
+// SharedMemoryChannel).
+#define NPRPC_DEFAULT_SHM_MAX_MESSAGE_SIZE (512 * 1024)

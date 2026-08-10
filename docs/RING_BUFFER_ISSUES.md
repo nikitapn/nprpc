@@ -1,3 +1,9 @@
+> Note: this review predates two later changes and reads against the code as
+> it then was. The single packed claim cursor suggested below has since
+> landed, and the sizes it quotes as compile-time constants
+> (`DEFAULT_BUFFER_SIZE`, `MAX_MESSAGE_SIZE`) are now per-ring values chosen
+> by the server — see "Shared Memory Transport" in the README.
+
 Verdict
 
 The two-ring design (fixed slot-header ring + mirrored payload ring) is sound for one producer and one consumer, and the commit protocol via actual_size is mostly correct. But the code claims MPSC, and with two or more concurrent producers there are two independent data-corruption races in the payload claim path. There are also robustness/validation gaps worth fixing regardless.

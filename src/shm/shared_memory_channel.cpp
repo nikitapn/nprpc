@@ -10,6 +10,41 @@
 
 namespace nprpc::impl {
 
+namespace {
+
+// The configured sizes, made safe to create rings with.
+//
+// Two things have to hold and neither is worth a failed startup: a ring big
+// enough to be worth having, and a message the ring can actually carry.  The
+// claim reserves size + 1 bytes (see claim_slot_and_payload), so a message
+// exactly the size of the ring never fits however empty the ring is — which
+// would be a send that fails forever rather than a send that waits.
+std::pair<size_t, size_t> validated_ring_sizes()
+{
+  constexpr size_t kMinRing = 64 * 1024;
+
+  size_t ring = g_cfg.shm_ring_buffer_size;
+  if (ring < kMinRing) {
+    NPRPC_LOG_WARN("shm_ring_buffer_size {} is below the {} byte minimum; "
+                   "using the minimum",
+                   ring, kMinRing);
+    ring = kMinRing;
+  }
+
+  size_t max_message = g_cfg.shm_max_message_size;
+  if (max_message == 0 || max_message >= ring) {
+    const size_t clamped = ring / 2;
+    NPRPC_LOG_WARN("shm_max_message_size {} does not fit a {} byte ring; "
+                   "using {}",
+                   max_message, ring, clamped);
+    max_message = clamped;
+  }
+
+  return {ring, max_message};
+}
+
+} // namespace
+
 SharedMemoryChannel::SharedMemoryChannel(boost::asio::io_context& ioc,
                                          const std::string& channel_id,
                                          bool is_server,
@@ -17,7 +52,6 @@ SharedMemoryChannel::SharedMemoryChannel(boost::asio::io_context& ioc,
     : channel_id_(channel_id)
     , is_server_(is_server)
     , ioc_(ioc)
-    , recv_buffer_(MAX_MESSAGE_SIZE)
 {
   // Server writes to s2c, reads from c2s
   // Client writes to c2s, reads from s2c
@@ -27,13 +61,17 @@ SharedMemoryChannel::SharedMemoryChannel(boost::asio::io_context& ioc,
   try {
     if (create_rings) {
       // Create new ring buffers (continuous, variable-sized)
+      const auto [ring, max_message] = validated_ring_sizes();
+
       send_ring_ =
-          LockFreeRingBuffer::create(send_ring_name_, RING_BUFFER_SIZE);
+          LockFreeRingBuffer::create(send_ring_name_, ring, max_message);
 
       recv_ring_ =
-          LockFreeRingBuffer::create(recv_ring_name_, RING_BUFFER_SIZE);
+          LockFreeRingBuffer::create(recv_ring_name_, ring, max_message);
 
-      NPRPC_LOG_INFO("Created ring buffers: {} , {} ({} bytes each)", send_ring_name_, recv_ring_name_, RING_BUFFER_SIZE);
+      NPRPC_LOG_INFO("Created ring buffers: {} , {} ({} bytes each, messages "
+                     "up to {} bytes)",
+                     send_ring_name_, recv_ring_name_, ring, max_message);
     } else {
       // Open existing ring buffers
       send_ring_ = LockFreeRingBuffer::open(send_ring_name_);
@@ -41,6 +79,11 @@ SharedMemoryChannel::SharedMemoryChannel(boost::asio::io_context& ioc,
 
       NPRPC_LOG_INFO("Opened ring buffers: {} , {}", send_ring_name_, recv_ring_name_);
     }
+
+    // Whoever created the rings decided this, and wrote it where both ends
+    // can read it.  Taken from the ring we send into, since that is the one
+    // this side's own writes have to fit.
+    max_message_size_ = send_ring_->header()->max_message_size;
 
     exchange_identities();
 
@@ -177,7 +220,7 @@ SharedMemoryChannel::~SharedMemoryChannel()
 
 bool SharedMemoryChannel::send(const void* data, uint32_t size)
 {
-  if (!send_ring_ || size > MAX_MESSAGE_SIZE) {
+  if (!send_ring_ || size > max_message_size_) {
     return false;
   }
 
@@ -267,7 +310,14 @@ void SharedMemoryChannel::read_loop()
 
       // std::cout << "Falling back to copy-based read" << std::endl;
 
-      // Fallback to copy-based read
+      // Fallback to copy-based read.  The bound is the ring we read from,
+      // which the peer sized; allocated here rather than in the constructor
+      // because a channel with a zero-copy consumer never reaches this line
+      // and should not carry the buffer for a path it does not take.
+      const size_t recv_max = recv_ring_->header()->max_message_size;
+      if (recv_buffer_.size() < recv_max)
+        recv_buffer_.resize(recv_max);
+
       // Blocking read with timeout (allows checking running_ flag)
       size_t bytes_read = recv_ring_->read_with_timeout(
           recv_buffer_.data(), recv_buffer_.size(),
@@ -275,8 +325,8 @@ void SharedMemoryChannel::read_loop()
 
       if (bytes_read > 0) {
         // Validate message size (security check)
-        if (bytes_read > MAX_MESSAGE_SIZE) {
-          NPRPC_LOG_ERROR("SharedMemoryChannel: Rejected oversized message: {} bytes (max: {} bytes)", bytes_read, MAX_MESSAGE_SIZE);
+        if (bytes_read > recv_max) {
+          NPRPC_LOG_ERROR("SharedMemoryChannel: Rejected oversized message: {} bytes (max: {} bytes)", bytes_read, recv_max);
           continue;
         }
 

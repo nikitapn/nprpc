@@ -36,10 +36,6 @@ namespace nprpc::impl {
  */
 class NPRPC_API SharedMemoryChannel
 {
-public:
-  static constexpr size_t RING_BUFFER_SIZE = 16 * 1024 * 1024;
-  static constexpr size_t MAX_MESSAGE_SIZE = 12 * 1024 * 1024;
-
 private:
   std::string channel_id_;
   std::string send_ring_name_; // Ring buffer we write to
@@ -64,7 +60,16 @@ private:
   std::chrono::steady_clock::time_point last_poll_{};
   bool peer_lost_ = false;
 
-  // Buffer for receiving messages
+  // The largest message these rings carry, taken from the ring header rather
+  // than from this process' configuration: the server sizes the rings at
+  // creation and stamps the number into them, so a client — which only ever
+  // opens rings somebody else made — is told rather than configured, and two
+  // differently-configured builds cannot disagree about the same ring.
+  size_t max_message_size_ = 0;
+
+  // Buffer for receiving messages, on the copy path only.  Grown on first
+  // use: a channel whose consumer set on_data_received_view never takes that
+  // path and never pays for the buffer.
   std::vector<char> recv_buffer_;
 
 public:
@@ -195,8 +200,10 @@ public:
 
   /**
    * @brief Get max message size for reservation
+   *
+   * A property of the rings, not of the build — see max_message_size_.
    */
-  static constexpr size_t max_message_size() { return MAX_MESSAGE_SIZE; }
+  size_t max_message_size() const noexcept { return max_message_size_; }
 
   /**
    * @brief Callback invoked when data is received

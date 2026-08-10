@@ -80,6 +80,9 @@ struct Config {
   // SHM channels for npquicrouter integration (see BuildConfig).
   std::string shm_egress_channel;
   std::string shm_ingress_channel;
+  // Per-client ring sizing for the shared-memory listener (see BuildConfig).
+  size_t shm_ring_buffer_size = NPRPC_DEFAULT_SHM_RING_BUFFER_SIZE;
+  size_t shm_max_message_size = NPRPC_DEFAULT_SHM_MAX_MESSAGE_SIZE;
 };
 
 NPRPC_API void fill_guid(std::array<std::uint8_t, 16>& guid) noexcept;

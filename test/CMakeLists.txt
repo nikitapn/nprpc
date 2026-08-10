@@ -243,6 +243,32 @@ target_link_libraries(test_shared_memory_peer_liveness
 
 add_test(NAME SharedMemoryPeerLiveness COMMAND test_shared_memory_peer_liveness)
 
+# Test executable for the stale-segment sweep
+add_executable(test_shared_memory_reaper
+  src/test_shared_memory_reaper.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/shm/process_identity.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/thread_identity.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/logging.cpp
+)
+
+target_include_directories(test_shared_memory_reaper
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_link_libraries(test_shared_memory_reaper
+  PRIVATE
+    Boost::headers
+    GTest::gtest_main
+    rt
+    pthread
+    ssl
+    crypto
+)
+
+add_test(NAME SharedMemoryReaper COMMAND test_shared_memory_reaper)
+
 # Test executable for stream backpressure (full ring / credit exhaustion)
 add_executable(test_stream_backpressure
   src/test_stream_backpressure.cpp

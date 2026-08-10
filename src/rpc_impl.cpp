@@ -304,6 +304,8 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   g_cfg.quic_key_file = cfg_->quic_key_file;
   g_cfg.shm_egress_channel  = cfg_->shm_egress_channel;
   g_cfg.shm_ingress_channel = cfg_->shm_ingress_channel;
+  g_cfg.shm_ring_buffer_size = cfg_->shm_ring_buffer_size;
+  g_cfg.shm_max_message_size = cfg_->shm_max_message_size;
 
   impl::g_rpc = new impl::RpcImpl();
   return impl::g_rpc;
