@@ -42,7 +42,29 @@ StreamManager::StreamManager(SessionContext& session,
 {
 }
 
-StreamManager::~StreamManager() { cancel_all(); }
+StreamManager::~StreamManager()
+{
+  // Handler coroutines go first, and by destruction rather than by the
+  // resumption cancel_all() would give them: this manager is the thing they
+  // would resume into, and there is no turn of the executor left in which
+  // that could be made safe.  A handler that deserved to clean up has already
+  // had its chance — a dying session calls cancel_all() long before it lets
+  // go of the manager, and this destructor is what is left over.
+  //
+  // Outside the lock, because destroying a frame destroys the StreamReader
+  // living in it, and that reader unregisters itself through mutex_.  Doing
+  // it here also empties readers_ of exactly those readers, so the
+  // cancel_all() below reaches only the ones owned from elsewhere — whose
+  // owners are still waiting to be told.
+  std::unordered_map<uint64_t, ::nprpc::Task<>> handlers;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    handlers.swap(active_tasks_);
+  }
+  handlers.clear();
+
+  cancel_all();
+}
 
 void StreamManager::external_retain()
 {
@@ -875,8 +897,18 @@ void StreamManager::write_chunk_or_queue(uint64_t stream_id,
 
 void StreamManager::cancel_all()
 {
+  // Nothing below the lock may touch a stream object, only move it out.
+  //
+  // Every one of these destructors and cancel() calls comes back in here:
+  // ~StreamReader unregisters itself, StreamWriter::cancel() sends a
+  // cancellation, a parked write's callback resumes a caller that usually
+  // writes again.  All of them take mutex_, which this function would still
+  // be holding — so the work happens after the lock is released, on copies
+  // taken while it was held.
   std::vector<std::pair<StreamReaderBase*, std::unique_ptr<StreamReaderBase>>> readers;
   std::vector<std::function<void(bool)>> parked;
+  std::vector<std::unique_ptr<StreamWriterBase>> writers;
+  std::unordered_map<uint64_t, ::nprpc::Task<>> handlers;
   {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -896,12 +928,11 @@ void StreamManager::cancel_all()
       // comment above). This path was unreachable before StreamManager
       // gained real ownership/destruction (it used to leak forever), so
       // this null check was never exercised until now.
-      if (info.writer) {
-        info.writer->cancel();
-      }
+      if (info.writer)
+        writers.push_back(std::move(info.writer));
     }
     writers_.clear();
-    active_tasks_.clear();
+    handlers.swap(active_tasks_);
     pending_messages_.clear();
     pending_stream_starts_.clear();
     started_streams_.clear();
@@ -918,10 +949,39 @@ void StreamManager::cancel_all()
   for (auto& cb : parked)
     cb(false);
 
+  for (auto& writer : writers)
+    writer->cancel();
+
+  // A server-side stream handler is a coroutine parked on `co_await reader`,
+  // and everything it does to undo accepting the stream — unsubscribe, drop
+  // the resource the stream was a lease on — is written after that await.
+  // Destroying the frame here would run its destructors and skip all of it,
+  // so the handler is resumed with an error instead and left to end itself.
+  //
+  // Its completion handler goes first: it posts back into this manager, which
+  // by the time a resumed handler finishes may be gone (a dead session drops
+  // its StreamManager as soon as the last message in flight lets go).  We own
+  // these frames from here on, so nobody needs telling that they ended.
+  for (auto& [id, handler] : handlers)
+    handler.set_completion_handler({});
+
   for (auto& [reader, _] : readers) {
     flat_buffer empty_fb;
     reader->on_error(0, std::move(empty_fb));
   }
+
+  if (handlers.empty())
+    return;
+
+  // on_error posted each handler's resumption onto the executor rather than
+  // resuming inline, so the frames have to outlive this function.  Posting
+  // their disposal behind those resumptions is what gives every handler its
+  // one turn to run: asio runs posted work in order, so each frame is dropped
+  // only after the coroutine inside it has finished with it.  The manager is
+  // held too, because a handler's cleanup is entitled to call back into the
+  // stream it is cleaning up after.
+  post([keep = weak_from_this().lock(),
+        handlers = std::move(handlers)]() mutable { handlers.clear(); });
 }
 
 } // namespace nprpc::impl

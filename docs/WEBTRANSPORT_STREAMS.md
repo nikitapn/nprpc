@@ -270,6 +270,35 @@ different layers:
 
 Both are covered by `test/src/test_stream_backpressure.cpp`.
 
+#### When the consumer disappears
+
+A peer that goes away entirely is found by `SharedMemoryChannel::poll_periodic`
+(the detach flag it set on its way out, else its pid) and reaches the session
+as `on_peer_dead` → `StreamManager::cancel_all`. What that has to do is undo
+the streams **without touching a single stream object while holding
+`mutex_`** — because everything it does comes straight back in: destroying a
+reader unregisters it, cancelling a writer sends a cancellation, and a parked
+write's callback resumes a caller that usually writes again. Each of those
+takes the same lock. Everything is therefore moved out under the lock and
+acted on after it.
+
+The other half is what happens to a **server-side stream handler**, which is a
+coroutine parked on `co_await reader` with all of its teardown written after
+that await. Destroying its frame runs destructors and skips every catch block,
+so cancellation resumes it with an error and lets it end itself; the frames are
+kept alive behind the resumptions (posted work runs in order) rather than
+dropped where they stand. A service whose handler is discarded mid-await loses
+whatever that handler was holding — the case this was written for is a
+compositor that kept a dead client's window on screen forever, because the only
+call to `destroySurface` was in the `catch` that never ran.
+
+`~StreamManager` is the exception and takes the other branch: no turn of the
+executor is left, so it destroys the frames — outside the lock — and then
+cancels what remains. By then a dying session has long since called
+`cancel_all` and the handlers have had their chance.
+
+Covered by `test/src/test_stream_teardown.cpp`.
+
 #### Implementation map
 
 | Piece | Location |

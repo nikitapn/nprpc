@@ -267,6 +267,30 @@ add_test(NAME StreamBackpressure COMMAND test_stream_backpressure)
 
 set_tests_properties(StreamBackpressure PROPERTIES TIMEOUT 60)
 
+# Test executable for stream teardown (what a dead session does to a handler)
+add_executable(test_stream_teardown
+  src/test_stream_teardown.cpp
+)
+
+add_dependencies(test_stream_teardown nprpc_test_gen)
+
+target_include_directories(test_stream_teardown
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${nprpc_test_stub_INCLUDE_DIR}
+)
+
+target_link_libraries(test_stream_teardown
+  PRIVATE
+    nprpc::nprpc
+    GTest::gtest_main
+    Threads::Threads
+)
+
+add_test(NAME StreamTeardown COMMAND test_stream_teardown)
+
+set_tests_properties(StreamTeardown PROPERTIES TIMEOUT 60)
+
 # Test executable for HTTP utility helpers
 add_executable(test_http_utils
   src/test_http_utils.cpp
