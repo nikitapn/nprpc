@@ -365,6 +365,10 @@ add_library(nprpc
   src/flat_buffer.cpp
   src/uuid.cpp
   src/thread_identity.cpp
+  # Cookie helpers: no HTTP/Beast/OpenSSL dependency. Always linked so
+  # Swift (and other consumers) resolve get_cookie/set_cookie even when
+  # HTTP is compiled out — they already no-op on SHM/TCP sessions.
+  src/http/http_auth.cpp
   # Public headers
   include/nprpc_base_ext.hpp
   include/nprpc_nameserver.hpp
@@ -415,7 +419,6 @@ if(NPRPC_ENABLE_HTTP OR NPRPC_ENABLE_HTTP3)
     src/http/http_rpc_session.cpp
     src/http/http_file_cache.cpp
     src/http/http_file_watcher.cpp
-    src/http/http_auth.cpp
   )
 endif()
 
