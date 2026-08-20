@@ -29,6 +29,23 @@ configure:
       -DNPRPC_BUILD_DEV_DOCKER=ON \
       -DNPRPC_BUILD_EXAMPLES=ON
 
+# Configure a shared-memory-only build (no TCP/HTTP/WebSocket/SSL/QUIC)
+configure-shm:
+    cmake -G Ninja -S . -B "{{build_dir}}_shm" \
+      -DCMAKE_BUILD_TYPE="{{build_type}}" \
+      -DNPRPC_ENABLE_TCP=OFF \
+      -DNPRPC_ENABLE_HTTP=OFF \
+      -DNPRPC_ENABLE_WEBSOCKET=OFF \
+      -DNPRPC_ENABLE_SSL=OFF \
+      -DNPRPC_ENABLE_QUIC=OFF \
+      -DNPRPC_ENABLE_HTTP3=OFF \
+      -DNPRPC_ENABLE_SSR=OFF \
+      -DNPRPC_BUILD_TESTS=OFF \
+      -DNPRPC_BUILD_TOOLS=ON \
+      -DNPRPC_BUILD_JS=OFF \
+      -DNPRPC_BUILD_ROUTER=OFF \
+      -DNPRPC_USE_BORINGSSL=OFF
+
 # Build a single CMake target (e.g. `just bt nprpc_test`)
 bt target:
     cmake --build "{{build_dir}}" --target "{{target}}" -j{{nproc}}

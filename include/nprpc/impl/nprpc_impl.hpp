@@ -19,15 +19,15 @@
 #include <variant>
 #include <vector>
 
+#ifdef NPRPC_TCP_ENABLED
 #include <boost/asio/awaitable.hpp>
-#include <boost/asio/deadline_timer.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#endif
+#include <boost/asio/deadline_timer.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/core/exchange.hpp>
 #include <boost/asio/thread_pool.hpp>
-#include <boost/beast/core.hpp>
-#include <boost/beast/websocket.hpp>
 
 #include <nprpc/impl/id_to_ptr.hpp>
 #include <nprpc/impl/session.hpp>
@@ -156,6 +156,7 @@ protected:
   }
 };
 
+#ifdef NPRPC_TCP_ENABLED
 class SocketConnection : public Session,
                          public std::enable_shared_from_this<SocketConnection>
 {
@@ -264,6 +265,7 @@ public:
   SocketConnection(const EndPoint& endpoint,
                    boost::asio::ip::tcp::socket&& socket);
 };
+#endif // NPRPC_TCP_ENABLED
 
 class RpcImpl : public Rpc
 {

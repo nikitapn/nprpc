@@ -3,6 +3,8 @@
 
 #pragma once
 
+#ifdef NPRPC_SSL_ENABLED
+
 #include <nprpc/common.hpp>
 
 #include <boost/beast/ssl.hpp>
@@ -14,3 +16,5 @@ using ssl_stream = beast::ssl_stream<beast_tcp_stream_strand>;
 using ssl_ws = beast::websocket::stream<beast::ssl_stream<beast_tcp_stream_strand>>;
 
 } // namespace nprpc::impl
+
+#endif // NPRPC_SSL_ENABLED

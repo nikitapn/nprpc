@@ -18,13 +18,15 @@ NPRPC is a high-performance, multi-transport RPC framework for distributed syste
 
 | Transport | Use Case | Notes |
 |-----------|----------|-------|
-| **TCP** | Native IPC, microservices | Lowest overhead, no browser support; optional io_uring backend (experimental) |
-| **WebSocket** | Real-time, bidirectional | Persistent connection, streams supported; TLS via WSS |
-| **HTTP** | Stateless web APIs | Browser-compatible, SSR-capable; TLS via HTTPS |
+| **TCP** | Native IPC, microservices | Lowest overhead, no browser support; optional io_uring backend (experimental); `-DNPRPC_ENABLE_TCP=OFF` to disable |
+| **WebSocket** | Real-time, bidirectional | Persistent connection, streams supported; TLS via WSS; `-DNPRPC_ENABLE_WEBSOCKET=OFF` to disable |
+| **HTTP** | Stateless web APIs | Browser-compatible, SSR-capable; TLS via HTTPS; `-DNPRPC_ENABLE_HTTP=OFF` to disable |
 | **HTTP/3** | Modern web | QUIC-based, SSR-capable; requires `-DNPRPC_ENABLE_HTTP3=ON` |
 | **WebTransport** | Browser streaming | Multiplexed streams over HTTP/3; native stream mapping for `stream<T>` |
 | **QUIC** | Native next-gen | Multiplexed, encrypted; requires `-DNPRPC_ENABLE_QUIC=ON` |
-| **Shared Memory** | Same-machine IPC | Zero-copy in some cases; extremely low latency |
+| **Shared Memory** | Same-machine IPC | Zero-copy in some cases; extremely low latency. Always compiled in. |
+
+TLS for HTTPS/WSS is optional (`-DNPRPC_ENABLE_SSL=OFF`). A shared-memory-only build (TCP/HTTP/WebSocket/SSL all off) does not need OpenSSL or liburing. See [docs/BUILD.md](docs/BUILD.md).
 
 ## Quick Start
 

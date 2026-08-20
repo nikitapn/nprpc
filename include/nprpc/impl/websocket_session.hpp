@@ -5,7 +5,9 @@
 
 #include <nprpc/common.hpp>
 #include <nprpc/impl/session.hpp>
+#ifdef NPRPC_SSL_ENABLED
 #include <nprpc/impl/ssl.hpp>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -145,6 +147,7 @@ private:
   websocket_t ws_;
 };
 
+#ifdef NPRPC_SSL_ENABLED
 template <typename Derived>
 class SSLWebSocketSessionT : public WebSocketSession<Derived>
 {
@@ -166,6 +169,7 @@ public:
 private:
   websocket_t ws_;
 };
+#endif // NPRPC_SSL_ENABLED
 
 class AcceptingPlainWebSocketSession
     : public PlainWebSocketSessionT<AcceptingPlainWebSocketSession>,
@@ -182,6 +186,7 @@ public:
   }
 };
 
+#ifdef NPRPC_SSL_ENABLED
 class AcceptingSSLWebSocketSession
     : public SSLWebSocketSessionT<AcceptingSSLWebSocketSession>,
       public std::enable_shared_from_this<AcceptingSSLWebSocketSession>
@@ -197,6 +202,7 @@ public:
                  endpoint.address().to_v4().to_string(), endpoint.port());
   }
 };
+#endif // NPRPC_SSL_ENABLED
 
 template <class Body, class Allocator>
 void make_accepting_websocket_session(
@@ -204,11 +210,13 @@ void make_accepting_websocket_session(
   beast::http::request<Body, beast::http::basic_fields<Allocator>> req,
   net::ip::address throttle_ip = {});
 
+#ifdef NPRPC_SSL_ENABLED
 template <class Body, class Allocator>
 void make_accepting_websocket_session(
   ssl_stream stream,
   beast::http::request<Body, beast::http::basic_fields<Allocator>> req,
   net::ip::address throttle_ip = {});
+#endif
 
 class ClientPlainWebSocketSession
     : public PlainWebSocketSessionT<ClientPlainWebSocketSession>,
@@ -230,6 +238,7 @@ public:
   void reconnect() {}
 };
 
+#ifdef NPRPC_SSL_ENABLED
 class ClientSSLWebSocketSession
     : public SSLWebSocketSessionT<ClientSSLWebSocketSession>,
       public std::enable_shared_from_this<ClientSSLWebSocketSession>
@@ -249,6 +258,7 @@ public:
   // TODO: Implement reconnect logic
   void reconnect() {}
 };
+#endif // NPRPC_SSL_ENABLED
 
 // Factory functions to create client WebSocket sessions
 // These functions are used to create client sessions
@@ -257,8 +267,10 @@ std::shared_ptr<ClientPlainWebSocketSession>
 make_client_plain_websocket_session(const EndPoint& endpoint,
                                     net::io_context& ioc);
 
+#ifdef NPRPC_SSL_ENABLED
 std::shared_ptr<ClientSSLWebSocketSession>
 make_client_ssl_websocket_session(const EndPoint& endpoint,
                                   net::io_context& ioc);
+#endif
 
 } // namespace nprpc::impl

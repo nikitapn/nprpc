@@ -60,25 +60,56 @@ int main()
   boost::asio::io_context ioc;
 
   try {
-    auto rpc = nprpc::RpcBuilder()
-                   .set_log_level(nprpc::LogLevel::error)
-                   .with_hostname("localhost")
-                   .with_tcp(15000)
-                   .with_http(15001)
-                      .allow_origins({"https://localhost:24443"})
-                   .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
-                        "/home/nikita/projects/nprpc/certs/out/localhost.key")
-                   .build();
+    nprpc::RpcBuilder builder;
+    builder.set_log_level(nprpc::LogLevel::error);
+
+#if defined(NPRPC_ENABLE_TCP) || defined(NPRPC_ENABLE_HTTP) || \
+    defined(NPRPC_ENABLE_WEBSOCKET) || defined(NPRPC_ENABLE_QUIC)
+    builder.with_hostname("localhost");
+#endif
+
+#ifdef NPRPC_ENABLE_TCP
+    builder.with_tcp(15000);
+#endif
+#ifdef NPRPC_ENABLE_HTTP
+    auto http = builder.with_http(15001)
+                    .allow_origins({"https://localhost:24443"});
+#ifdef NPRPC_ENABLE_SSL
+    http.ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
+             "/home/nikita/projects/nprpc/certs/out/localhost.key");
+#endif
+#endif
+
+    auto rpc = builder.build();
 
     auto poa = nprpc::PoaBuilder(rpc)
                    .with_max_objects(1)
-                   .with_object_id_policy( nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied) .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                   .with_object_id_policy(
+                       nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied)
+                   .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
                    .build();
 
-
     using F = nprpc::ObjectActivationFlags;
-    auto oid = poa->activate_object_with_id(
-        0, &server, F::tcp | F::http | F::https | F::ws | F::wss);
+    auto flags = F::shm;
+#ifdef NPRPC_ENABLE_TCP
+    flags = flags | F::tcp;
+#endif
+#ifdef NPRPC_ENABLE_HTTP
+    flags = flags | F::http;
+# ifdef NPRPC_ENABLE_SSL
+    flags = flags | F::https;
+# endif
+#endif
+#if defined(NPRPC_ENABLE_WEBSOCKET) && defined(NPRPC_ENABLE_HTTP)
+    flags = flags | F::ws;
+# ifdef NPRPC_ENABLE_SSL
+    flags = flags | F::wss;
+# endif
+#endif
+#ifdef NPRPC_ENABLE_QUIC
+    flags = flags | F::quic;
+#endif
+    [[maybe_unused]] auto oid = poa->activate_object_with_id(0, &server, flags);
 
     boost::asio::signal_set signals(rpc->ioc(), SIGINT, SIGTERM);
     signals.async_wait(

@@ -22,6 +22,11 @@ add_custom_target(
     "Generating all nprpc_test_stub files"
 )
 
+# Integration tests need TCP + HTTP + WebSocket + SSL (nameserver + all
+# transport permutations). Shared-memory unit tests below still build when
+# those transports are compiled out.
+if(NPRPC_ENABLE_TCP AND NPRPC_ENABLE_HTTP AND NPRPC_ENABLE_WEBSOCKET AND NPRPC_ENABLE_SSL)
+
 # Main test executable for C++ tests
 add_executable(nprpc_test
   src/main.cpp
@@ -131,6 +136,8 @@ add_custom_target(run_nprpc_tests_verbose
 #   COMMENT "Automatically running nprpc C++ tests after build..."
 # )
 
+endif() # NPRPC_ENABLE_TCP AND HTTP AND WEBSOCKET AND SSL
+
 # Test executable for lock-free ring buffer
 add_executable(test_lock_free_ring_buffer
   src/test_lock_free_ring_buffer.cpp
@@ -150,8 +157,6 @@ target_link_libraries(test_lock_free_ring_buffer
     GTest::gtest
     rt
     pthread
-    ssl
-    crypto
 )
 
 add_test(NAME LockFreeRingBuffer COMMAND test_lock_free_ring_buffer)
@@ -263,8 +268,6 @@ target_link_libraries(test_shared_memory_reaper
     GTest::gtest_main
     rt
     pthread
-    ssl
-    crypto
 )
 
 add_test(NAME SharedMemoryReaper COMMAND test_shared_memory_reaper)
@@ -318,6 +321,7 @@ add_test(NAME StreamTeardown COMMAND test_stream_teardown)
 set_tests_properties(StreamTeardown PROPERTIES TIMEOUT 60)
 
 # Test executable for HTTP utility helpers
+if(NPRPC_ENABLE_HTTP)
 add_executable(test_http_utils
   src/test_http_utils.cpp
   ../src/http/http_utils.cpp
@@ -336,6 +340,7 @@ target_link_libraries(test_http_utils
 )
 
 add_test(NAME HttpUtils COMMAND test_http_utils)
+endif() # NPRPC_ENABLE_HTTP
 
 # HTTP/3 Shell Script Tests (requires server to be started manually or via wrapper)
 if(NPRPC_ENABLE_HTTP3)
@@ -434,15 +439,22 @@ exit \$RESULT
   )
   
   # Add dependency on the server test executable
-  add_dependencies(nprpc_test nprpc_server_test)
+  if(TARGET nprpc_test)
+    add_dependencies(nprpc_test nprpc_server_test)
+  endif()
 endif()
 
 # Ensure the auxiliary shared-memory test executables are built before
 # running the post-build CTest invocation on the main `nprpc_test` target.
-add_dependencies(nprpc_test
-  test_lock_free_ring_buffer
-  test_shared_memory_endpoint
-  test_shared_memory_listener
-  test_shared_memory_peer_liveness
-  test_http_utils
-)
+if(TARGET nprpc_test)
+  set(_nprpc_test_aux_deps
+    test_lock_free_ring_buffer
+    test_shared_memory_endpoint
+    test_shared_memory_listener
+    test_shared_memory_peer_liveness
+  )
+  if(TARGET test_http_utils)
+    list(APPEND _nprpc_test_aux_deps test_http_utils)
+  endif()
+  add_dependencies(nprpc_test ${_nprpc_test_aux_deps})
+endif()

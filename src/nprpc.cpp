@@ -199,29 +199,37 @@ Object::select_endpoint(std::optional<EndPoint> remote_endpoint) noexcept
             return std::make_pair(pos, std::nullopt);
           break;
         case EndPointType::Quic:
+#ifdef NPRPC_QUIC_ENABLED
           if ((pos = urls.find(quic_prefix)) != std::string::npos)
             return std::make_pair(pos, std::nullopt);
+#endif
           break;
         case EndPointType::SecuredWebSocket:
+#if defined(NPRPC_WEBSOCKET_ENABLED) && defined(NPRPC_SSL_ENABLED)
           if ((pos = urls.find(web_prefix)) != std::string::npos &&
               (flags() & static_cast<uint16_t>(
                              detail::ObjectFlag::WebSocketSecured)))
             return std::make_pair(pos, EndPointType::SecuredWebSocket);
+#endif
           break;
         case EndPointType::WebSocket:
+#ifdef NPRPC_WEBSOCKET_ENABLED
           if ((pos = urls.find(web_prefix)) != std::string::npos &&
               (flags() & static_cast<uint16_t>(
                              detail::ObjectFlag::WebSocketUnsecured))) {
             try_replace_ip(pos, web_prefix);
             return std::make_pair(pos, EndPointType::WebSocket);
           }
+#endif
           break;
         case EndPointType::Tcp:
         case EndPointType::TcpPrivate:
+#ifdef NPRPC_TCP_ENABLED
           if ((pos = urls.find(tcp_prefix)) != std::string::npos) {
             try_replace_ip(pos, tcp_prefix);
             return std::make_pair(pos, std::nullopt);
           }
+#endif
           break;
         case EndPointType::Http:
         case EndPointType::SecuredHttp:

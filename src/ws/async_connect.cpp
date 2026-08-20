@@ -6,11 +6,13 @@
 #include <nprpc/exception.hpp>
 #include <nprpc/impl/async_connect.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
+#ifdef NPRPC_SSL_ENABLED
 #include <nprpc/impl/ssl.hpp>
+#include <boost/asio/ssl.hpp>
+#endif
 
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/post.hpp>
-#include <boost/asio/ssl.hpp>
 
 namespace nprpc::impl {
 
@@ -25,11 +27,13 @@ AsyncConnector<Type>::run()
   net::ip::make_address_v4(host_, ec);
 
   if (!ec) {
+#ifdef NPRPC_SSL_ENABLED
     if (std::is_same_v<Type, type_wss>) {
       throw nprpc::Exception("SSL connections require a valid FQDN, "
                              "instead got an IP address: " +
                              host_);
     }
+#endif
   }
 
   // Start the timer
@@ -90,7 +94,9 @@ void AsyncConnector<Type>::on_resolve(const beast::error_code& ec,
   asyncon(results);
 }
 
+#ifdef NPRPC_SSL_ENABLED
 extern net::ssl::context ssl_context_client;
+#endif
 
 template <typename Type>
 void AsyncConnector<Type>::on_connect(
@@ -125,6 +131,7 @@ void AsyncConnector<Type>::on_connect(
     return;
   }
 
+#ifdef NPRPC_SSL_ENABLED
   // SSL handshake for SSL streams
   if constexpr (std::is_same_v<Type, type_wss>) {
     // Create SSL stream from TCP stream
@@ -150,6 +157,7 @@ void AsyncConnector<Type>::on_connect(
         }));
     return;
   }
+#endif
 }
 
 template <typename Type>
@@ -171,6 +179,7 @@ void AsyncConnector<Type>::on_ws_handshake(const beast::error_code& ec,
   }
 }
 
+#ifdef NPRPC_SSL_ENABLED
 template <typename Type>
 void AsyncConnector<Type>::on_ssl_handshake(
     const beast::error_code& ec,
@@ -217,6 +226,7 @@ void AsyncConnector<Type>::on_ssl_ws_handshake(const beast::error_code& ec,
     stream_promise_->set_value(std::move(ws));
   }
 }
+#endif // NPRPC_SSL_ENABLED
 
 template <typename Type> void AsyncConnector<Type>::do_timeout()
 {
@@ -244,6 +254,8 @@ template <typename Type> void AsyncConnector<Type>::cleanup()
 // Explicit template instantiations
 template class AsyncConnector<type_tcp>;
 template class AsyncConnector<type_ws>;
+#ifdef NPRPC_SSL_ENABLED
 template class AsyncConnector<type_wss>;
+#endif
 
 } // namespace nprpc::impl

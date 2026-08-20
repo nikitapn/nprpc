@@ -5,12 +5,14 @@
 
 #include <nprpc/common.hpp>
 #include <nprpc/endpoint.hpp>
+#ifdef NPRPC_SSL_ENABLED
 #include <nprpc/impl/ssl.hpp>
-
 #include <boost/asio/ssl/stream.hpp>
+#include <boost/beast/ssl.hpp>
+#endif
+
 #include <boost/asio/strand.hpp>
 #include <boost/beast/core.hpp>
-#include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
 
 #include <future>
@@ -28,10 +30,12 @@ struct type_ws {
   static constexpr bool is_websocket = true;
 };
 
+#ifdef NPRPC_SSL_ENABLED
 struct type_wss {
   using stream_t = ssl_ws;
   static constexpr bool is_websocket = true;
 };
+#endif
 
 // Helper class for resolver/socket async operations
 template <typename Type>
@@ -59,12 +63,14 @@ class AsyncConnector : public std::enable_shared_from_this<AsyncConnector<Type>>
   void on_ws_handshake(const beast::error_code& ec,
                        std::unique_ptr<plain_ws>&& ws);
 
+#ifdef NPRPC_SSL_ENABLED
   void on_ssl_handshake(
       const beast::error_code& ec,
       std::unique_ptr<beast::ssl_stream<beast_tcp_stream_strand>>&& ssl_stream);
 
   void on_ssl_ws_handshake(const beast::error_code& ec,
                            std::unique_ptr<ssl_ws>&& ws);
+#endif
 
   void do_timeout();
   void cleanup();
@@ -110,6 +116,7 @@ async_connect_ws(const EndPoint& endpoint,
       ->run();
 }
 
+#ifdef NPRPC_SSL_ENABLED
 inline std::shared_ptr<std::promise<std::unique_ptr<ssl_ws>>>
 async_connect_wss(const EndPoint& endpoint,
                   net::io_context& ioc,
@@ -119,5 +126,6 @@ async_connect_wss(const EndPoint& endpoint,
              ioc, std::string(endpoint.hostname()), endpoint.port(), timeout)
       ->run();
 }
+#endif
 
 } // namespace nprpc::impl

@@ -34,12 +34,43 @@ option(NPRPC_BUILD_JS "Build JavaScript bindings" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_BUILD_EXAMPLES "Build examples" OFF)
 option(NPRPC_INSTALL "Generate install target" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_BUILD_DEV_DOCKER "Build developer Docker image from Dockerfile.dev" OFF)
+option(NPRPC_ENABLE_TCP "Enable TCP transport" ON)
+option(NPRPC_ENABLE_HTTP "Enable HTTP/1.1 server (static files, HTTP RPC, WebSocket upgrades)" ON)
+option(NPRPC_ENABLE_WEBSOCKET "Enable WebSocket transport (WS/WSS)" ON)
+option(NPRPC_ENABLE_SSL "Enable TLS (HTTPS/WSS) via OpenSSL/BoringSSL" ON)
 option(NPRPC_ENABLE_QUIC "Enable QUIC transport using MsQuic" OFF)
 option(NPRPC_ENABLE_HTTP3 "Enable HTTP/3 server" OFF)
 option(NPRPC_ENABLE_SSR "Enable SSR support via Node.js worker (requires Boost.Process)" OFF)
 option(NPRPC_BUILD_NODE_ADDON "Build Node.js addon" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(NPRPC_USE_BORINGSSL "Use BoringSSL from third_party/boringssl instead of system OpenSSL" OFF)
+
+# SSL here is Boost.Asio TLS for HTTPS/WSS. HTTP/3 and QUIC have their own
+# TLS stacks and do not require NPRPC_ENABLE_SSL.
+if(NPRPC_ENABLE_SSR AND NOT NPRPC_ENABLE_HTTP)
+  message(FATAL_ERROR "NPRPC_ENABLE_SSR requires NPRPC_ENABLE_HTTP")
+endif()
+if(NPRPC_ENABLE_SSL AND NOT NPRPC_ENABLE_HTTP AND NOT NPRPC_ENABLE_WEBSOCKET)
+  message(STATUS "NPRPC_ENABLE_SSL ignored: HTTP and WebSocket are disabled")
+  set(NPRPC_ENABLE_SSL OFF)
+endif()
+if(NPRPC_ENABLE_WEBSOCKET AND NOT NPRPC_ENABLE_HTTP)
+  message(STATUS "WebSocket enabled without HTTP: server-side WS upgrades are unavailable")
+endif()
+
+set(NPRPC_NEED_OPENSSL OFF)
+if(NPRPC_ENABLE_SSL OR NPRPC_ENABLE_HTTP3)
+  set(NPRPC_NEED_OPENSSL ON)
+endif()
+
+# Derived: the default in-tree network stack. Tests and benchmarks assume
+# TCP + HTTP + WebSocket + SSL. npnameserver still builds with a subset.
+set(NPRPC_FULL_STACK OFF)
+if(NPRPC_ENABLE_TCP AND NPRPC_ENABLE_HTTP AND NPRPC_ENABLE_WEBSOCKET AND NPRPC_ENABLE_SSL)
+  set(NPRPC_FULL_STACK ON)
+endif()
+
+message(STATUS "NPRPC transports: SHM=ON TCP=${NPRPC_ENABLE_TCP} HTTP=${NPRPC_ENABLE_HTTP} WS=${NPRPC_ENABLE_WEBSOCKET} SSL=${NPRPC_ENABLE_SSL} QUIC=${NPRPC_ENABLE_QUIC} HTTP3=${NPRPC_ENABLE_HTTP3} SSR=${NPRPC_ENABLE_SSR} FULL_STACK=${NPRPC_FULL_STACK}")
 set(NPRPC_PROJECT_GIT_COMMIT "" CACHE STRING "Override git commit hash recorded in build info")
 set(NPRPC_THIRD_PARTY_GIT_COMMITS "" CACHE STRING "Override third-party git commits as name=commit|name=commit")
 
@@ -97,31 +128,37 @@ endif()
 find_package(Threads REQUIRED)
 find_package(Git QUIET)
 
-if(NPRPC_USE_BORINGSSL)
-  message(STATUS "Using BoringSSL from third_party/boringssl")
-  # BoringSSL must always be static even when BUILD_SHARED_LIBS=ON
-  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-  set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "" FORCE)
-  set(_saved_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
-  set(BUILD_SHARED_LIBS OFF)
-  add_subdirectory(third_party/boringssl EXCLUDE_FROM_ALL)
-  set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS})
-  # GCC issues a false-positive -Werror=array-bounds= on BoringSSL's own
-  # e_aesgcmsiv.cc; suppress it so the build doesn't fail.
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(crypto PRIVATE -Wno-array-bounds -Wno-stringop-overread)
+if(NPRPC_NEED_OPENSSL)
+  if(NPRPC_USE_BORINGSSL)
+    message(STATUS "Using BoringSSL from third_party/boringssl")
+    # BoringSSL must always be static even when BUILD_SHARED_LIBS=ON
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "" FORCE)
+    set(_saved_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS OFF)
+    add_subdirectory(third_party/boringssl EXCLUDE_FROM_ALL)
+    set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS})
+    # GCC issues a false-positive -Werror=array-bounds= on BoringSSL's own
+    # e_aesgcmsiv.cc; suppress it so the build doesn't fail.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      target_compile_options(crypto PRIVATE -Wno-array-bounds -Wno-stringop-overread)
+    endif()
+    # Expose BoringSSL under the conventional OpenSSL:: namespace so that
+    # Boost.Asio and other consumers compile without changes.
+    add_library(OpenSSL::Crypto ALIAS crypto)
+    add_library(OpenSSL::SSL ALIAS ssl)
+  else()
+    find_package(OpenSSL REQUIRED)
   endif()
-  # Expose BoringSSL under the conventional OpenSSL:: namespace so that
-  # Boost.Asio and other consumers compile without changes.
-  add_library(OpenSSL::Crypto ALIAS crypto)
-  add_library(OpenSSL::SSL ALIAS ssl)
-else()
-  find_package(OpenSSL REQUIRED)
+elseif(NPRPC_USE_BORINGSSL)
+  message(STATUS "NPRPC_USE_BORINGSSL ignored: OpenSSL is not required for this configuration")
 endif()
 
-# Find liburing via pkg-config (required for io_uring support in Boost.Asio)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+# liburing is only used by the TCP io_uring backend.
+if(NPRPC_ENABLE_TCP)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+endif()
 
 # Custom Boost directory support (for Docker/CI builds with local Boost)
 if(DEFINED BOOST_DIR)
@@ -194,6 +231,7 @@ if(NPRPC_ENABLE_HTTP3)
   add_subdirectory(third_party/nghttp3 EXCLUDE_FROM_ALL)
 
   if(UNIX AND NOT WIN32)
+    find_package(PkgConfig REQUIRED)
     pkg_check_modules(libbpf QUIET IMPORTED_TARGET libbpf)
     find_program(CLANG_EXECUTABLE NAMES clang)
     find_program(XXD_EXECUTABLE NAMES xxd)
@@ -315,27 +353,6 @@ add_library(nprpc
   src/shm/shared_memory_reaper.cpp
   src/shm/shared_memory_server_session.cpp
   src/shm/shared_memory_init.cpp
-  # TCP transport
-  src/tcp/client_socket_connection.cpp
-  src/tcp/server_session_socket.cpp
-  src/tcp/server_epoll.cpp
-  src/tcp/server_uring.cpp
-  src/tcp/client_uring_connection.cpp
-  # HTTP transport
-  src/http/http_server.cpp
-  src/http/http_utils.cpp
-  src/http/http_rpc_session.cpp
-  src/http/http_file_cache.cpp
-  src/http/http_file_watcher.cpp
-  src/http/http_auth.cpp
-  src/http/http3_server_nghttp3.cpp
-  # WebSocket transport
-  src/ws/async_connect.cpp
-  src/ws/client_websocket_connection.cpp
-  src/ws/server_session_websocket.cpp
-  src/ws/websocket_session.cpp
-  # QUIC transport
-  src/quic/quic_transport.cpp
   # Core framework files
   src/nprpc.cpp
   src/logging.cpp
@@ -381,6 +398,60 @@ add_library(nprpc
   include/nprpc/serialization/serialization.h
 )
 
+if(NPRPC_ENABLE_TCP)
+  target_sources(nprpc PRIVATE
+    src/tcp/client_socket_connection.cpp
+    src/tcp/server_session_socket.cpp
+    src/tcp/server_epoll.cpp
+    src/tcp/server_uring.cpp
+    src/tcp/client_uring_connection.cpp
+  )
+  target_compile_definitions(nprpc PUBLIC NPRPC_TCP_ENABLED NPRPC_ENABLE_TCP)
+endif()
+
+if(NPRPC_ENABLE_HTTP OR NPRPC_ENABLE_HTTP3)
+  target_sources(nprpc PRIVATE
+    src/http/http_utils.cpp
+    src/http/http_rpc_session.cpp
+    src/http/http_file_cache.cpp
+    src/http/http_file_watcher.cpp
+    src/http/http_auth.cpp
+  )
+endif()
+
+if(NPRPC_ENABLE_HTTP)
+  target_sources(nprpc PRIVATE
+    src/http/http_server.cpp
+  )
+  target_compile_definitions(nprpc PUBLIC NPRPC_HTTP_ENABLED NPRPC_ENABLE_HTTP)
+endif()
+
+if(NPRPC_ENABLE_WEBSOCKET)
+  target_sources(nprpc PRIVATE
+    src/ws/async_connect.cpp
+    src/ws/client_websocket_connection.cpp
+    src/ws/server_session_websocket.cpp
+    src/ws/websocket_session.cpp
+  )
+  target_compile_definitions(nprpc PUBLIC NPRPC_WEBSOCKET_ENABLED NPRPC_ENABLE_WEBSOCKET)
+endif()
+
+if(NPRPC_ENABLE_SSL)
+  target_compile_definitions(nprpc PUBLIC NPRPC_SSL_ENABLED NPRPC_ENABLE_SSL)
+endif()
+
+if(NPRPC_ENABLE_QUIC)
+  target_sources(nprpc PRIVATE
+    src/quic/quic_transport.cpp
+  )
+endif()
+
+if(NPRPC_ENABLE_HTTP3)
+  target_sources(nprpc PRIVATE
+    src/http/http3_server_nghttp3.cpp
+  )
+endif()
+
 # SSR support (Node.js worker)
 if(NPRPC_ENABLE_SSR)
   target_sources(nprpc PRIVATE
@@ -417,50 +488,52 @@ target_include_directories(nprpc
 )
 
 # Link libraries
+target_link_libraries(nprpc
+  PUBLIC
+    Threads::Threads
+    Boost::headers
+  PRIVATE
+    unordered_dense::unordered_dense
+)
+
+if(NPRPC_ENABLE_TCP)
+  target_link_libraries(nprpc PUBLIC PkgConfig::uring)
+endif()
+
 # When using BoringSSL, ssl/crypto are static and must not be re-exported as
 # dynamic NEEDED entries from the shared library — make them PRIVATE.
-if(NPRPC_USE_BORINGSSL)
-  target_link_libraries(nprpc
-    PUBLIC
-      Threads::Threads
-      Boost::headers
-      PkgConfig::uring
-    PRIVATE
+if(NPRPC_NEED_OPENSSL)
+  if(NPRPC_USE_BORINGSSL)
+    target_link_libraries(nprpc PRIVATE
       OpenSSL::SSL
       OpenSSL::Crypto
-      unordered_dense::unordered_dense
-  )
-  # Re-export BoringSSL's include directory so consumers (npnameserver, etc.)
-  # can find <openssl/...> headers.
-  target_include_directories(nprpc PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/boringssl/include>
-  )
-  # BoringSSL is built with -fvisibility=hidden, so ERR_* and other OpenSSL
-  # symbols are NOT exported from libnprpc.so.  Any consumer that directly
-  # instantiates Boost.Asio SSL headers (e.g. boost/asio/ssl/impl/error.ipp)
-  # must therefore also link the BoringSSL static archives directly.
-  #
-  # CMake deduplicates ALIAS/target-based dependencies when it knows the target
-  # is already a PRIVATE dep of a shared library, so the explicit
-  # "OpenSSL::SSL / OpenSSL::Crypto" entries in downstream targets' link lists
-  # are silently dropped.  Using $<TARGET_FILE:...> produces a raw path that
-  # bypasses that deduplication and always lands in the consumer's link command.
-  # $<BUILD_INTERFACE:...> keeps it out of the installed-package targets file.
-  target_link_libraries(nprpc INTERFACE
-    $<BUILD_INTERFACE:$<TARGET_FILE:ssl>>
-    $<BUILD_INTERFACE:$<TARGET_FILE:crypto>>
-  )
-else()
-  target_link_libraries(nprpc
-    PUBLIC
-      Threads::Threads
+    )
+    # Re-export BoringSSL's include directory so consumers (npnameserver, etc.)
+    # can find <openssl/...> headers.
+    target_include_directories(nprpc PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/boringssl/include>
+    )
+    # BoringSSL is built with -fvisibility=hidden, so ERR_* and other OpenSSL
+    # symbols are NOT exported from libnprpc.so.  Any consumer that directly
+    # instantiates Boost.Asio SSL headers (e.g. boost/asio/ssl/impl/error.ipp)
+    # must therefore also link the BoringSSL static archives directly.
+    #
+    # CMake deduplicates ALIAS/target-based dependencies when it knows the target
+    # is already a PRIVATE dep of a shared library, so the explicit
+    # "OpenSSL::SSL / OpenSSL::Crypto" entries in downstream targets' link lists
+    # are silently dropped.  Using $<TARGET_FILE:...> produces a raw path that
+    # bypasses that deduplication and always lands in the consumer's link command.
+    # $<BUILD_INTERFACE:...> keeps it out of the installed-package targets file.
+    target_link_libraries(nprpc INTERFACE
+      $<BUILD_INTERFACE:$<TARGET_FILE:ssl>>
+      $<BUILD_INTERFACE:$<TARGET_FILE:crypto>>
+    )
+  else()
+    target_link_libraries(nprpc PUBLIC
       OpenSSL::SSL
       OpenSSL::Crypto
-      Boost::headers
-      PkgConfig::uring
-    PRIVATE
-      unordered_dense::unordered_dense
-  )
+    )
+  endif()
 endif()
 
 
@@ -471,12 +544,12 @@ if(NPRPC_ENABLE_QUIC)
   target_include_directories(nprpc PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/msquic/src/inc
   )
-  target_compile_definitions(nprpc PUBLIC NPRPC_QUIC_ENABLED)
+  target_compile_definitions(nprpc PUBLIC NPRPC_QUIC_ENABLED NPRPC_ENABLE_QUIC)
 endif()
 
 # HTTP/3 linking
 if(NPRPC_ENABLE_HTTP3)
-  target_compile_definitions(nprpc PUBLIC NPRPC_HTTP3_ENABLED)
+  target_compile_definitions(nprpc PUBLIC NPRPC_HTTP3_ENABLED NPRPC_ENABLE_HTTP3)
   if(NPRPC_USE_BORINGSSL)
     target_link_libraries(nprpc PRIVATE
       ngtcp2_static
@@ -507,22 +580,22 @@ if(NPRPC_ENABLE_HTTP3)
 endif()
 
 # Platform-specific settings
-if(WIN32)
+if(WIN32 AND NPRPC_NEED_OPENSSL)
   target_link_libraries(nprpc PUBLIC crypt32)
 endif()
 
 # SSR support (Node.js worker)
 if(NPRPC_ENABLE_SSR)
   message(STATUS "SSR support enabled - requires Boost.Process v2")
-  
+
   # Find Boost with required components for Process v2
   find_package(Boost REQUIRED COMPONENTS filesystem process)
-  
+
   target_include_directories(nprpc PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glaze/include
   )
   target_link_libraries(nprpc PRIVATE Boost::filesystem Boost::process)
-  target_compile_definitions(nprpc PUBLIC NPRPC_SSR_ENABLED)
+  target_compile_definitions(nprpc PUBLIC NPRPC_SSR_ENABLED NPRPC_ENABLE_SSR)
 endif()
 
 # Ensure export macro is defined when building the library so symbols are exported
@@ -580,14 +653,13 @@ if(NPRPC_BUILD_JS AND UNIX)
   add_subdirectory(nprpc_devtools)
 endif()
 
-if(NPRPC_BUILD_TESTS AND UNIX)
+if(NPRPC_BUILD_TESTS AND NPRPC_FULL_STACK AND UNIX)
   enable_testing()
   add_subdirectory(test)
-endif()
-
-# Benchmarks (optional, requires Google Benchmark)
-if(NPRPC_BUILD_TESTS AND UNIX)
+  # Benchmarks (optional, requires Google Benchmark)
   add_subdirectory(benchmark)
+elseif(NPRPC_BUILD_TESTS AND NOT NPRPC_FULL_STACK)
+  message(STATUS "Skipping tests and benchmarks: NPRPC_FULL_STACK is OFF (needs TCP+HTTP+WebSocket+SSL)")
 endif()
 
 if(NPRPC_BUILD_EXAMPLES)
@@ -627,7 +699,11 @@ if(NPRPC_INSTALL)
 
   # Install tools
   if(NPRPC_BUILD_TOOLS)
-    install(TARGETS npnameserver npidl
+    set(_nprpc_tool_targets npidl)
+    if(TARGET npnameserver)
+      list(APPEND _nprpc_tool_targets npnameserver)
+    endif()
+    install(TARGETS ${_nprpc_tool_targets}
       RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
   endif()

@@ -22,8 +22,11 @@ namespace nprpc::impl {
 
 template <class T>
 concept AnyWebSocketSession =
-    std::is_base_of_v<AcceptingPlainWebSocketSession, T> ||
-    std::is_base_of_v<AcceptingSSLWebSocketSession, T>;
+    std::is_base_of_v<AcceptingPlainWebSocketSession, T>
+#ifdef NPRPC_SSL_ENABLED
+    || std::is_base_of_v<AcceptingSSLWebSocketSession, T>
+#endif
+    ;
 
 template <AnyWebSocketSession Derived>
 class websocket_session_with_acceptor : public Derived
@@ -157,6 +160,7 @@ void make_accepting_websocket_session(
       ->run(std::move(req), std::move(throttle_ip));
 }
 
+#ifdef NPRPC_SSL_ENABLED
 template <>
 void make_accepting_websocket_session(
     ssl_stream stream,
@@ -169,5 +173,6 @@ void make_accepting_websocket_session(
       ssl_ws(std::move(stream)))
       ->run(std::move(req), std::move(throttle_ip));
 }
+#endif
 
 } // namespace nprpc::impl

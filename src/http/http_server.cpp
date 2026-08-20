@@ -6,7 +6,13 @@
 #include <nprpc/impl/http_rpc_session.hpp>
 #include <nprpc/impl/http_utils.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
+#ifdef NPRPC_WEBSOCKET_ENABLED
 #include <nprpc/impl/websocket_session.hpp>
+#endif
+#ifdef NPRPC_SSL_ENABLED
+#include <nprpc/impl/ssl.hpp>
+#include <boost/asio/ssl.hpp>
+#endif
 #ifdef NPRPC_SSR_ENABLED
 #include <nprpc/impl/ssr_manager.hpp>
 #endif
@@ -20,7 +26,9 @@
 
 namespace nprpc::impl {
 
+#ifdef NPRPC_SSL_ENABLED
 extern net::ssl::context ssl_context_server;
+#endif
 
 namespace {
 
@@ -525,6 +533,21 @@ public:
 
     // See if it is a WebSocket Upgrade
     if (beast::websocket::is_upgrade(parser_->get())) {
+#ifndef NPRPC_WEBSOCKET_ENABLED
+      {
+        auto& req = parser_->get();
+        http::response<http::string_body> res{http::status::not_implemented,
+                                              req.version()};
+        res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(http::field::content_type, "text/plain");
+        add_alt_svc_header(res);
+        res.keep_alive(false);
+        res.body() = "WebSocket support is not compiled in";
+        res.prepare_payload();
+        queue_write(std::move(res));
+        return;
+      }
+#else
       auto& req = parser_->get();
       auto const origin = std::string(req[http::field::origin]);
       auto const host = std::string(req[http::field::host]);
@@ -583,6 +606,7 @@ public:
       return make_accepting_websocket_session(derived().release_stream(),
                                               parser_->release(),
                                               remote_ip);
+#endif // NPRPC_WEBSOCKET_ENABLED
     }
 
     // Send the response
@@ -689,6 +713,7 @@ public:
 
 //------------------------------------------------------------------------------
 
+#ifdef NPRPC_SSL_ENABLED
 // Handles an SSL HTTP connection
 class ssl_http_session : public http_session<ssl_http_session>,
                          public std::enable_shared_from_this<ssl_http_session>
@@ -762,6 +787,7 @@ private:
     // At this point the connection is closed gracefully
   }
 };
+#endif // NPRPC_SSL_ENABLED
 
 //------------------------------------------------------------------------------
 
@@ -769,16 +795,22 @@ private:
 class detect_session : public std::enable_shared_from_this<detect_session>
 {
   beast_tcp_stream_strand stream_;
+#ifdef NPRPC_SSL_ENABLED
   net::ssl::context& ctx_;
+#endif
   std::shared_ptr<std::string const> doc_root_;
   flat_buffer buffer_;
 
 public:
   explicit detect_session(beast_tcp_stream_strand&& socket,
+#ifdef NPRPC_SSL_ENABLED
                           net::ssl::context& ctx,
+#endif
                           std::shared_ptr<std::string const> const& doc_root)
       : stream_(std::move(socket))
+#ifdef NPRPC_SSL_ENABLED
       , ctx_(ctx)
+#endif
       , doc_root_(doc_root)
   {
   }
@@ -797,6 +829,7 @@ public:
 
   void on_run()
   {
+#ifdef NPRPC_SSL_ENABLED
     // Set the timeout.
     stream_.expires_after(std::chrono::seconds(6));
 
@@ -804,8 +837,14 @@ public:
         stream_, buffer_,
         beast::bind_front_handler(&detect_session::on_detect,
                                   this->shared_from_this()));
+#else
+    std::make_shared<plain_http_session>(std::move(stream_), std::move(buffer_),
+                                         doc_root_)
+        ->run();
+#endif
   }
 
+#ifdef NPRPC_SSL_ENABLED
   void on_detect(beast::error_code ec, bool result)
   {
     if (ec)
@@ -824,24 +863,31 @@ public:
                                          doc_root_)
         ->run();
   }
+#endif
 };
 
 // Accepts incoming connections and launches the sessions
 class listener : public std::enable_shared_from_this<listener>
 {
   net::io_context& ioc_;
+#ifdef NPRPC_SSL_ENABLED
   net::ssl::context& ctx_;
+#endif
   tcp::acceptor acceptor_;
   std::shared_ptr<std::string const> doc_root_;
   bool running_ = true;
 
 public:
   listener(net::io_context& ioc,
+#ifdef NPRPC_SSL_ENABLED
            net::ssl::context& ctx,
+#endif
            tcp::endpoint endpoint,
            std::shared_ptr<std::string const> const& doc_root)
       : ioc_(ioc)
+#ifdef NPRPC_SSL_ENABLED
       , ctx_(ctx)
+#endif
       , acceptor_(net::make_strand(ioc))
       , doc_root_(doc_root)
   {
@@ -911,7 +957,10 @@ private:
 
     // Create the detector http_session and run it
     std::make_shared<detect_session>(beast_tcp_stream_strand(std::move(socket)),
-                                     ctx_, doc_root_)
+#ifdef NPRPC_SSL_ENABLED
+                                     ctx_,
+#endif
+                                     doc_root_)
         ->run();
 
     // Accept another connection
@@ -928,7 +977,10 @@ void init_http_server(boost::asio::io_context& ioc)
 
   // Create and launch a listening port
   g_http_listener = std::make_shared<listener>(
-      ioc, ssl_context_server,
+      ioc,
+#ifdef NPRPC_SSL_ENABLED
+      ssl_context_server,
+#endif
       tcp::endpoint{net::ip::make_address(g_cfg.listen_address),
                     g_cfg.listen_http_port},
       std::make_shared<std::string const>(g_cfg.http_root_dir));

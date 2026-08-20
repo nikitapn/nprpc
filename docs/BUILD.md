@@ -6,7 +6,7 @@ This document describes how to build and install NPRPC as a standalone library.
 
 - **C++ Compiler**: GCC 10+, Clang 12+, or MSVC 2019+ with C++20 support
 - **CMake**: 3.15 or higher
-- **OpenSSL**: For secure transport support
+- **OpenSSL**: For HTTPS/WSS and HTTP/3. Not required for a shared-memory-only build.
 - **Boost**: (Optional) For program_options in npidl tool
 - **GTest**: (Optional) For building tests
 - **Node.js**: (Optional) For TypeScript/JavaScript bindings
@@ -65,6 +65,10 @@ NPRPC provides several CMake options to customize the build:
 - `NPRPC_INSTALL` (default: ON when standalone) - Generate install targets
 - `NPRPC_BUILD_DEV_DOCKER` (default: OFF) - Build the `nprpc-dev:latest` developer image from `Dockerfile.dev`
 - `BUILD_SHARED_LIBS` (default: ON) - Build shared libraries instead of static
+- `NPRPC_ENABLE_TCP` (default: ON) - TCP transport (also requires liburing)
+- `NPRPC_ENABLE_HTTP` (default: ON) - HTTP/1.1 server (static files, HTTP RPC, WebSocket upgrades)
+- `NPRPC_ENABLE_WEBSOCKET` (default: ON) - WebSocket transport (WS/WSS)
+- `NPRPC_ENABLE_SSL` (default: ON) - TLS via OpenSSL/BoringSSL for HTTPS and WSS. Ignored when HTTP and WebSocket are both off. HTTP/3 and QUIC have their own TLS stacks and do not need this flag.
 - `NPRPC_ENABLE_QUIC` (default: OFF) - Enable QUIC transport (builds MsQuic from submodule)
 - `NPRPC_ENABLE_HTTP3` (default: OFF) - Enable HTTP/3 server support (nghttp3 backend)
 
@@ -76,6 +80,24 @@ Build only the library (minimal build):
 cmake -DNPRPC_BUILD_TOOLS=OFF -DNPRPC_BUILD_TESTS=OFF -DNPRPC_BUILD_JS=OFF ..
 cmake --build .
 ```
+
+Shared-memory-only (no OpenSSL, no liburing, no TCP/HTTP/WebSocket):
+
+```bash
+cmake \
+  -DNPRPC_ENABLE_TCP=OFF \
+  -DNPRPC_ENABLE_HTTP=OFF \
+  -DNPRPC_ENABLE_WEBSOCKET=OFF \
+  -DNPRPC_ENABLE_SSL=OFF \
+  -DNPRPC_ENABLE_QUIC=OFF \
+  -DNPRPC_ENABLE_HTTP3=OFF \
+  ..
+cmake --build .
+```
+
+Public compile definitions for the enabled transports: `NPRPC_ENABLE_TCP` / `NPRPC_TCP_ENABLED`, `NPRPC_ENABLE_HTTP` / `NPRPC_HTTP_ENABLED`, `NPRPC_ENABLE_WEBSOCKET` / `NPRPC_WEBSOCKET_ENABLED`, `NPRPC_ENABLE_SSL` / `NPRPC_SSL_ENABLED`, plus the existing `NPRPC_QUIC_ENABLED` / `NPRPC_HTTP3_ENABLED` / `NPRPC_SSR_ENABLED`. `RpcBuilder::build()` throws if you enable a transport that was compiled out.
+
+CMake also sets `NPRPC_FULL_STACK` when TCP, HTTP, WebSocket, and SSL are all on. Tests and benchmarks are only added in that configuration; `npnameserver` still builds with a reduced transport set.
 
 Build with QUIC and HTTP/3 support:
 

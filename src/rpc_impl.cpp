@@ -9,11 +9,16 @@
 #ifdef NPRPC_QUIC_ENABLED
 #include <nprpc/impl/quic_transport.hpp>
 #endif
+#ifdef NPRPC_WEBSOCKET_ENABLED
+#include <nprpc/impl/websocket_session.hpp>
+#endif
+#ifdef NPRPC_SSL_ENABLED
+#include <boost/asio/ssl/context.hpp>
+#endif
 #include "logging.hpp"
 #include <nprpc_nameserver.hpp>
-#include <nprpc/impl/websocket_session.hpp>
 
-#if defined(__linux__)
+#if defined(__linux__) && defined(NPRPC_TCP_ENABLED)
 namespace nprpc::impl {
 std::shared_ptr<Session> make_uring_client_connection(
     const EndPoint& endpoint, boost::asio::any_io_executor ex);
@@ -30,8 +35,7 @@ std::shared_ptr<Session> make_uring_client_connection(
 #include <functional>
 #include <sstream>
 
-#ifdef _WIN32
-#include <boost/asio/ssl/context.hpp>
+#if defined(_WIN32) && defined(NPRPC_SSL_ENABLED)
 #include <wincrypt.h>
 namespace {
 void add_windows_root_certs(boost::asio::ssl::context& ctx)
@@ -62,8 +66,10 @@ void add_windows_root_certs(boost::asio::ssl::context& ctx)
 
 namespace nprpc::impl {
 
+#ifdef NPRPC_SSL_ENABLED
 net::ssl::context ssl_context_server{net::ssl::context::tlsv13_server};
 net::ssl::context ssl_context_client{net::ssl::context::tlsv13_client};
+#endif
 
 namespace {
 size_t default_stream_pool_size() noexcept
@@ -139,6 +145,33 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   if (impl::g_rpc)
     throw Exception("NPRPC has been previously initialized");
 
+#ifndef NPRPC_TCP_ENABLED
+  if (cfg_->tcp_port != 0)
+    throw Exception("TCP transport was not compiled in (NPRPC_ENABLE_TCP=OFF)");
+#endif
+#ifndef NPRPC_HTTP_ENABLED
+  if (cfg_->http_port != 0)
+    throw Exception(
+        "HTTP transport was not compiled in (NPRPC_ENABLE_HTTP=OFF)");
+#endif
+#ifndef NPRPC_SSL_ENABLED
+  if (cfg_->http_ssl_enabled)
+    throw Exception("SSL was not compiled in (NPRPC_ENABLE_SSL=OFF)");
+#endif
+#ifndef NPRPC_QUIC_ENABLED
+  if (cfg_->quic_port != 0)
+    throw Exception(
+        "QUIC transport was not compiled in (NPRPC_ENABLE_QUIC=OFF)");
+#endif
+#ifndef NPRPC_HTTP3_ENABLED
+  if (cfg_->http3_enabled)
+    throw Exception("HTTP/3 was not compiled in (NPRPC_ENABLE_HTTP3=OFF)");
+#endif
+#ifndef NPRPC_SSR_ENABLED
+  if (cfg_->ssr_enabled)
+    throw Exception("SSR was not compiled in (NPRPC_ENABLE_SSR=OFF)");
+#endif
+
   // First check if the configuration is valid
   if (cfg_->http_ssl_enabled) {
     if (cfg_->http_cert_file.empty() || cfg_->http_key_file.empty()) {
@@ -169,6 +202,7 @@ NPRPC_API Rpc* RpcBuilderBase::build()
     }
   }
 
+#ifdef NPRPC_SSL_ENABLED
   if (cfg_->http_ssl_enabled) {
     auto read_file_to_string = [](std::string const file) {
       std::ifstream is(file, std::ios_base::in);
@@ -212,8 +246,19 @@ NPRPC_API Rpc* RpcBuilderBase::build()
     }
   }
 
-  // Configure SSL client settings based on RpcBuilder options
-  if (cfg_->http_ssl_client_disable_verification) {
+  // Configure SSL client settings based on RpcBuilder options.
+  // This Boost.Asio context is only used for outbound WSS/HTTPS. MsQuic and
+  // HTTP/3 have their own TLS stacks. Skip verify-path setup when nothing
+  // in the builder asks for HTTP/TLS — set_default_verify_paths SIGSEGVs on
+  // Ubuntu 24.04 + Boost.Asio (a SHM-only compositor dies immediately after
+  // "SSL client verification paths set").
+  const bool need_ssl_client =
+      cfg_->http_ssl_enabled || cfg_->http_port != 0 ||
+      !cfg_->ssl_client_self_signed_cert_path.empty() ||
+      cfg_->http_ssl_client_disable_verification;
+  if (!need_ssl_client) {
+    NPRPC_LOG_INFO("SSL client context unused (no HTTP/WSS)");
+  } else if (cfg_->http_ssl_client_disable_verification) {
     NPRPC_LOG_INFO("SSL client verification disabled (for testing only)");
     ssl_context_client.set_verify_mode(net::ssl::verify_none);
   } else {
@@ -246,6 +291,7 @@ NPRPC_API Rpc* RpcBuilderBase::build()
     }
     ssl_context_client.set_verify_mode(net::ssl::verify_peer);
   }
+#endif // NPRPC_SSL_ENABLED
 
   nprpc::impl::get_logger()->set_level(cfg_->log_level);
 
@@ -353,8 +399,12 @@ void RpcImpl::run()
   ioc_.run();
 }
 
+#ifdef NPRPC_TCP_ENABLED
 extern void init_socket(boost::asio::io_context& ioc);
+#endif
+#ifdef NPRPC_HTTP_ENABLED
 extern void init_http_server(boost::asio::io_context& ioc);
+#endif
 extern void init_shared_memory_listener(boost::asio::io_context& ioc);
 
 NPRPC_API Config g_cfg;
@@ -362,9 +412,15 @@ NPRPC_API RpcImpl* g_rpc;
 
 // Forward declarations for cleanup
 void stop_shared_memory_listener();
+#ifdef NPRPC_TCP_ENABLED
 void stop_socket_listener();
+#endif
+#ifdef NPRPC_HTTP_ENABLED
 void stop_http_server();
+#endif
+#if defined(NPRPC_HTTP_ENABLED) || defined(NPRPC_HTTP3_ENABLED)
 void stop_file_watcher();
+#endif
 #ifdef NPRPC_HTTP3_ENABLED
 void stop_http3_server();
 #endif
@@ -378,10 +434,16 @@ void RpcImpl::destroy()
   ioc_.stop();
 
   // Stop all listeners first
+#ifdef NPRPC_TCP_ENABLED
   stop_socket_listener();
+#endif
+#ifdef NPRPC_HTTP_ENABLED
   stop_http_server();
+#endif
   stop_shared_memory_listener();
+#if defined(NPRPC_HTTP_ENABLED) || defined(NPRPC_HTTP3_ENABLED)
   stop_file_watcher();
+#endif
 #ifdef NPRPC_QUIC_ENABLED
   stop_quic_listener();
 #endif
@@ -563,6 +625,7 @@ RpcImpl::get_session(const EndPoint& endpoint)
     throw nprpc::ExceptionCommFailure(
         "nprpc::impl::RpcImpl::get_session: Cannot create Ephemeral TCP connection");
   case EndPointType::Tcp:
+#ifdef NPRPC_TCP_ENABLED
 #if defined(__linux__)
     if (g_cfg.use_uring_tcp) {
       con = make_uring_client_connection(endpoint, ioc_.get_executor());
@@ -578,12 +641,26 @@ RpcImpl::get_session(const EndPoint& endpoint)
       con = std::move(sc);
     }
     break;
+#else
+    throw nprpc::ExceptionCommFailure(
+        "nprpc::impl::RpcImpl::get_session: TCP transport was not compiled in");
+#endif
   case EndPointType::WebSocket:
+#ifdef NPRPC_WEBSOCKET_ENABLED
     con = make_client_plain_websocket_session(endpoint, ioc_);
     break;
+#else
+    throw nprpc::ExceptionCommFailure(
+        "nprpc::impl::RpcImpl::get_session: WebSocket transport was not compiled in");
+#endif
   case EndPointType::SecuredWebSocket:
+#if defined(NPRPC_WEBSOCKET_ENABLED) && defined(NPRPC_SSL_ENABLED)
     con = make_client_ssl_websocket_session(endpoint, ioc_);
     break;
+#else
+    throw nprpc::ExceptionCommFailure(
+        "nprpc::impl::RpcImpl::get_session: WSS was not compiled in");
+#endif
   case EndPointType::SharedMemory:
     {
       auto smc = std::make_shared<SharedMemoryConnection>(endpoint, ioc_);
@@ -823,7 +900,17 @@ RpcImpl::get_nameserver(std::string_view nameserver_ip)
   oid.flags = static_cast<nprpc::oflags_t>(detail::ObjectFlag::Persistent);
   oid.origin.fill(0);
   oid.class_id = common::INameserver_Servant::_get_class();
-  oid.urls.assign("tcp://" + ip + ":15000;ws://" + ip + ":15001;");
+  oid.urls.clear();
+#ifdef NPRPC_TCP_ENABLED
+  oid.urls += "tcp://" + ip + ":15000;";
+#endif
+#ifdef NPRPC_WEBSOCKET_ENABLED
+  oid.urls += "ws://" + ip + ":15001;";
+#endif
+  if (oid.urls.empty()) {
+    throw nprpc::Exception(
+        "get_nameserver: no compiled-in transport can reach the nameserver");
+  }
 
   [[maybe_unused]] bool res = obj->select_endpoint();
   assert(res && "Nameserver must have a valid endpoint");
@@ -837,6 +924,7 @@ RpcImpl::RpcImpl()
   stream_pool_ = std::make_unique<boost::asio::thread_pool>(default_stream_pool_size());
   poas_created_.fill(false);
 
+#if defined(NPRPC_HTTP_ENABLED) || defined(NPRPC_HTTP3_ENABLED)
   if (g_cfg.watch_files && !g_cfg.http_root_dir.empty()) {
     extern void start_file_watcher(const std::filesystem::path&,
                                    const std::filesystem::path&,
@@ -869,9 +957,14 @@ RpcImpl::RpcImpl()
     start_file_watcher(g_cfg.http_root_dir, {}, {});
 #endif
   }
+#endif // NPRPC_HTTP_ENABLED || NPRPC_HTTP3_ENABLED
 
+#ifdef NPRPC_TCP_ENABLED
   init_socket(ioc_);
+#endif
+#ifdef NPRPC_HTTP_ENABLED
   init_http_server(ioc_);
+#endif
   init_shared_memory_listener(ioc_);
 #ifdef NPRPC_QUIC_ENABLED
   init_quic(ioc_);
@@ -1013,6 +1106,27 @@ ObjectId PoaImpl::finalize_activation(ObjectServant* obj,
   bool ws_enabled = (activation_flags & ObjectActivationFlags::ws);
   bool wss_enabled = (activation_flags & ObjectActivationFlags::wss);
   bool web_enabled = http_enabled || https_enabled || ws_enabled || wss_enabled || wt_enabled;
+
+#ifndef NPRPC_TCP_ENABLED
+  if (tcp_enabled)
+    throw std::runtime_error(
+        "TCP is enabled for object activation, but NPRPC was built with NPRPC_ENABLE_TCP=OFF");
+#endif
+#ifndef NPRPC_HTTP_ENABLED
+  if (http_enabled || https_enabled)
+    throw std::runtime_error(
+        "HTTP is enabled for object activation, but NPRPC was built with NPRPC_ENABLE_HTTP=OFF");
+#endif
+#ifndef NPRPC_WEBSOCKET_ENABLED
+  if (ws_enabled || wss_enabled)
+    throw std::runtime_error(
+        "WebSocket is enabled for object activation, but NPRPC was built with NPRPC_ENABLE_WEBSOCKET=OFF");
+#endif
+#ifndef NPRPC_SSL_ENABLED
+  if (https_enabled || wss_enabled)
+    throw std::runtime_error(
+        "TLS is enabled for object activation, but NPRPC was built with NPRPC_ENABLE_SSL=OFF");
+#endif
 
   if (web_enabled && g_cfg.listen_http_port == 0) {
     throw std::runtime_error(

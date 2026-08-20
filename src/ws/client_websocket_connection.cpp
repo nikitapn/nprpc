@@ -34,6 +34,7 @@ make_client_plain_websocket_session(const EndPoint& endpoint,
   return session;
 }
 
+#ifdef NPRPC_SSL_ENABLED
 std::shared_ptr<ClientSSLWebSocketSession>
 make_client_ssl_websocket_session(const EndPoint& endpoint,
                                   net::io_context& ioc)
@@ -53,5 +54,6 @@ make_client_ssl_websocket_session(const EndPoint& endpoint,
   session->start_read_loop();
   return session;
 }
+#endif
 
 } // namespace nprpc::impl
