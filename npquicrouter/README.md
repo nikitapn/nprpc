@@ -26,6 +26,7 @@ Both paths route transparently without terminating TLS or QUIC — the backend p
 - **Dual-transport** — handles TCP (TLS) and UDP (QUIC) on the same port (typically 443)
 - **SNI-based routing** — per-hostname routing table with a configurable default fallback
 - **HTTP → HTTPS redirect** — optional plaintext HTTP listener that returns `301` to `https://`
+- **ACME HTTP-01 webroot** — the redirect listener can serve `/.well-known/acme-challenge/` from disk, so certbot renews every hostname centrally without the backends being involved
 - **QUIC multi-worker** — multiple UDP worker threads with `SO_REUSEPORT` for parallel packet processing
 - **eBPF QUIC dispatcher** — optional `SO_ATTACH_REUSEPORT_EBPF` program that pins Initial packets by DCID hash and short-header packets by the worker ID embedded in the server's SCID; ensures all packets of a connection stay on the same worker
 - **SHM fast path** — when co-deployed with NPRPC HTTP/3 backends on the same machine, packets are exchanged over per-backend shared-memory lock-free ring buffers instead of loopback UDP sockets, preserving GSO batch metadata across the double-hop
@@ -43,6 +44,7 @@ All settings live in a single JSON file passed as the sole command-line argument
   "listen_tcp_port":       443,
   "listen_udp_port":       443,
   "http_redirect_port":    80,
+  "acme_webroot":          "/var/www/acme",
   "default_tcp_backend":   "127.0.0.1:8443",
   "default_udp_backend":   "127.0.0.1:4433",
   "udp_session_timeout_sec": 120,
@@ -70,6 +72,7 @@ All settings live in a single JSON file passed as the sole command-line argument
 | `listen_tcp_port` | uint16 | `443` | TCP (TLS) listen port |
 | `listen_udp_port` | uint16 | `443` | UDP (QUIC) listen port |
 | `http_redirect_port` | uint16 | `0` | If non-zero, listens on this port and returns `301 → https://` for all requests. Set to `80` for HTTP→HTTPS redirect. |
+| `acme_webroot` | string | `""` | If non-empty, `GET`/`HEAD` on `/.well-known/acme-challenge/<token>` is served from `<acme_webroot>/.well-known/acme-challenge/<token>` instead of being redirected. Requires `http_redirect_port`. See [ACME HTTP-01](#acme-http-01). |
 | `default_tcp_backend` | string | `""` | Fallback TCP backend (`host:port`) when no route matches the SNI. If empty, unmatched connections are dropped. |
 | `default_udp_backend` | string | `""` | Fallback UDP backend (`host:port`). Same rules as `default_tcp_backend`. |
 | `udp_session_timeout_sec` | int | `120` | Idle timeout for UDP sessions. Sessions idle longer than this are garbage-collected. |
@@ -87,6 +90,57 @@ Route fields:
 | `tcp_backend` | TCP backend (`host:port`). Optional — omit if the route is UDP-only. |
 | `udp_backend` | UDP/QUIC backend (`host:port`). Optional — omit if the route is TCP-only. |
 | `shm_ingress_channel` | SHM ingress channel name for this UDP backend (see [SHM Fast Path](#shm-fast-path)). Empty or absent = UDP mode for this route. |
+
+## ACME HTTP-01
+
+Because npquicrouter does not terminate TLS, it cannot answer an ACME
+`tls-alpn-01` challenge — but it *does* own port 80, which makes it the natural
+place to answer `http-01` for every hostname it routes.
+
+Set `acme_webroot` to the directory you pass to certbot as `--webroot -w`:
+
+```json
+{
+  "http_redirect_port": 80,
+  "acme_webroot": "/var/www/acme"
+}
+```
+
+With that set, the redirect listener special-cases exactly one path prefix:
+
+| Request | Response |
+|---|---|
+| `GET /.well-known/acme-challenge/<token>` | `200` with the contents of `<acme_webroot>/.well-known/acme-challenge/<token>`, or `404` |
+| everything else | `301` to `https://<host><path>` (unchanged) |
+
+Tokens are validated against the base64url alphabet (`A-Za-z0-9-_`, max 255
+chars) before being joined to the webroot, so a request can never escape the
+challenge directory — `/`, `.` and NUL are all rejected by the charset check.
+
+### certbot
+
+Issue and renew each hostname with the same webroot. The router only reads the
+directory, so nothing needs to be reloaded or restarted when certbot writes a
+token:
+
+```bash
+certbot certonly --webroot -w /var/www/acme \
+  -d site1.example.com \
+  --deploy-hook '/usr/local/bin/nprpc-reload-certs site1'
+```
+
+The `--deploy-hook` is where the *backend* picks up the new certificate; see
+[Certificate reload](../docs/certbot.md) for the nprpc side.
+
+npquicrouter runs as `www-data` in the sample unit, while certbot runs as
+root, so make the webroot readable by both:
+
+```bash
+install -d -o root -g www-data -m 0755 /var/www/acme
+install -d -o root -g www-data -m 0755 /var/www/acme/.well-known
+install -d -o root -g www-data -m 0775 /var/www/acme/.well-known/acme-challenge
+```
+
 
 ## Usage
 

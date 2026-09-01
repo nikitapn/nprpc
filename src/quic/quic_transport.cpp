@@ -1274,20 +1274,21 @@ void QuicListener::start(uint16_t port, AcceptCallback callback)
   accept_callback_ = std::move(callback);
 
   // Create server configuration with certificate
-  configuration_ = quic.create_configuration("nprpc", true, cert_file_.c_str(),
-                                             key_file_.c_str());
+  HQUIC configuration = quic.create_configuration(
+      "nprpc", true, cert_file_.c_str(), key_file_.c_str());
 
-  if (!configuration_) {
+  if (!configuration) {
     throw std::runtime_error("Failed to create QUIC server configuration");
   }
+  configuration_.store(configuration, std::memory_order_release);
 
   // Open listener
   QUIC_STATUS status = quic.api()->ListenerOpen(
       quic.registration(), listener_callback, this, &listener_);
 
   if (QUIC_FAILED(status)) {
-    quic.api()->ConfigurationClose(configuration_);
-    configuration_ = nullptr;
+    quic.api()->ConfigurationClose(configuration);
+    configuration_.store(nullptr, std::memory_order_release);
     throw std::runtime_error("ListenerOpen failed: " + std::to_string(status));
   }
 
@@ -1303,12 +1304,35 @@ void QuicListener::start(uint16_t port, AcceptCallback callback)
   if (QUIC_FAILED(status)) {
     quic.api()->ListenerClose(listener_);
     listener_ = nullptr;
-    quic.api()->ConfigurationClose(configuration_);
-    configuration_ = nullptr;
+    quic.api()->ConfigurationClose(configuration);
+    configuration_.store(nullptr, std::memory_order_release);
     throw std::runtime_error("ListenerStart failed: " + std::to_string(status));
   }
 
   NPRPC_QUIC_TRACE("Listener started on port {}", port);
+}
+
+bool QuicListener::reload_certificates()
+{
+  if (!listener_)
+    return true; // not started — nothing to reload
+
+  auto& quic = QuicApi::instance();
+
+  HQUIC fresh = quic.create_configuration("nprpc", true, cert_file_.c_str(),
+                                          key_file_.c_str());
+  if (!fresh) {
+    NPRPC_QUIC_ERROR("Failed to build QUIC configuration from '{}' / '{}'",
+                     cert_file_, key_file_);
+    return false;
+  }
+
+  HQUIC previous = configuration_.exchange(fresh, std::memory_order_acq_rel);
+  if (previous)
+    retired_configurations_.push_back(previous);
+
+  NPRPC_QUIC_TRACE("Listener reloaded certificate '{}'", cert_file_);
+  return true;
 }
 
 void QuicListener::stop()
@@ -1335,9 +1359,14 @@ void QuicListener::stop()
     listener_ = nullptr;
   }
 
-  if (configuration_) {
-    quic.api()->ConfigurationClose(configuration_);
-    configuration_ = nullptr;
+  // Safe now that the listener is closed: no callback can still be holding a
+  // configuration handle read before a reload swapped it out.
+  for (HQUIC retired : retired_configurations_)
+    quic.api()->ConfigurationClose(retired);
+  retired_configurations_.clear();
+
+  if (HQUIC cfg = configuration_.exchange(nullptr, std::memory_order_acq_rel)) {
+    quic.api()->ConfigurationClose(cfg);
   }
 }
 
@@ -1375,9 +1404,17 @@ void QuicListener::handle_listener_event(QUIC_LISTENER_EVENT* event)
 
     auto& quic = QuicApi::instance();
 
+    // Read once: a certificate reload may swap configuration_ concurrently,
+    // and this connection must use one handle consistently.
+    HQUIC configuration = configuration_.load(std::memory_order_acquire);
+    if (!configuration) {
+      NPRPC_QUIC_ERROR("No QUIC configuration for new connection");
+      return;
+    }
+
     // Set configuration on the connection
     QUIC_STATUS status = quic.api()->ConnectionSetConfiguration(
-        event->NEW_CONNECTION.Connection, configuration_);
+        event->NEW_CONNECTION.Connection, configuration);
 
     if (QUIC_FAILED(status)) {
       NPRPC_QUIC_ERROR("Failed to set connection configuration");
@@ -1386,7 +1423,7 @@ void QuicListener::handle_listener_event(QUIC_LISTENER_EVENT* event)
 
     // Create server connection wrapper
     auto conn = std::make_shared<QuicServerConnection>(
-        event->NEW_CONNECTION.Connection, configuration_);
+        event->NEW_CONNECTION.Connection, configuration);
     conn->start();
 
     // Track connection for cleanup
@@ -1849,6 +1886,13 @@ NPRPC_API void init_quic(boost::asio::io_context& ioc)
   } catch (const std::exception& e) {
     NPRPC_QUIC_ERROR("Failed to start listener: {}", e.what());
   }
+}
+
+NPRPC_API bool reload_quic_certificates()
+{
+  if (!g_quic_listener)
+    return true; // nothing running — nothing to reload
+  return g_quic_listener->reload_certificates();
 }
 
 NPRPC_API void stop_quic_listener()

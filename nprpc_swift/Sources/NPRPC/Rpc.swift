@@ -185,6 +185,28 @@ public final class Rpc {
         handle.pointee.start_thread_pool(threadCount)
     }
 
+    /// Re-read the configured TLS certificate and key files.
+    ///
+    /// Applies to every listener that terminates TLS with them: HTTP/1.1 +
+    /// WebSocket, HTTP/3, and the QUIC RPC listener.  Connections already
+    /// established keep the certificate they handshook with; new handshakes
+    /// use the reloaded one.
+    ///
+    /// A subsystem whose files fail to parse keeps its previous certificate
+    /// rather than dropping to none, so a half-written renewal cannot take
+    /// TLS down.
+    ///
+    /// Safe to call from any thread while the server is running — typically
+    /// from a `DispatchSource` signal handler on SIGHUP, driven by a certbot
+    /// deploy hook.
+    ///
+    /// - Returns: true if every configured subsystem reloaded successfully.
+    @discardableResult
+    public func reloadCertificates() -> Bool {
+        guard let handle = handle else { return false }
+        return handle.pointee.reload_certificates()
+    }
+
     /// Stop the io_context event loop
     public func stop() {
         guard let handle = handle else { return }

@@ -13,6 +13,7 @@
 #include <nprpc/impl/websocket_session.hpp>
 #endif
 #ifdef NPRPC_SSL_ENABLED
+#include <nprpc/impl/ssl.hpp>
 #include <boost/asio/ssl/context.hpp>
 #endif
 #include "logging.hpp"
@@ -67,8 +68,68 @@ void add_windows_root_certs(boost::asio::ssl::context& ctx)
 namespace nprpc::impl {
 
 #ifdef NPRPC_SSL_ENABLED
-net::ssl::context ssl_context_server{net::ssl::context::tlsv13_server};
+namespace {
+// Published by build_server_ssl_context() / reload_server_ssl_context(),
+// read once per accepted connection by the HTTP listener.
+std::atomic<std::shared_ptr<net::ssl::context>> g_ssl_context_server;
+} // namespace
+
 net::ssl::context ssl_context_client{net::ssl::context::tlsv13_client};
+
+std::shared_ptr<net::ssl::context> server_ssl_context()
+{
+  return g_ssl_context_server.load(std::memory_order_acquire);
+}
+
+std::shared_ptr<net::ssl::context> build_server_ssl_context()
+{
+  auto read_file_to_string = [](std::string const& file) {
+    std::ifstream is(file, std::ios_base::in);
+    if (!is) {
+      throw std::runtime_error("could not open certificate file: \"" + file +
+                               "\"");
+    }
+    return std::string(std::istreambuf_iterator<char>(is),
+                       std::istreambuf_iterator<char>());
+  };
+
+  // Read every file up front: a half-written certbot output must fail here,
+  // before the current context has been replaced.
+  std::string const cert = read_file_to_string(g_cfg.http_cert_file);
+  std::string const key = read_file_to_string(g_cfg.http_key_file);
+  std::string const dh = g_cfg.http_dhparams_file.empty()
+                             ? std::string()
+                             : read_file_to_string(g_cfg.http_dhparams_file);
+
+  auto ctx =
+      std::make_shared<net::ssl::context>(net::ssl::context::tlsv13_server);
+
+  ctx->set_options(boost::asio::ssl::context::default_workarounds |
+                   boost::asio::ssl::context::no_sslv2 |
+                   boost::asio::ssl::context::no_sslv3 |
+                   boost::asio::ssl::context::no_tlsv1 |   // Also disable TLS 1.0
+                   boost::asio::ssl::context::no_tlsv1_1 | // Also disable TLS 1.1
+                   boost::asio::ssl::context::single_dh_use |
+                   boost::asio::ssl::context::no_compression // Prevent CRIME attacks
+  );
+
+  ctx->use_certificate_chain(boost::asio::buffer(cert.data(), cert.size()));
+
+  ctx->use_private_key(boost::asio::buffer(key.data(), key.size()),
+                       boost::asio::ssl::context::file_format::pem);
+
+  if (!dh.empty())
+    ctx->use_tmp_dh(boost::asio::buffer(dh.data(), dh.size()));
+
+  return ctx;
+}
+
+void reload_server_ssl_context()
+{
+  // Build first, publish second — on a throw the old context stays in place.
+  auto ctx = build_server_ssl_context();
+  g_ssl_context_server.store(std::move(ctx), std::memory_order_release);
+}
 #endif
 
 namespace {
@@ -204,46 +265,12 @@ NPRPC_API Rpc* RpcBuilderBase::build()
 
 #ifdef NPRPC_SSL_ENABLED
   if (cfg_->http_ssl_enabled) {
-    auto read_file_to_string = [](std::string const file) {
-      std::ifstream is(file, std::ios_base::in);
-      if (!is) {
-        throw std::runtime_error("could not open certificate file: \"" + file +
-                                 "\"");
-      }
-      return std::string(std::istreambuf_iterator<char>(is),
-                         std::istreambuf_iterator<char>());
-    };
-
-    std::string const cert = read_file_to_string(cfg_->http_cert_file);
-    std::string const key = read_file_to_string(cfg_->http_key_file);
-
-    // ctx.set_password_callback(
-    //     [](std::size_t, ssl::context_base::password_purpose) {
-    //       return "test";
-    //     });
-
-    ssl_context_server.set_options(
-        boost::asio::ssl::context::default_workarounds |
-        boost::asio::ssl::context::no_sslv2 |
-        boost::asio::ssl::context::no_sslv3 |
-        boost::asio::ssl::context::no_tlsv1 |   // Also disable TLS 1.0
-        boost::asio::ssl::context::no_tlsv1_1 | // Also disable TLS 1.1
-        boost::asio::ssl::context::single_dh_use |
-        boost::asio::ssl::context::no_compression // Prevent CRIME attacks
-    );
-
-    ssl_context_server.use_certificate_chain(
-        boost::asio::buffer(cert.data(), cert.size()));
-
-    ssl_context_server.use_private_key(
-        boost::asio::buffer(key.data(), key.size()),
-        boost::asio::ssl::context::file_format::pem);
-
-    if (cfg_->http_dhparams_file.size() > 0) {
-      std::string const dh = read_file_to_string(cfg_->http_dhparams_file);
-      ssl_context_server.use_tmp_dh(
-          boost::asio::buffer(dh.data(), dh.size()));
-    }
+    // build_server_ssl_context() reads g_cfg, which is filled in below, so
+    // seed the three paths it needs before building.
+    g_cfg.http_cert_file = cfg_->http_cert_file;
+    g_cfg.http_key_file = cfg_->http_key_file;
+    g_cfg.http_dhparams_file = cfg_->http_dhparams_file;
+    reload_server_ssl_context();
   }
 
   // Configure SSL client settings based on RpcBuilder options.
@@ -304,8 +331,11 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   g_cfg.ssr_enabled = cfg_->ssr_enabled;
   g_cfg.use_epoll_tcp = cfg_->use_epoll_tcp;
   g_cfg.use_uring_tcp = cfg_->use_uring_tcp;
+  g_cfg.http_ssl_enabled = cfg_->http_ssl_enabled;
   g_cfg.http_cert_file = cfg_->http_cert_file;
   g_cfg.http_key_file = cfg_->http_key_file;
+  g_cfg.http_dhparams_file = cfg_->http_dhparams_file;
+  g_cfg.cert_watch_interval_sec = cfg_->cert_watch_interval_sec;
   g_cfg.http_root_dir = cfg_->http_root_dir;
   g_cfg.http_allowed_origins = cfg_->http_allowed_origins;
   g_cfg.http_max_request_body_size = cfg_->http_max_request_body_size;
@@ -429,9 +459,169 @@ extern void init_ssr(boost::asio::io_context& ioc);
 extern void stop_ssr();
 #endif
 
+#ifdef NPRPC_HTTP3_ENABLED
+bool reload_http3_certificates();
+#endif
+#ifdef NPRPC_QUIC_ENABLED
+bool reload_quic_certificates();
+#endif
+
+//==============================================================================
+// Certificate reload
+//==============================================================================
+
+namespace {
+
+// Polls the certificate/key files and calls nprpc::reload_certificates() when
+// either changes.  Only created when cert_watch_interval_sec is non-zero.
+class CertificateWatcher : public std::enable_shared_from_this<CertificateWatcher>
+{
+public:
+  CertificateWatcher(boost::asio::io_context& ioc, std::chrono::seconds interval)
+      : timer_(ioc), interval_(interval)
+  {
+  }
+
+  void start()
+  {
+    stamp_ = current_stamp();
+    schedule();
+  }
+
+  void stop()
+  {
+    stopped_ = true;
+    timer_.cancel();
+  }
+
+private:
+  // mtime + size of both files. Size is included because a same-second
+  // rewrite of a PEM almost always changes its length.
+  using Stamp = std::array<std::pair<std::int64_t, std::uintmax_t>, 2>;
+
+  static Stamp current_stamp()
+  {
+    Stamp stamp{};
+    const std::string* files[2] = {&g_cfg.http_cert_file, &g_cfg.http_key_file};
+    for (size_t i = 0; i < 2; ++i) {
+      std::error_code ec;
+      const auto t = std::filesystem::last_write_time(*files[i], ec);
+      if (ec)
+        continue; // missing mid-renewal: leave zeroed, retry next tick
+      stamp[i] = {t.time_since_epoch().count(),
+                  std::filesystem::file_size(*files[i], ec)};
+      if (ec)
+        stamp[i].second = 0;
+    }
+    return stamp;
+  }
+
+  void schedule()
+  {
+    timer_.expires_after(interval_);
+    timer_.async_wait(
+        [self = shared_from_this()](const boost::system::error_code& ec) {
+          if (ec || self->stopped_)
+            return;
+          self->tick();
+        });
+  }
+
+  void tick()
+  {
+    const auto now = current_stamp();
+    if (now != stamp_ && now != Stamp{}) {
+      stamp_ = now;
+      NPRPC_LOG_INFO("[cert] certificate files changed on disk, reloading");
+      nprpc::reload_certificates();
+    }
+    schedule();
+  }
+
+  boost::asio::steady_timer timer_;
+  std::chrono::seconds interval_;
+  Stamp stamp_{};
+  bool stopped_ = false;
+};
+
+std::shared_ptr<CertificateWatcher> g_cert_watcher;
+
+} // namespace
+
+void start_certificate_watcher(boost::asio::io_context& ioc)
+{
+  if (g_cfg.cert_watch_interval_sec == 0)
+    return;
+  if (g_cfg.http_cert_file.empty() || g_cfg.http_key_file.empty())
+    return;
+
+  g_cert_watcher = std::make_shared<CertificateWatcher>(
+      ioc, std::chrono::seconds(g_cfg.cert_watch_interval_sec));
+  g_cert_watcher->start();
+
+  NPRPC_LOG_INFO("[cert] watching '{}' every {}s", g_cfg.http_cert_file,
+                 g_cfg.cert_watch_interval_sec);
+}
+
+void stop_certificate_watcher()
+{
+  if (g_cert_watcher) {
+    g_cert_watcher->stop();
+    g_cert_watcher.reset();
+  }
+}
+
+} // namespace nprpc::impl
+
+namespace nprpc {
+
+bool reload_certificates()
+{
+  bool ok = true;
+
+#ifdef NPRPC_SSL_ENABLED
+  if (impl::g_cfg.http_ssl_enabled) {
+    try {
+      impl::reload_server_ssl_context();
+      NPRPC_LOG_INFO("[cert] HTTP/1.1 + WebSocket reloaded from '{}'",
+                     impl::g_cfg.http_cert_file);
+    } catch (const std::exception& e) {
+      // Keep serving the certificate we already have: a truncated or
+      // half-written renewal must not take TLS down.
+      NPRPC_LOG_ERROR("[cert] HTTP/1.1 reload failed, keeping the previous "
+                      "certificate: {}",
+                      e.what());
+      ok = false;
+    }
+  }
+#endif
+
+#ifdef NPRPC_HTTP3_ENABLED
+  if (!impl::reload_http3_certificates()) {
+    NPRPC_LOG_ERROR("[cert] HTTP/3 reload failed");
+    ok = false;
+  }
+#endif
+
+#ifdef NPRPC_QUIC_ENABLED
+  if (!impl::reload_quic_certificates()) {
+    NPRPC_LOG_ERROR("[cert] QUIC reload failed");
+    ok = false;
+  }
+#endif
+
+  return ok;
+}
+
+} // namespace nprpc
+
+namespace nprpc::impl {
+
 void RpcImpl::destroy()
 {
   ioc_.stop();
+
+  stop_certificate_watcher();
 
   // Stop all listeners first
 #ifdef NPRPC_TCP_ENABLED
@@ -976,6 +1166,9 @@ RpcImpl::RpcImpl()
 #ifdef NPRPC_SSR_ENABLED
   init_ssr(ioc_);
 #endif
+
+  extern void start_certificate_watcher(boost::asio::io_context & ioc);
+  start_certificate_watcher(ioc_);
 }
 
 void ReferenceListImpl::add_ref(ObjectServant* obj)

@@ -246,6 +246,7 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.http_cert_file = config->http_cert_file;
         cxxConfig.http_key_file = config->http_key_file;
         cxxConfig.http_dhparams_file = config->http_dhparams_file;
+        cxxConfig.cert_watch_interval_sec = config->cert_watch_interval_sec;
         cxxConfig.http_root_dir = config->http_root_dir;
         decode_allowed_origins(config->http_allowed_origins,
                        cxxConfig.http_allowed_origins);
@@ -356,6 +357,17 @@ void RpcHandle::stop() noexcept {
     if (!initialized_ || !impl_) return;
     auto* impl = static_cast<RpcHandleImpl*>(impl_);
     impl->stop();
+}
+
+bool RpcHandle::reload_certificates() noexcept {
+    if (!initialized_) return false;
+    try {
+        return nprpc::reload_certificates();
+    } catch (const std::exception& e) {
+        // Swift runtime is not built with exceptions — never let one escape.
+        NPRPC_LOG_ERROR("[SWB] RpcHandle::reload_certificates failed: {}", e.what());
+        return false;
+    }
 }
 
 std::string RpcHandle::get_debug_info() const {

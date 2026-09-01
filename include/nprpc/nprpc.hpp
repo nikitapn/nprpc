@@ -43,6 +43,26 @@ class Object;
 
 constexpr oid_t invalid_object_id = std::numeric_limits<oid_t>::max();
 
+/**
+ * @brief Re-read the configured TLS certificate and key files
+ *
+ * Applies to every listener that terminates TLS with them: HTTP/1.1 +
+ * WebSocket, HTTP/3, and the QUIC RPC listener.  Connections already
+ * established keep the certificate they handshook with; new handshakes use
+ * the reloaded one.
+ *
+ * A subsystem whose files fail to load keeps its previous certificate rather
+ * than dropping to none, so a half-written renewal cannot take the server
+ * down.
+ *
+ * Safe to call from any thread while the server is running.  It reads files
+ * and allocates, so call it from a normal thread (e.g. an asio signal_set
+ * handler), never from a raw POSIX signal handler.
+ *
+ * @return true if every configured subsystem reloaded successfully
+ */
+NPRPC_API bool reload_certificates();
+
 namespace impl {
 
 class RpcImpl;
@@ -495,6 +515,7 @@ struct BuildConfig {
   std::string http_cert_file;
   std::string http_key_file;
   std::string http_dhparams_file;
+  uint32_t cert_watch_interval_sec = 0; // 0 = no polling
   std::string http_root_dir;
   std::vector<std::string> http_allowed_origins;
   size_t http_max_request_body_size = NPRPC_DEFAULT_HTTP_MAX_REQUEST_BODY_SIZE;
@@ -737,6 +758,17 @@ public:
     cfg_->http_cert_file = cert_file;
     cfg_->http_key_file = key_file;
     cfg_->http_dhparams_file = dhparams_file;
+    return *this;
+  }
+
+  // Poll the certificate and key files every `interval` and reload them
+  // in-process when they change on disk, so a certbot renewal is picked up
+  // without a restart.  Zero (the default) disables polling; the certificate
+  // can still be reloaded on demand with nprpc::reload_certificates(), which
+  // is the better fit when certbot can run a --deploy-hook.
+  RpcBuilderHttp& watch_certificates(std::chrono::seconds interval) noexcept
+  {
+    cfg_->cert_watch_interval_sec = static_cast<uint32_t>(interval.count());
     return *this;
   }
 #endif

@@ -62,6 +62,8 @@ struct RpcBuildConfig {
     std::string http_cert_file;
     std::string http_key_file;
     std::string http_dhparams_file;
+    // Seconds between certificate/key mtime checks; 0 disables polling.
+    uint32_t cert_watch_interval_sec = 0;
     std::string http_root_dir;
     std::string http_allowed_origins;
     size_t http_max_request_body_size;
@@ -130,6 +132,13 @@ public:
 
     /// Stop the io_context
     void stop() noexcept;
+
+    /// Re-read the configured TLS certificate/key files on every listener that
+    /// terminates TLS with them (HTTP/1.1 + WebSocket, HTTP/3, QUIC RPC).
+    /// Established connections keep the certificate they handshook with.
+    /// @return false if any subsystem refused the new files; the ones that
+    ///         refused keep serving their previous certificate.
+    bool reload_certificates() noexcept;
 
     /// Check if initialized
     bool is_initialized() const { return initialized_; }

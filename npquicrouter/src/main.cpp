@@ -66,6 +66,11 @@ struct Config {
     uint16_t     listen_tcp_port       = 443;
     uint16_t     listen_udp_port       = 443;
     uint16_t     http_redirect_port    = 0;    // 0 = disabled; 80 = redirect HTTP→HTTPS
+    // Webroot for ACME HTTP-01 challenges. When non-empty, the redirect
+    // listener serves GET /.well-known/acme-challenge/<token> from
+    // <acme_webroot>/.well-known/acme-challenge/<token> instead of issuing a
+    // 301.  Matches certbot's `--webroot -w <acme_webroot>`.
+    std::string  acme_webroot;
     std::string  default_tcp_backend;  // fallback if no SNI match
     std::string  default_udp_backend;
     int          udp_session_timeout_sec = 120;
@@ -99,6 +104,7 @@ struct glz::meta<Config> {
         "listen_tcp_port",         &T::listen_tcp_port,
         "listen_udp_port",         &T::listen_udp_port,
         "http_redirect_port",      &T::http_redirect_port,
+        "acme_webroot",            &T::acme_webroot,
         "default_tcp_backend",     &T::default_tcp_backend,
         "default_udp_backend",     &T::default_udp_backend,
         "udp_session_timeout_sec", &T::udp_session_timeout_sec,
@@ -463,20 +469,87 @@ private:
 // HTTP→HTTPS redirect (plain port 80)
 //==============================================================================
 
-// Reads the first line of the HTTP request to extract the Host header,
-// then sends a 301 redirect to https://<host><path>.
+// ACME HTTP-01 challenge path prefix (RFC 8555 §8.3).
+static constexpr std::string_view kAcmePrefix = "/.well-known/acme-challenge/";
+
+// ACME tokens are base64url (RFC 8555 §8.1), so a valid token can never
+// contain '/', '.' or a NUL — rejecting everything else makes path
+// traversal out of the webroot impossible by construction.
+static bool is_valid_acme_token(std::string_view tok)
+{
+    if (tok.empty() || tok.size() > 255) return false;
+    return std::all_of(tok.begin(), tok.end(), [](unsigned char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+               (c >= '0' && c <= '9') || c == '-' || c == '_';
+    });
+}
+
+// Reads the first line of the HTTP request to extract the Host header, then
+// either serves an ACME HTTP-01 challenge (when a webroot is configured and
+// the path matches) or sends a 301 redirect to https://<host><path>.
 class HttpRedirectSession : public std::enable_shared_from_this<HttpRedirectSession> {
     static constexpr size_t kBufSize = 4096;
     tcp::socket sock_;
+    std::shared_ptr<const std::string> acme_webroot_;
     std::array<char, kBufSize> buf_{};
     size_t len_ = 0;
 
 public:
-    explicit HttpRedirectSession(tcp::socket s) : sock_(std::move(s)) {}
+    HttpRedirectSession(tcp::socket s,
+                        std::shared_ptr<const std::string> acme_webroot)
+        : sock_(std::move(s)), acme_webroot_(std::move(acme_webroot)) {}
 
     void start() { read_more(); }
 
 private:
+    // Writes `resp` and closes. Held by shared_ptr so the buffer outlives the
+    // async_write.
+    void respond(std::string resp) {
+        auto buf = std::make_shared<std::string>(std::move(resp));
+        asio::async_write(
+            sock_,
+            asio::buffer(*buf),
+            [self = shared_from_this(), buf](boost::system::error_code, size_t) {
+                self->sock_.close();
+            });
+    }
+
+    // Returns true if the request was handled as an ACME challenge.
+    bool try_acme(std::string_view method, const std::string& path) {
+        if (!acme_webroot_ || acme_webroot_->empty()) return false;
+        if (method != "GET" && method != "HEAD") return false;
+        if (!path.starts_with(kAcmePrefix)) return false;
+
+        const std::string_view token(path.data() + kAcmePrefix.size(),
+                                     path.size() - kAcmePrefix.size());
+        std::string body;
+        bool found = false;
+        if (is_valid_acme_token(token)) {
+            const std::string file =
+                *acme_webroot_ + std::string(kAcmePrefix) + std::string(token);
+            std::ifstream is(file, std::ios::binary);
+            if (is) {
+                body.assign(std::istreambuf_iterator<char>(is),
+                            std::istreambuf_iterator<char>());
+                found = true;
+            }
+        }
+
+        if (found) {
+            respond("HTTP/1.1 200 OK\r\n"
+                    "Content-Type: application/octet-stream\r\n"
+                    "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                    "Connection: close\r\n"
+                    "\r\n" + (method == "HEAD" ? std::string() : body));
+        } else {
+            respond("HTTP/1.1 404 Not Found\r\n"
+                    "Content-Length: 0\r\n"
+                    "Connection: close\r\n"
+                    "\r\n");
+        }
+        return true;
+    }
+
     void read_more() {
         sock_.async_read_some(
             asio::buffer(buf_.data() + len_, buf_.size() - len_),
@@ -497,18 +570,26 @@ private:
             // Buffer full with no complete headers — just redirect to /
         }
 
-        // Extract path from first request line: "GET /path HTTP/1.x"
+        // Extract method and path from first request line: "GET /path HTTP/1.x"
+        std::string_view method;
         std::string path = "/";
         const auto line_end = data.find("\r\n");
         if (line_end != std::string_view::npos) {
             const auto first_line = data.substr(0, line_end);
             const auto sp1 = first_line.find(' ');
             if (sp1 != std::string_view::npos) {
+                method = first_line.substr(0, sp1);
                 const auto sp2 = first_line.find(' ', sp1 + 1);
                 if (sp2 != std::string_view::npos)
                     path = std::string(first_line.substr(sp1 + 1, sp2 - sp1 - 1));
             }
         }
+
+        // Answer ACME HTTP-01 here rather than redirecting, so the challenge
+        // token only ever has to exist on the router and never has to be
+        // distributed to the backends.
+        if (try_acme(method, path))
+            return;
 
         // Extract Host header
         std::string host;
@@ -533,32 +614,24 @@ private:
             pos = crlf + 2;
         }
 
-        const std::string location = "https://" + host + path;
-        const std::string resp =
-            "HTTP/1.1 301 Moved Permanently\r\n"
-            "Location: " + location + "\r\n"
-            "Content-Length: 0\r\n"
-            "Connection: close\r\n"
-            "\r\n";
-
-        auto buf = std::make_shared<std::string>(resp);
-        asio::async_write(
-            sock_,
-            asio::buffer(*buf),
-            [self = shared_from_this(), buf](boost::system::error_code, size_t) {
-                self->sock_.close();
-            });
+        respond("HTTP/1.1 301 Moved Permanently\r\n"
+                "Location: https://" + host + path + "\r\n"
+                "Content-Length: 0\r\n"
+                "Connection: close\r\n"
+                "\r\n");
     }
 };
 
 class HttpRedirectRouter {
     tcp::acceptor acceptor_;
+    std::shared_ptr<const std::string> acme_webroot_;
 
 public:
     HttpRedirectRouter(asio::io_context& ioc, const Config& cfg)
         : acceptor_(ioc,
                     tcp::endpoint(asio::ip::make_address(cfg.listen_address),
                                   cfg.http_redirect_port))
+        , acme_webroot_(std::make_shared<const std::string>(cfg.acme_webroot))
     {
         acceptor_.set_option(tcp::acceptor::reuse_address(true));
     }
@@ -570,7 +643,8 @@ private:
         acceptor_.async_accept(
             [this](boost::system::error_code ec, tcp::socket sock) {
                 if (!ec)
-                    std::make_shared<HttpRedirectSession>(std::move(sock))->start();
+                    std::make_shared<HttpRedirectSession>(std::move(sock),
+                                                          acme_webroot_)->start();
                 if (ec != asio::error::operation_aborted)
                     accept();
             });
@@ -1125,6 +1199,7 @@ int main(int argc, char* argv[])
   "listen_tcp_port": 443,
   "listen_udp_port": 443,
   "http_redirect_port": 80,
+  "acme_webroot": "/var/www/acme",
   "default_tcp_backend": "127.0.0.1:8443",
   "default_udp_backend": "127.0.0.1:4433",
   "udp_session_timeout_sec": 120,
@@ -1252,8 +1327,11 @@ int main(int argc, char* argv[])
     std::clog << "npquicrouter listening — TCP "
               << cfg.listen_address << ":" << cfg.listen_tcp_port
               << "  UDP " << cfg.listen_address << ":" << cfg.listen_udp_port;
-    if (cfg.http_redirect_port != 0)
+    if (cfg.http_redirect_port != 0) {
         std::clog << "  HTTP(redirect) " << cfg.listen_address << ":" << cfg.http_redirect_port;
+        if (!cfg.acme_webroot.empty())
+            std::clog << " ACME-webroot=" << cfg.acme_webroot;
+    }
     if (num_workers > 1) {
         std::clog << "  UDP-workers=" << num_workers;
 #if defined(NPRPC_ROUTER_REUSEPORT_BPF_ENABLED) && defined(SO_ATTACH_REUSEPORT_EBPF)

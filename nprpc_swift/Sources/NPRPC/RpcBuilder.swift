@@ -47,6 +47,7 @@ class BuildConfig {
     var httpWebTransportStreamOpensBurst: UInt = 0
     var ssrHandlerDir: String = ""
     var watchFiles: Bool = false
+    var certWatchIntervalSec: UInt32 = 0
     var http3ShmEgressChannel: String = ""
     var http3ShmIngressChannel: String = ""
 
@@ -161,6 +162,7 @@ extension RpcBuilderInternal {
         cxxConfig.http_cert_file = std.string(config.httpCertFile)
         cxxConfig.http_key_file = std.string(config.httpKeyFile)
         cxxConfig.http_dhparams_file = std.string(config.httpDhparamsFile)
+        cxxConfig.cert_watch_interval_sec = config.certWatchIntervalSec
         cxxConfig.http_root_dir = std.string(config.httpRootDir)
         cxxConfig.http_allowed_origins = std.string(config.httpAllowedOrigins.joined(separator: "\n"))
         cxxConfig.http_max_request_body_size = numericCast(config.httpMaxRequestBodySize)
@@ -243,6 +245,19 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
         config.httpCertFile = certFile
         config.httpKeyFile = keyFile
         config.httpDhparamsFile = dhparamsFile
+        return self
+    }
+
+    /// Poll the certificate and key files and reload them in-process when
+    /// either changes on disk, so a certbot renewal is picked up without a
+    /// restart.  Zero (the default) disables polling; the certificate can
+    /// still be reloaded on demand with `Rpc.reloadCertificates()`, which is
+    /// the better fit when certbot can run a deploy hook.
+    ///
+    /// - Parameter interval: seconds between checks
+    @discardableResult
+    public func watchCertificates(intervalSeconds interval: UInt32) -> RpcBuilderHttp {
+        config.certWatchIntervalSec = interval
         return self
     }
 

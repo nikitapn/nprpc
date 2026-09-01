@@ -1326,6 +1326,12 @@ public:
   bool start();
   void stop();
 
+  // Re-reads cert_file_/key_file_ and installs them onto ssl_ctx_ for
+  // subsequent handshakes.  Runs on this worker's io_context — the same
+  // thread that calls SSL_new() — so it cannot race connection setup.
+  // Connections already established keep their existing certificate.
+  bool reload_certificates();
+
   // Run `work` on ioc_ and wait for it to finish.
   //
   // stop() runs from outside the io_context, normally while this worker's
@@ -4114,6 +4120,53 @@ private:
 } // namespace
 #endif
 
+namespace {
+
+// Installs `cert_file` / `key_file` onto `ctx`.
+//
+// The pair is validated in a scratch context first, so a malformed or
+// half-written certbot output cannot leave a live context holding a
+// certificate that does not match its key.
+bool load_cert_and_key(SSL_CTX* ctx,
+                       const std::string& cert_file,
+                       const std::string& key_file)
+{
+  auto apply = [&](SSL_CTX* target) {
+    if (SSL_CTX_use_certificate_chain_file(target, cert_file.c_str()) != 1) {
+      NPRPC_HTTP3_ERROR("Failed to load certificate '{}': {}", cert_file,
+                        ERR_error_string(ERR_get_error(), nullptr));
+      return false;
+    }
+    if (SSL_CTX_use_PrivateKey_file(target, key_file.c_str(),
+                                    SSL_FILETYPE_PEM) != 1) {
+      NPRPC_HTTP3_ERROR("Failed to load private key '{}': {}", key_file,
+                        ERR_error_string(ERR_get_error(), nullptr));
+      return false;
+    }
+    if (SSL_CTX_check_private_key(target) != 1) {
+      NPRPC_HTTP3_ERROR("Certificate and private key mismatch ('{}' / '{}')",
+                        cert_file, key_file);
+      return false;
+    }
+    return true;
+  };
+
+  SSL_CTX* scratch = SSL_CTX_new(TLS_server_method());
+  if (!scratch) {
+    NPRPC_HTTP3_ERROR("Failed to create scratch SSL context: {}",
+                      ERR_error_string(ERR_get_error(), nullptr));
+    return false;
+  }
+  const bool ok = apply(scratch);
+  SSL_CTX_free(scratch);
+  if (!ok)
+    return false;
+
+  return apply(ctx);
+}
+
+} // namespace
+
 Http3Server::Http3Server(boost::asio::io_context& ioc,
                          const std::string& cert_file,
                          const std::string& key_file,
@@ -4228,25 +4281,7 @@ bool Http3Server::start()
       nullptr);
 
   // Load certificate and key
-  if (SSL_CTX_use_certificate_chain_file(ssl_ctx_, cert_file_.c_str()) != 1) {
-    NPRPC_HTTP3_ERROR("Failed to load certificate: {}",
-                      ERR_error_string(ERR_get_error(), nullptr));
-    SSL_CTX_free(ssl_ctx_);
-    ssl_ctx_ = nullptr;
-    return false;
-  }
-
-  if (SSL_CTX_use_PrivateKey_file(ssl_ctx_, key_file_.c_str(),
-                                  SSL_FILETYPE_PEM) != 1) {
-    NPRPC_HTTP3_ERROR("Failed to load private key: {}",
-                      ERR_error_string(ERR_get_error(), nullptr));
-    SSL_CTX_free(ssl_ctx_);
-    ssl_ctx_ = nullptr;
-    return false;
-  }
-
-  if (SSL_CTX_check_private_key(ssl_ctx_) != 1) {
-    NPRPC_HTTP3_ERROR("Certificate and private key mismatch");
+  if (!load_cert_and_key(ssl_ctx_, cert_file_, key_file_)) {
     SSL_CTX_free(ssl_ctx_);
     ssl_ctx_ = nullptr;
     return false;
@@ -4386,6 +4421,22 @@ void Http3Server::run_on_io_and_wait(Work&& work)
       ioc_.restart();
     ioc_.poll();
   }
+}
+
+bool Http3Server::reload_certificates()
+{
+  if (!ssl_ctx_)
+    return false;
+
+  bool ok = false;
+  run_on_io_and_wait(
+      [&]() { ok = load_cert_and_key(ssl_ctx_, cert_file_, key_file_); });
+
+  if (ok) {
+    NPRPC_HTTP3_TRACE("worker {} reloaded certificate '{}'", worker_id_,
+                      cert_file_);
+  }
+  return ok;
 }
 
 void Http3Server::stop()
@@ -5373,6 +5424,19 @@ public:
     return true;
   }
 
+  // Reloads every worker's certificate.  Returns false if any worker failed;
+  // the ones that succeeded keep the new certificate, since a partial reload
+  // is still strictly better than none.
+  bool reload_certificates()
+  {
+    bool all_ok = true;
+    for (auto& worker : workers_) {
+      if (!worker->server->reload_certificates())
+        all_ok = false;
+    }
+    return all_ok;
+  }
+
   void stop() noexcept
   {
     // Stop ingress reader before shutting down workers so no new packets
@@ -5610,6 +5674,13 @@ NPRPC_API void init_http3_server(boost::asio::io_context& ioc)
     NPRPC_HTTP3_ERROR("Failed to start server");
     g_http3_server.reset();
   }
+}
+
+NPRPC_API bool reload_http3_certificates()
+{
+  if (!g_http3_server)
+    return true; // nothing running — nothing to reload
+  return g_http3_server->reload_certificates();
 }
 
 NPRPC_API void stop_http3_server()

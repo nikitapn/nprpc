@@ -26,9 +26,6 @@
 
 namespace nprpc::impl {
 
-#ifdef NPRPC_SSL_ENABLED
-extern net::ssl::context ssl_context_server;
-#endif
 
 namespace {
 
@@ -796,7 +793,10 @@ class detect_session : public std::enable_shared_from_this<detect_session>
 {
   beast_tcp_stream_strand stream_;
 #ifdef NPRPC_SSL_ENABLED
-  net::ssl::context& ctx_;
+  // Pinned for the lifetime of the session: the context this connection was
+  // accepted with stays valid even if a certificate reload publishes a new
+  // one while the handshake is still in flight.
+  std::shared_ptr<net::ssl::context> ctx_;
 #endif
   std::shared_ptr<std::string const> doc_root_;
   flat_buffer buffer_;
@@ -804,12 +804,12 @@ class detect_session : public std::enable_shared_from_this<detect_session>
 public:
   explicit detect_session(beast_tcp_stream_strand&& socket,
 #ifdef NPRPC_SSL_ENABLED
-                          net::ssl::context& ctx,
+                          std::shared_ptr<net::ssl::context> ctx,
 #endif
                           std::shared_ptr<std::string const> const& doc_root)
       : stream_(std::move(socket))
 #ifdef NPRPC_SSL_ENABLED
-      , ctx_(ctx)
+      , ctx_(std::move(ctx))
 #endif
       , doc_root_(doc_root)
   {
@@ -851,8 +851,13 @@ public:
       return fail(ec, "detect");
 
     if (result) {
+      if (!ctx_) {
+        // TLS was offered but no server context is configured.
+        NPRPC_LOG_ERROR("[HTTP] TLS ClientHello with no server SSL context");
+        return;
+      }
       // Launch SSL session
-      std::make_shared<ssl_http_session>(std::move(stream_), ctx_,
+      std::make_shared<ssl_http_session>(std::move(stream_), *ctx_,
                                          std::move(buffer_), doc_root_)
           ->run();
       return;
@@ -870,24 +875,15 @@ public:
 class listener : public std::enable_shared_from_this<listener>
 {
   net::io_context& ioc_;
-#ifdef NPRPC_SSL_ENABLED
-  net::ssl::context& ctx_;
-#endif
   tcp::acceptor acceptor_;
   std::shared_ptr<std::string const> doc_root_;
   bool running_ = true;
 
 public:
   listener(net::io_context& ioc,
-#ifdef NPRPC_SSL_ENABLED
-           net::ssl::context& ctx,
-#endif
            tcp::endpoint endpoint,
            std::shared_ptr<std::string const> const& doc_root)
       : ioc_(ioc)
-#ifdef NPRPC_SSL_ENABLED
-      , ctx_(ctx)
-#endif
       , acceptor_(net::make_strand(ioc))
       , doc_root_(doc_root)
   {
@@ -955,10 +951,12 @@ private:
     if (!running_)
       return;
 
-    // Create the detector http_session and run it
+    // Create the detector http_session and run it.
+    // The SSL context is read here rather than cached in the listener, so a
+    // certificate reload is picked up by the next connection.
     std::make_shared<detect_session>(beast_tcp_stream_strand(std::move(socket)),
 #ifdef NPRPC_SSL_ENABLED
-                                     ctx_,
+                                     server_ssl_context(),
 #endif
                                      doc_root_)
         ->run();
@@ -978,9 +976,6 @@ void init_http_server(boost::asio::io_context& ioc)
   // Create and launch a listening port
   g_http_listener = std::make_shared<listener>(
       ioc,
-#ifdef NPRPC_SSL_ENABLED
-      ssl_context_server,
-#endif
       tcp::endpoint{net::ip::make_address(g_cfg.listen_address),
                     g_cfg.listen_http_port},
       std::make_shared<std::string const>(g_cfg.http_root_dir));

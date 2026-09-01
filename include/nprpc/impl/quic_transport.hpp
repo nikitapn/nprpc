@@ -5,6 +5,7 @@
 
 #ifdef NPRPC_QUIC_ENABLED
 
+#include <atomic>
 #include <boost/asio/any_io_executor.hpp>
 #include <condition_variable>
 #include <cstring>
@@ -326,6 +327,12 @@ public:
   // Stop listening and close all connections
   void stop();
 
+  // Build a fresh MsQuic configuration from cert_file_/key_file_ and use it
+  // for connections accepted from now on.  Existing connections keep the
+  // configuration they were started with.  Returns false (keeping the current
+  // configuration) if the new certificate cannot be loaded.
+  bool reload_certificates();
+
   // Track a connection (called internally)
   void add_connection(std::shared_ptr<QuicServerConnection> conn);
 
@@ -340,7 +347,16 @@ private:
   void handle_listener_event(QUIC_LISTENER_EVENT* event);
 
   HQUIC listener_ = nullptr;
-  HQUIC configuration_ = nullptr;
+
+  // Read on MsQuic's listener callback thread, replaced by
+  // reload_certificates() from whichever thread drives the reload.
+  std::atomic<HQUIC> configuration_{nullptr};
+
+  // Configurations replaced by reload_certificates().  A listener callback may
+  // already have read the old handle when the swap happens, so the old
+  // configurations are only closed at stop(), once no callback can be in
+  // flight.  One entry per renewal — a handful over a process lifetime.
+  std::vector<HQUIC> retired_configurations_;
 
   AcceptCallback accept_callback_;
   std::string cert_file_;
@@ -354,6 +370,12 @@ private:
 // Global functions for QUIC transport initialization
 NPRPC_API void init_quic(boost::asio::io_context& ioc);
 NPRPC_API void stop_quic_listener();
+
+// Rebuild the listener's MsQuic configuration from the configured
+// certificate/key files.  Connections accepted from now on use the new
+// certificate; existing ones are untouched.  Returns true when there is no
+// listener running.
+NPRPC_API bool reload_quic_certificates();
 
 // Create a client-side QUIC session (called from get_session)
 NPRPC_API std::shared_ptr<Session>

@@ -48,8 +48,11 @@ struct Config {
   bool ssr_enabled = false;   // Enable node worker for SSR
   bool use_epoll_tcp = false; // Use raw epoll server instead of Asio (Linux only)
   bool use_uring_tcp = false; // Use io_uring server instead of Asio (Linux only)
-  std::string http_cert_file; // TLS cert for HTTP/3
-  std::string http_key_file;  // TLS key for HTTP/3
+  bool http_ssl_enabled = false; // TLS on the HTTP/1.1 + WebSocket listener
+  std::string http_cert_file; // TLS cert for HTTP/1.1, WebSocket and HTTP/3
+  std::string http_key_file;  // TLS key for HTTP/1.1, WebSocket and HTTP/3
+  std::string http_dhparams_file; // optional DH params for HTTP/1.1
+  uint32_t cert_watch_interval_sec = 0; // 0 = no certificate file polling
   std::string quic_cert_file;
   std::string quic_key_file;
   std::string http_root_dir;
