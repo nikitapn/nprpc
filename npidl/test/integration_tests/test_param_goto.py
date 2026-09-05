@@ -16,8 +16,18 @@ message Footstep {
   y: i32;
 }
 
+enum PanelEdge: u32 {
+  top,
+  bottom,
+  left,
+  right
+};
+
 interface Calculator {
   void SendFootstep(footstep: Footstep);
+  u32 CreatePanel(arenaId: in string, edge: in PanelEdge,
+                  thickness: in u32, reserve: in boolean,
+                  title: in string, appId: in string);
 }
 """
 
@@ -36,7 +46,18 @@ def main():
         target = result["range"]["start"]["line"]
         text = SOURCE.splitlines()[target]
         assert "message Footstep" in text, f"jumped to function instead of type: {text}"
-        print("✓ go-to-definition on parameter type Footstep")
+
+        line, col = find_in_text(SOURCE, "in PanelEdge")
+        col += 3  # skip "in " to land on the enum type name
+        resp = client.goto_definition(URI, line, col)
+        result = resp.get("result")
+        assert result, f"no definition for PanelEdge: {resp}"
+        target = result["range"]["start"]["line"]
+        text = SOURCE.splitlines()[target]
+        assert "enum PanelEdge" in text, (
+            f"enum param jumped to unexpected line {target}: {text}"
+        )
+        print("✓ go-to-definition on parameter types Footstep and PanelEdge")
     return 0
 
 

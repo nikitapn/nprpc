@@ -6,6 +6,8 @@
 #include "ast.hpp"
 #include "position_index.hpp"
 
+#include <optional>
+
 namespace npidl {
 
 // Builds a PositionIndex from a parsed Context
@@ -189,8 +191,10 @@ private:
       }
       if (!site.type)
         continue;
-      index_.add(site.type, get_type_node_type(site.type),
-                 site.range.start.line, site.range.start.column,
+      auto nt = get_type_node_type(site.type);
+      if (!nt)
+        continue;
+      index_.add(site.type, *nt, site.range.start.line, site.range.start.column,
                  site.range.end.line, site.range.end.column, false);
     }
   }
@@ -212,11 +216,13 @@ private:
         if (!arg->type_refs.empty()) {
           index_type_refs(arg->type_refs);
         } else if (arg->type_ref_range.is_valid() && arg->type) {
-          index_.add(arg->type, get_type_node_type(arg->type),
-                     arg->type_ref_range.start.line,
-                     arg->type_ref_range.start.column,
-                     arg->type_ref_range.end.line, arg->type_ref_range.end.column,
-                     false);
+          auto nt = get_type_node_type(arg->type);
+          if (nt) {
+            index_.add(arg->type, *nt, arg->type_ref_range.start.line,
+                       arg->type_ref_range.start.column,
+                       arg->type_ref_range.end.line,
+                       arg->type_ref_range.end.column, false);
+          }
         }
       }
     }
@@ -234,18 +240,23 @@ private:
     if (!field->type_refs.empty()) {
       index_type_refs(field->type_refs);
     } else if (field->type_ref_range.is_valid() && field->type) {
-      index_.add(field->type, get_type_node_type(field->type),
-                 field->type_ref_range.start.line,
-                 field->type_ref_range.start.column,
-                 field->type_ref_range.end.line, field->type_ref_range.end.column,
-                 false);
+      auto nt = get_type_node_type(field->type);
+      if (nt) {
+        index_.add(field->type, *nt, field->type_ref_range.start.line,
+                   field->type_ref_range.start.column,
+                   field->type_ref_range.end.line,
+                   field->type_ref_range.end.column, false);
+      }
     }
   }
 
-  // Helper to get NodeType for a type declaration
-  PositionIndex::NodeType get_type_node_type(AstTypeDecl* type)
+  // Named user types only. Fundamentals/string/void must not be indexed as
+  // Alias — that tag was a fallback and stole go-to-definition from enums.
+  std::optional<PositionIndex::NodeType> get_type_node_type(AstTypeDecl* type)
   {
     using FieldType = npidl::FieldType;
+    if (!type)
+      return std::nullopt;
     switch (type->id) {
     case FieldType::Struct:
       return static_cast<AstStructDecl*>(type)->is_exception()
@@ -260,9 +271,7 @@ private:
     case FieldType::Optional:
       return PositionIndex::NodeType::Optional;
     default:
-      // For fundamental types, wrapped types, etc. - shouldn't happen for
-      // user types
-      return PositionIndex::NodeType::Alias; // fallback
+      return std::nullopt;
     }
   }
 

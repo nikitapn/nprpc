@@ -651,6 +651,25 @@ LspServer::create_hover_content(const npidl::PositionIndex::Entry* entry)
     break;
   }
 
+  case NodeType::Alias: {
+    auto* type = static_cast<npidl::AstTypeDecl*>(entry->node);
+    if (type && type->id == npidl::FieldType::Alias) {
+      auto* alias = static_cast<npidl::AstAliasDecl*>(type);
+      md << "**alias** `" << alias->name << "`\n";
+      if (alias->type)
+        md << "Target: `" << format_type(alias->type) << "`\n";
+    } else if (type && type->id == npidl::FieldType::Enum) {
+      auto* e = npidl::cenum(type);
+      md << "**enum** `" << e->name << "`\n\n";
+      md << "Values: " << e->items.size() << "\n";
+    } else if (type) {
+      md << "**type** `" << format_type(type) << "`\n";
+    } else {
+      md << "Unknown node type\n";
+    }
+    break;
+  }
+
   case NodeType::Optional: {
     auto* opt = static_cast<npidl::AstTypeDecl*>(entry->node);
     md << "**optional type**\n\n";
@@ -1034,7 +1053,13 @@ void LspServer::handle_definition(const glz::generic& id,
       send_location(*type_range);
       return;
     }
-    send_entry_location(*entry);
+    // Usage sites of fundamentals were previously tagged Alias and this
+    // fallback returned the usage span (F12 appeared to do nothing).
+    if (entry->declaration) {
+      send_entry_location(*entry);
+      return;
+    }
+    send_response(id, "null");
     return;
   }
 
@@ -1349,7 +1374,13 @@ void LspServer::handle_debug_positions(const glz::generic& id,
     } else if (entry.node_type == npidl::PositionIndex::NodeType::Parameter) {
       name = static_cast<npidl::AstFunctionArgument*>(entry.node)->name;
     } else if (entry.node_type == npidl::PositionIndex::NodeType::Alias) {
-      name = static_cast<npidl::AstAliasDecl*>(entry.node)->name;
+      auto* type = static_cast<npidl::AstTypeDecl*>(entry.node);
+      if (type && type->id == npidl::FieldType::Alias)
+        name = static_cast<npidl::AstAliasDecl*>(type)->name;
+      else if (type && type->id == npidl::FieldType::Enum)
+        name = npidl::cenum(type)->name;
+      else
+        name = type ? format_type(type) : "?";
     } else if (entry.node_type == npidl::PositionIndex::NodeType::Keyword) {
       auto* site = static_cast<npidl::TypeRefSite*>(entry.node);
       name = site ? site->keyword : "?";

@@ -1033,6 +1033,12 @@ class Parser : public IParser
 
     AstTypeDecl* type;
 
+    // Do not keep type_refs / type_ref_range from a previous parameter when
+    // this stack object is reused. Fundamentals never call note_type_ref, so
+    // a leftover range would be indexed as the previous named type.
+    arg.type_refs.clear();
+    arg.type_ref_range = {};
+
     if (!check(&Parser::type_decl_collect, std::ref(type),
                std::ref(arg.type_refs)))
       return false;
@@ -1362,11 +1368,14 @@ class Parser : public IParser
 
     match('(');
 
-    AstFunctionArgument arg;
-    Token arg_start;
-
     if (check(&Parser::one, TokenId::RoundBracketClose) == false) {
       for (;;) {
+        // Construct a fresh argument each iteration. After std::move the
+        // previous arg, type_ref_range (a POD) is copied, not cleared, so a
+        // later fundamental parameter would inherit the previous named type's
+        // span.
+        AstFunctionArgument arg;
+        Token arg_start;
         if (!check(&Parser::arg_decl, std::ref(arg), std::ref(arg_start))) {
           throw_error("Expected argument declaration. Syntax: name: Type or name out: Type");
         }

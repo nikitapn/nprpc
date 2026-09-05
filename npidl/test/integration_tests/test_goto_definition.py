@@ -28,10 +28,20 @@ exception SurfaceNotFound {
   id: u32;
 }
 
+enum PanelEdge: u32 {
+  top,
+  bottom,
+  left,
+  right
+};
+
 interface Demo {
   void Move(p: Point);
   bidi_stream<ThemeAck, SystemTheme> SubscribeSystemTheme();
   void DestroySurface(surfaceId: in u32) raises(SurfaceNotFound);
+  u32 CreatePanel(arenaId: in string, edge: in PanelEdge,
+                  thickness: in u32, reserve: in boolean,
+                  title: in string, appId: in string);
 }
 """
 
@@ -69,6 +79,11 @@ def main():
             f"raises(SurfaceNotFound) jumped to unexpected line {target}: {text}"
         )
 
+        target, text = jump_to(client, "PanelEdge", occurrence=1)
+        assert "enum PanelEdge" in text, (
+            f"param type PanelEdge jumped to unexpected line {target}: {text}"
+        )
+
         line, col = find_in_text(SOURCE, "SurfaceNotFound", occurrence=1)
         refs = client.send_request(
             "textDocument/references",
@@ -82,7 +97,7 @@ def main():
         assert len(ref_list) >= 2, (
             f"expected declaration + raises usage, got {ref_list}"
         )
-        print("✓ go-to-definition on Point, stream return types, and raises()")
+        print("✓ go-to-definition on Point, stream return types, raises(), and enum params")
     return 0
 
 

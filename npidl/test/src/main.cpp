@@ -197,6 +197,76 @@ interface Theme {
   EXPECT_EQ(npidl::cflat(fn->ret_type_refs[2].type)->name, "SystemTheme");
 }
 
+TEST(LspReturnTypes, EnumParamTypeRefs)
+{
+  npidl::Context ctx;
+  std::vector<npidl::ParseError> errors;
+  std::string code = R"(
+module sample;
+
+enum PanelEdge: u32 {
+  top,
+  bottom,
+  left,
+  right
+};
+
+interface Demo {
+  u32 CreatePanel(arenaId: in string, edge: in PanelEdge,
+                  thickness: in u32, reserve: in boolean,
+                  title: in string, appId: in string);
+}
+)";
+
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, code, errors))
+      << (errors.empty() ? "" : errors.front().message);
+  auto* fn = ctx.interfaces[0]->fns[0];
+  npidl::AstFunctionArgument* edge = nullptr;
+  for (auto* a : fn->args) {
+    if (a->name == "edge")
+      edge = a;
+  }
+  ASSERT_NE(edge, nullptr);
+  ASSERT_EQ(edge->type->id, npidl::FieldType::Enum) << (int)edge->type->id;
+  ASSERT_EQ(edge->type_refs.size(), 1u) << edge->type_refs.size();
+  EXPECT_EQ(edge->type_refs[0].type->id, npidl::FieldType::Enum);
+
+  npidl::PositionIndex index;
+  npidl::PositionIndexBuilder(index, ctx).build();
+  const auto& site = edge->type_refs[0];
+  for (auto* a : fn->args) {
+    if (a->name == "edge")
+      continue;
+    if (!a->type_ref_range.is_valid())
+      continue;
+    EXPECT_FALSE(a->type_ref_range.start.line == site.range.start.line &&
+                 a->type_ref_range.start.column == site.range.start.column)
+        << "arg " << a->name
+        << " inherited PanelEdge type_ref_range from a reused argument";
+  }
+  int hits = 0;
+  int enum_hits = 0;
+  int alias_hits = 0;
+  for (const auto& e : index.entries()) {
+    if (e.start_line == site.range.start.line &&
+        e.start_col == site.range.start.column) {
+      ++hits;
+      if (e.node_type == npidl::PositionIndex::NodeType::Enum)
+        ++enum_hits;
+      if (e.node_type == npidl::PositionIndex::NodeType::Alias)
+        ++alias_hits;
+    }
+  }
+  EXPECT_EQ(hits, 1) << "duplicate index entries at enum param type";
+  EXPECT_EQ(enum_hits, 1);
+  EXPECT_EQ(alias_hits, 0);
+
+  const auto* entry = index.find_at_position(site.range.start.line,
+                                             site.range.start.column);
+  ASSERT_NE(entry, nullptr);
+  EXPECT_EQ(entry->node_type, npidl::PositionIndex::NodeType::Enum);
+}
+
 TEST(LspReturnTypes, RaisesExceptionGoto)
 {
   npidl::Context ctx;

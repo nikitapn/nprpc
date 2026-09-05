@@ -104,14 +104,20 @@ public:
 
     const Entry* best_match = nullptr;
     uint32_t smallest_size = UINT32_MAX;
+    int best_rank = INT32_MAX;
 
     // Find all entries containing this position
-    // Return the smallest (most specific/nested)
+    // Return the smallest (most specific/nested). Equal spans prefer a
+    // named type (enum/struct/...) over Alias, which is also the fallback
+    // tag for fundamentals.
     for (const auto& entry : entries_) {
       if (entry.contains(line, col)) {
         uint32_t size = entry.size();
-        if (size < smallest_size) {
+        int rank = specificity_rank(entry.node_type);
+        if (size < smallest_size ||
+            (size == smallest_size && rank < best_rank)) {
           smallest_size = size;
+          best_rank = rank;
           best_match = &entry;
         }
       }
@@ -134,9 +140,11 @@ public:
       }
     }
 
-    // Sort by size (most specific first)
+    // Sort by size (most specific first), then named types over Alias.
     std::sort(result.begin(), result.end(), [](const Entry* a, const Entry* b) {
-      return a->size() < b->size();
+      if (a->size() != b->size())
+        return a->size() < b->size();
+      return specificity_rank(a->node_type) < specificity_rank(b->node_type);
     });
 
     return result;
@@ -155,6 +163,32 @@ public:
   bool is_finalized() const { return finalized_; }
 
   size_t size() const { return entries_.size(); }
+
+  // Lower is more specific. Alias is last so a leftover fundamental tagged
+  // as Alias does not win over the real enum/struct at the same span.
+  static int specificity_rank(NodeType t)
+  {
+    switch (t) {
+    case NodeType::Keyword:
+    case NodeType::EnumValue:
+      return 0;
+    case NodeType::Parameter:
+    case NodeType::Field:
+    case NodeType::Function:
+    case NodeType::Import:
+      return 1;
+    case NodeType::Enum:
+    case NodeType::Struct:
+    case NodeType::Exception:
+    case NodeType::Interface:
+      return 2;
+    case NodeType::Optional:
+      return 3;
+    case NodeType::Alias:
+      return 4;
+    }
+    return 5;
+  }
 };
 
 } // namespace npidl
