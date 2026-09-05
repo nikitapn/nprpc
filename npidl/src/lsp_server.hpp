@@ -118,6 +118,16 @@ struct TextDocumentPositionParams {
   Position position;
 };
 
+struct ReferenceContext {
+  bool includeDeclaration = true;
+};
+
+struct ReferenceParams {
+  TextDocumentIdentifier textDocument;
+  Position position;
+  std::optional<ReferenceContext> context;
+};
+
 struct Hover {
   std::string contents; // Markdown string
   std::optional<Range> range;
@@ -183,42 +193,12 @@ template <> struct glz::meta<lsp::Location> {
   static constexpr auto value = object("uri", &T::uri, "range", &T::range);
 };
 
-template <> struct glz::meta<lsp::SymbolKind> {
-  using enum lsp::SymbolKind;
-  static constexpr auto value = enumerate(File,
-                                          Module,
-                                          Namespace,
-                                          Package,
-                                          Class,
-                                          Method,
-                                          Property,
-                                          Field,
-                                          Constructor,
-                                          Enum,
-                                          Interface,
-                                          Function,
-                                          Variable,
-                                          Constant,
-                                          String,
-                                          Number,
-                                          Boolean,
-                                          Array,
-                                          Object,
-                                          Key,
-                                          Null,
-                                          EnumMember,
-                                          Struct,
-                                          Event,
-                                          Operator,
-                                          TypeParameter);
-};
+// SymbolKind is serialized as an integer (LSP requires a number, not a name).
 
 template <> struct glz::meta<lsp::DocumentSymbol> {
   using T = lsp::DocumentSymbol;
   static constexpr auto value = object("name",
                                        &T::name,
-                                       "detail",
-                                       &T::detail,
                                        "kind",
                                        &T::kind,
                                        "range",
@@ -288,6 +268,22 @@ template <> struct glz::meta<lsp::TextDocumentPositionParams> {
   using T = lsp::TextDocumentPositionParams;
   static constexpr auto value =
       object("textDocument", &T::textDocument, "position", &T::position);
+};
+
+template <> struct glz::meta<lsp::ReferenceContext> {
+  using T = lsp::ReferenceContext;
+  static constexpr auto value =
+      object("includeDeclaration", &T::includeDeclaration);
+};
+
+template <> struct glz::meta<lsp::ReferenceParams> {
+  using T = lsp::ReferenceParams;
+  static constexpr auto value = object("textDocument",
+                                       &T::textDocument,
+                                       "position",
+                                       &T::position,
+                                       "context",
+                                       &T::context);
 };
 
 template <> struct glz::meta<lsp::Hover> {
@@ -374,6 +370,15 @@ struct Notification : Message {
   glz::raw_json params;
 };
 
+// Incoming JSON-RPC message. Presence of a top-level `id` distinguishes
+// requests from notifications. Do not scan the raw text for "id" — params
+// of $/cancelRequest also contain an "id".
+struct Incoming : Message {
+  std::optional<glz::generic> id;
+  std::string method;
+  glz::raw_json params;
+};
+
 } // namespace jsonrpc
 
 template <> struct glz::meta<jsonrpc::Request> {
@@ -406,6 +411,18 @@ template <> struct glz::meta<jsonrpc::Notification> {
       "jsonrpc", &T::jsonrpc, "method", &T::method, "params", &T::params);
 };
 
+template <> struct glz::meta<jsonrpc::Incoming> {
+  using T = jsonrpc::Incoming;
+  static constexpr auto value = object("jsonrpc",
+                                       &T::jsonrpc,
+                                       "id",
+                                       &T::id,
+                                       "method",
+                                       &T::method,
+                                       "params",
+                                       &T::params);
+};
+
 // Forward declarations
 class Context;
 class Parser;
@@ -429,6 +446,10 @@ public:
 
   void open(const std::string& uri, const std::string& text, int version);
   void change(const std::string& uri, const std::string& text, int version);
+  void apply_changes(
+      const std::string& uri,
+      const std::vector<lsp::TextDocumentContentChangeEvent>& changes,
+      int version);
   void close(const std::string& uri);
 
   Document* get(const std::string& uri);
@@ -472,6 +493,7 @@ private:
   void handle_did_close(const glz::raw_json& params);
   void handle_hover(const glz::generic& id, const glz::raw_json& params);
   void handle_definition(const glz::generic& id, const glz::raw_json& params);
+  void handle_references(const glz::generic& id, const glz::raw_json& params);
   void handle_document_symbol(const glz::generic& id,
                               const glz::raw_json& params);
   void handle_semantic_tokens_full(const glz::generic& id,

@@ -10,6 +10,7 @@ namespace npidl {
 
 // Forward declarations
 class Context;
+class ISourceProvider;
 
 // Error information from parser
 struct ParseError {
@@ -18,10 +19,17 @@ struct ParseError {
   std::string message;
 };
 
-// Parse in-memory content into an existing context (for LSP multi-file support)
-// Returns true if parsing succeeded (no errors found)
-// Errors vector is populated with all found errors
-// Context is updated with parsed AST and imports
+// Load built-in types (nprpc::detail::ObjectId, etc.) into an empty context.
+void load_builtins(Context& ctx);
+
+// Parse into an existing context. Always resets the context first so a
+// subsequent edit/reparse cannot see the previous AST or symbol table.
+// Returns true if parsing succeeded (no errors found).
+bool parse_for_lsp(Context& ctx,
+                   ISourceProvider& source,
+                   std::vector<ParseError>& errors);
+
+// Parse in-memory content into an existing context (for tests and LSP).
 bool parse_for_lsp(Context& ctx,
                    const std::string& content,
                    std::vector<ParseError>& errors);

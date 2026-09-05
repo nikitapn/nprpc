@@ -1,129 +1,90 @@
 #!/usr/bin/env python3
-import json
-import subprocess
+"""Go-to-definition on type names."""
+
 import sys
+from pathlib import Path
 
-def send_lsp_message(proc, message):
-    """Send a JSON-RPC message with proper headers"""
-    content = json.dumps(message)
-    header = f"Content-Length: {len(content)}\r\n\r\n"
-    proc.stdin.write(header.encode('utf-8'))
-    proc.stdin.write(content.encode('utf-8'))
-    proc.stdin.flush()
+sys.path.insert(0, str(Path(__file__).parent))
+from lsp_test_base import LspTestClient, find_in_text
 
-def read_lsp_message(proc):
-    """Read a JSON-RPC message with headers"""
-    # Read headers
-    headers = {}
-    while True:
-        line = proc.stdout.readline().decode('utf-8')
-        if line == '\r\n' or line == '\n':
-            break
-        if ':' in line:
-            key, value = line.split(':', 1)
-            headers[key.strip()] = value.strip()
-    
-    # Read content
-    content_length = int(headers.get('Content-Length', 0))
-    if content_length > 0:
-        content = proc.stdout.read(content_length).decode('utf-8')
-        return json.loads(content)
-    return None
+URI = "file:///tmp/npidl_goto.npidl"
+SOURCE = """\
+module sample;
 
-# Start LSP server
-lsp_server = subprocess.Popen(
-    ['/home/nikita/projects/npsystem/build/linux/bin/npidl', '--lsp'],
-    stdin=subprocess.PIPE,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE
-)
+message Point {
+  x: i32;
+  y: i32;
+}
 
-try:
-    # Initialize
-    print("Sending initialize...")
-    send_lsp_message(lsp_server, {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {"capabilities": {}}
-    })
-    
-    response = read_lsp_message(lsp_server)
-    print(f"Initialize: {response.get('result', {}).get('capabilities', {}).get('definitionProvider')}")
-    
-    # Send didOpen
-    print("\nSending didOpen...")
-    test_file = "/home/nikita/projects/npsystem/nprpc/idl/nprpc_base.npidl"
-    with open(test_file) as f:
-        file_content = f.read()
-    
-    send_lsp_message(lsp_server, {
-        "jsonrpc": "2.0",
-        "method": "textDocument/didOpen",
-        "params": {
-            "textDocument": {
-                "uri": f"file://{test_file}",
-                "languageId": "npidl",
-                "version": 1,
-                "text": file_content
-            }
-        }
-    })
-    
-    # Give it time to parse
-    import time
-    time.sleep(0.5)
-    
-    # Read the file to find test positions
-    lines = file_content.split('\n')
-    
-    # Find a field with a type (e.g., "what: string;" in ExceptionCommFailure)
-    # Line 14 is "  what: string;" (0-indexed: line 13)
-    test_positions = [
-        {"line": 13, "char": 8, "desc": "field 'what' in ExceptionCommFailure"},
-        {"line": 18, "char": 5, "desc": "ExceptionObjectNotExist declaration"},
-        {"line": 28, "char": 5, "desc": "DebugLevel enum value"},
-    ]
-    
-    for test in test_positions:
-        print(f"\n{'='*70}")
-        print(f"Testing go-to-definition at line {test['line']}, char {test['char']}")
-        print(f"Description: {test['desc']}")
-        print(f"Context: {lines[test['line']].strip()}")
-        
-        send_lsp_message(lsp_server, {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "textDocument/definition",
-            "params": {
-                "textDocument": {"uri": f"file://{test_file}"},
-                "position": {"line": test['line'], "character": test['char']}
-            }
-        })
-        
-        # Read responses (might get diagnostics first)
-        for _ in range(3):
-            response = read_lsp_message(lsp_server)
-            if response and response.get('id') == 2:
-                break
-        
-        if response and 'result' in response:
-            result = response['result']
-            if result and result != "null":
-                print(f"✓ Definition found:")
-                if isinstance(result, dict) and 'range' in result:
-                    r = result['range']
-                    start_line = r['start']['line']
-                    start_char = r['start']['character']
-                    print(f"  Location: line {start_line + 1}, char {start_char + 1}")
-                    print(f"  Text: {lines[start_line].strip()}")
-                else:
-                    print(f"  Result: {result}")
-            else:
-                print(f"✗ No definition found (expected for fundamental types)")
-        else:
-            print(f"✗ No response or error")
-    
-finally:
-    lsp_server.terminate()
-    lsp_server.wait()
+message ThemeAck {
+  ok: boolean;
+}
+
+message SystemTheme {
+  name: string;
+}
+
+exception SurfaceNotFound {
+  id: u32;
+}
+
+interface Demo {
+  void Move(p: Point);
+  bidi_stream<ThemeAck, SystemTheme> SubscribeSystemTheme();
+  void DestroySurface(surfaceId: in u32) raises(SurfaceNotFound);
+}
+"""
+
+
+def jump_to(client, needle, occurrence=0):
+    line, col = find_in_text(SOURCE, needle, occurrence=occurrence)
+    resp = client.goto_definition(URI, line, col)
+    result = resp.get("result")
+    assert result, f"no definition for {needle!r}: {resp}"
+    target = result["range"]["start"]["line"]
+    return target, SOURCE.splitlines()[target]
+
+
+def main():
+    with LspTestClient() as client:
+        client.initialize()
+        msg = client.open_document(URI, SOURCE)
+        assert msg["params"]["diagnostics"] == []
+
+        target, text = jump_to(client, "Point", occurrence=1)
+        assert "message Point" in text, f"jumped to unexpected line {target}: {text}"
+
+        target, text = jump_to(client, "ThemeAck", occurrence=1)
+        assert "message ThemeAck" in text, (
+            f"return type ThemeAck jumped to unexpected line {target}: {text}"
+        )
+
+        target, text = jump_to(client, "SystemTheme", occurrence=1)
+        assert "message SystemTheme" in text, (
+            f"return type SystemTheme jumped to unexpected line {target}: {text}"
+        )
+
+        target, text = jump_to(client, "SurfaceNotFound", occurrence=1)
+        assert "exception SurfaceNotFound" in text, (
+            f"raises(SurfaceNotFound) jumped to unexpected line {target}: {text}"
+        )
+
+        line, col = find_in_text(SOURCE, "SurfaceNotFound", occurrence=1)
+        refs = client.send_request(
+            "textDocument/references",
+            {
+                "textDocument": {"uri": URI},
+                "position": {"line": line, "character": col},
+                "context": {"includeDeclaration": True},
+            },
+        )
+        ref_list = refs.get("result") or []
+        assert len(ref_list) >= 2, (
+            f"expected declaration + raises usage, got {ref_list}"
+        )
+        print("✓ go-to-definition on Point, stream return types, and raises()")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

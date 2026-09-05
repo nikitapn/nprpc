@@ -1,5 +1,7 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
-// SPDX-License-Identifier: MITinclude <algorithm>
+// SPDX-License-Identifier: MIT
+
+#include <algorithm>
 
 #include <cassert>
 #include <charconv>
@@ -651,6 +653,21 @@ class Parser : public IParser
     node->set_position(token_position(start_token), current_position());
   }
 
+  template <typename T>
+  void set_name_from_token(T* node, const Token& name_token)
+  {
+    uint32_t length = name_token.name.empty()
+                          ? 1u
+                          : static_cast<uint32_t>(name_token.name.size());
+    node->set_name_position(static_cast<uint32_t>(name_token.line),
+                            static_cast<uint32_t>(name_token.col), length);
+  }
+
+  template <typename T, typename... Args> T* ast(Args&&... args)
+  {
+    return ctx_.make<T>(std::forward<Args>(args)...);
+  }
+
   // array_or_vec_decl ::= '[' (IDENTIFIER | NUMBER)? ']'
   bool array_or_vec_decl(AstTypeDecl*& type)
   {
@@ -681,9 +698,9 @@ class Parser : public IParser
     if (length == 0) {
       throw_error("Array length cannot be zero.");
     } else if (length > 0) {
-      type = new AstArrayDecl(type, static_cast<int>(length));
+      type = ast<AstArrayDecl>(type, static_cast<int>(length));
     } else {
-      type = new AstVectorDecl(type);
+      type = ast<AstVectorDecl>(type);
     }
 
     return true;
@@ -748,6 +765,42 @@ class Parser : public IParser
     return false;
   }
 
+  std::string_view token_lexed_text(const Token& tok) const
+  {
+    if (!tok.name.empty())
+      return tok.name;
+    return tok.static_name;
+  }
+
+  SourceRange range_from_token(const Token& tok) const
+  {
+    auto text = token_lexed_text(tok);
+    uint32_t len = text.empty() ? 1u : static_cast<uint32_t>(text.size());
+    return SourceRange(static_cast<uint32_t>(tok.line),
+                       static_cast<uint32_t>(tok.col),
+                       static_cast<uint32_t>(tok.line),
+                       static_cast<uint32_t>(tok.col) + len - 1);
+  }
+
+  void note_type_ref(std::vector<TypeRefSite>& sites,
+                     AstTypeDecl* type,
+                     const Token& tok)
+  {
+    TypeRefSite site;
+    site.type = type;
+    site.range = range_from_token(tok);
+    sites.push_back(std::move(site));
+  }
+
+  void note_keyword(std::vector<TypeRefSite>& sites, const Token& tok)
+  {
+    TypeRefSite site;
+    site.range = range_from_token(tok);
+    site.is_keyword = true;
+    site.keyword = std::string(token_lexed_text(tok));
+    sites.push_back(std::move(site));
+  }
+
   // type_decl ::= fundamental_type array_or_vec_decl?
   //             | IDENTIFIER array_or_vec_decl?
   //             | 'vector' '<' type_decl '>'
@@ -755,18 +808,24 @@ class Parser : public IParser
   //             | 'void'
   //             | 'object'
   //             | 'stream' '<' type_decl '>'
-  // type_decl without type reference tracking (for recursive/vector types)
   bool type_decl(AstTypeDecl*& type)
   {
-    Token dummy;
-    return type_decl1(type, dummy);
+    std::vector<TypeRefSite> unused;
+    return type_decl_collect(type, unused);
   }
 
-  // type_decl with type reference tracking
   bool type_decl1(AstTypeDecl*& type, Token& type_ref_token)
   {
+    std::vector<TypeRefSite> sites;
+    if (!type_decl_collect(type, sites))
+      return false;
+    type_ref_token = Token{};
+    return true;
+  }
+
+  bool type_decl_collect(AstTypeDecl*& type, std::vector<TypeRefSite>& sites)
+  {
     type = nullptr;
-    type_ref_token = Token{}; // Reset
 
     auto nm = ctx_.nm_cur();
     Token t;
@@ -779,27 +838,28 @@ class Parser : public IParser
 
     if (t.is_fundamental_type()) {
       flush();
-      type = new AstFundamentalType(t.id);
+      type = ast<AstFundamentalType>(t.id);
       check(&Parser::array_or_vec_decl, std::ref(type));
       return true;
     }
 
     switch (t.id) {
     case TokenId::Identifier:
-      type_ref_token = t; // Capture the type reference token
       flush();
       type = nm->find_type(t.name, false);
       if (!type) {
         throw_error("Unknown type '" + t.name + "'. Did you forget to import it or define it before use?");
       }
+      note_type_ref(sites, type, t);
       check(&Parser::array_or_vec_decl, std::ref(type));
       return true;
     case TokenId::Vector:
       flush();
-      type = new AstVectorDecl();
+      type = ast<AstVectorDecl>();
       match('<');
-      if (!check(&Parser::type_decl,
-                 std::ref(static_cast<AstVectorDecl*>(type)->type)))
+      if (!check(&Parser::type_decl_collect,
+                 std::ref(static_cast<AstVectorDecl*>(type)->type),
+                 std::ref(sites)))
         throw_error("Expected a type declaration inside vector<...>");
       match('>');
       return true;
@@ -808,7 +868,8 @@ class Parser : public IParser
     case TokenId::ClientStream:
     case TokenId::BidiStream: {
       flush();
-      type = new AstStreamDecl();
+      note_keyword(sites, t);
+      type = ast<AstStreamDecl>();
       switch (t.id) {
       case TokenId::Stream:
       case TokenId::ServerStream:
@@ -830,15 +891,18 @@ class Parser : public IParser
       if (stream->kind == StreamKind::Bidi) {
         if (stream->direct)
           throw_error("'direct' is only supported for stream<T> / server_stream<T>");
-        if (!check(&Parser::type_decl, std::ref(stream->input_type)))
+        if (!check(&Parser::type_decl_collect, std::ref(stream->input_type),
+                   std::ref(sites)))
           throw_error("Expected input type declaration inside bidi_stream<In, Out>");
         match(',');
-        if (!check(&Parser::type_decl, std::ref(stream->type)))
+        if (!check(&Parser::type_decl_collect, std::ref(stream->type),
+                   std::ref(sites)))
           throw_error("Expected output type declaration inside bidi_stream<In, Out>");
       } else {
         if (stream->kind == StreamKind::Client && stream->direct)
           throw_error("'direct' is not supported for client_stream<T>");
-        if (!check(&Parser::type_decl, std::ref(stream->type)))
+        if (!check(&Parser::type_decl_collect, std::ref(stream->type),
+                   std::ref(sites)))
           throw_error("Expected a type declaration inside stream<...>");
       }
       match('>');
@@ -846,16 +910,16 @@ class Parser : public IParser
     }
     case TokenId::String:
       flush();
-      type = new AstStringDecl();
+      type = ast<AstStringDecl>();
       check(&Parser::array_or_vec_decl, std::ref(type));
       return true;
     case TokenId::Void:
       flush();
-      type = new AstVoidDecl();
+      type = ast<AstVoidDecl>();
       return true;
     case TokenId::Object:
       flush();
-      type = new AstObjectDecl();
+      type = ast<AstObjectDecl>();
       return true;
     case TokenId::One: {
       flush(); // consume 'one'
@@ -863,7 +927,7 @@ class Parser : public IParser
         throw_error("Expected 'of' after 'one'. Syntax: one of { arm_name: Type; ... }");
       flush(); // consume 'of'
       match('{');
-      auto* v = new AstVariantDecl();
+      auto* v = ast<AstVariantDecl>();
       // Use pure peek-chain: arm_tok and ':' stay in the lookahead queue so
       // that type_decl1's flush() consumes them together with the type name.
       // Mixing peek() + match() would corrupt tokens_looked_.
@@ -899,23 +963,25 @@ class Parser : public IParser
   {
     Token field_name;
     AstTypeDecl* type;
-    Token type_token;
     bool optional;
 
     field_name = peek();
+    std::vector<TypeRefSite> type_sites;
     if (!((field_name == TokenId::Identifier ||
            field_name == TokenId::Message) &&
           maybe(optional, &Parser::one, TokenId::Optional) &&
           peek() == TokenId::Colon &&
-          check(&Parser::type_decl1, std::ref(type), std::ref(type_token))))
+          check(&Parser::type_decl_collect, std::ref(type),
+                std::ref(type_sites))))
       return false;
 
     if (field_name == TokenId::Message)
       field_name.name = "message";
 
-    field = new AstFieldDecl();
+    field = ast<AstFieldDecl>();
     field->name = std::move(field_name.name);
-    field->type = optional ? new AstOptionalDecl(type) : type;
+    field->type = optional ? ast<AstOptionalDecl>(type) : type;
+    field->type_refs = std::move(type_sites);
 
     // Set position for just the field name token
     SourcePosition start = token_position(field_name);
@@ -923,21 +989,20 @@ class Parser : public IParser
                        field_name.col + static_cast<int>(field->name.length()) -
                            1);
     field->range = SourceRange(start, end);
+    field->name_range = field->range;
 
-    // Set type reference position if we got a valid identifier token
-    if (type_token.id == TokenId::Identifier) {
-      SourcePosition type_start = token_position(type_token);
-      SourcePosition type_end(
-          type_token.line,
-          type_token.col + static_cast<int>(type_token.name.length()) - 1);
-      field->type_ref_range = SourceRange(type_start, type_end);
+    for (const auto& site : field->type_refs) {
+      if (!site.is_keyword && site.range.is_valid()) {
+        field->type_ref_range = site.range;
+        break;
+      }
     }
 
     return true;
   }
 
   // arg_decl ::= IDENTIFIER '?'? ':' ('in' | 'out' 'direct'?) type_decl
-  bool arg_decl(AstFunctionArgument& arg, Token& start_token, Token& type_token)
+  bool arg_decl(AstFunctionArgument& arg, Token& start_token)
   {
     Token arg_name = peek();
     bool optional;
@@ -968,11 +1033,19 @@ class Parser : public IParser
 
     AstTypeDecl* type;
 
-    if (!check(&Parser::type_decl1, std::ref(type), std::ref(type_token)))
+    if (!check(&Parser::type_decl_collect, std::ref(type),
+               std::ref(arg.type_refs)))
       return false;
 
     arg.name = arg_name.name;
-    arg.type = optional ? new AstOptionalDecl(type) : type;
+    arg.type = optional ? ast<AstOptionalDecl>(type) : type;
+
+    for (const auto& site : arg.type_refs) {
+      if (!site.is_keyword && site.range.is_valid()) {
+        arg.type_ref_range = site.range;
+        break;
+      }
+    }
 
     return true;
   }
@@ -1017,9 +1090,10 @@ class Parser : public IParser
     flush();
 
     Token name_tok = match(TokenId::Identifier);
-    auto s = new AstStructDecl();
+    auto s = ast<AstStructDecl>();
     bool is_exception = first_tok == TokenId::Exception;
     s->name = name_tok.name;
+    set_name_from_token(s, name_tok);
     if (is_exception) {
       s->exception_id = ctx_.next_exception_id();
       ctx_.exceptions.push_back(s);
@@ -1030,9 +1104,9 @@ class Parser : public IParser
     s->nm = ctx_.nm_cur();
 
     if (is_exception) {
-      auto ex_id = new AstFieldDecl();
+      auto ex_id = ast<AstFieldDecl>();
       ex_id->name = "__ex_id";
-      ex_id->type = new AstFundamentalType(TokenId::UInt32);
+      ex_id->type = ast<AstFundamentalType>(TokenId::UInt32);
       s->fields.push_back(ex_id);
     }
 
@@ -1196,7 +1270,7 @@ class Parser : public IParser
     match(';');
 
     // Create import AST node
-    auto* import = new AstImportDecl();
+    auto* import = ast<AstImportDecl>();
     import->import_path = import_path_tok.name;
     import->import_line = import_tok.line;
     import->import_col = import_tok.col;
@@ -1267,51 +1341,43 @@ class Parser : public IParser
   bool function_decl(AstFunctionDecl*& f)
   {
     AstTypeDecl* ret_type = nullptr;
+    std::vector<TypeRefSite> ret_sites;
     Token start_tok;
     {
       PeekGuard pg(*this);
       start_tok = peek(); // Capture starting position (return type token)
     }
-    if (!check(&Parser::type_decl, std::ref(ret_type)))
+    if (!check(&Parser::type_decl_collect, std::ref(ret_type),
+               std::ref(ret_sites)))
       return false;
 
-    f = new AstFunctionDecl();
+    f = ast<AstFunctionDecl>();
     f->ret_value = ret_type;
+    f->ret_type_refs = std::move(ret_sites);
     f->is_async = false;
     f->is_stream = false;
     auto name_tok = match(TokenId::Identifier);
     f->name = name_tok.name;
+    set_name_from_token(f, name_tok);
 
     match('(');
 
     AstFunctionArgument arg;
     Token arg_start;
-    Token arg_type_token;
 
     if (check(&Parser::one, TokenId::RoundBracketClose) == false) {
       for (;;) {
-        if (!check(&Parser::arg_decl, std::ref(arg), std::ref(arg_start),
-                   std::ref(arg_type_token))) {
+        if (!check(&Parser::arg_decl, std::ref(arg), std::ref(arg_start))) {
           throw_error("Expected argument declaration. Syntax: name: Type or name out: Type");
         }
-        auto* arg_ptr = new AstFunctionArgument(std::move(arg));
+        auto* arg_ptr = ast<AstFunctionArgument>(std::move(arg));
         // Set position for just the argument name
         SourcePosition start = token_position(arg_start);
         SourcePosition end(arg_start.line,
                            arg_start.col +
                                static_cast<int>(arg_ptr->name.length()) - 1);
         arg_ptr->range = SourceRange(start, end);
-
-        // Set type reference position if we got a valid identifier
-        // token
-        if (arg_type_token.id == TokenId::Identifier) {
-          SourcePosition type_start = token_position(arg_type_token);
-          SourcePosition type_end(
-              arg_type_token.line,
-              arg_type_token.col +
-                  static_cast<int>(arg_type_token.name.length()) - 1);
-          arg_ptr->type_ref_range = SourceRange(type_start, type_end);
-        }
+        arg_ptr->name_range = arg_ptr->range;
 
         f->args.push_back(arg_ptr);
         if (check(&Parser::one, TokenId::RoundBracketClose))
@@ -1361,10 +1427,11 @@ class Parser : public IParser
       match('(');
 
       for (;;) {
-        auto type =
-            ctx_.nm_cur()->find_type(match(TokenId::Identifier).name, false);
+        auto ex_tok = match(TokenId::Identifier);
+        auto type = ctx_.nm_cur()->find_type(ex_tok.name, false);
         if (!type)
           throw_error("Unknown exception type. The type specified in 'raises(...)' must be defined as an exception.");
+        note_type_ref(f->ret_type_refs, type, ex_tok);
 
         if (type->id != FieldType::Struct || !cflat(type)->is_exception()) {
           throw_error("Type is not an exception. Use 'exception TypeName { ... }' to define an exception type.");
@@ -1457,9 +1524,10 @@ class Parser : public IParser
       return false;
     flush();
 
-    auto ifs = new AstInterfaceDecl();
+    auto ifs = ast<AstInterfaceDecl>();
     auto name_tok = match(TokenId::Identifier);
     ifs->name = name_tok.name;
+    set_name_from_token(ifs, name_tok);
 
     for (const auto& a : attr) {
       if (a.first == "trusted")
@@ -1617,6 +1685,7 @@ class Parser : public IParser
       v->name = left.name;
       v->nm = ctx_.nm_cur();
       set_node_position(v, start_tok);
+      set_name_from_token(v, left);
       auto result = ctx_.nm_cur()->add(v->name, v);
       if (!result) {
         throw_error(result.error());
@@ -1625,7 +1694,8 @@ class Parser : public IParser
       return true;
     }
 
-    auto a = new AstAliasDecl(std::move(left.name), ctx_.nm_cur(), right);
+    auto a = ast<AstAliasDecl>(std::string(left.name), ctx_.nm_cur(), right);
+    set_name_from_token(a, left);
 
     // Set position for the using declaration
     set_node_position(a, start_tok);
@@ -1649,9 +1719,11 @@ class Parser : public IParser
       return false;
     flush();
 
-    auto e = new AstEnumDecl;
+    auto e = ast<AstEnumDecl>();
 
-    e->name = std::move(match(TokenId::Identifier).name);
+    auto enum_name_tok = match(TokenId::Identifier);
+    set_name_from_token(e, enum_name_tok);
+    e->name = std::move(enum_name_tok.name);
     e->token_id = TokenId::UInt32;
     e->nm = ctx_.nm_cur();
 
@@ -1680,6 +1752,7 @@ class Parser : public IParser
       if (tok.id != TokenId::Identifier)
         throw_error("Unexpected token '" + tok.name + '\'');
 
+      auto item_range = range_from_token(tok);
       auto name = std::move(tok.name);
 
       tok = peek();
@@ -1696,6 +1769,7 @@ class Parser : public IParser
         // explicit
         e->items.emplace_back(std::move(name),
                               std::pair<AstNumber, bool>{n, true});
+        e->item_name_ranges.push_back(item_range);
 
         ix = std::get<std::int64_t>(n.value) + 1;
         tok = peek();
@@ -1703,6 +1777,7 @@ class Parser : public IParser
         // implicit
         e->items.emplace_back(std::move(name),
                               std::pair<AstNumber, bool>{ix, 0});
+        e->item_name_ranges.push_back(item_range);
         ix++;
       }
 
@@ -1858,24 +1933,33 @@ public:
   }
 };
 
-// Parse into existing context (for LSP with persistent AST)
+// Parse into existing context. Always resets first so edits cannot leave a
+// stale AST / symbol table behind (which previously produced immediate
+// "Type redefinition" errors on the next keystroke).
 bool parse_for_lsp(Context& ctx,
-                   const std::string& content,
+                   ISourceProvider& source,
                    std::vector<ParseError>& errors)
 {
   errors.clear();
+  ctx.reset();
+
+  if (!ctx.is_nprpc_base()) {
+    load_builtins(ctx);
+  }
 
   try {
     builders::BuildGroup builder(&ctx);
+    LspImportResolver import_resolver;
+    // Mark the current file as already-being-parsed so a circular import
+    // cannot re-enter it and produce type redefinitions.
+    import_resolver.should_parse_import(ctx.get_file_path());
+    LspErrorHandler error_handler;
+    Lexer lexer(source, ctx);
+    Parser parser(lexer, ctx, builder, import_resolver, error_handler, true);
 
-    // Use test parser factory for in-memory content
-    auto [source_provider, import_resolver, error_handler, lexer, parser] =
-        ParserFactory::create_test_parser(ctx, builder, content);
+    parser.parse();
 
-    parser->parse();
-
-    // Collect any errors that occurred
-    for (const auto& e : error_handler->get_errors()) {
+    for (const auto& e : error_handler.get_errors()) {
       ParseError err;
       err.line = e.line;
       err.col = e.col;
@@ -1883,9 +1967,8 @@ bool parse_for_lsp(Context& ctx,
       errors.push_back(err);
     }
 
-    return error_handler->get_errors().empty();
+    return error_handler.get_errors().empty();
   } catch (const std::exception& e) {
-    // Fallback for unexpected errors
     ParseError err;
     err.line = 1;
     err.col = 1;
@@ -1895,42 +1978,20 @@ bool parse_for_lsp(Context& ctx,
   }
 }
 
+bool parse_for_lsp(Context& ctx,
+                   const std::string& content,
+                   std::vector<ParseError>& errors)
+{
+  InMemorySourceProvider source(content);
+  return parse_for_lsp(ctx, source, errors);
+}
+
 // Parse string content for testing purposes
 bool parse_string_for_testing(const std::string& content,
                               std::vector<ParseError>& errors)
 {
-  errors.clear();
-
-  try {
-    Context ctx;
-
-    builders::BuildGroup builder(&ctx);
-
-    // Use test parser factory for in-memory content
-    auto [source_provider, import_resolver, error_handler, lexer, parser] =
-        ParserFactory::create_test_parser(ctx, builder, content);
-
-    parser->parse();
-
-    // Collect any errors that occurred
-    for (const auto& e : error_handler->get_errors()) {
-      ParseError err;
-      err.line = e.line;
-      err.col = e.col;
-      err.message = e.what();
-      errors.push_back(err);
-    }
-
-    return error_handler->get_errors().empty();
-  } catch (const std::exception& e) {
-    // Fallback for unexpected errors
-    ParseError err;
-    err.line = 1;
-    err.col = 1;
-    err.message = std::string("Unexpected error: ") + e.what();
-    errors.push_back(err);
-    return false;
-  }
+  Context ctx;
+  return parse_for_lsp(ctx, content, errors);
 }
 
 // ParserFactory implementation

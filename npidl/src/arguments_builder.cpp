@@ -15,7 +15,7 @@ void ArgumentsStructBuilder::make_arguments_structs(AstFunctionDecl* fn)
   // Note: Streaming functions don't have traditional return values - they
   // return a StreamReader on the client side, not output parameters.
   if (!fn->is_void() && fn->stream_kind == StreamKind::None) {
-    auto ret = new AstFunctionArgument();
+    auto ret = ctx_->make<AstFunctionArgument>();
     ret->name = "ret_val";
     ret->modifier = ArgumentModifier::Out;
     ret->type = fn->ret_value;
@@ -42,7 +42,7 @@ AstStructDecl* ArgumentsStructBuilder::make_struct(
   if (args.empty())
     return nullptr;
 
-  auto s = new AstStructDecl();
+  auto s = ctx_->make<AstStructDecl>();
   s->name = ctx_->current_file() + "_M" + std::to_string(++ctx_->m_struct_n_);
   s->exception_id = -1; // Mark as non-exception
   s->internal = true; // Mark as internal (not user-defined)
@@ -50,8 +50,8 @@ AstStructDecl* ArgumentsStructBuilder::make_struct(
   s->is_builtin = ctx_->is_parsing_builtins(); // Mark as built-in if we're currently parsing built-ins
 
   std::transform(args.begin(), args.end(), std::back_inserter(s->fields),
-                 [ix = 0, s, fn](AstFunctionArgument* arg) mutable {
-                   auto f = new AstFieldDecl();
+                 [ix = 0, s, fn, ctx = ctx_](AstFunctionArgument* arg) mutable {
+                   auto f = ctx->make<AstFieldDecl>();
                    f->name = "_" + std::to_string(++ix);
                    f->type = arg->type;
                    s->flat &= is_flat(arg->type);
@@ -67,7 +67,6 @@ AstStructDecl* ArgumentsStructBuilder::make_struct(
 
   if (auto p = ctx_->affa_list.get(id); p) {
     --ctx_->m_struct_n_;
-    delete s;
     s = p;
   } else {
     ctx_->affa_list.put(id, s);

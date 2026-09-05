@@ -44,7 +44,8 @@ public:
     }
 
     // Index all types from namespace (includes aliases, enums, and structs
-    // not in exceptions list)
+    // not in exceptions list). Skip builtin namespaces so their positions
+    // (from the embedded nprpc_base IDL) do not leak into the user document.
     index_namespace_types(ctx_.nm_cur()->root());
 
     // Finalize (sort) the index
@@ -52,9 +53,27 @@ public:
   }
 
 private:
+  void add_named(void* node,
+                 PositionIndex::NodeType type,
+                 const AstNodeWithPosition* named)
+  {
+    if (!named)
+      return;
+    if (named->name_range.is_valid()) {
+      index_.add(node, type, named->name_range.start.line,
+                 named->name_range.start.column, named->name_range.end.line,
+                 named->name_range.end.column);
+      return;
+    }
+    if (named->range.start.line > 0) {
+      index_.add(node, type, named->range.start.line, named->range.start.column,
+                 named->range.end.line, named->range.end.column);
+    }
+  }
+
   void index_namespace_types(Namespace* ns)
   {
-    if (!ns)
+    if (!ns || ns->is_builtin())
       return;
 
     // Index all types in this namespace
@@ -96,19 +115,19 @@ private:
 
     case FieldType::Alias: {
       auto* alias = static_cast<AstAliasDecl*>(type);
-      if (has_position(alias)) {
-        index_.add(alias, PositionIndex::NodeType::Alias,
-                   alias->range.start.line, alias->range.start.column,
-                   alias->range.end.line, alias->range.end.column);
-      }
+      add_named(alias, PositionIndex::NodeType::Alias, alias);
       break;
     }
     case FieldType::Enum: {
       auto* e = static_cast<AstEnumDecl*>(type);
-      if (has_position(e)) {
-        index_.add(e, PositionIndex::NodeType::Enum, e->range.start.line,
-                   e->range.start.column, e->range.end.line,
-                   e->range.end.column);
+      add_named(e, PositionIndex::NodeType::Enum, e);
+      const auto n = std::min(e->items.size(), e->item_name_ranges.size());
+      for (size_t i = 0; i < n; ++i) {
+        const auto& r = e->item_name_ranges[i];
+        if (!r.is_valid())
+          continue;
+        index_.add(e, PositionIndex::NodeType::EnumValue, r.start.line,
+                   r.start.column, r.end.line, r.end.column);
       }
       break;
     }
@@ -133,12 +152,7 @@ private:
 
   void index_interface(AstInterfaceDecl* ifs)
   {
-    if (!has_position(ifs))
-      return;
-
-    index_.add(ifs, PositionIndex::NodeType::Interface, ifs->range.start.line,
-               ifs->range.start.column, ifs->range.end.line,
-               ifs->range.end.column);
+    add_named(ifs, PositionIndex::NodeType::Interface, ifs);
 
     // Index functions within interface
     for (auto* fn : ifs->fns) {
@@ -148,14 +162,13 @@ private:
 
   void index_struct(AstStructDecl* s, bool is_exception = false)
   {
-    if (!has_position(s))
+    if (s && s->is_builtin)
       return;
 
-    index_.add(s,
-               is_exception ? PositionIndex::NodeType::Exception
-                            : PositionIndex::NodeType::Struct,
-               s->range.start.line, s->range.start.column, s->range.end.line,
-               s->range.end.column);
+    add_named(s,
+              is_exception ? PositionIndex::NodeType::Exception
+                           : PositionIndex::NodeType::Struct,
+              s);
 
     // Index fields within struct
     for (auto* field : s->fields) {
@@ -163,14 +176,31 @@ private:
     }
   }
 
+  void index_type_refs(std::vector<TypeRefSite>& sites)
+  {
+    for (auto& site : sites) {
+      if (!site.range.is_valid())
+        continue;
+      if (site.is_keyword) {
+        index_.add(&site, PositionIndex::NodeType::Keyword,
+                   site.range.start.line, site.range.start.column,
+                   site.range.end.line, site.range.end.column, false);
+        continue;
+      }
+      if (!site.type)
+        continue;
+      index_.add(site.type, get_type_node_type(site.type),
+                 site.range.start.line, site.range.start.column,
+                 site.range.end.line, site.range.end.column, false);
+    }
+  }
+
   void index_function(AstFunctionDecl* fn)
   {
-    if (!has_position(fn))
-      return;
-
-    index_.add(fn, PositionIndex::NodeType::Function, fn->range.start.line,
-               fn->range.start.column, fn->range.end.line,
-               fn->range.end.column);
+    // Index the function *name* only. The full signature range overlaps
+    // parameter tokens and made single-line methods highlight as one blob.
+    add_named(fn, PositionIndex::NodeType::Function, fn);
+    index_type_refs(fn->ret_type_refs);
 
     // Index parameters
     for (auto* arg : fn->args) {
@@ -179,13 +209,14 @@ private:
                    arg->range.start.line, arg->range.start.column,
                    arg->range.end.line, arg->range.end.column);
 
-        // Also index the parameter's type reference if it has a
-        // position
-        if (arg->type_ref_range.is_valid() && arg->type) {
-          index_.add(
-              arg->type, get_type_node_type(arg->type),
-              arg->type_ref_range.start.line, arg->type_ref_range.start.column,
-              arg->type_ref_range.end.line, arg->type_ref_range.end.column);
+        if (!arg->type_refs.empty()) {
+          index_type_refs(arg->type_refs);
+        } else if (arg->type_ref_range.is_valid() && arg->type) {
+          index_.add(arg->type, get_type_node_type(arg->type),
+                     arg->type_ref_range.start.line,
+                     arg->type_ref_range.start.column,
+                     arg->type_ref_range.end.line, arg->type_ref_range.end.column,
+                     false);
         }
       }
     }
@@ -200,12 +231,14 @@ private:
                field->range.start.column, field->range.end.line,
                field->range.end.column);
 
-    // Also index the type reference if it has a position
-    if (field->type_ref_range.is_valid() && field->type) {
-      index_.add(
-          field->type, get_type_node_type(field->type),
-          field->type_ref_range.start.line, field->type_ref_range.start.column,
-          field->type_ref_range.end.line, field->type_ref_range.end.column);
+    if (!field->type_refs.empty()) {
+      index_type_refs(field->type_refs);
+    } else if (field->type_ref_range.is_valid() && field->type) {
+      index_.add(field->type, get_type_node_type(field->type),
+                 field->type_ref_range.start.line,
+                 field->type_ref_range.start.column,
+                 field->type_ref_range.end.line, field->type_ref_range.end.column,
+                 false);
     }
   }
 

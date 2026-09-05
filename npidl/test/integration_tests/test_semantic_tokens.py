@@ -1,116 +1,122 @@
 #!/usr/bin/env python3
-import json
-import subprocess
+"""Semantic tokens generation."""
+
 import sys
+from pathlib import Path
 
-def send_lsp_message(proc, message):
-    """Send a JSON-RPC message with proper headers"""
-    content = json.dumps(message)
-    header = f"Content-Length: {len(content)}\r\n\r\n"
-    proc.stdin.write(header.encode('utf-8'))
-    proc.stdin.write(content.encode('utf-8'))
-    proc.stdin.flush()
+sys.path.insert(0, str(Path(__file__).parent))
+from lsp_test_base import LspTestClient, find_in_text
 
-def read_lsp_message(proc):
-    """Read a JSON-RPC message with headers"""
-    # Read headers
-    headers = {}
-    while True:
-        line = proc.stdout.readline().decode('utf-8')
-        if line == '\r\n' or line == '\n':
-            break
-        if ':' in line:
-            key, value = line.split(':', 1)
-            headers[key.strip()] = value.strip()
-    
-    # Read content
-    content_length = int(headers.get('Content-Length', 0))
-    if content_length > 0:
-        content = proc.stdout.read(content_length).decode('utf-8')
-        return json.loads(content)
-    return None
+URI = "file:///tmp/npidl_semantic_tokens.npidl"
+SOURCE = """\
+module sample;
 
-# Start LSP server
-lsp_server = subprocess.Popen(
-    ['/home/nikita/projects/npsystem/build/linux/bin/npidl', '--lsp'],
-    stdin=subprocess.PIPE,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE
-)
+message Point {
+  x: i32;
+}
 
-try:
-    # Initialize
-    print("Sending initialize...")
-    send_lsp_message(lsp_server, {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {"capabilities": {}}
-    })
-    
-    response = read_lsp_message(lsp_server)
-    print("Initialize response:", json.dumps(response, indent=2))
-    
-    # Check for semanticTokensProvider
-    if response and 'result' in response:
-        caps = response['result'].get('capabilities', {})
-        semantic_tokens = caps.get('semanticTokensProvider')
-        print("\nSemantic tokens support:", semantic_tokens)
-    
-    # Send didOpen
-    print("\nSending didOpen...")
-    test_file = "/home/nikita/projects/npsystem/nprpc/idl/nprpc_base.npidl"
-    with open(test_file) as f:
-        file_content = f.read()
-    
-    send_lsp_message(lsp_server, {
-        "jsonrpc": "2.0",
-        "method": "textDocument/didOpen",
-        "params": {
-            "textDocument": {
-                "uri": f"file://{test_file}",
-                "languageId": "npidl",
-                "version": 1,
-                "text": file_content
-            }
-        }
-    })
-    
-    # Give it time to parse
-    import time
-    time.sleep(0.5)
-    
-    # Request semantic tokens
-    print("\nRequesting semantic tokens...")
-    send_lsp_message(lsp_server, {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "textDocument/semanticTokens/full",
-        "params": {
-            "textDocument": {
-                "uri": f"file://{test_file}"
-            }
-        }
-    })
-    
-    # Read responses (might get diagnostics first)
-    for _ in range(3):  # Try a few times
-        response = read_lsp_message(lsp_server)
-        print(f"Response: {json.dumps(response, indent=2)[:200]}...")
-        if response and response.get('id') == 2:
-            break
-    
-    # Decode first few tokens
-    if response and 'result' in response and 'data' in response['result']:
-        data = response['result']['data']
-        print(f"\nTotal tokens: {len(data) // 5}")
-        print("First 10 tokens (deltaLine, deltaCol, length, type, modifiers):")
-        for i in range(min(10, len(data) // 5)):
-            idx = i * 5
-            token = data[idx:idx+5]
-            print(f"  Token {i}: {token}")
+message ThemeAck {
+  ok: boolean;
+}
 
-    
-finally:
-    lsp_server.terminate()
-    lsp_server.wait()
+message SystemTheme {
+  name: string;
+}
+
+enum Color {
+  Red,
+  Green = 2,
+  Blue
+}
+
+interface Demo {
+  void Move(p: Point);
+  bidi_stream<ThemeAck, SystemTheme> SubscribeSystemTheme();
+}
+"""
+
+# Must match the legend advertised in handle_initialize.
+TT_INTERFACE = 1
+TT_CLASS = 2
+TT_FUNCTION = 4
+TT_PARAMETER = 5
+TT_PROPERTY = 6
+TT_TYPE = 7
+TT_KEYWORD = 8
+TT_ENUM_MEMBER = 9
+
+
+def decode(data):
+    tokens = []
+    line = 0
+    col = 0
+    for i in range(0, len(data), 5):
+        dline, dcol, length, ttype, _mods = data[i : i + 5]
+        line += dline
+        col = dcol if dline != 0 else col + dcol
+        tokens.append((line, col, length, ttype))
+    return tokens
+
+
+def main():
+    with LspTestClient() as client:
+        init = client.initialize()
+        provider = init["result"]["capabilities"].get("semanticTokensProvider")
+        assert provider, "semanticTokensProvider missing"
+
+        msg = client.open_document(URI, SOURCE)
+        assert msg["params"]["diagnostics"] == []
+
+        resp = client.semantic_tokens(URI)
+        data = resp["result"]["data"]
+        assert data, "no semantic tokens"
+        tokens = decode(data)
+        types = {t[3] for t in tokens}
+        assert TT_CLASS in types, f"missing struct token: {tokens}"
+        assert TT_INTERFACE in types, f"missing interface token: {tokens}"
+        assert TT_FUNCTION in types, f"missing function token: {tokens}"
+        assert TT_PARAMETER in types, f"missing parameter token: {tokens}"
+        assert TT_PROPERTY in types, f"missing field token: {tokens}"
+
+        fn = next(t for t in tokens if t[3] == TT_FUNCTION)
+        assert fn[2] == len("Move"), f"function token length {fn[2]} != 4"
+
+        line, col = find_in_text(SOURCE, "Move")
+        assert fn[0] == line and fn[1] == col, (
+            f"function token at {fn[0]}:{fn[1]}, expected {line}:{col}"
+        )
+
+        kw_line, kw_col = find_in_text(SOURCE, "bidi_stream")
+        stream_kw = [
+            t for t in tokens
+            if t[0] == kw_line and t[1] == kw_col and t[2] == len("bidi_stream")
+        ]
+        assert stream_kw, f"missing bidi_stream keyword token: {tokens}"
+        assert stream_kw[0][3] == TT_KEYWORD, (
+            f"bidi_stream token type {stream_kw[0][3]} != keyword"
+        )
+
+        ack_line, ack_col = find_in_text(SOURCE, "ThemeAck", occurrence=1)
+        ack_tok = [
+            t for t in tokens if t[0] == ack_line and t[1] == ack_col
+        ]
+        assert ack_tok, f"missing ThemeAck return-type token: {tokens}"
+        assert ack_tok[0][3] == TT_CLASS, (
+            f"ThemeAck token type {ack_tok[0][3]} != class"
+        )
+
+        red_line, red_col = find_in_text(SOURCE, "Red")
+        red_tok = [
+            t for t in tokens if t[0] == red_line and t[1] == red_col
+        ]
+        assert red_tok, f"missing enum key token for Red: {tokens}"
+        assert red_tok[0][3] == TT_ENUM_MEMBER, (
+            f"Red token type {red_tok[0][3]} != enumMember"
+        )
+        assert red_tok[0][2] == len("Red")
+        print(f"✓ semantic tokens: {len(tokens)} tokens")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

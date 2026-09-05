@@ -67,6 +67,8 @@ public:
 
 class LspImportResolver : public IImportResolver
 {
+  std::unordered_set<std::string> parsed_files_;
+
 public:
   std::optional<std::filesystem::path>
   resolve_import(const std::string& import_path,

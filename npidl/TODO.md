@@ -14,11 +14,11 @@
   - Integration test suite (7 tests covering main LSP features)
 
 ## Urgent / High Priority
-* [ ] Fix reparsing after edits: currently the same context remains after an edit with the old AST and the symbol table, leading to immediate error during reparse. Need to invalidate context on edit and reparse from scratch. Or implement incremental reparsing properly.
+* [x] Fix reparsing after edits: `parse_for_lsp` now resets the context (AST pool + symbol table) and reloads builtins before every parse. `didChange` applies full or incremental edits, then reparses from scratch. Covered by `LspReparse` gtests and `test_reparse_after_edit.py`.
 
-* [ ] Some weirdness with functions: they are counted as one semantic token, but have multiple children for parameters. Need to verify if this is correct behavior or if functions should be expanded differently. Go-to-definition on function parameters is working, though.
+* [x] Function semantic tokens: the position index records the function *name* (`name_range`), not the whole signature, so parameters are separate tokens. Document symbols still use the full declaration range.
 
-* [ ] Fix AstNode* memory leak: currently AstNode objects are allocated with `new` but never deleted, leading to memory leaks. Implement proper memory management, possibly using smart pointers or an arena allocator to manage AST node lifetimes effectively.
+* [x] Fix AstNode* memory leak: AST nodes are allocated from `Context`'s `AstPool` and destroyed on `reset()` / `~Context()`. Namespaces own their children.
 
 ## Medium Priority
 * [ ] Add more LSP features: implement additional LSP capabilities such as:

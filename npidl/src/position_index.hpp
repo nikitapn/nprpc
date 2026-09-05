@@ -29,7 +29,8 @@ public:
     Alias,
     Import,
     EnumValue,
-    Optional
+    Optional,
+    Keyword
   };
 
   struct Entry {
@@ -39,6 +40,7 @@ public:
     uint32_t end_col;
     void* node; // Pointer to AST node (type-erased)
     NodeType node_type;
+    bool declaration = true;
 
     // Check if this entry contains the given position
     bool contains(uint32_t line, uint32_t col) const
@@ -72,9 +74,11 @@ public:
            uint32_t start_line,
            uint32_t start_col,
            uint32_t end_line,
-           uint32_t end_col)
+           uint32_t end_col,
+           bool declaration = true)
   {
-    entries_.push_back({start_line, start_col, end_line, end_col, node, type});
+    entries_.push_back(
+        {start_line, start_col, end_line, end_col, node, type, declaration});
   }
 
   // Finalize the index (sorts entries for efficient lookup)

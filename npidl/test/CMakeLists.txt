@@ -57,7 +57,7 @@ if(Python3_FOUND)
   
   # Set environment variables for the test
   set_tests_properties(npidl_lsp_integration_tests PROPERTIES
-    ENVIRONMENT "NPIDL_BIN=${CMAKE_BINARY_DIR}/bin/npidl"
+    ENVIRONMENT "NPIDL_BIN=$<TARGET_FILE:npidl>"
     TIMEOUT 60
     LABELS "integration;lsp"
   )

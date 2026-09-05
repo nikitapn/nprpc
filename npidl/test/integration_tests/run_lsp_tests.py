@@ -22,7 +22,7 @@ def run_test(script_path, description):
             cwd=script_path.parent,
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=30
         )
         
         if result.returncode == 0:
@@ -60,6 +60,7 @@ def main():
         ("test_param_goto.py", "Go-to-definition on function parameters"),
         ("test_semantic_tokens.py", "Semantic tokens generation"),
         ("test_lsp_features.py", "General LSP features (hover, etc.)"),
+        ("test_reparse_after_edit.py", "Reparse after document edits"),
     ]
     
     print("NPIDL LSP Integration Test Suite")

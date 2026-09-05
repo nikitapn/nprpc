@@ -7,10 +7,12 @@
 #include <cassert>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <tuple>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 #include <expected>
@@ -123,7 +125,7 @@ class Namespace
   std::vector<Namespace*> children_;
   std::vector<std::pair<std::string, AstTypeDecl*>> types_;
   std::vector<std::pair<std::string, AstNumber>> constants_;
-
+  bool builtin_ = false;
 
 public:
   Namespace()
@@ -136,6 +138,18 @@ public:
       , name_(std::move(name))
   {
   }
+
+  Namespace(const Namespace&) = delete;
+  Namespace& operator=(const Namespace&) = delete;
+
+  ~Namespace()
+  {
+    for (auto* child : children_)
+      delete child;
+  }
+
+  void mark_builtin() noexcept { builtin_ = true; }
+  bool is_builtin() const noexcept { return builtin_; }
 
   const std::string& name() const noexcept { return name_; }
 
@@ -316,6 +330,15 @@ struct AstTypeDecl {
   FieldType id;
 };
 
+// A named type or keyword that appeared in a type expression
+// (return types, parameters, fields). Used for LSP hover / definition / tokens.
+struct TypeRefSite {
+  AstTypeDecl* type = nullptr;
+  SourceRange range;
+  bool is_keyword = false;
+  std::string keyword;
+};
+
 struct AstObjectDecl : AstTypeDecl {
   AstObjectDecl() { id = FieldType::Object; }
 };
@@ -446,6 +469,7 @@ struct AstInterfaceDecl : AstTypeDecl, AstNodeWithPosition {
 struct AstEnumDecl : AstFundamentalType, AstNodeWithPosition {
   Namespace* nm;
   std::vector<std::pair<std::string, std::pair<AstNumber, bool>>> items;
+  std::vector<SourceRange> item_name_ranges;
 
   AstEnumDecl()
       : AstFundamentalType(TokenId::UInt32)
@@ -456,8 +480,8 @@ struct AstEnumDecl : AstFundamentalType, AstNodeWithPosition {
 
 struct AstFieldDecl : AstNodeWithPosition {
   AstTypeDecl* type;
-  SourceRange type_ref_range; // Position of the type name in source (for
-                              // go-to-definition)
+  SourceRange type_ref_range; // First named type in the type expression
+  std::vector<TypeRefSite> type_refs;
   bool function_argument = false;
   bool input_function_argument;
   std::string_view function_name;
@@ -642,6 +666,7 @@ struct AstFunctionArgument : AstFieldDecl {
 struct AstFunctionDecl : AstNodeWithPosition {
   uint16_t idx;
   AstTypeDecl* ret_value;
+  std::vector<TypeRefSite> ret_type_refs;
   AstStructDecl* in_s = nullptr;
   AstStructDecl* out_s = nullptr;
   AstStructDecl* ex = nullptr;
@@ -675,14 +700,44 @@ public:
     return nullptr;
   }
   void put(const IdType& id, T item) { items_.emplace_back(id, item); }
+  void clear() { items_.clear(); }
   auto begin() { return items_.begin(); }
   auto end() { return items_.end(); }
 };
 
 using AFFAList = List<struct_id_t, AstStructDecl*>;
 
+// Owns AST nodes allocated during a parse. Resetting the pool destroys every
+// node (calling typed destructors) so a later reparse can start from scratch
+// without leaking or seeing stale symbol-table entries.
+class AstPool
+{
+  std::vector<std::unique_ptr<void, void (*)(void*)>> nodes_;
+
+public:
+  AstPool() = default;
+  AstPool(const AstPool&) = delete;
+  AstPool& operator=(const AstPool&) = delete;
+
+  ~AstPool() { reset(); }
+
+  template <typename T, typename... Args> T* create(Args&&... args)
+  {
+    T* p = new T(std::forward<Args>(args)...);
+    nodes_.emplace_back(p, [](void* x) { delete static_cast<T*>(x); });
+    return p;
+  }
+
+  void reset()
+  {
+    while (!nodes_.empty())
+      nodes_.pop_back();
+  }
+};
+
 class Context
 {
+  AstPool pool_;
   Namespace* nm_global_; // Truly global root, always anonymous
   Namespace* nm_root_;   // User's module namespace root (point to nm_global_ or child)
   Namespace* nm_cur_;
@@ -752,6 +807,8 @@ public:
   auto push_namespace(std::string&& s)
   {
     nm_cur_ = nm_cur_->push(std::move(s));
+    if (parsing_builtins_)
+      nm_cur_->mark_builtin();
     return nm_cur_;
   }
 
@@ -847,23 +904,32 @@ public:
 
   AstStructDecl& get_struct_by_path(std::string_view path) const;
 
+  template <typename T, typename... Args> T* make(Args&&... args)
+  {
+    return pool_.create<T>(std::forward<Args>(args)...);
+  }
+
+  // Destroy the AST and symbol table and re-initialize for a fresh parse.
+  // Keeps the current file path (or uses `file_path` if provided).
+  void reset();
+  void reset(std::filesystem::path file_path);
+
+  // Update the main file path used by the lexer and error messages.
+  void set_file_path(std::filesystem::path file_path);
+
   Context(std::filesystem::path initial_file_path = "<in-memory>")
       : nm_global_(new Namespace(nullptr, "<root>"))  // Global root, always anonymous
       , nm_root_(nm_global_)         // Initially points to global
       , nm_cur_(nm_global_)
   {
-    // Initialize file stack with the main file
-    std::string base_name =
-        initial_file_path.filename().replace_extension().string();
-    std::transform(base_name.begin(), base_name.end(), base_name.begin(),
-                   [](char c) { return c == '.' ? '_' : ::tolower(c); });
-
-    file_stack_.push_back(FileContext{
-        .file_path = std::move(initial_file_path),
-        .base_name = std::move(base_name),
-        .namespace_at_entry = nm_global_ // Main file starts at global root
-    });
+    init_file_stack(std::move(initial_file_path));
   }
+
+  Context(const Context&) = delete;
+  Context& operator=(const Context&) = delete;
+  Context(Context&&) = delete;
+  Context& operator=(Context&&) = delete;
+  ~Context();
   
   // Set parsing builtins mode. When true, module declaration creates
   // child namespace instead of renaming root.
@@ -886,6 +952,10 @@ public:
   }
 
   BuiltinTypeInfo get_builtin_types_info() const noexcept { return builtin_types_info_; }
+
+private:
+  void init_file_stack(std::filesystem::path file_path);
+  static std::string make_base_name(const std::filesystem::path& file_path);
 }; // Context
 
 

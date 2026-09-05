@@ -66,6 +66,8 @@ struct SourceRange {
 // Mix-in class for AST nodes that need position tracking
 struct AstNodeWithPosition {
   SourceRange range;
+  // Identifier token only (used for semantic tokens / hover on the name)
+  SourceRange name_range;
   // For named nodes (interfaces, structs, functions, fields, etc.)
   std::string name;
 
@@ -73,6 +75,13 @@ struct AstNodeWithPosition {
   void set_position(const SourcePosition& start, const SourcePosition& end)
   {
     range = SourceRange(start, end);
+  }
+  void set_name_position(uint32_t line, uint32_t col, uint32_t length)
+  {
+    if (length == 0)
+      length = 1;
+    name_range = SourceRange(SourcePosition(line, col),
+                             SourcePosition(line, col + length - 1));
   }
   const SourceRange& get_range() const { return range; }
 

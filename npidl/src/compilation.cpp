@@ -4,6 +4,7 @@
 #include "builder.hpp"
 #include "builtins.hpp"
 #include "cpp_builder.hpp"
+#include "parse_for_lsp.hpp"
 #include "parser_factory.hpp"
 #include "swift_builder.hpp"
 #include "ts_builder.hpp"
@@ -14,7 +15,7 @@ namespace npidl {
 // Parse built-in types into context. These types are always available
 // without explicit imports (e.g., nprpc::detail::ObjectId).
 // Uses an empty BuildGroup so no code is generated for builtins.
-static void load_builtins(Context& ctx)
+void load_builtins(Context& ctx)
 {
   ctx.set_parsing_builtins(true);
 

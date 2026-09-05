@@ -3,7 +3,82 @@
 
 #include "ast.hpp"
 
+#include <algorithm>
+#include <cctype>
+
 namespace npidl {
+
+std::string Context::make_base_name(const std::filesystem::path& file_path)
+{
+  std::string base_name = file_path.filename().replace_extension().string();
+  std::transform(base_name.begin(), base_name.end(), base_name.begin(),
+                 [](char c) { return c == '.' ? '_' : ::tolower(c); });
+  return base_name;
+}
+
+void Context::init_file_stack(std::filesystem::path file_path)
+{
+  std::string base_name = make_base_name(file_path);
+  file_stack_.clear();
+  file_stack_.push_back(FileContext{
+      .file_path = std::move(file_path),
+      .base_name = std::move(base_name),
+      .namespace_at_entry = nm_global_,
+  });
+}
+
+void Context::set_file_path(std::filesystem::path file_path)
+{
+  std::string base_name = make_base_name(file_path);
+  if (file_stack_.empty()) {
+    file_stack_.push_back(FileContext{
+        .file_path = std::move(file_path),
+        .base_name = std::move(base_name),
+        .namespace_at_entry = nm_global_,
+    });
+    return;
+  }
+  file_stack_.front().file_path = std::move(file_path);
+  file_stack_.front().base_name = std::move(base_name);
+}
+
+void Context::reset()
+{
+  std::filesystem::path path = "<in-memory>";
+  if (!file_stack_.empty())
+    path = file_stack_.front().file_path;
+  reset(std::move(path));
+}
+
+void Context::reset(std::filesystem::path file_path)
+{
+  pool_.reset();
+  delete nm_global_;
+
+  nm_global_ = new Namespace(nullptr, "<root>");
+  nm_root_ = nm_global_;
+  nm_cur_ = nm_global_;
+  exception_id_last = -1;
+  parsing_builtins_ = false;
+  module_name.clear();
+  module_level = 0;
+  structs_with_helpers_.clear();
+  affa_list.clear();
+  m_struct_n_ = 0;
+  exceptions.clear();
+  builtin_exceptions.clear();
+  interfaces.clear();
+  imports.clear();
+  builtin_types_info_ = {};
+  init_file_stack(std::move(file_path));
+}
+
+Context::~Context()
+{
+  pool_.reset();
+  delete nm_global_;
+  nm_global_ = nullptr;
+}
 
 void Context::set_module_name(std::vector<std::string>&& name_parts)
 {
@@ -18,6 +93,7 @@ void Context::set_module_name(std::vector<std::string>&& name_parts)
       } else {
         nm_cur_ = nm_cur_->push(std::move(part));
       }
+      nm_cur_->mark_builtin();
     }
     // Don't set module_name or module_level for builtins
     return;

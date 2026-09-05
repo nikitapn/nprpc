@@ -3,12 +3,59 @@
 
 #include "lsp_server.hpp"
 #include "parse_for_lsp.hpp"
+#include "parser_implementations.hpp"
 #include "position_index_builder.hpp"
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <sstream>
+#include <string_view>
 
 // DocumentManager Implementation
+
+namespace {
+
+std::filesystem::path uri_to_path(const std::string& uri)
+{
+  constexpr std::string_view prefix = "file://";
+  if (uri.starts_with(prefix))
+    return std::filesystem::path(uri.substr(prefix.size()));
+  return std::filesystem::path(uri);
+}
+
+size_t position_to_offset(const std::string& text, int line, int character)
+{
+  size_t offset = 0;
+  int cur_line = 0;
+  while (cur_line < line && offset < text.size()) {
+    if (text[offset] == '\n')
+      ++cur_line;
+    ++offset;
+  }
+  if (character < 0)
+    character = 0;
+  return std::min(text.size(), offset + static_cast<size_t>(character));
+}
+
+void apply_content_change(std::string& content,
+                          const lsp::TextDocumentContentChangeEvent& change)
+{
+  if (!change.range.has_value()) {
+    content = change.text;
+    return;
+  }
+  const auto& range = *change.range;
+  size_t start =
+      position_to_offset(content, range.start.line, range.start.character);
+  size_t end = position_to_offset(content, range.end.line, range.end.character);
+  if (end < start)
+    end = start;
+  content.replace(start, end - start, change.text);
+}
+
+} // namespace
 
 void DocumentManager::open(const std::string& uri,
                            const std::string& text,
@@ -30,6 +77,19 @@ void DocumentManager::change(const std::string& uri,
     it->second.content = text;
     it->second.version = version;
   }
+}
+
+void DocumentManager::apply_changes(
+    const std::string& uri,
+    const std::vector<lsp::TextDocumentContentChangeEvent>& changes,
+    int version)
+{
+  auto it = documents_.find(uri);
+  if (it == documents_.end())
+    return;
+  for (const auto& change : changes)
+    apply_content_change(it->second.content, change);
+  it->second.version = version;
 }
 
 void DocumentManager::close(const std::string& uri) { documents_.erase(uri); }
@@ -64,9 +124,17 @@ DocumentManager::parse_and_get_diagnostics(npidl::WorkspaceManager& workspace,
     return diagnostics;
   }
 
-  // Parse into the project's persistent context
+  // Point the context at this document, then reparse from scratch. parse_for_lsp
+  // resets the AST and symbol table so a previous version of the file cannot
+  // leak "Type redefinition" errors into the next edit.
+  project->ctx->set_file_path(uri_to_path(doc.uri));
+
+  npidl::LspSourceProvider source_provider;
+  for (const auto& [uri, open_doc] : documents_)
+    source_provider.update_document(uri, open_doc.content);
+
   std::vector<npidl::ParseError> parse_errors;
-  npidl::parse_for_lsp(*project->ctx, doc.content, parse_errors);
+  npidl::parse_for_lsp(*project->ctx, source_provider, parse_errors);
 
   // Extract imports from parsed context
   doc.imports.clear();
@@ -169,12 +237,8 @@ DocumentManager::parse_and_get_diagnostics(npidl::WorkspaceManager& workspace,
 
 LspServer::LspServer()
 {
-  // Disable buffering on stdin/stdout for LSP protocol
-  std::ios::sync_with_stdio(false);
-  std::cin.tie(nullptr);
-  std::cout.tie(nullptr);
-
-  // Log to stderr (stdout is for LSP messages)
+  // Log to stderr (stdout is for LSP messages). File tee, if any, is
+  // installed in main() before this constructor runs.
   std::clog << "NPIDL LSP Server starting..." << std::endl;
 }
 
@@ -285,8 +349,9 @@ void LspServer::handle_initialize(const glz::generic& id,
       "function",  // 4 - function
       "parameter", // 5 - parameter
       "property",  // 6 - field
-      "type",      // 7 - type reference
-      "keyword"    // 8 - keywords (import, etc.)
+      "type",       // 7 - type reference
+      "keyword",    // 8 - keywords (import, stream, etc.)
+      "enumMember"  // 9 - enum keys
   };
   semanticTokens.legend.tokenModifiers = {
       "readonly",    // 0 - const
@@ -357,13 +422,11 @@ void LspServer::handle_did_change(const glz::raw_json& params)
   std::clog << "Document changed: " << change_params.textDocument.uri
             << std::endl;
 
-  // Full document sync (change=1)
   if (!change_params.contentChanges.empty()) {
-    documents_.change(change_params.textDocument.uri,
-                      change_params.contentChanges[0].text,
-                      change_params.textDocument.version);
+    documents_.apply_changes(change_params.textDocument.uri,
+                             change_params.contentChanges,
+                             change_params.textDocument.version);
 
-    // Parse and send diagnostics
     if (auto* doc = documents_.get(change_params.textDocument.uri)) {
       auto diagnostics = documents_.parse_and_get_diagnostics(workspace_, *doc);
       publish_diagnostics(change_params.textDocument.uri, diagnostics);
@@ -595,6 +658,30 @@ LspServer::create_hover_content(const npidl::PositionIndex::Entry* entry)
     break;
   }
 
+  case NodeType::Keyword: {
+    auto* site = static_cast<npidl::TypeRefSite*>(entry->node);
+    md << "**keyword** `" << (site ? site->keyword : "") << "`\n";
+    break;
+  }
+
+  case NodeType::EnumValue: {
+    auto* e = static_cast<npidl::AstEnumDecl*>(entry->node);
+    std::string key = "?";
+    if (e) {
+      const auto n = std::min(e->items.size(), e->item_name_ranges.size());
+      for (size_t i = 0; i < n; ++i) {
+        const auto& r = e->item_name_ranges[i];
+        if (r.start.line == entry->start_line &&
+            r.start.column == entry->start_col) {
+          key = e->items[i].first;
+          break;
+        }
+      }
+      md << "**enum member** `" << e->name << "." << key << "`\n";
+    }
+    break;
+  }
+
   default:
     md << "Unknown node type\n";
     break;
@@ -671,6 +758,21 @@ std::string LspServer::format_type(npidl::AstTypeDecl* type)
     auto* alias = npidl::calias(type);
     return alias->name;
   }
+  case FieldType::Stream: {
+    auto* stream = static_cast<npidl::AstStreamDecl*>(type);
+    std::string inner = format_type(stream->type);
+    switch (stream->kind) {
+    case npidl::StreamKind::Client:
+      return "client_stream<" + inner + ">";
+    case npidl::StreamKind::Bidi:
+      return "bidi_stream<" +
+             (stream->input_type ? format_type(stream->input_type) : "?") +
+             ", " + inner + ">";
+    default:
+      return std::string(stream->direct ? "stream<direct " : "stream<") + inner +
+             ">";
+    }
+  }
   default:
     return "?";
   }
@@ -717,8 +819,9 @@ void LspServer::handle_semantic_tokens_full(const glz::generic& id,
     TT_FUNCTION = 4,  // function
     TT_PARAMETER = 5, // parameter
     TT_PROPERTY = 6,  // field
-    TT_TYPE = 7,      // type reference
-    TT_KEYWORD = 8    // keywords
+    TT_TYPE = 7,        // type reference
+    TT_KEYWORD = 8,     // keywords
+    TT_ENUM_MEMBER = 9  // enum keys
   };
 
   // Token modifiers (bitflags)
@@ -768,11 +871,19 @@ void LspServer::handle_semantic_tokens_full(const glz::generic& id,
       token_type = TT_TYPE;
       break;
     case npidl::PositionIndex::NodeType::EnumValue:
-      token_type = TT_PROPERTY; // Treat enum values as properties
+      token_type = TT_ENUM_MEMBER;
       break;
     case npidl::PositionIndex::NodeType::Optional:
       token_type = TT_TYPE;
       break;
+    case npidl::PositionIndex::NodeType::Keyword:
+      token_type = TT_KEYWORD;
+      break;
+    }
+
+    if (entry.node_type == npidl::PositionIndex::NodeType::Keyword ||
+        !entry.declaration) {
+      token_modifiers = 0;
     }
 
     // Convert from 1-based parser position to 0-based LSP position
@@ -853,166 +964,159 @@ void LspServer::handle_definition(const glz::generic& id,
   std::clog << "Found node type: " << static_cast<int>(entry->node_type)
             << std::endl;
 
-  // Helper to get position from a type that inherits from AstNodeWithPosition
+  auto named_range = [](const npidl::AstNodeWithPosition* node)
+      -> const npidl::SourceRange* {
+    if (!node)
+      return nullptr;
+    if (node->name_range.is_valid())
+      return &node->name_range;
+    if (node->range.is_valid())
+      return &node->range;
+    return nullptr;
+  };
+
+  // Prefer the identifier range: that is what the position index stores.
   auto get_type_position =
-      [](npidl::AstTypeDecl* type) -> const npidl::SourceRange* {
+      [&](npidl::AstTypeDecl* type) -> const npidl::SourceRange* {
     using FieldType = npidl::FieldType;
 
     switch (type->id) {
-    case FieldType::Struct: {
-      auto* s = npidl::cflat(type);
-      return &s->range;
-    }
-    case FieldType::Interface: {
-      auto* ifs = npidl::cifs(type);
-      return &ifs->range;
-    }
-    case FieldType::Enum: {
-      auto* e = npidl::cenum(type);
-      return &e->range;
-    }
-    case FieldType::Alias: {
-      auto* alias = npidl::calias(type);
-      return &alias->range;
-    }
+    case FieldType::Struct:
+      return named_range(npidl::cflat(type));
+    case FieldType::Interface:
+      return named_range(npidl::cifs(type));
+    case FieldType::Enum:
+      return named_range(npidl::cenum(type));
+    case FieldType::Alias:
+      return named_range(npidl::calias(type));
     default:
       return nullptr;
     }
   };
 
-  // Check if we're on a type reference or a type definition
-  // Type references are added to the index pointing to AstTypeDecl nodes
-  // For type references, we want to navigate to the actual definition
+  auto send_location = [&](const npidl::SourceRange& range) {
+    lsp::Location location;
+    location.uri = pos_params.textDocument.uri;
+    location.range.start.line = static_cast<int>(range.start.line) - 1;
+    location.range.start.character = static_cast<int>(range.start.column) - 1;
+    location.range.end.line = static_cast<int>(range.end.line) - 1;
+    location.range.end.character = static_cast<int>(range.end.column) - 1;
+    send_response(id, glz::write_json(location).value_or("null"));
+  };
+
+  auto send_entry_location = [&](const npidl::PositionIndex::Entry& e) {
+    lsp::Location location;
+    location.uri = pos_params.textDocument.uri;
+    location.range.start.line = static_cast<int>(e.start_line) - 1;
+    location.range.start.character = static_cast<int>(e.start_col) - 1;
+    location.range.end.line = static_cast<int>(e.end_line) - 1;
+    location.range.end.character = static_cast<int>(e.end_col) - 1;
+    send_response(id, glz::write_json(location).value_or("null"));
+  };
+
+  // Type references are indexed at the usage site but point at the defining
+  // AST node. Jump to that node's name rather than the usage, and never fall
+  // through to "this entry is the definition" (that returned the usage).
   if (entry->node_type == npidl::PositionIndex::NodeType::Struct ||
+      entry->node_type == npidl::PositionIndex::NodeType::Exception ||
       entry->node_type == npidl::PositionIndex::NodeType::Interface ||
       entry->node_type == npidl::PositionIndex::NodeType::Enum ||
       entry->node_type == npidl::PositionIndex::NodeType::Alias ||
       entry->node_type == npidl::PositionIndex::NodeType::Optional) {
-    // This is a type - could be a reference or the actual definition
-    // Get the type's position from the AST node
     auto* type = static_cast<npidl::AstTypeDecl*>(entry->node);
     if (type->id == npidl::FieldType::Optional) {
-      // Unwrap optional to get to the base type
       auto* opt = static_cast<npidl::AstWrapType*>(type);
       type = opt->type;
     }
 
     const npidl::SourceRange* type_range = get_type_position(type);
-
     if (type_range && type_range->is_valid()) {
-      // Check if the position we clicked on matches the type's definition
-      // position If not, it's a type reference and we need to jump to the
-      // definition
-      if (entry->start_line != type_range->start.line ||
-          entry->start_col != type_range->start.column) {
-        // This is a type reference, find the actual definition
-        std::clog << "Found type reference, looking for definition at "
-                  << type_range->start.line << ":" << type_range->start.column
-                  << std::endl;
-
-        const auto* def_entry = project->position_index.find_at_position(
-            type_range->start.line, type_range->start.column);
-
-        if (def_entry) {
-          lsp::Location location;
-          location.uri = pos_params.textDocument.uri;
-          location.range.start.line = def_entry->start_line - 1;
-          location.range.start.character = def_entry->start_col - 1;
-          location.range.end.line = def_entry->end_line - 1;
-          location.range.end.character = def_entry->end_col - 1;
-
-          std::string result = glz::write_json(location).value_or("null");
-          send_response(id, result);
-          return;
-        }
-      } else {
-        // This is the actual definition, return its position
-        std::clog << "Node is the type definition itself" << std::endl;
-
-        lsp::Location location;
-        location.uri = pos_params.textDocument.uri;
-        location.range.start.line = entry->start_line - 1;
-        location.range.start.character = entry->start_col - 1;
-        location.range.end.line = entry->end_line - 1;
-        location.range.end.character = entry->end_col - 1;
-
-        std::string result = glz::write_json(location).value_or("null");
-        send_response(id, result);
-        return;
-      }
+      send_location(*type_range);
+      return;
     }
+    send_entry_location(*entry);
+    return;
   }
 
-  // For fields and parameters, try to find the type definition
-  npidl::AstTypeDecl* type_to_find = nullptr;
-
+  // For fields and parameters, jump to the field's type definition.
   if (entry->node_type == npidl::PositionIndex::NodeType::Field ||
       entry->node_type == npidl::PositionIndex::NodeType::Parameter) {
     auto* field = static_cast<npidl::AstFieldDecl*>(entry->node);
     if (field && field->type) {
-      type_to_find = field->type;
-      std::clog << "Field/parameter with type id: "
-                << static_cast<int>(type_to_find->id) << std::endl;
+      npidl::AstTypeDecl* base_type = field->type;
+      while (base_type->id == npidl::FieldType::Optional ||
+             base_type->id == npidl::FieldType::Vector ||
+             base_type->id == npidl::FieldType::Array) {
+        auto* wrap = static_cast<npidl::AstWrapType*>(base_type);
+        base_type = wrap->type;
+      }
+      const npidl::SourceRange* type_range = get_type_position(base_type);
+      if (type_range && type_range->is_valid()) {
+        send_location(*type_range);
+        return;
+      }
     }
-  } else {
-    // For other node types (functions, imports, etc.), they ARE the
-    // definition
-    std::clog << "Node is a definition itself" << std::endl;
-
-    lsp::Location location;
-    location.uri = pos_params.textDocument.uri;
-    location.range.start.line = entry->start_line - 1;
-    location.range.start.character = entry->start_col - 1;
-    location.range.end.line = entry->end_line - 1;
-    location.range.end.character = entry->end_col - 1;
-
-    std::string result = glz::write_json(location).value_or("null");
-    send_response(id, result);
+    send_response(id, "null");
     return;
   }
 
-  // If we have a type to find, get its position
-  if (type_to_find) {
-    // Unwrap optionals, vectors, and arrays to get to the base type
-    npidl::AstTypeDecl* base_type = type_to_find;
-    while (base_type->id == npidl::FieldType::Optional ||
-           base_type->id == npidl::FieldType::Vector ||
-           base_type->id == npidl::FieldType::Array) {
-      auto* wrap = static_cast<npidl::AstWrapType*>(base_type);
-      base_type = wrap->type;
-    }
+  // Functions, imports, etc. are their own definition (the indexed name).
+  send_entry_location(*entry);
+}
 
-    const npidl::SourceRange* type_range = get_type_position(base_type);
+void LspServer::handle_references(const glz::generic& id,
+                                  const glz::raw_json& params)
+{
+  lsp::ReferenceParams ref_params;
 
-    if (type_range && type_range->is_valid()) {
-      std::clog << "Type definition position: " << type_range->start.line << ":"
-                << type_range->start.column << std::endl;
-
-      // Find the index entry for this type definition
-      const auto* def_entry = project->position_index.find_at_position(
-          type_range->start.line, type_range->start.column);
-
-      if (def_entry) {
-        lsp::Location location;
-        location.uri = pos_params.textDocument
-                           .uri; // Same file for now (TODO: handle imports)
-        location.range.start.line = def_entry->start_line - 1;
-        location.range.start.character = def_entry->start_col - 1;
-        location.range.end.line = def_entry->end_line - 1;
-        location.range.end.character = def_entry->end_col - 1;
-
-        std::string result = glz::write_json(location).value_or("null");
-        send_response(id, result);
-        return;
-      }
-    } else {
-      std::clog << "Type is a fundamental type (no definition to jump to)"
-                << std::endl;
-    }
+  auto error = glz::read_json(ref_params, params.str);
+  if (error) {
+    std::cerr << "Error parsing references params: "
+              << glz::format_error(error, params.str) << '\n';
+    send_response(id, "[]");
+    return;
   }
 
-  std::clog << "Could not resolve definition" << std::endl;
-  send_response(id, "null");
+  auto* project = workspace_.find_project(ref_params.textDocument.uri);
+  if (!project) {
+    send_response(id, "[]");
+    return;
+  }
+
+  uint32_t line = ref_params.position.line + 1;
+  uint32_t col = ref_params.position.character + 1;
+  const auto* entry = project->position_index.find_at_position(line, col);
+  if (!entry || !entry->node) {
+    send_response(id, "[]");
+    return;
+  }
+
+  void* target = entry->node;
+  if (entry->node_type == npidl::PositionIndex::NodeType::Keyword) {
+    auto* site = static_cast<npidl::TypeRefSite*>(entry->node);
+    if (site && site->type)
+      target = site->type;
+  }
+
+  const bool include_declaration =
+      !ref_params.context.has_value() || ref_params.context->includeDeclaration;
+
+  std::vector<lsp::Location> locations;
+  for (const auto& e : project->position_index.entries()) {
+    if (e.node != target)
+      continue;
+    if (!include_declaration && e.declaration)
+      continue;
+    lsp::Location location;
+    location.uri = ref_params.textDocument.uri;
+    location.range.start.line = static_cast<int>(e.start_line) - 1;
+    location.range.start.character = static_cast<int>(e.start_col) - 1;
+    location.range.end.line = static_cast<int>(e.end_line) - 1;
+    location.range.end.character = static_cast<int>(e.end_col) - 1;
+    locations.push_back(std::move(location));
+  }
+
+  send_response(id, glz::write_json(locations).value_or("[]"));
 }
 
 void LspServer::handle_document_symbol(const glz::generic& id,
@@ -1036,19 +1140,26 @@ void LspServer::handle_document_symbol(const glz::generic& id,
 
   std::vector<lsp::DocumentSymbol> symbols;
 
-  // Helper to convert SourceRange to LSP Range
   auto to_lsp_range = [](const npidl::SourceRange& sr) -> lsp::Range {
+    auto clamp0 = [](int v) { return v < 0 ? 0 : v; };
     lsp::Range range;
-    range.start.line = sr.start.line - 1;
-    range.start.character = sr.start.column - 1;
-    range.end.line = sr.end.line - 1;
-    range.end.character = sr.end.column - 1;
+    range.start.line = clamp0(static_cast<int>(sr.start.line) - 1);
+    range.start.character = clamp0(static_cast<int>(sr.start.column) - 1);
+    range.end.line = clamp0(static_cast<int>(sr.end.line) - 1);
+    range.end.character = clamp0(static_cast<int>(sr.end.column) - 1);
+    if (range.end.line < range.start.line ||
+        (range.end.line == range.start.line &&
+         range.end.character < range.start.character)) {
+      range.end = range.start;
+    }
     return range;
   };
 
   // Traverse namespace tree and collect all types
   std::function<void(npidl::Namespace*)> visit_namespace =
       [&](npidl::Namespace* ns) {
+        if (!ns || ns->is_builtin())
+          return;
         for (const auto& [type_name, type_decl] : ns->types()) {
           // Handle structs
           if (type_decl->id == npidl::FieldType::Struct) {
@@ -1111,14 +1222,18 @@ void LspServer::handle_document_symbol(const glz::generic& id,
             symbol.range = to_lsp_range(e->range);
             symbol.selectionRange = symbol.range;
 
-            // Add enum members
-            for (const auto& [member_name, member_value] : e->items) {
+            for (size_t i = 0; i < e->items.size(); ++i) {
               lsp::DocumentSymbol member_symbol;
-              member_symbol.name = member_name;
+              member_symbol.name = e->items[i].first;
               member_symbol.kind = lsp::SymbolKind::EnumMember;
-              member_symbol.range =
-                  symbol.range; // Enums don't track member positions
-              member_symbol.selectionRange = symbol.range;
+              if (i < e->item_name_ranges.size() &&
+                  e->item_name_ranges[i].is_valid()) {
+                member_symbol.range = to_lsp_range(e->item_name_ranges[i]);
+                member_symbol.selectionRange = member_symbol.range;
+              } else {
+                member_symbol.range = symbol.range;
+                member_symbol.selectionRange = symbol.range;
+              }
               symbol.children.push_back(std::move(member_symbol));
             }
 
@@ -1210,6 +1325,9 @@ void LspServer::handle_debug_positions(const glz::generic& id,
     case npidl::PositionIndex::NodeType::EnumValue:
       result << "EnumValue";
       break;
+    case npidl::PositionIndex::NodeType::Keyword:
+      result << "Keyword";
+      break;
     default:
       result << "Unknown";
     }
@@ -1232,6 +1350,22 @@ void LspServer::handle_debug_positions(const glz::generic& id,
       name = static_cast<npidl::AstFunctionArgument*>(entry.node)->name;
     } else if (entry.node_type == npidl::PositionIndex::NodeType::Alias) {
       name = static_cast<npidl::AstAliasDecl*>(entry.node)->name;
+    } else if (entry.node_type == npidl::PositionIndex::NodeType::Keyword) {
+      auto* site = static_cast<npidl::TypeRefSite*>(entry.node);
+      name = site ? site->keyword : "?";
+    } else if (entry.node_type == npidl::PositionIndex::NodeType::EnumValue) {
+      auto* e = static_cast<npidl::AstEnumDecl*>(entry.node);
+      name = e ? e->name : "?";
+      const auto n = e ? std::min(e->items.size(), e->item_name_ranges.size())
+                       : 0;
+      for (size_t i = 0; i < n; ++i) {
+        const auto& r = e->item_name_ranges[i];
+        if (r.start.line == entry.start_line &&
+            r.start.column == entry.start_col) {
+          name = e->name + "." + e->items[i].first;
+          break;
+        }
+      }
     }
 
     result << "  Name: " << name << "\n";
@@ -1275,67 +1409,57 @@ void LspServer::run()
     std::clog << "Received message: " << message->substr(0, 100) << "..."
               << std::endl;
 
-    // Check if it's a request (has "id" field) or notification (no "id"
-    // field)
-    bool has_id = message->find("\"id\"") != std::string::npos;
+    jsonrpc::Incoming incoming;
+    auto error = glz::read_json(incoming, *message);
+    if (error) {
+      std::cerr << "Failed to parse JSON-RPC message: "
+                << glz::format_error(error, *message) << '\n';
+      continue;
+    }
 
-    if (has_id) {
-      // It's a request
-      jsonrpc::Request request;
-      auto error = glz::read_json(request, *message);
+    if (incoming.id.has_value()) {
+      const auto& id = *incoming.id;
+      std::clog << "Request method: " << incoming.method << std::endl;
 
-      if (error) {
-        std::cerr << "Failed to parse as request: "
-                  << glz::format_error(error, *message) << '\n';
-        continue;
-      }
-
-      std::clog << "Request method: " << request.method << std::endl;
-
-      if (request.method == "initialize") {
-        handle_initialize(request.id, request.params);
-      } else if (request.method == "shutdown") {
-        handle_shutdown(request.id);
-      } else if (request.method == "textDocument/hover") {
-        handle_hover(request.id, request.params);
-      } else if (request.method == "textDocument/definition") {
-        handle_definition(request.id, request.params);
-      } else if (request.method == "textDocument/documentSymbol") {
-        handle_document_symbol(request.id, request.params);
-      } else if (request.method == "textDocument/semanticTokens/full") {
-        handle_semantic_tokens_full(request.id, request.params);
-      } else if (request.method == "npidl/debugPositions") {
-        handle_debug_positions(request.id, request.params);
+      if (incoming.method == "initialize") {
+        handle_initialize(id, incoming.params);
+      } else if (incoming.method == "shutdown") {
+        handle_shutdown(id);
+      } else if (incoming.method == "textDocument/hover") {
+        handle_hover(id, incoming.params);
+      } else if (incoming.method == "textDocument/definition") {
+        handle_definition(id, incoming.params);
+      } else if (incoming.method == "textDocument/references") {
+        handle_references(id, incoming.params);
+      } else if (incoming.method == "textDocument/documentSymbol") {
+        handle_document_symbol(id, incoming.params);
+      } else if (incoming.method == "textDocument/semanticTokens/full") {
+        handle_semantic_tokens_full(id, incoming.params);
+      } else if (incoming.method == "npidl/debugPositions") {
+        handle_debug_positions(id, incoming.params);
       } else {
-        std::cerr << "Unknown request method: " << request.method << '\n';
-        send_error(request.id, -32601, "Method not found");
+        std::cerr << "Unknown request method: " << incoming.method << '\n';
+        send_error(id, -32601, "Method not found");
       }
     } else {
-      // It's a notification
-      jsonrpc::Notification notification;
-      auto error = glz::read_json(notification, *message);
+      std::clog << "Notification method: " << incoming.method << std::endl;
 
-      if (error) {
-        std::cerr << "Failed to parse as notification: "
-                  << glz::format_error(error, *message) << '\n';
-        continue;
-      }
-
-      std::clog << "Notification method: " << notification.method << std::endl;
-
-      if (notification.method == "initialized") {
-        handle_initialized(notification.params);
-      } else if (notification.method == "exit") {
+      if (incoming.method == "initialized") {
+        handle_initialized(incoming.params);
+      } else if (incoming.method == "exit") {
         handle_exit();
-      } else if (notification.method == "textDocument/didOpen") {
-        handle_did_open(notification.params);
-      } else if (notification.method == "textDocument/didChange") {
-        handle_did_change(notification.params);
-      } else if (notification.method == "textDocument/didClose") {
-        handle_did_close(notification.params);
+      } else if (incoming.method == "textDocument/didOpen") {
+        handle_did_open(incoming.params);
+      } else if (incoming.method == "textDocument/didChange") {
+        handle_did_change(incoming.params);
+      } else if (incoming.method == "textDocument/didClose") {
+        handle_did_close(incoming.params);
+      } else if (incoming.method == "$/cancelRequest" ||
+                 incoming.method == "$/setTrace" ||
+                 incoming.method == "$/logTrace") {
+        // Optional protocol notifications; we do not cancel in-flight work.
       } else {
-        std::cerr << "Unknown notification: " << notification.method
-                  << std::endl;
+        std::cerr << "Unknown notification: " << incoming.method << std::endl;
       }
     }
   }

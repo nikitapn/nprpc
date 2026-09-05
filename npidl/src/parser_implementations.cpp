@@ -47,11 +47,14 @@ void LspSourceProvider::remove_document(const std::string& uri)
 
 std::string LspSourceProvider::read_file(const std::filesystem::path& path)
 {
-  // Convert path to URI for lookup
-  std::string uri = "file://" + path.string();
+  std::string path_str = path.string();
+  std::string uri =
+      path_str.starts_with("file://") ? path_str : "file://" + path_str;
 
-  // Check if we have this document in memory
   if (auto it = documents_.find(uri); it != documents_.end()) {
+    return it->second;
+  }
+  if (auto it = documents_.find(path_str); it != documents_.end()) {
     return it->second;
   }
 
@@ -121,9 +124,12 @@ std::optional<std::filesystem::path> LspImportResolver::resolve_import(
 bool LspImportResolver::should_parse_import(
     const std::filesystem::path& resolved_path)
 {
-  // Always return true - LSP handles caching at DocumentManager level
-  // This keeps Parser stateless
-  return true;
+  // Parse each imported file once per reparse to avoid circular-import loops.
+  std::error_code ec;
+  auto canonical = std::filesystem::weakly_canonical(resolved_path, ec);
+  std::string key = ec ? resolved_path.lexically_normal().string()
+                       : canonical.string();
+  return parsed_files_.insert(key).second;
 }
 
 // ============================================================================

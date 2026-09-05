@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 #include <gtest/gtest.h>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "../../src/ast.hpp"
 #include "../../src/parse_for_lsp.hpp"
+#include "../../src/position_index.hpp"
+#include "../../src/position_index_builder.hpp"
 
 namespace npidltest {
 
@@ -63,7 +67,8 @@ TEST(NPIDL, TestNamespaceSubstitution)
   n2 = create_namespace("M::N::Q");
   level = Namespace::substract(n1, n2);
   EXPECT_EQ(level, 0);
-  EXPECT_EQ(n2->to_cpp17_namespace(level), "::M::N::Q");
+  // to_cpp17_namespace strips a leading '::' from the global path
+  EXPECT_EQ(n2->to_cpp17_namespace(level), "M::N::Q");
 
   n1 = create_namespace("nprpc");
   n2 = create_namespace("nprpc::detail::helpers");
@@ -75,7 +80,9 @@ TEST(NPIDL, TestNamespaceSubstitution)
   n2 = create_namespace("nprpc::detail::helpers");
   level = Namespace::substract(n1, n2);
   EXPECT_EQ(level, 0);
-  EXPECT_EQ(n2->to_cpp17_namespace(level), "::nprpc::detail::helpers");
+  EXPECT_EQ(n2->to_cpp17_namespace(level), "nprpc::detail::helpers");
+
+  delete root_namespace;
 }
 
 // TEST(NPIDL, TestErrorRecovery) {
@@ -158,6 +165,277 @@ TEST(NPIDL, MultipleRaisesSyntax)
   ASSERT_EQ(fn->exceptions.size(), 2u);
   EXPECT_EQ(fn->exceptions[0]->name, "FirstError");
   EXPECT_EQ(fn->exceptions[1]->name, "SecondError");
+}
+
+TEST(LspReturnTypes, BidiStreamReturnTypeRefs)
+{
+  npidl::Context ctx;
+  std::vector<npidl::ParseError> errors;
+  std::string code = R"(
+module sample;
+
+message ThemeAck { ok: boolean; }
+message SystemTheme { name: string; }
+
+interface Theme {
+  bidi_stream<ThemeAck, SystemTheme> SubscribeSystemTheme();
+}
+)";
+
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, code, errors))
+      << (errors.empty() ? "" : errors.front().message);
+  ASSERT_EQ(ctx.interfaces.size(), 1u);
+  ASSERT_EQ(ctx.interfaces[0]->fns.size(), 1u);
+
+  auto* fn = ctx.interfaces[0]->fns[0];
+  ASSERT_EQ(fn->ret_type_refs.size(), 3u);
+  EXPECT_TRUE(fn->ret_type_refs[0].is_keyword);
+  EXPECT_EQ(fn->ret_type_refs[0].keyword, "bidi_stream");
+  ASSERT_NE(fn->ret_type_refs[1].type, nullptr);
+  ASSERT_NE(fn->ret_type_refs[2].type, nullptr);
+  EXPECT_EQ(npidl::cflat(fn->ret_type_refs[1].type)->name, "ThemeAck");
+  EXPECT_EQ(npidl::cflat(fn->ret_type_refs[2].type)->name, "SystemTheme");
+}
+
+TEST(LspReturnTypes, RaisesExceptionGoto)
+{
+  npidl::Context ctx;
+  std::vector<npidl::ParseError> errors;
+  std::string code = R"(
+module sample;
+
+exception SurfaceNotFound { id: u32; }
+
+interface Demo {
+  void DestroySurface(surfaceId: in u32) raises(SurfaceNotFound);
+}
+)";
+
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, code, errors))
+      << (errors.empty() ? "" : errors.front().message);
+  auto* fn = ctx.interfaces[0]->fns[0];
+  bool found = false;
+  for (const auto& site : fn->ret_type_refs) {
+    if (!site.is_keyword && site.type &&
+        npidl::cflat(site.type)->name == "SurfaceNotFound") {
+      found = true;
+      npidl::PositionIndex index;
+      npidl::PositionIndexBuilder(index, ctx).build();
+      const auto* entry = index.find_at_position(site.range.start.line,
+                                                 site.range.start.column);
+      ASSERT_NE(entry, nullptr);
+      EXPECT_EQ(entry->node_type, npidl::PositionIndex::NodeType::Exception);
+      auto* ex = static_cast<npidl::AstStructDecl*>(entry->node);
+      EXPECT_TRUE(ex->name_range.is_valid());
+      EXPECT_NE(ex->name_range.start.line, site.range.start.line);
+    }
+  }
+  EXPECT_TRUE(found) << "raises() type ref for SurfaceNotFound missing";
+}
+
+static const char* kValidSample = R"(
+module sample;
+
+message Point {
+  x: i32;
+  y: i32;
+}
+
+interface Demo {
+  void Move(p: Point);
+}
+)";
+
+static bool has_redefinition(const std::vector<npidl::ParseError>& errors)
+{
+  for (const auto& err : errors) {
+    if (err.message.find("redefinition") != std::string::npos)
+      return true;
+  }
+  return false;
+}
+
+TEST(LspReparse, SameContentTwiceHasNoRedefinition)
+{
+  npidl::Context ctx;
+  std::vector<npidl::ParseError> errors;
+
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, kValidSample, errors)) << (errors.empty() ? "" : errors.front().message);
+  ASSERT_TRUE(errors.empty());
+  ASSERT_EQ(ctx.interfaces.size(), 1u);
+  ASSERT_EQ(ctx.interfaces[0]->fns.size(), 1u);
+  EXPECT_EQ(ctx.interfaces[0]->fns[0]->name, "Move");
+
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, kValidSample, errors)) << (errors.empty() ? "" : errors.front().message);
+  ASSERT_TRUE(errors.empty());
+  EXPECT_FALSE(has_redefinition(errors));
+  ASSERT_EQ(ctx.interfaces.size(), 1u);
+  ASSERT_EQ(ctx.interfaces[0]->name, "Demo");
+}
+
+TEST(LspReparse, EditIntroducesThenClearsError)
+{
+  npidl::Context ctx;
+  std::vector<npidl::ParseError> errors;
+
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, kValidSample, errors));
+
+  std::string invalid = R"(
+module sample;
+
+message Point {
+  x: UnknownType;
+  y: i32;
+}
+
+interface Demo {
+  void Move(p: Point);
+}
+)";
+
+  EXPECT_FALSE(npidl::parse_for_lsp(ctx, invalid, errors));
+  ASSERT_FALSE(errors.empty());
+  EXPECT_FALSE(has_redefinition(errors))
+      << "Reparse after edit should not report stale type redefinitions; got: "
+      << errors.front().message;
+
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, kValidSample, errors)) << (errors.empty() ? "" : errors.front().message);
+  EXPECT_TRUE(errors.empty());
+  ASSERT_EQ(ctx.interfaces.size(), 1u);
+}
+
+TEST(LspReparse, AddTypeAndUseItAfterEdit)
+{
+  npidl::Context ctx;
+  std::vector<npidl::ParseError> errors;
+
+  std::string before = R"(
+module sample;
+
+interface Demo {
+  void Ping();
+}
+)";
+
+  std::string after = R"(
+module sample;
+
+message Point {
+  x: i32;
+  y: i32;
+}
+
+interface Demo {
+  void Ping();
+  void Move(p: Point);
+}
+)";
+
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, before, errors));
+  ASSERT_EQ(ctx.interfaces.size(), 1u);
+  ASSERT_EQ(ctx.interfaces[0]->fns.size(), 1u);
+
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, after, errors)) << (errors.empty() ? "" : errors.front().message);
+  ASSERT_TRUE(errors.empty());
+  ASSERT_EQ(ctx.interfaces.size(), 1u);
+  ASSERT_EQ(ctx.interfaces[0]->fns.size(), 2u);
+  EXPECT_EQ(ctx.interfaces[0]->fns[1]->name, "Move");
+  ASSERT_FALSE(ctx.interfaces[0]->fns[1]->args.empty());
+  EXPECT_EQ(ctx.interfaces[0]->fns[1]->args[0]->name, "p");
+}
+
+TEST(LspReparse, PositionIndexTracksFunctionNameNotWholeSignature)
+{
+  npidl::Context ctx;
+  std::vector<npidl::ParseError> errors;
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, kValidSample, errors));
+
+  npidl::PositionIndex index;
+  npidl::PositionIndexBuilder builder(index, ctx);
+  builder.build();
+
+  // `void Move(p: Point);` lives inside interface Demo. The function token
+  // must be just "Move", not the entire signature.
+  const npidl::PositionIndex::Entry* fn = nullptr;
+  for (const auto& entry : index.entries()) {
+    if (entry.node_type == npidl::PositionIndex::NodeType::Function) {
+      fn = &entry;
+      break;
+    }
+  }
+  ASSERT_NE(fn, nullptr);
+  EXPECT_EQ(fn->start_line, fn->end_line);
+  EXPECT_EQ(fn->end_col - fn->start_col + 1, 4u); // "Move"
+
+  // Reparse and confirm the index is rebuilt against the new AST, not the old
+  // one (stale pointers / duplicate entries).
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, kValidSample, errors));
+  index.clear();
+  npidl::PositionIndexBuilder builder2(index, ctx);
+  builder2.build();
+
+  size_t function_tokens = 0;
+  for (const auto& entry : index.entries()) {
+    if (entry.node_type == npidl::PositionIndex::NodeType::Function)
+      ++function_tokens;
+  }
+  EXPECT_EQ(function_tokens, 1u);
+}
+
+TEST(LspReparse, HoverPositionSurvivesContentEdit)
+{
+  npidl::Context ctx;
+  std::vector<npidl::ParseError> errors;
+
+  // No leading newline so line numbers stay obvious. Adding a field to Point
+  // must not disturb lookup of the parameter type on the following line.
+  std::string before =
+      "module sample;\n"
+      "message Point { x: i32; y: i32; }\n"
+      "interface Demo { void Move(p: Point); }\n";
+  std::string after =
+      "module sample;\n"
+      "message Point { x: i32; y: i32; z: i32; }\n"
+      "interface Demo { void Move(p: Point); }\n";
+
+  auto point_usage = [](const std::string& src) {
+    // 1-based line/col of the parameter type "Point"
+    const std::string needle = "p: Point";
+    auto pos = src.find(needle);
+    EXPECT_NE(pos, std::string::npos);
+    uint32_t line = 1, col = 1;
+    for (size_t i = 0; i < pos; ++i) {
+      if (src[i] == '\n') {
+        ++line;
+        col = 1;
+      } else {
+        ++col;
+      }
+    }
+    col += 3; // skip "p: "
+    return std::pair<uint32_t, uint32_t>{line, col};
+  };
+
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, before, errors));
+  npidl::PositionIndex index;
+  npidl::PositionIndexBuilder(index, ctx).build();
+
+  auto [line, col] = point_usage(before);
+  const auto* before_entry = index.find_at_position(line, col);
+  ASSERT_NE(before_entry, nullptr);
+  EXPECT_EQ(before_entry->node_type, npidl::PositionIndex::NodeType::Struct);
+
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, after, errors));
+  index.clear();
+  npidl::PositionIndexBuilder(index, ctx).build();
+
+  auto [line2, col2] = point_usage(after);
+  EXPECT_EQ(line, line2);
+  EXPECT_EQ(col, col2);
+
+  const auto* after_entry = index.find_at_position(line2, col2);
+  ASSERT_NE(after_entry, nullptr);
+  EXPECT_EQ(after_entry->node_type, npidl::PositionIndex::NodeType::Struct);
 }
 
 } // namespace npidltest

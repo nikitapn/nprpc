@@ -1,65 +1,108 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import { workspace, ExtensionContext, commands, window } from 'vscode';
 
 import {
 	LanguageClient,
 	LanguageClientOptions,
-	ServerOptions,
-	TransportKind
+	ServerOptions
 } from 'vscode-languageclient/node';
 
-let client: LanguageClient;
+let client: LanguageClient | undefined;
+let currentPath: string | undefined;
+let startGeneration = 0;
 
-export function activate(context: ExtensionContext) {
-	// Get the npidl executable path from settings
-	const config = workspace.getConfiguration('npidl');
-	// const npidlPath = config.get<string>('lsp.path', '/home/nikita/projects/npsystem/build/bin/npidl');
-	const npidlPath = '/home/nikita/projects/npsystem/build/linux/bin/npidl';
+function isExecutable(filePath: string): boolean {
+	try {
+		fs.accessSync(filePath, fs.constants.X_OK);
+		return fs.statSync(filePath).isFile();
+	} catch {
+		return false;
+	}
+}
 
-	// Server options - launch npidl with --lsp flag, redirect stderr to log file
+function getNpidlPath(): string {
+	return workspace.getConfiguration('npidl').get<string>('lsp.path')?.trim() || 'npidl';
+}
+
+function createClient(npidlPath: string): LanguageClient {
+	// Do not set transport: TransportKind.stdio — the client would append
+	// `--stdio`, which Boost.ProgramOptions rejects. Native executables
+	// already use stdin/stdout when transport is left unset.
 	const serverOptions: ServerOptions = {
-		command: 'bash',
-		args: ['-c', `${npidlPath} --lsp 2>/tmp/npidl-vscode-stderr.log`],
-		transport: TransportKind.stdio
+		command: npidlPath,
+		args: ['--lsp']
 	};
 
-	console.log(`Using NPIDL Language Server at: ${npidlPath}`);
-
-	// Client options - configure file patterns and synchronization
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [
 			{ scheme: 'file', language: 'npidl' }
 		],
 		synchronize: {
-			// Notify the server about file changes to .npidl files
 			fileEvents: workspace.createFileSystemWatcher('**/*.npidl')
 		}
 	};
 
-	// Create and start the language client
-	client = new LanguageClient(
+	return new LanguageClient(
 		'npidlLanguageServer',
 		'NPIDL Language Server',
 		serverOptions,
 		clientOptions
 	);
+}
 
-	// Register debug command
+async function startClient(npidlPath: string): Promise<void> {
+	if (path.isAbsolute(npidlPath) && !isExecutable(npidlPath)) {
+		window.showErrorMessage(
+			`NPIDL language server not found at ${npidlPath}. Set npidl.lsp.path to your npidl binary.`
+		);
+	}
+
+	const gen = ++startGeneration;
+	const next = createClient(npidlPath);
+	await next.start();
+	if (gen !== startGeneration) {
+		await next.stop();
+		return;
+	}
+	client = next;
+	currentPath = npidlPath;
+	console.log(`Using NPIDL Language Server at: ${npidlPath}`);
+}
+
+async function restartClient(npidlPath: string): Promise<void> {
+	const previous = client;
+	client = undefined;
+	currentPath = undefined;
+	if (previous) {
+		try {
+			await previous.stop();
+		} catch (error) {
+			console.error('Failed to stop NPIDL language server', error);
+		}
+	}
+	await startClient(npidlPath);
+}
+
+export function activate(context: ExtensionContext) {
 	const debugPositionsCmd = commands.registerCommand('npidl.debugPositions', async () => {
 		const editor = window.activeTextEditor;
 		if (!editor) {
 			window.showErrorMessage('No active editor');
 			return;
 		}
+		if (!client) {
+			window.showErrorMessage('NPIDL language server is not running');
+			return;
+		}
 
 		const uri = editor.document.uri.toString();
-		
+
 		try {
 			const result = await client.sendRequest('npidl/debugPositions', {
 				uri: uri
 			});
-			
-			// Show result in a new document
+
 			const doc = await workspace.openTextDocument({
 				content: result as string,
 				language: 'plaintext'
@@ -70,15 +113,32 @@ export function activate(context: ExtensionContext) {
 		}
 	});
 
-	context.subscriptions.push(debugPositionsCmd);
+	const configWatcher = workspace.onDidChangeConfiguration(async (event) => {
+		if (!event.affectsConfiguration('npidl.lsp.path')) {
+			return;
+		}
+		const nextPath = getNpidlPath();
+		if (nextPath === currentPath) {
+			return;
+		}
+		try {
+			await restartClient(nextPath);
+			window.showInformationMessage(`NPIDL language server restarted: ${nextPath}`);
+		} catch (error) {
+			window.showErrorMessage(`Failed to restart NPIDL language server: ${error}`);
+		}
+	});
 
-	// Start the client (also starts the server)
-	client.start();
+	context.subscriptions.push(debugPositionsCmd, configWatcher);
+	void startClient(getNpidlPath());
 }
 
 export function deactivate(): Thenable<void> | undefined {
+	startGeneration++;
 	if (!client) {
 		return undefined;
 	}
-	return client.stop();
+	const previous = client;
+	client = undefined;
+	return previous.stop();
 }

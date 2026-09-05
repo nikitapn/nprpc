@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <streambuf>
 
 #include <boost/program_options.hpp>
 
@@ -11,6 +13,86 @@
 #include "colored_cout.h"
 
 using namespace npidl;
+
+namespace {
+
+// Copies clog/cerr to a file while still writing stderr (stdout is LSP JSON).
+class TeeBuf : public std::streambuf
+{
+  std::streambuf* a_;
+  std::streambuf* b_;
+
+public:
+  TeeBuf(std::streambuf* a, std::streambuf* b)
+      : a_(a)
+      , b_(b)
+  {
+  }
+
+protected:
+  int overflow(int c) override
+  {
+    if (c == EOF)
+      return !EOF;
+    if (a_->sputc(static_cast<char>(c)) == EOF)
+      return EOF;
+    if (b_ && b_->sputc(static_cast<char>(c)) == EOF)
+      return EOF;
+    return c;
+  }
+
+  int sync() override
+  {
+    const int r1 = a_->pubsync();
+    const int r2 = b_ ? b_->pubsync() : 0;
+    return (r1 == 0 && r2 == 0) ? 0 : -1;
+  }
+
+  std::streamsize xsputn(const char* s, std::streamsize n) override
+  {
+    const auto n1 = a_->sputn(s, n);
+    if (b_)
+      b_->sputn(s, n);
+    return n1;
+  }
+};
+
+class LspFileLog
+{
+  std::ofstream file_;
+  TeeBuf tee_;
+  std::streambuf* old_clog_;
+  std::streambuf* old_cerr_;
+  bool redirected_ = false;
+
+public:
+  explicit LspFileLog(const std::filesystem::path& path)
+      : file_(path, std::ios::out | std::ios::app)
+      , tee_(std::cerr.rdbuf(), file_ ? file_.rdbuf() : nullptr)
+      , old_clog_(std::clog.rdbuf())
+      , old_cerr_(std::cerr.rdbuf())
+  {
+    if (!file_) {
+      std::cerr << "Failed to open LSP log file: " << path.string() << '\n';
+      return;
+    }
+    file_ << std::unitbuf;
+    std::cerr.rdbuf(&tee_);
+    std::clog.rdbuf(&tee_);
+    redirected_ = true;
+    std::clog << "LSP log file: " << path.string() << std::endl;
+  }
+
+  ~LspFileLog()
+  {
+    if (redirected_) {
+      std::clog.rdbuf(old_clog_);
+      std::cerr.rdbuf(old_cerr_);
+    }
+  }
+};
+
+} // namespace
 
 int main(int argc, char* argv[])
 {
@@ -29,6 +111,9 @@ int main(int argc, char* argv[])
     ("help", "produce help message")
     ("version", "print version information")
     ("lsp", "run as Language Server Protocol server")
+    ("lsp-log", po::value<std::filesystem::path>(),
+     "append LSP logs to this file (default: /tmp/npidl-lsp.log)")
+    ("stdio", "ignored; LSP always uses stdin/stdout (accepted for VS Code)")
     ("cpp", po::bool_switch(&generate_cpp)->default_value(false), "Generate C++")
     ("ts", po::bool_switch(&generate_typescript)->default_value(false),"Generate TypeScript")
     ("swift", po::bool_switch(&generate_swift)->default_value(false), "Generate Swift")
@@ -57,6 +142,16 @@ int main(int argc, char* argv[])
 
     // LSP mode - run Language Server
     if (vm.count("lsp")) {
+      // Must happen before any I/O and before installing the log tee:
+      // calling this later can reset rdbuf() and drop the file log.
+      std::ios::sync_with_stdio(false);
+      std::cin.tie(nullptr);
+      std::cout.tie(nullptr);
+
+      const auto log_path = vm.count("lsp-log")
+                                ? vm["lsp-log"].as<std::filesystem::path>()
+                                : std::filesystem::path("/tmp/npidl-lsp.log");
+      LspFileLog log(log_path);
       LspServer server;
       server.run();
       return 0;

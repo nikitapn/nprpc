@@ -1,43 +1,65 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Compile, package, and install the NPIDL VS Code extension.
+set -euo pipefail
 
-# Setup script for NPIDL VSCode extension
-
-set -e
-
-echo "Setting up NPIDL VSCode extension..."
-
-# Navigate to extension directory
 cd "$(dirname "$0")"
 
-# Check if npm is installed
-if ! command -v npm &> /dev/null; then
-    echo "Error: npm is not installed. Please install Node.js and npm first."
-    exit 1
+if ! command -v npm >/dev/null 2>&1; then
+  echo "error: npm is required (install Node.js)" >&2
+  exit 1
 fi
 
-# Install dependencies
-echo "Installing dependencies..."
+find_code() {
+  if [[ -n "${CODE_BIN:-}" ]]; then
+    if command -v "$CODE_BIN" >/dev/null 2>&1; then
+      echo "$CODE_BIN"
+      return 0
+    fi
+    echo "error: CODE_BIN=$CODE_BIN not found" >&2
+    return 1
+  fi
+  local c
+  for c in code code-insiders codium; do
+    if command -v "$c" >/dev/null 2>&1; then
+      echo "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+echo "==> npm install"
 npm install
 
-# Compile TypeScript
-echo "Compiling TypeScript..."
+echo "==> compile"
 npm run compile
 
-echo ""
-echo "✅ Extension compiled successfully!"
-echo ""
-echo "To install the extension in VSCode:"
-echo "1. Package the extension:"
-echo "   npm install -g @vscode/vsce"
-echo "   vsce package"
-echo ""
-echo "2. Install the generated .vsix file:"
-echo "   code --install-extension npidl-lsp-*.vsix"
-echo ""
-echo "Or for development:"
-echo "1. Open this folder in VSCode"
-echo "2. Press F5 to launch Extension Development Host"
-echo "3. Open a .npidl file in the new window"
-echo ""
-echo "Don't forget to configure the npidl path in VSCode settings:"
-echo "   \"npidl.lsp.path\": \"$(pwd)/../../build/linux/bin/npidl\""
+echo "==> package"
+npm run package
+
+version="$(node -p "require('./package.json').version")"
+name="$(node -p "require('./package.json').name")"
+vsix="${name}-${version}.vsix"
+
+if [[ ! -f "$vsix" ]]; then
+  echo "error: expected $vsix after packaging" >&2
+  ls -la ./*.vsix 2>/dev/null || true
+  exit 1
+fi
+
+if ! code_bin="$(find_code)"; then
+  echo "Packed $(pwd)/$vsix"
+  echo "error: VS Code CLI not found (code / code-insiders / codium)." >&2
+  echo "Install the CLI or set CODE_BIN, then run:" >&2
+  echo "  code --install-extension $(pwd)/$vsix --force" >&2
+  exit 1
+fi
+
+echo "==> install $vsix ($code_bin)"
+"$code_bin" --install-extension "$vsix" --force
+
+echo
+echo "Installed $vsix"
+echo "Set npidl.lsp.path to your npidl binary, then reload the window."
+echo "  Example: /home/nikita/projects/nprpc/.build_relwith_debinfo/npidl/npidl"
+echo "Logs: /tmp/npidl-lsp.log"
