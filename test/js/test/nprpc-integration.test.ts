@@ -226,6 +226,15 @@ describe('NPRPC Integration Tests', function() {
                 expect(result[i]).to.equal("String " + i);
             }
         });
+
+        it('should pass fixed-size array of strings', async function() {
+            const strings = Array.from({ length: 32 }, (_, i) => "Array string " + i);
+            await testBasic.InArrayOfStrings(strings);
+        });
+
+        it('should pass vector of strings', async function() {
+            await testBasic.InVectorOfStrings(["first", "", "third string"]);
+        });
     }); // describe TestBasic
 
     describe('TestOptional Interface', function() {

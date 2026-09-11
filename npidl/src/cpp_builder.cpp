@@ -326,23 +326,23 @@ void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type,
         os << "::nprpc::flat::Span<";
         emit_flat_type(wt, os);
         os << ">";
-      } else if (wt->id == FieldType::Struct) {
+      } else if (wt->id == FieldType::Struct || wt->id == FieldType::String) {
         os << "::nprpc::flat::Span_ref<";
         emit_flat_type(wt, os);
         os << ", ";
-        emit_flat_type(wt, os);
-        os << "_Direct>";
+        emit_direct_type(wt, os);
+        os << ">";
       }
     } else {
       if (wt->id == FieldType::Fundamental || wt->id == FieldType::Enum) {
         os << "/*out*/::nprpc::flat::Vector_Direct1<";
         emit_parameter_type_for_servant_callback_r(wt, os, input);
         os << ">";
-      } else if (wt->id == FieldType::Struct) {
+      } else if (wt->id == FieldType::Struct || wt->id == FieldType::String) {
         os << "/*out*/::nprpc::flat::Vector_Direct2<";
         emit_flat_type(wt, os);
         os << ", ";
-        emit_parameter_type_for_servant_callback_r(wt, os, input);
+        emit_direct_type(wt, os);
         os << ">";
       }
     }
@@ -514,7 +514,7 @@ void CppBuilder::emit_accessors(const std::string& flat_name, AstFieldDecl* f, s
       os << "  const auto " << f->name << "() const noexcept { return (::nprpc::flat::Span<const ";
       emit_flat_type(wt, os);
       os << ">)base()." << f->name << "; }\n";
-    } else if (wt->id == FieldType::Struct) {
+    } else if (wt->id == FieldType::Struct || wt->id == FieldType::String) {
       os << "  auto " << f->name << "() noexcept { return ::nprpc::flat::Span_ref<";
       emit_flat_type(wt, os);
       os << ", ";
@@ -625,10 +625,16 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
       // String_Direct1::operator= does length()+copy in one step.  Do not call
       // length() separately first — that would double-allocate the body and
       // make wire-size pre-measurement wrong.
+      // Vectors expose the element span through the _d() Direct accessor,
+      // arrays through the plain accessor (there is no _d() for arrays).
+      std::string span_expr;
+      if (type->id == FieldType::Vector)
+        span_expr = op1 + (top_type ? "()" : "_d()()");
+      else
+        span_expr = op1 + (top_type ? "" : "()");
       os << bd << "{\n"
-         << (bd += 1) << "auto vdir = " << op1 << "_d();\n"
+         << (bd += 1) << "auto span = " << span_expr << ";\n"
          << bd << "auto it = " << op2 << ".begin();\n"
-         << bd << "auto span = vdir();\n"
          << bd << "for (auto e : span) {\n";
       os << (bd += 1) << "e = *it;\n";
       os << bd << "++it;\n" << (bd -= 1) << "}\n" << (bd -= 1) << "}\n";
@@ -1407,7 +1413,6 @@ void CppBuilder::emit_safety_checks_r(
         if (is_flat(car(ftr)->type))
           continue;
         // Need to check each element in the array
-        // TODO: Test it
         os << bd << "{\n";
         auto str = op + "." + field->name + "()";
         bd += 1;
@@ -1416,6 +1421,7 @@ void CppBuilder::emit_safety_checks_r(
         emit_safety_checks_r(car(ftr)->type, "e", os, true, false);
         os << bd << "}\n";
         bd -= 1;
+        os << bd << "}\n";
       }
     }
 

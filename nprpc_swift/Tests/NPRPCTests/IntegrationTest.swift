@@ -19,6 +19,8 @@ private class TestBasicServantImpl: TestBasicServant, @unchecked Sendable {
     var outFlatStruct_receivedValue: UInt32 = 0
     var outScalarWithException_receivedDevAddr: UInt8 = 0
     var outScalarWithException_receivedAddr: UInt16 = 0
+    var inArrayOfStrings_received: [String] = []
+    var inVectorOfStrings_received: [String] = []
 
     override func returnBoolean() throws -> Bool { true }
     override func returnIdArray() throws -> IdArray { [1, 2, 3, 4, 5] }
@@ -27,6 +29,8 @@ private class TestBasicServantImpl: TestBasicServant, @unchecked Sendable {
         in_receivedA = a; in_receivedB = b; in_receivedC = c; return true
     }
     override func out() throws -> (UInt32, Bool, [UInt8]) { (123456789, true, [1, 2, 3, 4, 5]) }
+    override func inArrayOfStrings(strings: [String]) throws { inArrayOfStrings_received = strings }
+    override func inVectorOfStrings(strings: [String]) throws { inVectorOfStrings_received = strings }
     override func inStruct(a: AAA) throws { inStruct_receivedA = a }
     override func outStruct() throws -> AAA { AAA(a: 1234, b: "Hello world", c: "Another string") }
     override func inFlatStruct(value: UInt32, a: FlatStruct) throws {
@@ -504,6 +508,23 @@ final class IntegrationTests: XCTestCase {
 
         let arr = try await client.returnStringArray(count: 3)
         XCTAssertEqual(arr, ["String 1", "String 2", "String 3"])
+    }
+
+    func testInStringCollections() async throws {
+        let servant = TestBasicServantImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        guard let obj = NPRPCObject.fromObjectId(oid) else {
+            XCTFail("Failed to create NPRPCObject from ObjectId"); return
+        }
+        let client = narrow(obj, to: TestBasic.self)!
+
+        let fixed = (0..<32).map { "Array string \($0)" }
+        try await client.inArrayOfStrings(strings: fixed)
+        XCTAssertEqual(servant.inArrayOfStrings_received, fixed)
+
+        let vector = ["first", "", "third string"]
+        try await client.inVectorOfStrings(strings: vector)
+        XCTAssertEqual(servant.inVectorOfStrings_received, vector)
     }
 
     func testLargeMessage() async throws {

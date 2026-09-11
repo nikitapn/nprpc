@@ -30,6 +30,26 @@ public:
         std::iota(std::begin(span), std::end(span), 0);
     }
     
+    void InArrayOfStrings (::nprpc::flat::Span_ref<::nprpc::flat::String, ::nprpc::flat::String_Direct1> strings) override {
+        EXPECT_EQ(strings.size(), 32u);
+        uint32_t ix = 0;
+        for (auto s : strings) {
+            EXPECT_EQ(std::string_view(s()), "Array string " + std::to_string(ix++));
+        }
+    }
+
+    void InVectorOfStrings (::nprpc::flat::Span_ref<::nprpc::flat::String, ::nprpc::flat::String_Direct1> strings) override {
+        EXPECT_EQ(strings.size(), 3u);
+        std::vector<std::string_view> expected{"first", "", "third string"};
+        size_t ix = 0;
+        for (auto s : strings) {
+            EXPECT_TRUE(ix < expected.size());
+            if (ix >= expected.size())
+                return;
+            EXPECT_EQ(std::string_view(s()), expected[ix++]);
+        }
+    }
+
     void InFlatStruct (uint32_t value, nprpc::test::flat::FlatStruct_Direct a) override{
         EXPECT_EQ(value, 42);
         EXPECT_EQ(a.a(), 42);

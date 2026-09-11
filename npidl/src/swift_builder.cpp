@@ -2011,7 +2011,7 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
     if (is_fundamental(wt)) {
       out << bl() << "NPRPC.marshal_fundamental_array(buffer: buffer, offset: offset + " << field_offset << ", array: " << field_access << ", count: " << count_name << ")\n";
     } else if (wt->id == FieldType::String) {
-      out << bl() << "NPRPC.marshal_string_array(buffer: buffer, offset: offset + " << field_offset << ", array: " << field_access << ", count: " << count_name << ")\n";
+      out << bl() << "NPRPC.marshal_string_array(buffer: buffer, offset: offset + " << field_offset << ", stringArray: " << field_access << ", count: " << count_name << ")\n";
     } else {
       auto flat_struct = cflat(wt);
       std::string type_name = flat_struct ? flat_struct->name : "<unknown>";

@@ -61,6 +61,16 @@ TEST_F(NprpcTest, TestBasic)
         EXPECT_EQ(ix++, i);
       }
 
+      // InArrayOfStrings test
+      std::array<std::string, 32> string_array_in;
+      for (size_t i = 0; i < string_array_in.size(); ++i)
+        string_array_in[i] = "Array string " + std::to_string(i);
+      obj->InArrayOfStrings(string_array_in);
+
+      // InVectorOfStrings test
+      std::vector<std::string> strings{"first", "", "third string"};
+      obj->InVectorOfStrings(nprpc::flat::make_read_only_span(strings));
+
       // OutStruct test
       nprpc::test::AAA aaa;
       obj->OutStruct(aaa);
