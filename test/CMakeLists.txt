@@ -192,6 +192,28 @@ gtest_discover_tests(test_variant
   DISCOVERY_MODE PRE_TEST
 )
 
+# ObjectPtr reference counting (header-only, no runtime needed)
+add_executable(test_object_ptr
+  src/test_object_ptr.cpp
+)
+
+target_include_directories(test_object_ptr
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+target_link_libraries(test_object_ptr
+  PRIVATE
+    GTest::gtest_main
+)
+
+gtest_discover_tests(test_object_ptr
+  PROPERTIES
+    TIMEOUT 30
+  DISCOVERY_TIMEOUT 15
+  DISCOVERY_MODE PRE_TEST
+)
+
 # Test executable for shared memory endpoint
 add_executable(test_shared_memory_endpoint
   src/test_shared_memory_endpoint.cpp

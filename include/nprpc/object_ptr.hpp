@@ -60,18 +60,26 @@ public:
   {
   }
 
-  /// Shares `other`'s object, adding a reference.
+  /// Shares `other`'s object, adding a reference, and releases the one
+  /// held before.
   ObjectPtr<T>& operator=(const ObjectPtr<T>& other) noexcept
   {
-    obj_ = other.obj_;
-    safe_add_ref();
+    // Add before releasing: on self-assignment the release could otherwise
+    // drop the last reference and destroy the object.
+    T* incoming = other.obj_;
+    if (incoming)
+      incoming->add_ref();
+    safe_release();
+    obj_ = incoming;
     return *this;
   }
 
-  /// Takes `other`'s object, leaving `other` empty.
+  /// Takes `other`'s object, leaving `other` empty, and releases the one
+  /// held before.
   ObjectPtr<T>& operator=(ObjectPtr<T>&& other) noexcept
   {
-    obj_ = std::exchange(other.obj_, nullptr);
+    if (this != &other)
+      reset(std::exchange(other.obj_, nullptr));
     return *this;
   }
 
