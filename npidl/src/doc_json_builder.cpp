@@ -83,7 +83,7 @@ void DocJsonBuilder::begin_decl(std::string_view kind,
   decls_ << "{\"kind\":" << Str{kind}
          << ",\"name\":" << Str{node.name}
          << ",\"namespace\":" << Str{ctx_->nm_cur()->full_idl_namespace()}
-         << ",\"file\":" << Str{ctx_->get_file_path().filename().string()}
+         << ",\"file\":" << Str{ctx_->current_file_path()}
          << ",\"line\":" << node.name_range.start.line
          << ",\"doc\":" << Str{node.doc};
 }
@@ -97,7 +97,7 @@ void DocJsonBuilder::emit_constant(const std::string& name, AstNumber* number)
   value << *number;
   decls_ << "{\"kind\":\"const\",\"name\":" << Str{name}
          << ",\"namespace\":" << Str{ctx_->nm_cur()->full_idl_namespace()}
-         << ",\"file\":" << Str{ctx_->get_file_path().filename().string()}
+         << ",\"file\":" << Str{ctx_->current_file_path()}
          << ",\"value\":" << Str{value.str()} << '}';
 }
 
@@ -196,7 +196,7 @@ void DocJsonBuilder::finalize()
   filename.replace_extension(".doc.json");
   std::ofstream ofs(out_dir_ / filename, std::ios::binary);
   ofs << "{\"format\":1"
-      << ",\"file\":" << Str{ctx_->get_file_path().filename().string()}
+      << ",\"file\":" << Str{ctx_->current_file_path()}
       << ",\"module\":" << Str{ctx_->module()}
       << ",\"declarations\":[\n"
       << decls_.str() << "\n]}\n";

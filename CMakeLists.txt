@@ -620,6 +620,9 @@ if(NPRPC_BUILD_TOOLS)
   if(TARGET npidl)
     add_dependencies(npnameserver nprpc_stub_gen)
   endif()
+
+  # After nprpc: the docs_api target reads its include dirs and definitions.
+  add_subdirectory(npdoc)
 endif()
 
 # Optional components

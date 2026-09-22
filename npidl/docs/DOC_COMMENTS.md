@@ -83,11 +83,12 @@ It can be combined with `--cpp`/`--ts`/`--swift` in one run.
 ```jsonc
 {
   "format": 1,
-  "file": "live_blog.npidl",
+  "file": "/abs/path/idl/live_blog.npidl",   // canonical path
   "module": "live_blog",
   "declarations": [
     // Every declaration has: kind, name, namespace, file, line, doc.
-    // "file" is where it was declared, which differs for imports.
+    // "file" is the canonical path of the file that declared it, which
+    // differs from the top-level one for imports.
     { "kind": "message",   "fields": [{ "name", "type", "line", "doc" }] },
     { "kind": "exception", "fields": [...] },      // __ex_id is omitted
     { "kind": "enum",      "underlying": "u32",

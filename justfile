@@ -152,6 +152,23 @@ gen-test-idl: (bt "npidl")
     cp /tmp/nprpc_test.cpp "{{build_dir}}/nprpc_test_stub/src/gen/"
     cp /tmp/nprpc_test.hpp "{{build_dir}}/nprpc_test_stub/src/gen/include/"
 
+# ── docs ─────────────────────────────────────────────────────────────────────
+
+# Collect API docs (C++ headers, Swift package, IDL) into <build>/docs/api.json
+docs-api:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="$PWD/{{build_dir}}/docs"
+    # Swift has no standalone extractor that copes with C++ interop; the
+    # compiler writes the symbol graph during an ordinary build instead.
+    swift build --package-path nprpc_swift --target NPRPC \
+      --scratch-path "$out/swift-build" \
+      -Xswiftc -emit-symbol-graph -Xswiftc -emit-symbol-graph-dir -Xswiftc "$out/swift-symbols" \
+      -Xswiftc -symbol-graph-minimum-access-level -Xswiftc public
+    cmake -S . -B "{{build_dir}}" -DNPRPC_DOCS_SWIFT_SYMBOLS="$out/swift-symbols/NPRPC.symbols.json" >/dev/null
+    cmake --build "{{build_dir}}" --target docs_api
+    echo "API docs: $out/api.json"
+
 # ── benchmarks ───────────────────────────────────────────────────────────────
 
 # Build and run Google Benchmark suite (pass filters after --)
