@@ -26,7 +26,8 @@ npidl_generate_idl_files("${LIVE_BLOG_IDL_FILES}" live_blog_cpp_stub)
 
 file(GLOB_RECURSE LIVE_BLOG_CLIENT_SOURCES CONFIGURE_DEPENDS
   ${LIVE_BLOG_CLIENT_ROOT}/src/*
-  ${LIVE_BLOG_CLIENT_ROOT}/static/*
+  ${LIVE_BLOG_ROOT}/templates/*
+  ${LIVE_BLOG_ROOT}/web/*
 )
 
 add_custom_target(live_blog_stubs
@@ -39,32 +40,28 @@ add_custom_target(live_blog_stubs
 )
 
 add_custom_target(live_blog_client_deps
-  COMMAND ${NPM_EXECUTABLE} ls --workspace ${LIVE_BLOG_CLIENT_WORKSPACE} --depth=0 vite @sveltejs/kit @tailwindcss/vite @nprpc/vite-plugin @nprpc/adapter-sveltekit
+  COMMAND ${NPM_EXECUTABLE} ls --workspace ${LIVE_BLOG_CLIENT_WORKSPACE} --depth=0 vite @tailwindcss/cli
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   DEPENDS
     ${CMAKE_SOURCE_DIR}/package.json
     ${CMAKE_SOURCE_DIR}/package-lock.json
     ${LIVE_BLOG_CLIENT_ROOT}/package.json
-    ${CMAKE_SOURCE_DIR}/nprpc_node/package.json
-    ${CMAKE_SOURCE_DIR}/nprpc_adapter_sveltekit/package.json
-    ${CMAKE_SOURCE_DIR}/nprpc_vite_plugin/package.json
   COMMENT "Checking live-blog client workspace dependencies (run 'npm ci' at the repo root if this fails)"
   USES_TERMINAL
   VERBATIM
 )
 
 add_custom_target(live_blog_client
-  COMMAND ${NPM_EXECUTABLE} run build --workspace ${LIVE_BLOG_CLIENT_WORKSPACE}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMAND ${LIVE_BLOG_ROOT}/scripts/build-assets.sh
+  WORKING_DIRECTORY ${LIVE_BLOG_ROOT}
   DEPENDS
     live_blog_client_deps
     live_blog_stubs
     ${LIVE_BLOG_CLIENT_ROOT}/package.json
-    ${LIVE_BLOG_CLIENT_ROOT}/svelte.config.js
     ${LIVE_BLOG_CLIENT_ROOT}/tsconfig.json
     ${LIVE_BLOG_CLIENT_ROOT}/vite.config.ts
     ${LIVE_BLOG_CLIENT_SOURCES}
-  COMMENT "Building live-blog Vite client"
+  COMMENT "Building live-blog static root (islands, CSS, vendored assets)"
   USES_TERMINAL
   VERBATIM
 )

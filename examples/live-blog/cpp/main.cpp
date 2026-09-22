@@ -561,7 +561,6 @@ int main()
                      .root_dir(static_root.string())
                      .ssl(NPRPC_LIVE_BLOG_CERT_FILE, NPRPC_LIVE_BLOG_KEY_FILE)
                      .enable_http3()
-                     .enable_ssr(runtime_root.string())
                      .watch_files()
                    .build();
 
@@ -584,7 +583,6 @@ int main()
 
     std::cout << "Starting live-blog C++ server on https://localhost:8443\n";
     std::cout << "Static root:      " << static_root << "\n";
-    std::cout << "SSR handler root: " << runtime_root << "\n";
     std::cout << "Media dir:        " << media_dir << "  (place post-<id>.fmp4 files here)\n";
     std::cout << "host.json:        " << host_json_path << "\n";
     std::cout << "Objects:          blog, chat, media\n";

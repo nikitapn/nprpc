@@ -9,7 +9,7 @@ NPRPC is a high-performance, multi-transport RPC framework for distributed syste
 - **Type-safe IDL** — `.npidl` → C++/TypeScript/Swift stubs with `npidl`
 - **Cross-language** — seamless C++ ↔ TypeScript/JavaScript ↔ Swift interop
 - **Browser-first** — WebSocket, HTTP, and WebTransport endpoints; `host.json` bootstrap for static deployments
-- **SSR support** — built-in SvelteKit SSR via shared memory IPC (see [docs/SSR_ARCHITECTURE.md](docs/SSR_ARCHITECTURE.md))
+- **Server-rendered pages** — render HTML in the process that owns the services (see [docs/PAGE_RENDERING.md](docs/PAGE_RENDERING.md))
 - **Cookie auth** — httpOnly cookie-based auth for HTTP/WebSocket (see [docs/HTTP_AUTH.md](docs/HTTP_AUTH.md))
 - **POA** — Portable Object Adapter for lifecycle, transports, and dispatch placement (see [docs/POA.md](docs/POA.md))
 - **Nameserver** — service discovery and named object binding
@@ -20,8 +20,8 @@ NPRPC is a high-performance, multi-transport RPC framework for distributed syste
 |-----------|----------|-------|
 | **TCP** | Native IPC, microservices | Lowest overhead, no browser support; optional io_uring backend (experimental); `-DNPRPC_ENABLE_TCP=OFF` to disable |
 | **WebSocket** | Real-time, bidirectional | Persistent connection, streams supported; TLS via WSS; `-DNPRPC_ENABLE_WEBSOCKET=OFF` to disable |
-| **HTTP** | Stateless web APIs | Browser-compatible, SSR-capable; TLS via HTTPS; `-DNPRPC_ENABLE_HTTP=OFF` to disable |
-| **HTTP/3** | Modern web | QUIC-based, SSR-capable; requires `-DNPRPC_ENABLE_HTTP3=ON` |
+| **HTTP** | Stateless web APIs | Browser-compatible, page rendering; TLS via HTTPS; `-DNPRPC_ENABLE_HTTP=OFF` to disable |
+| **HTTP/3** | Modern web | QUIC-based, page rendering; requires `-DNPRPC_ENABLE_HTTP3=ON` |
 | **WebTransport** | Browser streaming | Multiplexed streams over HTTP/3; native stream mapping for `stream<T>` |
 | **QUIC** | Native next-gen | Multiplexed, encrypted; requires `-DNPRPC_ENABLE_QUIC=ON` |
 | **Shared Memory** | Same-machine IPC | Zero-copy in some cases; extremely low latency. Always compiled in. |
@@ -444,9 +444,12 @@ const proc = new MyProcessor();
 await manager.RegisterProcessor(proc);
 ```
 
-### Server-Side Rendering (SSR)
+### Server-Rendered Pages
 
-NPRPC can serve SvelteKit apps with full SSR over HTTP/3. See [docs/SSR_ARCHITECTURE.md](docs/SSR_ARCHITECTURE.md) for setup and architecture details.
+A page handler renders HTML in the process that owns the services, so a page is
+built from data the server already holds — no second process and no hydration
+round-trip. Returning `std::nullopt` declines a request, which falls through to
+the zero-copy static file cache. See [docs/PAGE_RENDERING.md](docs/PAGE_RENDERING.md).
 
 ```cpp
 auto* rpc = nprpc::RpcBuilder()
@@ -455,7 +458,13 @@ auto* rpc = nprpc::RpcBuilder()
     .ssl("cert.crt", "key.key")
     .root_dir("/srv/www")
     .enable_http3()
-    .enable_ssr("/srv/www") // path to SvelteKit build containing index.js
+    .with_page_handler([&](const nprpc::PageRequest& req)
+                           -> std::optional<nprpc::PageResponse> {
+      if (req.path != "/blog") return std::nullopt;  // -> static files
+      nprpc::PageResponse res;
+      res.body = render_blog(repository.list_posts(1, 10));
+      return res;
+    })
   .build();
 rpc->run();
 ```
@@ -752,7 +761,7 @@ See [benchmark/README.md](benchmark/README.md) for methodology and results.
 | Topic | Document |
 |-------|----------|
 | Full build options | [docs/BUILD.md](docs/BUILD.md) |
-| SSR architecture | [docs/SSR_ARCHITECTURE.md](docs/SSR_ARCHITECTURE.md) |
+| Server-rendered pages | [docs/PAGE_RENDERING.md](docs/PAGE_RENDERING.md) |
 | Cookie auth API | [docs/HTTP_AUTH.md](docs/HTTP_AUTH.md) |
 | HTTP/3 + WebTransport debugging | [.github/skills/http3-webtransport-debugging/SKILL.md](.github/skills/http3-webtransport-debugging/SKILL.md) |
 | Nameserver source | [npnameserver/npnameserver.cpp](npnameserver/npnameserver.cpp) |

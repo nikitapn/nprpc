@@ -60,7 +60,6 @@ docker run --rm -v "$PROJECT_ROOT:/workspace" -w /workspace ${DOCKER_IMAGE_NAME}
         -DNPRPC_BUILD_TOOLS=ON \
         -DNPRPC_ENABLE_QUIC=ON \
         -DNPRPC_ENABLE_HTTP3=ON \
-        -DNPRPC_ENABLE_SSR=ON \
         -DBUILD_SHARED_LIBS=ON \
         -DNPRPC_BUILD_TESTS=OFF \
         -DNPRPC_BUILD_JS=OFF

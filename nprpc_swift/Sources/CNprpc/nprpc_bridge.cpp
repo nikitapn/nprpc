@@ -306,7 +306,6 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.http_port = config->http_port;
         cxxConfig.http_ssl_enabled = config->http_ssl_enabled;
         cxxConfig.http3_enabled = config->http3_enabled;
-        cxxConfig.ssr_enabled = config->ssr_enabled;
         cxxConfig.http_ssl_client_disable_verification = config->http_ssl_client_disable_verification;
         cxxConfig.http_cert_file = config->http_cert_file;
         cxxConfig.http_key_file = config->http_key_file;
@@ -353,7 +352,6 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
             config->http_webtransport_stream_opens_per_session_per_second;
         cxxConfig.http_webtransport_stream_opens_burst =
             config->http_webtransport_stream_opens_burst;
-        cxxConfig.ssr_handler_dir = config->ssr_handler_dir;
         cxxConfig.watch_files = config->watch_files;
         if (config->page_handler) {
             cxxConfig.page_handler =

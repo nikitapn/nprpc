@@ -4,8 +4,7 @@
 * [ ] Replace std::unordered_map with absl::flat_hash_map in performance-critical paths. (Partially done in http3_server_nghttp3, need to audit the rest of the codebase for hot paths like pending request tracking, connection maps, etc.)
 
 ## Packaging / DX
-* [ ] Write a friction-free setup guide for a mixed Swift/C++ + SvelteKit project with `nprpc_node` / `nprpc_shm.node`, including build, runtime layout, and SSR packaging expectations.
-* [x] Provide a minimal starter template or reference example that works out of the box for Swift backend + SvelteKit frontend + NPRPC SSR/addon integration.
+* [x] Provide a minimal reference example that works out of the box for a Swift backend with server-rendered pages (`examples/live-blog`).
 
 ## Runtime Configuration
 * [ ] Add `RpcBuilder` options for socket send/receive buffer sizes so applications can tune kernel buffers without patching transport code.

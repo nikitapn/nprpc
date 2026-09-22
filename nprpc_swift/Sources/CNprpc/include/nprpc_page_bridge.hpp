@@ -51,9 +51,9 @@ void nprpc_page_response_set_body(void* response, const char* data, size_t len);
 /// Render one page.
 ///
 /// Return true once the response has been filled in, or false to decline the
-/// request — the server then falls through to its normal routing (SSR worker
-/// if enabled, then static files), so declining unknown paths is how a handler
-/// lets the zero-copy file cache serve assets.
+/// request — the server then falls through to static file serving, so
+/// declining unknown paths is how a handler lets the zero-copy file cache
+/// serve assets.
 ///
 /// Called synchronously on an HTTP I/O thread, and on several of them at once
 /// when the server runs a thread pool, so the implementation must be

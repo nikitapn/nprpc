@@ -79,7 +79,7 @@ try rpc.run()  // Blocks until shutdown
 |--------|-------------|
 | `.ssl(certFile:keyFile:)` | Enable TLS with certificate files |
 | `.enableHttp3()` | Enable HTTP/3 (QUIC) protocol |
-| `.enableSsr(handlerDir:)` | Enable server-side rendering |
+| `.withPageHandler(_:)` | Render pages in this process |
 | `.rootDir(_:)` | Set HTTP document root directory |
 | `.allowOrigins(_:)` | Allow browser cross-origin requests from specific origins |
 | `.maxRequestBodySize(_:)` | Cap buffered HTTP request body size |
@@ -193,7 +193,7 @@ This creates self-signed certificates in `certs/out/` for local testing.
 ## Next Steps
 
 1. **Implement RPC Services**: Define `.npidl` interfaces and generate Swift stubs
-2. **Add SSR Support**: Enable server-side rendering with `.enableSsr()`
+2. **Render pages in-process**: serve HTML with `.withPageHandler()`
 3. **Connect to Nameserver**: Register services for discovery
 4. **Add Authentication**: Implement auth middleware
 5. **Production Deployment**: Configure logging, monitoring, health checks

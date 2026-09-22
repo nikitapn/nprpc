@@ -40,16 +40,11 @@ option(NPRPC_ENABLE_WEBSOCKET "Enable WebSocket transport (WS/WSS)" ON)
 option(NPRPC_ENABLE_SSL "Enable TLS (HTTPS/WSS) via OpenSSL/BoringSSL" ON)
 option(NPRPC_ENABLE_QUIC "Enable QUIC transport using MsQuic" OFF)
 option(NPRPC_ENABLE_HTTP3 "Enable HTTP/3 server" OFF)
-option(NPRPC_ENABLE_SSR "Enable SSR support via Node.js worker (requires Boost.Process)" OFF)
-option(NPRPC_BUILD_NODE_ADDON "Build Node.js addon" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(NPRPC_USE_BORINGSSL "Use BoringSSL from third_party/boringssl instead of system OpenSSL" OFF)
 
 # SSL here is Boost.Asio TLS for HTTPS/WSS. HTTP/3 and QUIC have their own
 # TLS stacks and do not require NPRPC_ENABLE_SSL.
-if(NPRPC_ENABLE_SSR AND NOT NPRPC_ENABLE_HTTP)
-  message(FATAL_ERROR "NPRPC_ENABLE_SSR requires NPRPC_ENABLE_HTTP")
-endif()
 if(NPRPC_ENABLE_SSL AND NOT NPRPC_ENABLE_HTTP AND NOT NPRPC_ENABLE_WEBSOCKET)
   message(STATUS "NPRPC_ENABLE_SSL ignored: HTTP and WebSocket are disabled")
   set(NPRPC_ENABLE_SSL OFF)
@@ -70,7 +65,7 @@ if(NPRPC_ENABLE_TCP AND NPRPC_ENABLE_HTTP AND NPRPC_ENABLE_WEBSOCKET AND NPRPC_E
   set(NPRPC_FULL_STACK ON)
 endif()
 
-message(STATUS "NPRPC transports: SHM=ON TCP=${NPRPC_ENABLE_TCP} HTTP=${NPRPC_ENABLE_HTTP} WS=${NPRPC_ENABLE_WEBSOCKET} SSL=${NPRPC_ENABLE_SSL} QUIC=${NPRPC_ENABLE_QUIC} HTTP3=${NPRPC_ENABLE_HTTP3} SSR=${NPRPC_ENABLE_SSR} FULL_STACK=${NPRPC_FULL_STACK}")
+message(STATUS "NPRPC transports: SHM=ON TCP=${NPRPC_ENABLE_TCP} HTTP=${NPRPC_ENABLE_HTTP} WS=${NPRPC_ENABLE_WEBSOCKET} SSL=${NPRPC_ENABLE_SSL} QUIC=${NPRPC_ENABLE_QUIC} HTTP3=${NPRPC_ENABLE_HTTP3} FULL_STACK=${NPRPC_FULL_STACK}")
 set(NPRPC_PROJECT_GIT_COMMIT "" CACHE STRING "Override git commit hash recorded in build info")
 set(NPRPC_THIRD_PARTY_GIT_COMMITS "" CACHE STRING "Override third-party git commits as name=commit|name=commit")
 
@@ -317,7 +312,6 @@ set(nprpc_stub_GENERATED_SOURCES "")
 set(IDL_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/idl/nprpc_base.npidl
   ${CMAKE_CURRENT_SOURCE_DIR}/idl/nprpc_nameserver.npidl
-  ${CMAKE_CURRENT_SOURCE_DIR}/idl/nprpc_node.npidl
 )
 
 npidl_generate_idl_files("${IDL_FILES}" nprpc_stub)
@@ -458,16 +452,6 @@ if(NPRPC_ENABLE_HTTP3)
   )
 endif()
 
-# SSR support (Node.js worker)
-if(NPRPC_ENABLE_SSR)
-  target_sources(nprpc PRIVATE
-    src/ssr/node_worker_manager.cpp
-    src/ssr/ssr_manager.cpp
-    include/nprpc/impl/node_worker_manager.hpp
-    include/nprpc/impl/ssr_manager.hpp
-  )
-endif()
-
 # Add alias for namespaced target (modern CMake practice)
 add_library(nprpc::nprpc ALIAS nprpc)
 
@@ -590,20 +574,6 @@ if(WIN32 AND NPRPC_NEED_OPENSSL)
   target_link_libraries(nprpc PUBLIC crypt32)
 endif()
 
-# SSR support (Node.js worker)
-if(NPRPC_ENABLE_SSR)
-  message(STATUS "SSR support enabled - requires Boost.Process v2")
-
-  # Find Boost with required components for Process v2
-  find_package(Boost REQUIRED COMPONENTS filesystem process)
-
-  target_include_directories(nprpc PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glaze/include
-  )
-  target_link_libraries(nprpc PRIVATE Boost::filesystem Boost::process)
-  target_compile_definitions(nprpc PUBLIC NPRPC_SSR_ENABLED NPRPC_ENABLE_SSR)
-endif()
-
 # Ensure export macro is defined when building the library so symbols are exported
 target_compile_definitions(nprpc PRIVATE NPRPC_EXPORTS)
 
@@ -670,11 +640,6 @@ endif()
 
 if(NPRPC_BUILD_EXAMPLES)
   add_subdirectory(examples)
-endif()
-
-# Node.js Addon
-if(NPRPC_BUILD_NODE_ADDON)
-  add_subdirectory(nprpc_node)
 endif()
 
 # SNI-based QUIC+TLS reverse proxy

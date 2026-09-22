@@ -18,7 +18,6 @@ class BuildConfig {
     var httpPort: UInt16 = 0
     var httpSslEnabled: Bool = false
     var http3Enabled: Bool = false
-    var ssrEnabled: Bool = false
     var httpCertFile: String = ""
     var httpKeyFile: String = ""
     var httpDhparamsFile: String = ""
@@ -45,7 +44,6 @@ class BuildConfig {
     var httpWebTransportRequestsBurst: UInt = 0
     var httpWebTransportStreamOpensPerSessionPerSecond: UInt = 0
     var httpWebTransportStreamOpensBurst: UInt = 0
-    var ssrHandlerDir: String = ""
     var watchFiles: Bool = false
     var pageHandler: PageHandler? = nil
     var certWatchIntervalSec: UInt32 = 0
@@ -158,7 +156,6 @@ extension RpcBuilderInternal {
         // HTTP/WebSocket settings
         cxxConfig.http_ssl_enabled = config.httpSslEnabled
         cxxConfig.http3_enabled = config.http3Enabled
-        cxxConfig.ssr_enabled = config.ssrEnabled
         cxxConfig.http_ssl_client_disable_verification = config.httpSslClientDisableVerification
         cxxConfig.http_cert_file = std.string(config.httpCertFile)
         cxxConfig.http_key_file = std.string(config.httpKeyFile)
@@ -187,7 +184,6 @@ extension RpcBuilderInternal {
         cxxConfig.http_webtransport_requests_burst = numericCast(config.httpWebTransportRequestsBurst)
         cxxConfig.http_webtransport_stream_opens_per_session_per_second = numericCast(config.httpWebTransportStreamOpensPerSessionPerSecond)
         cxxConfig.http_webtransport_stream_opens_burst = numericCast(config.httpWebTransportStreamOpensBurst)
-        cxxConfig.ssr_handler_dir = std.string(config.ssrHandlerDir)
         cxxConfig.watch_files = config.watchFiles
 
         // Retained for the life of the process: the C++ server keeps the raw
@@ -240,7 +236,7 @@ public final class RpcBuilderTcp: RpcBuilderInternal {
     }
 }
 
-/// HTTP/WebSocket-specific builder with SSL and SSR options
+/// HTTP/WebSocket-specific builder with SSL and page-rendering options
 public final class RpcBuilderHttp: RpcBuilderInternal {
     internal let config: BuildConfig
 
@@ -278,12 +274,11 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
         return self
     }
 
-    /// Render pages in this process instead of shelling out to an SSR worker.
+    /// Render pages in this process.
     ///
     /// `handler` is consulted for every GET/HEAD/POST the RPC endpoint did not
-    /// claim.  Returning `nil` falls through to the server's normal routing, so
-    /// static assets keep their zero-copy path.  Unlike ``enableSsr(handlerDir:)``
-    /// this needs no separate worker process.
+    /// claim.  Returning `nil` falls through to static file serving, so assets
+    /// keep their zero-copy path.
     ///
     /// ```swift
     /// .withPageHandler { request in
@@ -295,16 +290,6 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
     @discardableResult
     public func withPageHandler(_ handler: @escaping PageHandler) -> RpcBuilderHttp {
         config.pageHandler = handler
-        return self
-    }
-
-    /// Enable server-side rendering
-    @discardableResult
-    public func enableSsr(handlerDir: String = "") -> RpcBuilderHttp {
-        config.ssrEnabled = true
-        if !handlerDir.isEmpty {
-            config.ssrHandlerDir = handlerDir
-        }
         return self
     }
 

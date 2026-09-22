@@ -95,7 +95,7 @@ cmake \
 cmake --build .
 ```
 
-Public compile definitions for the enabled transports: `NPRPC_ENABLE_TCP` / `NPRPC_TCP_ENABLED`, `NPRPC_ENABLE_HTTP` / `NPRPC_HTTP_ENABLED`, `NPRPC_ENABLE_WEBSOCKET` / `NPRPC_WEBSOCKET_ENABLED`, `NPRPC_ENABLE_SSL` / `NPRPC_SSL_ENABLED`, plus the existing `NPRPC_QUIC_ENABLED` / `NPRPC_HTTP3_ENABLED` / `NPRPC_SSR_ENABLED`. `RpcBuilder::build()` throws if you enable a transport that was compiled out.
+Public compile definitions for the enabled transports: `NPRPC_ENABLE_TCP` / `NPRPC_TCP_ENABLED`, `NPRPC_ENABLE_HTTP` / `NPRPC_HTTP_ENABLED`, `NPRPC_ENABLE_WEBSOCKET` / `NPRPC_WEBSOCKET_ENABLED`, `NPRPC_ENABLE_SSL` / `NPRPC_SSL_ENABLED`, plus the existing `NPRPC_QUIC_ENABLED` / `NPRPC_HTTP3_ENABLED`. `RpcBuilder::build()` throws if you enable a transport that was compiled out.
 
 CMake also sets `NPRPC_FULL_STACK` when TCP, HTTP, WebSocket, and SSL are all on. Tests and benchmarks are only added in that configuration; `npnameserver` still builds with a reduced transport set.
 

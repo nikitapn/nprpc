@@ -23,7 +23,6 @@ build/
 # Node modules
 node_modules/
 nprpc_js/node_modules/
-nprpc_node/node_modules/
 test/js/node_modules/
 
 # CMake generated files

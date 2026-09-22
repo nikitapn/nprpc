@@ -104,9 +104,8 @@ public struct PageResponse: Sendable {
 
 /// Renders a page, or returns `nil` to decline the request.
 ///
-/// Declining falls through to the server's normal routing — the SSR worker when
-/// one is configured, then the static file cache — so returning `nil` for paths
-/// you do not recognise is how assets keep their zero-copy path.
+/// Declining falls through to the static file cache, so returning `nil` for
+/// paths you do not recognise is how assets keep their zero-copy path.
 ///
 /// Called synchronously on an HTTP I/O thread, and on several concurrently when
 /// the server runs a thread pool, hence `@Sendable`.  A render that blocks holds

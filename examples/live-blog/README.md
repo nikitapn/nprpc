@@ -113,9 +113,11 @@ Set `LIVE_BLOG_TEMPLATE_RELOAD=1` to re-read templates on every render, and
 ```text
 examples/live-blog/
 ├── README.md
-├── client/   # SvelteKit shell + hydration app
-├── server/   # Swift NPRPC backend scaffold
-└── cpp/      # C++ NPRPC backend using the same client build
+├── templates/  # Mustache page templates, shared by any backend
+├── web/        # Tailwind source + vendored htmx
+├── client/     # browser islands (chat, video)
+├── swift/      # Swift NPRPC backend + page handler
+└── cpp/        # C++ NPRPC backend using the same contracts
 ```
 
 ## Client Notes
@@ -175,9 +177,5 @@ The Tailwind CLI is hoisted to the monorepo root by npm workspaces. If it is
 missing:
 
 ```bash
-npm install --ignore-scripts -w examples/live-blog/client
+npm install -w examples/live-blog/client
 ```
-
-`--ignore-scripts` is needed because a plain install tries to rebuild the
-`nprpc_node` native addon, which currently fails to compile for reasons
-unrelated to this example.

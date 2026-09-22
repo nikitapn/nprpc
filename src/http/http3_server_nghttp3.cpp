@@ -14,9 +14,6 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/misc/thread_identity.hpp>
 #include <nprpc/impl/page_dispatch.hpp>
-#ifdef NPRPC_SSR_ENABLED
-#include <nprpc/impl/ssr_manager.hpp>
-#endif
 #include <nprpc/common.hpp>
 
 #include <nghttp3/nghttp3.h>
@@ -2554,60 +2551,11 @@ int Http3Connection::start_response(Http3Stream* stream)
 
   // Handle the HTTP request
   if (stream->method == "GET" || stream->method == "HEAD") {
-    // In-process page rendering, ahead of the SSR worker (see
-    // nprpc/page_handler.hpp).  nullopt falls through to SSR, then static.
+    // In-process page rendering (see nprpc/page_handler.hpp).  nullopt
+    // falls through to static file serving.
     if (auto page = try_render_page(stream)) {
       return send_page_response(stream, std::move(*page));
     }
-
-#ifdef NPRPC_SSR_ENABLED
-    // Check if this request should be handled by SSR
-    if (g_cfg.ssr_enabled &&
-        nprpc::impl::should_ssr(stream->method, stream->path, stream->accept)) {
-      NPRPC_HTTP3_TRACE("Forwarding to SSR: {} {}", stream->method,
-                        stream->path);
-
-      // Build full URL
-      std::string url =
-          std::string("https://") + stream->authority.c_str() + stream->path.c_str();
-
-      // Filter out HTTP/2 pseudo-headers (start with ':') for Web API
-      // compatibility
-      std::map<std::string, std::string> filtered_headers;
-      for (const auto& [key, value] : stream->headers) {
-        if (!key.empty() && key[0] != ':') {
-          filtered_headers[std::string(key)] = std::string(value);
-        }
-      }
-
-      // Forward to SSR (synchronous call)
-      auto ssr_response =
-          nprpc::impl::forward_to_ssr(std::string_view(stream->method), url, filtered_headers,
-                                      "", // No body for GET/HEAD
-                                      remote_ep_.address().to_string());
-
-      if (ssr_response) {
-        NPRPC_HTTP3_TRACE("SSR response: {} ({} bytes)",
-                          ssr_response->status_code, ssr_response->body.size());
-
-        // Determine content type from SSR response headers
-        std::string content_type = "text/html; charset=utf-8";
-        for (const auto& [key, value] : ssr_response->headers) {
-          if (key == "content-type" || key == "Content-Type") {
-            content_type = value;
-            break;
-          }
-        }
-
-        return send_dynamic_response(stream, ssr_response->status_code,
-                                     content_type,
-                                     std::move(ssr_response->body));
-      } else {
-        NPRPC_HTTP3_ERROR("SSR failed, falling back to static file");
-        // Fall through to static file serving
-      }
-    }
-#endif
 
     // Serve static file
     std::string request_path(stream->path);
@@ -2687,54 +2635,6 @@ int Http3Connection::start_response(Http3Stream* stream)
     if (auto page = try_render_page(stream)) {
       return send_page_response(stream, std::move(*page));
     }
-
-#ifdef NPRPC_SSR_ENABLED
-    // Check if this is a SvelteKit form action (POST with ?/ in path)
-    if (g_cfg.ssr_enabled &&
-        nprpc::impl::should_ssr(stream->method, stream->path, stream->accept)) {
-      NPRPC_HTTP3_TRACE("Forwarding POST to SSR: {}", stream->path);
-
-      // Build full URL
-      std::string url =
-          std::string("https://") + stream->authority.c_str() + stream->path.c_str();
-
-      // Filter out HTTP/2 pseudo-headers
-      std::map<std::string, std::string> filtered_headers;
-      for (const auto& [key, value] : stream->headers) {
-        if (!key.empty() && key[0] != ':') {
-          filtered_headers[std::string(key)] = std::string(value);
-        }
-      }
-
-      // Get request body as string
-        std::string body_str(
-          reinterpret_cast<const char*>(stream->request_body.data_ptr()),
-          stream->request_body.size());
-
-      // Forward to SSR
-      auto ssr_response = nprpc::impl::forward_to_ssr(
-          stream->method, url, filtered_headers, body_str,
-          remote_ep_.address().to_string());
-
-      if (ssr_response) {
-        NPRPC_HTTP3_TRACE("SSR POST response: {} ({} bytes)",
-                          ssr_response->status_code, ssr_response->body.size());
-
-        std::string content_type = "text/html; charset=utf-8";
-        for (const auto& [key, value] : ssr_response->headers) {
-          if (key == "content-type" || key == "Content-Type") {
-            content_type = value;
-            break;
-          }
-        }
-
-        return send_dynamic_response(stream, ssr_response->status_code,
-                                     content_type,
-                                     std::move(ssr_response->body));
-      }
-      // Fall through to default response on error
-    }
-#endif
 
     // Default: return 200 OK for other POST requests
     return send_static_response(stream, 200, "text/plain", "OK");

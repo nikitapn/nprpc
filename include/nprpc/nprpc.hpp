@@ -511,7 +511,6 @@ struct BuildConfig {
   uint16_t http_port = 0;
   bool http_ssl_enabled = false;
   bool http3_enabled = false;
-  bool ssr_enabled = false;
   bool http_ssl_client_disable_verification = false;
   std::string http_cert_file;
   std::string http_key_file;
@@ -540,10 +539,7 @@ struct BuildConfig {
   size_t http_webtransport_requests_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_REQUESTS_BURST;
   size_t http_webtransport_stream_opens_per_session_per_second = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_PER_SESSION_PER_SECOND;
   size_t http_webtransport_stream_opens_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_BURST;
-  std::string ssr_handler_dir; // Path to SSR handler (index.js), defaults to
-                               // http_root_dir
-
-  // In-process page renderer.  Consulted before the SSR worker; see
+  // In-process page renderer; see
   // RpcBuilderHttp::with_page_handler.
   PageHandler page_handler;
   bool watch_files = NPRPC_DEFAULT_WATCH_FILES; // Enable inotify-based cache invalidation (dev mode)
@@ -790,22 +786,11 @@ public:
     return *this;
   }
 #endif
-#if defined(NPRPC_ENABLE_SSR)
-  RpcBuilderHttp& enable_ssr(std::string_view handler_dir = "") noexcept
-  {
-    cfg_->ssr_enabled = true;
-    if (!handler_dir.empty()) {
-      cfg_->ssr_handler_dir = handler_dir;
-    }
-    return *this;
-  }
-#endif
-  /// Render pages in this process instead of shelling out to an SSR worker.
+  /// Render pages in this process.
   ///
   /// @p handler is consulted for every GET/HEAD/POST the RPC endpoint did not
   /// claim.  Returning std::nullopt falls through to the server's normal
-  /// routing, so static assets keep their zero-copy path.  Unlike enable_ssr
-  /// this needs no NPRPC_ENABLE_SSR build option — there is no worker process.
+  /// routing, so static assets keep their zero-copy path.
   RpcBuilderHttp& with_page_handler(PageHandler handler) noexcept
   {
     cfg_->page_handler = std::move(handler);

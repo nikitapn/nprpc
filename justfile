@@ -25,7 +25,6 @@ configure:
       -DNPRPC_BUILD_TOOLS=ON \
       -DNPRPC_ENABLE_QUIC=ON \
       -DNPRPC_ENABLE_HTTP3=ON \
-      -DNPRPC_ENABLE_SSR=ON \
       -DNPRPC_BUILD_DEV_DOCKER=ON \
       -DNPRPC_BUILD_EXAMPLES=ON
 
@@ -39,7 +38,6 @@ configure-shm:
       -DNPRPC_ENABLE_SSL=OFF \
       -DNPRPC_ENABLE_QUIC=OFF \
       -DNPRPC_ENABLE_HTTP3=OFF \
-      -DNPRPC_ENABLE_SSR=OFF \
       -DNPRPC_BUILD_TESTS=OFF \
       -DNPRPC_BUILD_TOOLS=ON \
       -DNPRPC_BUILD_JS=OFF \
@@ -246,7 +244,6 @@ profile:
       -DNPRPC_BUILD_TOOLS=ON \
       -DNPRPC_ENABLE_QUIC=ON \
       -DNPRPC_ENABLE_HTTP3=ON \
-      -DNPRPC_ENABLE_SSR=ON \
       -DNPRPC_BUILD_EXAMPLES=ON
     cmake --build .build_perf --target nprpc_benchmarks -j{{nproc}}
     just _kill-test-procs
@@ -264,8 +261,8 @@ profile-http3-1mb *args:
 statistics:
     cloc . --exclude-lang=SVG,XML,zsh \
       --fullpath \
-      --not-match-d='build|gen|Generated|node_modules|third_party|dist|\.build_.*|\.cache|\.github|\.svelte-kit|\.clang-format' \
-      --not-match-f='nprpc_nameserver\.hpp|package-lock\.json|nprpc_node\.hpp|nprpc_base\.hpp'
+      --not-match-d='build|gen|Generated|node_modules|third_party|dist|\.build_.*|\.cache|\.github|\.clang-format' \
+      --not-match-f='nprpc_nameserver\.hpp|package-lock\.json|nprpc_base\.hpp'
 
 # ── nprpc_devtools ───────────────────────────────────────────────────────────
 

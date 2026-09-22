@@ -34,9 +34,9 @@ struct PageResponse {
 
 /// Renders a page in-process, on the HTTP server's own thread.
 ///
-/// Returning `std::nullopt` means "not mine" — the server carries on with its
-/// normal routing (SSR worker if enabled, then static files), so a handler can
-/// claim `/blog` and leave `/_app/immutable/...` to the zero-copy file cache.
+/// Returning `std::nullopt` means "not mine" — the server carries on with
+/// static file serving, so a handler can claim `/blog` and leave `/assets/...`
+/// to the zero-copy file cache.
 ///
 /// The call is synchronous and blocks an I/O thread, which suits a template
 /// render (microseconds) but not a database round-trip.  Anything slow belongs

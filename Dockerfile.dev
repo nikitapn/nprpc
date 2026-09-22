@@ -96,7 +96,6 @@ RUN --mount=type=cache,id=nprpc-build,target=/workspace/.build_relwith_debinfo \
     -DNPRPC_BUILD_TOOLS=ON \
     -DNPRPC_ENABLE_QUIC=ON \
     -DNPRPC_ENABLE_HTTP3=ON \
-    -DNPRPC_ENABLE_SSR=ON \
     -DBUILD_SHARED_LIBS=ON \
     -DNPRPC_BUILD_TESTS=OFF \
     -DNPRPC_BUILD_JS=OFF \
