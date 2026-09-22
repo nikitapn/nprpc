@@ -23,7 +23,6 @@ Node worker in the path.
 - `swift/` — Swift backend: the demo services plus `LiveBlogWeb`, the page handler
 - `templates/` — Mustache templates, language-neutral and shared with any backend
 - `client/` — browser code for the interactive islands (chat, video)
-- `cpp/` — C++ backend implementing the same contracts
 
 ```text
 browser ──HTTP──▶ NPRPC C++ HTTP server
@@ -116,8 +115,7 @@ examples/live-blog/
 ├── templates/  # Mustache page templates, shared by any backend
 ├── web/        # Tailwind source + vendored htmx
 ├── client/     # browser islands (chat, video)
-├── swift/      # Swift NPRPC backend + page handler
-└── cpp/        # C++ NPRPC backend using the same contracts
+└── swift/      # Swift NPRPC backend + page handler
 ```
 
 ## Client Notes
@@ -139,14 +137,9 @@ regeneration.
 
 ## Server Notes
 
-The server side includes:
-
-- a Swift package under `swift/` — services plus the `LiveBlogWeb` page handler
-- a native C++ server under `cpp/`
-
-The C++ server implements the same contracts. It does not render pages yet; the
-templates are plain text and portable, so a C++ page handler would use
-`third_party/Mustache` against the same files.
+The server is the Swift package under `swift/`: the services plus the
+`LiveBlogWeb` page handler. The templates are plain Mustache and hold no Swift,
+so another backend could render the same files.
 
 ## Building
 

@@ -4,10 +4,9 @@ Generate NPRPC stubs for TypeScript and Swift from IDL files.
 Uses the nprpc-dev:latest Docker image which contains the npidl compiler.
 
 Usage:
-    python3 gen_stubs.py          # generate TS, Swift and C++
+    python3 gen_stubs.py          # generate TS and Swift
     python3 gen_stubs.py --ts     # generate TypeScript only
     python3 gen_stubs.py --swift  # generate Swift only
-    python3 gen_stubs.py --cpp    # generate C++ only
 """
 
 import subprocess
@@ -36,7 +35,6 @@ IDL_FILES = [
 # Output directories (relative to ROOT_DIR, mirrored as /app/... inside container)
 TS_OUTPUT_DIR    = "client/src/rpc"
 SWIFT_OUTPUT_DIR = "swift/Sources/LiveBlogAPI"
-CPP_OUTPUT_DIR   = "cpp"
 
 def run_npidl(lang_flag: str, idl_files: list, output_dir: str) -> None:
     """Run npidl in the nprpc-dev Docker container for the given language."""
@@ -82,15 +80,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate NPRPC stubs via Docker npidl")
     parser.add_argument("--ts",    action="store_true", help="Generate TypeScript stubs only")
     parser.add_argument("--swift", action="store_true", help="Generate Swift stubs only")
-    parser.add_argument("--cpp",   action="store_true", help="Generate C++ stubs only")
     args = parser.parse_args()
 
     # No language flag at all means every language; naming one means only that
-    # one (so --cpp must not also drag in TS and Swift).
-    none_selected = not (args.ts or args.swift or args.cpp)
+    # one (so --ts must not also drag in Swift).
+    none_selected = not (args.ts or args.swift)
     gen_ts    = args.ts    or none_selected
     gen_swift = args.swift or none_selected
-    gen_cpp   = args.cpp   or none_selected
 
     print("=== Generating NPRPC stubs ===")
     print(f"  Docker image : {DOCKER_IMAGE}")
@@ -103,9 +99,6 @@ def main() -> None:
 
     if gen_swift:
         run_npidl("--swift", IDL_FILES, SWIFT_OUTPUT_DIR)
-
-    if gen_cpp:
-        run_npidl("--cpp", IDL_FILES, CPP_OUTPUT_DIR)
 
     print()
     print("Done.")
