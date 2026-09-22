@@ -1,0 +1,45 @@
+<div class="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+  <div class="space-y-6">
+    <article class="glass-card p-8">
+      <p class="eyebrow"><time datetime="{{iso(published)}}">{{published}}</time></p>
+      <h2 class="mt-4 text-4xl font-semibold tracking-tight text-stone-950">{{title}}</h2>
+      <p class="mt-4 max-w-3xl text-lg leading-8 text-stone-700">{{summary}}</p>
+      <div class="mt-5 flex flex-wrap items-center gap-3 text-sm text-stone-500">
+        <a class="rounded-full border border-amber-900/15 px-3 py-1 hover:bg-white/80"
+           href="/author/{{author.slug}}">{{author.name}}</a>
+        {{#tags}}
+        <span class="rounded-full bg-amber-100 px-3 py-1 text-amber-900">{{.}}</span>
+        {{/tags}}
+      </div>
+      <div class="prose prose-stone mt-8 max-w-none leading-8 text-stone-800">
+        {{{body_html}}}
+      </div>
+    </article>
+
+    <section class="glass-card p-8">
+      <p class="eyebrow">Comments</p>
+      <div id="comments" class="mt-5 space-y-4">
+        {{> partials/comments}}
+      </div>
+    </section>
+  </div>
+
+  <!-- Islands. Everything above is server HTML; these two are mounted by
+       /islands.js, which replaces their contents. Without JavaScript the
+       noscript text is what stays on the page. -->
+  <aside class="space-y-6">
+    <section class="glass-card p-7" data-nprpc-chat data-post-id="{{id}}">
+      <p class="eyebrow">Live chat via bidi stream</p>
+      <noscript>
+        <p class="mt-3 text-sm text-stone-600">Live chat needs JavaScript.</p>
+      </noscript>
+    </section>
+
+    <section class="glass-card p-7" data-nprpc-video data-post-id="{{id}}">
+      <p class="eyebrow">Server stream — MSE video</p>
+      <noscript>
+        <p class="mt-3 text-sm text-stone-600">Video playback needs JavaScript.</p>
+      </noscript>
+    </section>
+  </aside>
+</div>

@@ -44,6 +44,7 @@ DOCKER_CMD=(
     -v "$ROOT_DIR/../../certs":/app/certs:ro
     -v "$ROOT_DIR/client/build":/app/runtime-www:rw # We need rw for writing host.json
     -v "$ROOT_DIR/media":/app/media:ro # fMP4 files for media streaming
+    -v "$ROOT_DIR/templates":/app/templates:ro # Mustache page templates
 
     # Expose the RPC/HTTP port
     -p "${PORT_ARG}:${PORT_ARG}/tcp"

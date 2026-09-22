@@ -1,4 +1,22 @@
+/* Tailwind source for the server-rendered pages.
+ *
+ * Built by scripts/build-assets.sh into the static root as /app.css.
+ * @source points Tailwind's scanner at the Mustache templates, which is where
+ * every utility class now lives — there are no .svelte files to scan.
+ */
+
 @import "tailwindcss";
+
+/* post.mustache renders body_html from the backend, so the post body needs
+ * element-level styling rather than utility classes. */
+@plugin "@tailwindcss/typography";
+
+/* Every place a class name can appear. Tailwind v4 also auto-detects sources,
+ * but a class it misses fails silently as unstyled markup, so the three that
+ * matter are named explicitly. */
+@source "../../templates/**/*.mustache";
+@source "../../client/src/islands/*.ts";
+@source "../../swift/Sources/LiveBlogWeb/**/*.swift";
 
 :root {
 	--ink: #1c1917;
@@ -47,26 +65,4 @@ body {
 	font-family: ui-sans-serif, system-ui, sans-serif;
 	color: var(--accent-deep);
 	font-weight: 700;
-}
-
-.skeleton {
-	position: relative;
-	overflow: hidden;
-	background: rgba(120, 53, 15, 0.08);
-	border-radius: 999px;
-}
-
-.skeleton::after {
-	content: "";
-	position: absolute;
-	inset: 0;
-	transform: translateX(-100%);
-	background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.65), transparent);
-	animation: shimmer 1.6s infinite;
-}
-
-@keyframes shimmer {
-	100% {
-		transform: translateX(100%);
-	}
 }
