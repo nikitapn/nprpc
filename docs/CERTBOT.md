@@ -14,7 +14,7 @@ behind [npquicrouter](../npquicrouter/README.md), which routes by SNI and does
    :443 UDP ─ QUIC passthrough│                              │
                               └───┬──────────────────────┬───┘
                                   │                      │
-                    site1.nikitapn.com        site2.nikitapn.com
+                    site1.example.com         site2.example.com
                     (nprpc, own cert)         (nprpc, own cert)
 ```
 
@@ -22,34 +22,12 @@ Each hostname maps to exactly one backend, and each backend terminates TLS
 with a certificate for its own name. Nothing is shared, so there is no
 contention between backends over who owns a certificate.
 
-## There is no "last one wins"
+## Answering the challenge: HTTP-01 through the router
 
-A common worry with this layout is that several backends renewing the same
-name would somehow invalidate each other's certificates. They would not.
-Let's Encrypt has no notion of a domain's *current* certificate: issuance
-mints an independent artifact bound to whatever keypair the requester
-generated, and nothing but explicit revocation ever invalidates one. Two
-backends issuing for the same name end up with two simultaneously valid
-certificates and both work.
-
-What *does* bite is rate limiting — in particular the duplicate-certificate
-limit on an identical set of FQDNs. Check the [current
-limits](https://letsencrypt.org/docs/rate-limits/) before pointing several
-issuers at one name; when you get limited, the renewal that fails is the one
-whose certificate expires next.
-
-None of that applies to the topology above, where each name has exactly one
-issuer. It matters only if you later put several backends behind one
-hostname, or want a wildcard shared across all of them — in which case issue
-once centrally with DNS-01 and distribute, rather than letting each backend
-issue for itself.
-
-## Why HTTP-01 through the router
-
-npquicrouter cannot answer a `tls-alpn-01` challenge, because it does not
-terminate TLS. It does own port 80, which makes it the natural place to
-answer `http-01` for every hostname it routes: the token only ever has to
-exist on the router, and the backends stay out of issuance entirely.
+npquicrouter does not terminate TLS, so it cannot answer a `tls-alpn-01`
+challenge. It does own port 80, so it answers `http-01` for every hostname it
+routes. The challenge token only has to exist on the router, and the backends
+take no part in issuance.
 
 Set `acme_webroot` in the router config to the directory you hand certbot:
 
@@ -126,7 +104,7 @@ Then issue and renew with a hook that signals the right backend:
 
 ```bash
 certbot certonly --webroot -w /var/www/acme \
-  -d site1.nikitapn.com \
+  -d site1.example.com \
   --deploy-hook 'systemctl kill -s HUP site1'
 ```
 
@@ -143,8 +121,8 @@ and reload when either changes:
 auto* rpc = nprpc::RpcBuilder()
                 .with_http(443)
                     .root_dir("/srv/site1")
-                    .ssl("/etc/letsencrypt/live/site1.nikitapn.com/fullchain.pem",
-                         "/etc/letsencrypt/live/site1.nikitapn.com/privkey.pem")
+                    .ssl("/etc/letsencrypt/live/site1.example.com/fullchain.pem",
+                         "/etc/letsencrypt/live/site1.example.com/privkey.pem")
                     .watch_certificates(std::chrono::minutes(10))
                     .enable_http3()
                 .build();
@@ -166,8 +144,8 @@ The Swift binding exposes the same two mechanisms.
 let builder = RpcBuilder()
 let http = builder.withHttp(443)
 http.rootDir("/app/www")
-http.ssl(certFile: "/certs/live/nikitapn.com/fullchain.pem",
-         keyFile:  "/certs/live/nikitapn.com/privkey.pem")
+http.ssl(certFile: "/certs/live/example.com/fullchain.pem",
+         keyFile:  "/certs/live/example.com/privkey.pem")
 http.enableHttp3()
 // Optional: poll instead of (or alongside) a signal. 0 = off, the default.
 http.watchCertificates(intervalSeconds: 600)
@@ -200,12 +178,13 @@ A container changes only how the certificate gets in and how the signal gets
 out. Both are straightforward.
 
 **Getting the certificate in.** Mount the host's `/etc/letsencrypt`
-read-only and point the server at the paths *inside* the container:
+read-only and point the server at the paths *inside* the container, here
+passed as environment variables your server reads:
 
 ```
 -v /etc/letsencrypt:/certs:ro
--e NSCALC_PUBLIC_KEY=/certs/live/nikitapn.com/fullchain.pem
--e NSCALC_PRIVATE_KEY=/certs/live/nikitapn.com/privkey.pem
+-e TLS_CERT=/certs/live/example.com/fullchain.pem
+-e TLS_KEY=/certs/live/example.com/privkey.pem
 ```
 
 Mount the whole tree, not just `live/`. certbot's `live/*.pem` are relative
@@ -219,19 +198,19 @@ signals the container:
 
 ```bash
 certbot certonly --webroot -w /var/www/acme \
-  -d nikitapn.com \
-  --deploy-hook 'docker kill -s HUP nscalc-swift'
+  -d example.com \
+  --deploy-hook 'docker kill -s HUP myapp'
 ```
 
 `docker kill -s HUP` delivers to PID 1 in the container. That reaches the
 server as long as the entrypoint `exec`s it rather than leaving a shell as
 PID 1 — a shell would receive the signal and drop it. If the entrypoint ends
-in `exec /app/NScalcServer "${ARGS[@]}"`, you are fine.
+in `exec /app/MyServer "$@"`, you are fine.
 
 Sanity-check what PID 1 actually is before relying on it:
 
 ```bash
-docker exec nscalc-swift ps -o pid,comm -p 1
+docker exec myapp ps -o pid,comm -p 1
 ```
 
 **Or skip the signal entirely.** With `watchCertificates`, nothing has to
@@ -254,9 +233,9 @@ somewhere the service user can read and signalling afterwards:
 
 ```bash
 --deploy-hook 'install -o site1 -m 0600 \
-    /etc/letsencrypt/live/site1.nikitapn.com/privkey.pem /etc/site1/tls.key && \
+    /etc/letsencrypt/live/site1.example.com/privkey.pem /etc/site1/tls.key && \
   install -o site1 -m 0644 \
-    /etc/letsencrypt/live/site1.nikitapn.com/fullchain.pem /etc/site1/tls.crt && \
+    /etc/letsencrypt/live/site1.example.com/fullchain.pem /etc/site1/tls.crt && \
   systemctl kill -s HUP site1'
 ```
 
@@ -265,16 +244,26 @@ the two do not match. That is harmless here: a reload that lands in that
 window fails its mismatch check, keeps the previous pair, and the `HUP` after
 both copies reloads a consistent one.
 
+## Several servers for one name
+
+Let's Encrypt does not replace a name's certificate when a new one is issued.
+Every issued certificate stays valid until it expires or is revoked, so several
+servers can each obtain their own certificate for the same name. What limits
+this is the [rate limits](https://letsencrypt.org/docs/rate-limits/), in
+particular the one on duplicate certificates for an identical set of names.
+For a wildcard, or many servers behind one name, issue once with DNS-01 and
+distribute the certificate instead.
+
 ## Checking what is actually being served
 
 ```bash
 # HTTP/1.1 / TLS over TCP
-echo | openssl s_client -connect site1.nikitapn.com:443 \
-       -servername site1.nikitapn.com 2>/dev/null \
+echo | openssl s_client -connect site1.example.com:443 \
+       -servername site1.example.com 2>/dev/null \
   | openssl x509 -noout -subject -dates
 
 # HTTP/3 over QUIC
-curl -sv --http3-only https://site1.nikitapn.com/ 2>&1 | grep -E 'subject:|expire'
+curl -sv --http3-only https://site1.example.com/ 2>&1 | grep -E 'subject:|expire'
 ```
 
 Both should show the new dates immediately after a reload, without the

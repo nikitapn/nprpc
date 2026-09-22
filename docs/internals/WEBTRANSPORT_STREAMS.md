@@ -1,5 +1,9 @@
 # WebTransport Stream Architecture
 
+Contributor notes on how streams are carried over WebTransport and how stream
+flow control works inside the runtime. For using streams, see
+[STREAMS.md](../STREAMS.md).
+
 ## Overview
 
 NPRPC uses WebTransport (over HTTP/3) as a high-performance alternative to WebSocket for browser-to-server communication. The transport layer sits on top of QUIC, multiplexing two kinds of application-level streams — **Control** and **Native** — over client-initiated QUIC bidirectional streams.
@@ -248,7 +252,7 @@ different layers:
 
 - **A full transport.** The shared-memory ring is finite (1024 header slots,
   16 MB payload) and refuses a write once it fills; it never blocks. That
-  refusal now travels back: `Session::send_stream_message` returns `bool`,
+  refusal travels back: `Session::send_stream_message` returns `bool`,
   `StreamManager::dispatch_buffer` passes it through, `send_chunk` returns it,
   and `StreamWriter::write` returns it and closes the stream. A reliable
   stream cannot survive a hole — the consumer would see a sequence gap — so
@@ -287,10 +291,8 @@ coroutine parked on `co_await reader` with all of its teardown written after
 that await. Destroying its frame runs destructors and skips every catch block,
 so cancellation resumes it with an error and lets it end itself; the frames are
 kept alive behind the resumptions (posted work runs in order) rather than
-dropped where they stand. A service whose handler is discarded mid-await loses
-whatever that handler was holding — the case this was written for is a
-compositor that kept a dead client's window on screen forever, because the only
-call to `destroySurface` was in the `catch` that never ran.
+dropped where they stand. A handler discarded mid-await would lose
+whatever it was holding, since cleanup written in a `catch` would never run.
 
 `~StreamManager` is the exception and takes the other branch: no turn of the
 executor is left, so it destroys the frames — outside the lock — and then

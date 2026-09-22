@@ -1,330 +1,162 @@
 # Building and Installing NPRPC
 
-This document describes how to build and install NPRPC as a standalone library.
-
 ## Prerequisites
 
-- **C++ Compiler**: GCC 10+, Clang 12+, or MSVC 2019+ with C++20 support
-- **CMake**: 3.15 or higher
-- **OpenSSL**: For HTTPS/WSS and HTTP/3. Not required for a shared-memory-only build.
-- **Boost**: (Optional) For program_options in npidl tool
-- **GTest**: (Optional) For building tests
-- **Node.js**: (Optional) For TypeScript/JavaScript bindings
+- **Linux.** The TCP transport is built on epoll and io_uring, so any build
+  with TCP enabled is Linux-only. On other platforms, configure with
+  `-DNPRPC_ENABLE_TCP=OFF`; that configuration is not tested.
+- **A C++23 compiler:** a recent GCC or Clang.
+- **CMake 3.15+**, and **pkg-config**.
+- **Boost** (headers; Boost.ProgramOptions for the tools).
+- **liburing**, when TCP is enabled.
+- **OpenSSL**, for HTTPS/WSS. Not needed with `NPRPC_USE_BORINGSSL=ON`, which
+  builds BoringSSL from the bundled submodule, or when TLS is off.
+- Optional: **GoogleTest** for the tests, **Node.js** for the TypeScript
+  package, **Swift 6.3** for the Swift package, **libclang** and **md4c** for
+  the API docs tool.
 
-### Ubuntu/Debian
-
-```bash
-sudo apt update
-sudo apt install -y build-essential cmake libssl-dev libboost-dev libgtest-dev
-```
-
-### macOS
-
-```bash
-brew install cmake openssl boost googletest
-```
-
-### Windows
-
-Install dependencies using vcpkg:
+On Debian or Ubuntu:
 
 ```bash
-vcpkg install openssl boost-program-options gtest
+sudo apt install -y build-essential cmake ninja-build pkg-config \
+  libboost-dev libboost-program-options-dev liburing-dev libssl-dev libgtest-dev
 ```
 
 ## Building
 
-### Basic Build
-
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/nprpc.git
+git clone --recursive https://github.com/nikitapn/nprpc.git
 cd nprpc
-
-# Create build directory
-mkdir build && cd build
-
-# Configure
-cmake ..
-
-# Build
-cmake --build .
-
-# Install (optional)
-sudo cmake --install .
-```
-
-### Build Options
-
-NPRPC provides several CMake options to customize the build:
-
-- `NPRPC_BUILD_TOOLS` (default: ON when standalone) - Build npidl tool and nameserver
-- `NPRPC_BUILD_TESTS` (default: ON when standalone) - Build test suite
-- `NPRPC_BUILD_JS` (default: ON when standalone) - Build JavaScript/TypeScript bindings
-- `NPRPC_BUILD_EXAMPLES` (default: OFF) - Build repo examples, including Docker-backed Swift examples
-- `NPRPC_INSTALL` (default: ON when standalone) - Generate install targets
-- `NPRPC_BUILD_DEV_DOCKER` (default: OFF) - Build the `nprpc-dev:latest` developer image from `Dockerfile.dev`
-- `BUILD_SHARED_LIBS` (default: ON) - Build shared libraries instead of static
-- `NPRPC_ENABLE_TCP` (default: ON) - TCP transport (also requires liburing)
-- `NPRPC_ENABLE_HTTP` (default: ON) - HTTP/1.1 server (static files, HTTP RPC, WebSocket upgrades)
-- `NPRPC_ENABLE_WEBSOCKET` (default: ON) - WebSocket transport (WS/WSS)
-- `NPRPC_ENABLE_SSL` (default: ON) - TLS via OpenSSL/BoringSSL for HTTPS and WSS. Ignored when HTTP and WebSocket are both off. HTTP/3 and QUIC have their own TLS stacks and do not need this flag.
-- `NPRPC_ENABLE_QUIC` (default: OFF) - Enable QUIC transport (builds MsQuic from submodule)
-- `NPRPC_ENABLE_HTTP3` (default: OFF) - Enable HTTP/3 server support (nghttp3 backend)
-
-#### Examples
-
-Build only the library (minimal build):
-
-```bash
-cmake -DNPRPC_BUILD_TOOLS=OFF -DNPRPC_BUILD_TESTS=OFF -DNPRPC_BUILD_JS=OFF ..
-cmake --build .
-```
-
-Shared-memory-only (no OpenSSL, no liburing, no TCP/HTTP/WebSocket):
-
-```bash
-cmake \
-  -DNPRPC_ENABLE_TCP=OFF \
-  -DNPRPC_ENABLE_HTTP=OFF \
-  -DNPRPC_ENABLE_WEBSOCKET=OFF \
-  -DNPRPC_ENABLE_SSL=OFF \
-  -DNPRPC_ENABLE_QUIC=OFF \
-  -DNPRPC_ENABLE_HTTP3=OFF \
-  ..
-cmake --build .
-```
-
-Public compile definitions for the enabled transports: `NPRPC_ENABLE_TCP` / `NPRPC_TCP_ENABLED`, `NPRPC_ENABLE_HTTP` / `NPRPC_HTTP_ENABLED`, `NPRPC_ENABLE_WEBSOCKET` / `NPRPC_WEBSOCKET_ENABLED`, `NPRPC_ENABLE_SSL` / `NPRPC_SSL_ENABLED`, plus the existing `NPRPC_QUIC_ENABLED` / `NPRPC_HTTP3_ENABLED`. `RpcBuilder::build()` throws if you enable a transport that was compiled out.
-
-CMake also sets `NPRPC_FULL_STACK` when TCP, HTTP, WebSocket, and SSL are all on. Tests and benchmarks are only added in that configuration; `npnameserver` still builds with a reduced transport set.
-
-Build with QUIC and HTTP/3 support:
-
-```bash
-cmake -DNPRPC_ENABLE_QUIC=ON -DNPRPC_ENABLE_HTTP3=ON ..
-cmake --build .
-```
-
-Build the developer Docker image from CMake:
-
-```bash
-cmake -S . -B build -DNPRPC_BUILD_DEV_DOCKER=ON
+cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
+sudo cmake --install build   # optional
 ```
 
-Invalidate the cached Docker build stamp so the next build reruns the image step:
+If you cloned without `--recursive`, run `git submodule update --init
+--recursive` first; QUIC, HTTP/3 and BoringSSL are built from submodules.
 
-```bash
-cmake --build build --target nprpc_dev_docker_invalidate
-cmake --build build --target nprpc_dev_docker
-```
+The `justfile` wraps the common configurations. `just configure` enables
+everything, including QUIC, HTTP/3, BoringSSL, tests and examples.
 
-Or force both steps in one command:
+### Options
 
-```bash
-cmake --build build --target nprpc_dev_docker_rebuild
-```
+| Option | Default | Effect |
+|---|---|---|
+| `NPRPC_ENABLE_TCP` | ON | Native TCP transport (Linux, needs liburing) |
+| `NPRPC_ENABLE_HTTP` | ON | HTTP/1.1 server: static files, RPC over HTTP, WebSocket upgrades |
+| `NPRPC_ENABLE_WEBSOCKET` | ON | WebSocket transport (WS/WSS) |
+| `NPRPC_ENABLE_SSL` | ON | TLS for HTTPS and WSS. HTTP/3 and QUIC bring their own TLS. |
+| `NPRPC_ENABLE_QUIC` | OFF | Native QUIC transport (builds MsQuic) |
+| `NPRPC_ENABLE_HTTP3` | OFF | HTTP/3 and WebTransport (nghttp3/ngtcp2) |
+| `NPRPC_USE_BORINGSSL` | OFF | Use the bundled BoringSSL instead of system OpenSSL |
+| `BUILD_SHARED_LIBS` | ON | Shared rather than static library |
+| `NPRPC_BUILD_TOOLS` | ON* | `npidl`, `npnameserver`, and `npdoc` if libclang and md4c are found |
+| `NPRPC_BUILD_TESTS` | ON* | Test suite (needs TCP, HTTP, WebSocket and SSL all on) |
+| `NPRPC_BUILD_JS` | ON* | TypeScript package |
+| `NPRPC_BUILD_ROUTER` | ON* | `npquicrouter`, the SNI router for HTTP/3 sites |
+| `NPRPC_BUILD_EXAMPLES` | OFF | Examples, including the Docker-built Swift live-blog server |
+| `NPRPC_BUILD_DEV_DOCKER` | OFF | The `nprpc-dev:latest` image; see [DOCKER_DEV_IMAGE.md](DOCKER_DEV_IMAGE.md) |
+| `NPRPC_INSTALL` | ON* | Install targets |
 
-Build examples, including the Docker-backed Swift `live-blog` server:
+\* ON when NPRPC is the top-level project, OFF when it is added with
+`add_subdirectory`.
+
+Shared memory is always available. Every transport can be switched off; a
+shared-memory-only build needs neither OpenSSL nor liburing:
 
 ```bash
 cmake -S . -B build \
-  -DNPRPC_BUILD_EXAMPLES=ON \
-  -DNPRPC_BUILD_TOOLS=ON
-cmake --build build --target live_blog_example
+  -DNPRPC_ENABLE_TCP=OFF -DNPRPC_ENABLE_HTTP=OFF -DNPRPC_ENABLE_WEBSOCKET=OFF \
+  -DNPRPC_ENABLE_SSL=OFF -DNPRPC_ENABLE_QUIC=OFF -DNPRPC_ENABLE_HTTP3=OFF
 ```
 
-When `NPRPC_BUILD_EXAMPLES=ON`, the `live_blog_example` target builds the `nprpc-dev:latest` image, regenerates TypeScript and Swift stubs, runs the Vite client build, and then runs the Swift server build inside the container.
+Each enabled transport defines `NPRPC_ENABLE_<NAME>` for code that uses the
+library, so you can compile features conditionally. Asking `RpcBuilder` for a
+transport that was compiled out throws from `build()`.
 
-Build static library:
+## Using NPRPC in your project
 
-```bash
-cmake -DBUILD_SHARED_LIBS=OFF ..
-cmake --build .
-```
+### CMake
 
-Build with custom install prefix:
-
-```bash
-cmake -DCMAKE_INSTALL_PREFIX=/usr/local ..
-cmake --build .
-sudo cmake --install .
-```
-
-### Running Tests
-
-If you built with tests enabled:
-
-```bash
-# C++ only
-ctest --output-on-failure
-# Or:
-cmake --build . --target run_nprpc_tests
-just run-cpp-tests
-
-# JS/TS
-just run-js-tests
-
-# Swift (Docker rebuild of nprpc — slow)
-just run-swift-tests
-
-# Swift on the host (reuses the CMake build dir; needs Swift + sudo setcap)
-just run-swift-tests-host
-# or:
-python3 run_all_tests.py --skip-cmake --skip-cpp --skip-js --swift-host
-```
-
-#### Pre-merge workflow
-
-**Always run the full test suite before merging to `main`.** That means C++,
-JS/TS, and Swift — not only the suite you touched.
-
-```bash
-# Preferred local gate (reuses host CMake build for Swift; may prompt for sudo setcap)
-just test-all --swift-host
-
-# Full Docker Swift path (no host Swift toolchain required; slower)
-just test-all
-```
-
-`run_all_tests.py` is the single entry point (`just test-all` is a thin wrapper).
-Host Swift mode builds `NPRPCPackageTests.xctest` against `--build-dir`, then
-runs `sudo setcap cap_net_admin,cap_bpf+ep` on that binary so HTTP/3 reuseport
-eBPF can attach, and finally `swift test --skip-build` so capabilities are not
-stripped by a rebuild.
-
-## Using NPRPC in Your Project
-
-### With CMake's find_package
-
-After installing NPRPC, you can use it in your CMake project:
-
-```cmake
-cmake_minimum_required(VERSION 3.15)
-project(MyProject)
-
-# Find NPRPC package
-find_package(nprpc REQUIRED)
-
-# Create your executable
-add_executable(myapp main.cpp)
-
-# Link against nprpc
-target_link_libraries(myapp PRIVATE nprpc::nprpc)
-```
-
-### As a Subdirectory
-
-You can also include NPRPC directly in your project:
-
-```cmake
-# Add nprpc as subdirectory
-add_subdirectory(external/nprpc)
-
-# Create your executable
-add_executable(myapp main.cpp)
-
-# Link against nprpc
-target_link_libraries(myapp PRIVATE nprpc::nprpc)
-```
-
-### Using npidl to Generate Code
-
-If you installed NPRPC with tools, you can use the `npidl_generate_idl_files` function:
+After installing:
 
 ```cmake
 find_package(nprpc REQUIRED)
 
-# Generate code from IDL files
-set(IDL_FILES
-  ${CMAKE_CURRENT_SOURCE_DIR}/idl/myservice.npidl
-)
+npidl_generate_idl_files("${CMAKE_CURRENT_SOURCE_DIR}/idl/myservice.npidl" myservice_stub)
 
-npidl_generate_idl_files("${IDL_FILES}" myservice_stub)
-
-# Create executable with generated code
-add_executable(myapp
-  main.cpp
-  ${myservice_stub_GENERATED_SOURCES}
-)
-
-target_include_directories(myapp PRIVATE
-  ${myservice_stub_INCLUDE_DIR}
-)
-
+add_executable(myapp main.cpp ${myservice_stub_GENERATED_SOURCES})
+target_include_directories(myapp PRIVATE ${myservice_stub_INCLUDE_DIR})
 target_link_libraries(myapp PRIVATE nprpc::nprpc)
 ```
 
-## Cross-Compilation
+`npidl_generate_idl_files` runs npidl on the IDL and exposes the generated
+sources and include directory. To vendor NPRPC instead, use
+`add_subdirectory(external/nprpc)` and the same `nprpc::nprpc` target.
 
-For cross-compilation, specify the toolchain file:
+### Swift
 
-```bash
-cmake -DCMAKE_TOOLCHAIN_FILE=/path/to/toolchain.cmake ..
-cmake --build .
-```
+Add the `nprpc_swift` package and depend on its `NPRPC` product (and
+`NPRPCWeb` for server-rendered pages). Enable C++ interoperability on targets
+that import it. The [development image](DOCKER_DEV_IMAGE.md) has it pre-built.
 
-## Development Build
+### TypeScript
 
-For development with debugging symbols:
+The `nprpc` npm package is built from `nprpc_js/`. Generate stubs with
+`npidl --ts`.
 
-```bash
-cmake -DCMAKE_BUILD_TYPE=Debug ..
-cmake --build .
-```
+## Installed files
 
-For release with optimizations:
+| What | Where |
+|---|---|
+| Headers | `${CMAKE_INSTALL_PREFIX}/include/nprpc/` |
+| Library | `${CMAKE_INSTALL_PREFIX}/lib/` |
+| `npidl`, `npnameserver` | `${CMAKE_INSTALL_PREFIX}/bin/` |
+| CMake package | `${CMAKE_INSTALL_PREFIX}/lib/cmake/nprpc/` |
 
-```bash
-cmake -DCMAKE_BUILD_TYPE=Release ..
-cmake --build .
-```
+CMake has no uninstall target; `xargs rm < build/install_manifest.txt`
+removes what was installed.
 
 ## Troubleshooting
 
-### OpenSSL not found
+- **OpenSSL not found:** `-DOPENSSL_ROOT_DIR=/path/to/openssl`, or use
+  `-DNPRPC_USE_BORINGSSL=ON`.
+- **Boost not found:** `-DBOOST_ROOT=/path/to/boost`.
+- **GTest not found:** install it, pass `-DGTest_DIR=...`, or disable tests
+  with `-DNPRPC_BUILD_TESTS=OFF`.
+- **liburing not found:** install `liburing-dev`, or build without TCP.
 
-If CMake cannot find OpenSSL, specify the path manually:
+## For contributors
+
+### Tests
 
 ```bash
-cmake -DOPENSSL_ROOT_DIR=/path/to/openssl ..
+ctest --test-dir build --output-on-failure   # C++
+just run-js-tests                           # TypeScript
+just run-swift-tests-host                   # Swift, against the CMake build
+just run-swift-tests                        # Swift, inside Docker (slower)
 ```
 
-### Boost not found
-
-Specify Boost root directory:
+Run the whole suite (C++, TypeScript and Swift) before merging to `main`:
 
 ```bash
-cmake -DBOOST_ROOT=/path/to/boost ..
+just test-all --swift-host
 ```
 
-### GTest not found
+Host Swift tests need `sudo setcap cap_net_admin,cap_bpf+ep` on the test
+binary so HTTP/3 can attach its eBPF socket router; the script does this and
+may prompt for your password.
 
-If you want to build tests but GTest is not found:
+### Docs
 
-```bash
-# Option 1: Disable tests
-cmake -DNPRPC_BUILD_TESTS=OFF ..
+`just docs-api` extracts the API from the C++ headers, the Swift package and
+the IDL, and `just docs-serve` serves the documentation site at
+<http://localhost:8080>. See `npdoc/README.md` and `docs/site/README.md`.
 
-# Option 2: Specify GTest location
-cmake -DGTest_DIR=/path/to/gtest/lib/cmake/GTest ..
-```
-
-## Installation Paths
-
-By default, NPRPC installs to:
-
-- **Headers**: `${CMAKE_INSTALL_PREFIX}/include/nprpc/`
-- **Libraries**: `${CMAKE_INSTALL_PREFIX}/lib/`
-- **Executables**: `${CMAKE_INSTALL_PREFIX}/bin/` (npidl, npnameserver)
-- **CMake config**: `${CMAKE_INSTALL_PREFIX}/lib/cmake/nprpc/`
-
-## Uninstalling
-
-CMake doesn't provide an uninstall target by default. To uninstall, you can use:
+### Development image
 
 ```bash
-# From build directory
-cat install_manifest.txt | sudo xargs rm
+cmake -S . -B build -DNPRPC_BUILD_DEV_DOCKER=ON
+cmake --build build --target nprpc_dev_docker          # builds if inputs changed
+cmake --build build --target nprpc_dev_docker_rebuild  # forces a rebuild
 ```

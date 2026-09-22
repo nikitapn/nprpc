@@ -11,8 +11,7 @@ browser ──HTTP/1.1, HTTP/3──▶ NPRPC HTTP server
                                  └── everything else → static file cache (zero-copy)
 ```
 
-There is no worker process and no IPC, so this needs no separate build option —
-it is available wherever `NPRPC_ENABLE_HTTP` or `NPRPC_ENABLE_HTTP3` is on.
+It is available wherever `NPRPC_ENABLE_HTTP` or `NPRPC_ENABLE_HTTP3` is on.
 
 ## C++
 
@@ -44,14 +43,29 @@ builder.withPageHandler { request in
 
 `PageRequest.queryItems` parses the query string, percent-decoding and treating
 `+` as a space. `PageResponse` has an `html:` initializer and a `redirect(to:)`
-helper that defaults to 303, the right status after a POST. Handlers are bridged
-to C++ as a C function pointer plus an opaque context
-(`nprpc_swift/Sources/CNprpc/include/nprpc_page_bridge.hpp`), which keeps Swift
-out of C++ closure lifetimes.
+helper that defaults to 303, the right status after a POST.
 
-`examples/live-blog` is a full example: Mustache templates rendered from
-npidl-generated structs, htmx for fragment swaps, and browser islands for the
-parts that need a live RPC connection.
+For templates, the `NPRPCWeb` library (a separate product of the `nprpc_swift`
+package) provides `TemplateLibrary`: it loads a directory of Mustache
+templates and can re-read them on every request during development.
+
+```swift
+import NPRPCWeb
+
+let templates = try TemplateLibrary(directory: "templates", hotReload: true)
+builder.withPageHandler { request in
+    guard request.path == "/" else { return nil }
+    return templates.render(HomeView(), withTemplate: "home")
+        .map { PageResponse(html: $0) }
+}
+```
+
+Two complete examples:
+
+- `examples/live-blog`: Mustache pages rendered from npidl-generated structs,
+  htmx for fragment swaps, and browser islands for the parts that need a live
+  RPC connection.
+- `docs/site`: this documentation site.
 
 ## Routing
 
@@ -78,18 +92,12 @@ takes the process down, as any trap does.
 
 ## Response headers
 
-A handler's headers are carried on both HTTP/1.1 and HTTP/3.
-
-`content-length` and `transfer-encoding` are ignored because the server owns
-framing, pseudo-headers are the protocol's to emit, and names are lowercased for
-HTTP/3. `content-type` defaults to `text/html; charset=utf-8` when unset.
-
-On HTTP/3 the header bytes are moved into the stream before submission, because
-nghttp3 does not copy a `NO_COPY` name or value and the handler's strings do not
-outlive the call.
+A handler's headers are sent on both HTTP/1.1 and HTTP/3. `content-type`
+defaults to `text/html; charset=utf-8`. `content-length` and
+`transfer-encoding` are ignored, because the server sets them itself.
 
 ## Related
 
 - [Build options](./BUILD.md)
 - [Cookie auth](./HTTP_AUTH.md)
-- [HTTP/3 server](./HTTP3_BACKENDS.md)
+- [npquicrouter](../npquicrouter/README.md), for running several HTTP/3 sites on one address

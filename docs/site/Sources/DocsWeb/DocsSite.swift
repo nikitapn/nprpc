@@ -124,7 +124,11 @@ public struct DocsSite: Sendable {
     // MARK: - Rendering
 
     private func guideNav(_ index: DocsIndex) -> [NavItem] {
-        index.guides.map { NavItem(title: $0.title, url: "/guide/" + $0.slug) }
+        // The rest are alphabetical; this one is where a newcomer starts.
+        let first = "GETTING_STARTED"
+        let ordered = index.guides.filter { $0.slug == first }
+            + index.guides.filter { $0.slug != first }
+        return ordered.map { NavItem(title: $0.title, url: "/guide/" + $0.slug) }
     }
 
     private func page(_ template: String, _ view: Any, title: String, index: DocsIndex,

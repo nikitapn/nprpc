@@ -1,16 +1,21 @@
 # NPRPC Development Docker Image
 
-Production-ready Docker image with pre-built NPRPC C++ libraries, Swift bindings, and tools.
+A development image with NPRPC's C++ library, Swift package and tools
+pre-built, so a Swift or C++ project can build against NPRPC without building
+it first. Use it for building; see the multi-stage example below for a small
+runtime image.
 
 ## What's Included
 
-- **Swift 6.2.3** runtime and compiler
-- **NPRPC C++ library** (`libnprpc.so`)
-- **npidl** - IDL compiler
-- **npnameserver** - Name server executable
-- **Boost 1.89.0** (filesystem, system)
-- **Swift bindings** (compiled + source + process)
-- All headers and CMake config files
+- **Swift 6.3.0** toolchain (the image is based on `swift:6.3.0`)
+- **NPRPC C++ library** (`libnprpc.so`), headers and CMake config
+- **npidl** (IDL compiler) and **npnameserver**
+- **Swift package** `nprpc_swift`, pre-built: the `NPRPC` library, and
+  `NPRPCWeb` for server-rendered pages
+- **swift-mustache**, which `NPRPCWeb` depends on
+- **Boost 1.89.0**
+- CMake, Ninja, pkg-config, Node.js, liburing, and ffmpeg/gpac for media
+  examples
 
 ## Quick Start
 
@@ -20,10 +25,15 @@ Production-ready Docker image with pre-built NPRPC C++ libraries, Swift bindings
 just build-dev-image
 ```
 
-This creates `nprpc-dev:latest` with all artifacts in `/opt/`:
-- `/opt/nprpc` - C++ library, headers, tools, cmake configs
-- `/opt/nprpc_swift` - Swift package (source + compiled)
-- `/opt/boost` - Boost libraries
+This creates `nprpc-dev:latest` with everything under `/opt/`:
+- `/opt/nprpc`: C++ library, headers, tools, CMake config
+- `/opt/nprpc_swift`: Swift package (source + compiled)
+- `/opt/swift-mustache`: template engine used by `NPRPCWeb`
+- `/opt/boost`: Boost libraries
+
+The image runs as the `ubuntu` user (UID/GID 1000). Pass
+`--user $(id -u):$(id -g)` so files written to a mounted directory belong to
+you.
 
 ### Use in Your Project
 
@@ -44,7 +54,7 @@ RUN swift build -c release
 
 ```bash
 # Build your Swift project
-docker run --rm \
+docker run --rm --user $(id -u):$(id -g) \
   -v $(pwd):/project \
   -w /project \
   nprpc-dev:latest \
@@ -91,12 +101,17 @@ let package = Package(
         .executableTarget(
             name: "MyRpcService",
             dependencies: [
-                .product(name: "NPRPC", package: "nprpc_swift")
-            ]
+                .product(name: "NPRPC", package: "nprpc_swift"),
+                // Only if you render pages with Mustache templates:
+                .product(name: "NPRPCWeb", package: "nprpc_swift"),
+            ],
+            swiftSettings: [.interoperabilityMode(.Cxx)]
         )
     ]
 )
 ```
+
+Targets that import `NPRPC` need C++ interoperability enabled, as above.
 
 ## Using NPRPC in CMake Projects
 
@@ -129,7 +144,8 @@ Pre-configured in the image:
 - `NPRPC_ROOT=/opt/nprpc`
 - `NPRPC_SWIFT_ROOT=/opt/nprpc_swift`
 - `PATH` includes `/opt/nprpc/bin` (npidl, npnameserver)
-- `LD_LIBRARY_PATH` includes library paths
+- `LD_LIBRARY_PATH` includes `/opt/nprpc/lib` and `/opt/boost/lib`
+- `PKG_CONFIG_PATH` includes `/opt/nprpc/lib/pkgconfig`
 
 ## Customization
 
@@ -191,9 +207,9 @@ Libraries are in `LD_LIBRARY_PATH`, but if running executables outside the image
 
 ## Version Information
 
-Run inside container:
+Run inside the container:
 ```bash
-swift --version        # Swift 6.2.3
+swift --version        # Swift 6.3.0
 npidl --version        # NPRPC IDL compiler
 cmake --version        # CMake
 ```
