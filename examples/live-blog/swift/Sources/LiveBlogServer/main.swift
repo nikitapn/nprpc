@@ -471,6 +471,7 @@ do {
       .withPageHandler { web.handle($0) }
       .rootDir(staticRoot)
       .enableHttp3()
+      .http3Workers(1)
       .watchFiles()
     .build()
 
