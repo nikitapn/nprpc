@@ -4,6 +4,7 @@
 import DocsModel
 import Foundation
 import NPRPC
+import NPRPCWeb
 
 /// Holds the index built from api.json and rebuilds it when the file
 /// changes, so `just docs-api` shows up on the next request without a

@@ -10,7 +10,8 @@ let package = Package(
   dependencies: [
     // NPRPC Swift bindings — pre-installed in the Docker image
     .package(path: "/opt/nprpc_swift"),
-    // swift-mustache — mounted from third_party/ by scripts/build-swift-server.sh
+    // swift-mustache — installed in the image next to nprpc_swift, which uses
+    // it for NPRPCWeb; the view models also conform to its protocols.
     .package(path: "/opt/swift-mustache"),
   ],
   targets: [
@@ -30,6 +31,7 @@ let package = Package(
       dependencies: [
         "LiveBlogAPI",
         .product(name: "NPRPC", package: "nprpc_swift"),
+        .product(name: "NPRPCWeb", package: "nprpc_swift"),
         .product(name: "Mustache", package: "swift-mustache")
       ],
       path: "Sources/LiveBlogWeb",

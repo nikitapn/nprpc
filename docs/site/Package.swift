@@ -8,7 +8,6 @@ let package = Package(
   platforms: [.macOS(.v13)],
   dependencies: [
     .package(path: "../../nprpc_swift"),
-    .package(path: "../../third_party/swift-mustache"),
   ],
   targets: [
     // api.json -> an index of pages, links and search. No NPRPC, no
@@ -19,7 +18,7 @@ let package = Package(
       dependencies: [
         "DocsModel",
         .product(name: "NPRPC", package: "nprpc_swift"),
-        .product(name: "Mustache", package: "swift-mustache"),
+        .product(name: "NPRPCWeb", package: "nprpc_swift"),
       ],
       path: "Sources/DocsWeb",
       swiftSettings: [.interoperabilityMode(.Cxx)]),

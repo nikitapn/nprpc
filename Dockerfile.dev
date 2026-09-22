@@ -170,6 +170,8 @@ COPY --from=swift-builder /opt/nprpc/lib/libCNprpc.a /opt/nprpc/lib/libCNprpc.a
 
 # Copy Swift package source for dependent projects
 COPY --from=swift-builder /workspace/nprpc_swift /opt/nprpc_swift
+# NPRPCWeb's template engine; Package.installed.swift points here.
+COPY --from=swift-builder /workspace/third_party/swift-mustache /opt/swift-mustache
 
 # Copy built Swift artifacts
 COPY --from=swift-builder /workspace/nprpc_swift/.build/release /opt/nprpc_swift/.build/release

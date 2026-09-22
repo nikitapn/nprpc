@@ -57,7 +57,6 @@ echo "=== Step 2: Building Swift server ($BUILD_CONFIG) ==="
 docker run --rm \
   --user "$(id -u):$(id -g)" \
   -v "$ROOT_DIR/../swift":/app \
-  -v "$ROOT_DIR/../../../third_party/swift-mustache":/opt/swift-mustache:ro \
   -w /app \
   "$DOCKER_IMAGE" \
   swift build -c "$BUILD_CONFIG"

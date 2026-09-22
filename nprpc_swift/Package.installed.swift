@@ -18,6 +18,13 @@ let package = Package(
         .library(
             name: "NPRPC",
             targets: ["NPRPC"]),
+        .library(
+            name: "NPRPCWeb",
+            targets: ["NPRPCWeb"]),
+    ],
+    dependencies: [
+        // Copied into the image next to this package.
+        .package(path: "/opt/swift-mustache"),
     ],
     targets: [
         // C++ bridge — pre-built into libnprpc.so.
@@ -36,6 +43,12 @@ let package = Package(
             swiftSettings: [
                 .interoperabilityMode(.Cxx)
             ]
+        ),
+
+        .target(
+            name: "NPRPCWeb",
+            dependencies: [.product(name: "Mustache", package: "swift-mustache")],
+            path: "Sources/NPRPCWeb"
         ),
 
         .testTarget(

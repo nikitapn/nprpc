@@ -11,6 +11,7 @@ import Foundation
 import LiveBlogAPI
 import Mustache
 import NPRPC
+import NPRPCWeb
 
 /// What the page handler needs from the application's data layer.
 ///

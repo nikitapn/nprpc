@@ -81,6 +81,18 @@ if let root = nprpcRoot, let buildPath {
     ]
 }
 
+// MARK: - Dependencies
+
+/// swift-mustache backs NPRPCWeb. In the monorepo it is the third_party
+/// submodule, so every package in the tree resolves the same copy; published
+/// consumers fetch it.
+let mustacheDependency: Package.Dependency = {
+    if let root = nprpcRoot {
+        return .package(path: (root as NSString).appendingPathComponent("third_party/swift-mustache"))
+    }
+    return .package(url: "https://github.com/hummingbird-project/swift-mustache.git", from: "2.1.0")
+}()
+
 // MARK: - Package
 
 let package = Package(
@@ -93,10 +105,19 @@ let package = Package(
             name: "NPRPC",
             targets: ["NPRPC"]
         ),
+        // Server-rendered pages: templates for a page handler. Separate from
+        // NPRPC so RPC-only users do not pull in swift-mustache.
+        .library(
+            name: "NPRPCWeb",
+            targets: ["NPRPCWeb"]
+        ),
         .executable(
             name: "nprpc-swift-benchmark",
             targets: ["NPRPCBenchmark"]
         ),
+    ],
+    dependencies: [
+        mustacheDependency,
     ],
     targets: [
         .target(
@@ -114,6 +135,16 @@ let package = Package(
             swiftSettings: [
                 .interoperabilityMode(.Cxx),
             ]
+        ),
+        .target(
+            name: "NPRPCWeb",
+            dependencies: [.product(name: "Mustache", package: "swift-mustache")],
+            path: "Sources/NPRPCWeb"
+        ),
+        .testTarget(
+            name: "NPRPCWebTests",
+            dependencies: ["NPRPCWeb"],
+            path: "Tests/NPRPCWebTests"
         ),
         .testTarget(
             name: "NPRPCTests",

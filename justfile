@@ -161,11 +161,16 @@ docs-api:
     out="$PWD/{{build_dir}}/docs"
     # Swift has no standalone extractor that copes with C++ interop; the
     # compiler writes the symbol graph during an ordinary build instead.
-    swift build --package-path nprpc_swift --target NPRPC \
-      --scratch-path "$out/swift-build" \
-      -Xswiftc -emit-symbol-graph -Xswiftc -emit-symbol-graph-dir -Xswiftc "$out/swift-symbols" \
-      -Xswiftc -symbol-graph-minimum-access-level -Xswiftc public
-    cmake -S . -B "{{build_dir}}" -DNPRPC_DOCS_SWIFT_SYMBOLS="$out/swift-symbols/NPRPC.symbols.json" >/dev/null
+    modules=(NPRPC NPRPCWeb)
+    graphs=()
+    for module in "${modules[@]}"; do
+      swift build --package-path nprpc_swift --target "$module" \
+        --scratch-path "$out/swift-build" \
+        -Xswiftc -emit-symbol-graph -Xswiftc -emit-symbol-graph-dir -Xswiftc "$out/swift-symbols" \
+        -Xswiftc -symbol-graph-minimum-access-level -Xswiftc public
+      graphs+=("$out/swift-symbols/$module.symbols.json")
+    done
+    cmake -S . -B "{{build_dir}}" -DNPRPC_DOCS_SWIFT_SYMBOLS="$(IFS=';'; echo "${graphs[*]}")" >/dev/null
     cmake --build "{{build_dir}}" --target docs_api
     echo "API docs: $out/api.json"
 

@@ -63,8 +63,8 @@ target_link_libraries(npdoc PRIVATE npdoc_core Boost::program_options)
 # The C++ headers and the IDL are handled here. Swift needs its own compiler
 # run (see `just docs-api`); point NPRPC_DOCS_SWIFT_SYMBOLS at the resulting
 # NPRPC.symbols.json to include it.
-set(NPRPC_DOCS_SWIFT_SYMBOLS "" CACHE FILEPATH
-    "NPRPC.symbols.json to merge into build/docs/api.json (optional)")
+set(NPRPC_DOCS_SWIFT_SYMBOLS "" CACHE STRING
+    "Swift <Module>.symbols.json files (;-separated) to merge into build/docs/api.json (optional)")
 
 if(TARGET npidl AND TARGET nprpc)
   set(NPDOC_OUT_DIR ${CMAKE_BINARY_DIR}/docs)
@@ -103,10 +103,12 @@ if(TARGET npidl AND TARGET nprpc)
   file(GLOB NPDOC_GUIDES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/docs/*.md)
 
   set(NPDOC_SWIFT_ARGS)
-  if(NPRPC_DOCS_SWIFT_SYMBOLS)
+  foreach(graph ${NPRPC_DOCS_SWIFT_SYMBOLS})
+    list(APPEND NPDOC_SWIFT_ARGS --swift-symbols ${graph})
+  endforeach()
+  if(NPDOC_SWIFT_ARGS)
     # Generated/ is npidl output; the IDL entries document those types.
-    set(NPDOC_SWIFT_ARGS --swift-symbols ${NPRPC_DOCS_SWIFT_SYMBOLS}
-        --swift-exclude nprpc_swift/Sources/NPRPC/Generated/)
+    list(APPEND NPDOC_SWIFT_ARGS --swift-exclude nprpc_swift/Sources/NPRPC/Generated/)
   endif()
 
   add_custom_command(

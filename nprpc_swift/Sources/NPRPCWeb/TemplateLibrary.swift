@@ -6,7 +6,12 @@ import Mustache
 
 /// Loads a directory of `.mustache` files and renders from it.
 ///
-/// Same as LiveBlogWeb's; see there for why it walks the directory itself.
+/// swift-mustache ships `MustacheLibrary(directory:)`, but it is `async` (so it
+/// cannot be called from the server's synchronous bootstrap) and its `reload:`
+/// flag is compiled out of release builds and trips a `preconditionFailure` on
+/// templates that did not come from a file.  Walking the directory here keeps
+/// startup synchronous and makes hot reload work the same way in both
+/// configurations.
 public final class TemplateLibrary: @unchecked Sendable {
     private let directory: String
     private let hotReload: Bool
@@ -76,9 +81,13 @@ public final class TemplateLibrary: @unchecked Sendable {
     }
 }
 
+/// Why a `TemplateLibrary` could not load its directory.
 public enum TemplateError: Error, CustomStringConvertible {
+    /// The directory does not exist or cannot be listed.
     case directoryUnreadable(String)
+    /// The directory holds no `.mustache` files.
     case noTemplates(String)
+    /// A template has a syntax error; `name` is its path without the extension.
     case parseFailed(name: String, underlying: Error)
 
     public var description: String {
