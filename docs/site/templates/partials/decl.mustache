@@ -1,0 +1,15 @@
+<div class="decl" id="{{anchor}}">
+  <pre class="signature"><code>{{signature}}</code></pre>
+  {{#doc_html}}<div class="prose">{{{doc_html}}}</div>{{/doc_html}}
+  {{^doc_html}}<p class="muted undocumented">Not documented.</p>{{/doc_html}}
+  {{#has_params}}
+  <dl class="params">
+    {{#params}}
+    <dt><code>{{name}}</code>{{#direction}} <span class="kind">{{direction}}</span>{{/direction}}</dt>
+    <dd>{{{doc_html}}}</dd>
+    {{/params}}
+  </dl>
+  {{/has_params}}
+  {{#returns_html}}<p class="returns"><strong>Returns</strong> {{{returns_html}}}</p>{{/returns_html}}
+  {{#location}}<p class="location">{{location}}</p>{{/location}}
+</div>

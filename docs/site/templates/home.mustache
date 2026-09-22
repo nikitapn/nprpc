@@ -1,0 +1,24 @@
+<article class="prose">
+  <h1>NPRPC documentation</h1>
+  <p class="lead">
+    Reference for every public declaration in the C++ headers, the Swift package
+    and the IDL, generated from their <code>///</code> comments, plus the
+    hand-written guides.
+  </p>
+</article>
+
+<section class="cards">
+  {{#langs}}
+  <a class="card" href="{{url}}">
+    <h2>{{title}}</h2>
+    <p>{{symbols}} declarations · {{documented}} documented</p>
+  </a>
+  {{/langs}}
+</section>
+
+<section>
+  <h2 class="section-title">Guides</h2>
+  <ul class="link-list">
+    {{#guides}}<li><a href="{{url}}">{{title}}</a></li>{{/guides}}
+  </ul>
+</section>

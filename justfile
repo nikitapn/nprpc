@@ -169,6 +169,13 @@ docs-api:
     cmake --build "{{build_dir}}" --target docs_api
     echo "API docs: $out/api.json"
 
+# Serve the docs site with live reload of api.json and templates (after docs-api)
+docs-serve port="8080":
+    cd docs/site && swift build --product docs-server
+    cd docs/site && DOCS_PORT={{port}} DOCS_TEMPLATE_RELOAD=1 \
+      DOCS_API="{{join(justfile_directory(), build_dir)}}/docs/api.json" \
+      ./.build/debug/docs-server
+
 # ── benchmarks ───────────────────────────────────────────────────────────────
 
 # Build and run Google Benchmark suite (pass filters after --)

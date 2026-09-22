@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{title}}</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script src="/vendor/htmx.min.js" defer></script>
+</head>
+{{! Links anywhere in the page load into #content and push the URL; the
+    server answers those requests with the page body alone. }}
+<body hx-boost="true" hx-target="#content" hx-swap="innerHTML show:window:top">
+  <header class="topbar">
+    <a class="brand" href="/">NPRPC <span>docs</span></a>
+    <form class="search" action="/search" method="get" role="search">
+      <input type="search" name="q" value="{{query}}" placeholder="Search the API…"
+             autocomplete="off" aria-label="Search the API"
+             hx-get="/search" hx-trigger="input changed delay:150ms, search"
+             hx-target="#search-results" hx-swap="innerHTML" hx-push-url="false" />
+      <div id="search-results" class="search-results"></div>
+    </form>
+  </header>
+
+  <div class="shell">
+    <nav class="sidebar" aria-label="Documentation">
+      <h2>API</h2>
+      <ul>
+        {{#langs}}<li><a href="{{url}}">{{title}}</a></li>{{/langs}}
+      </ul>
+      <h2>Guides</h2>
+      <ul>
+        {{#guides}}<li><a href="{{url}}">{{title}}</a></li>{{/guides}}
+      </ul>
+    </nav>
+
+    <main id="content">{{{content}}}</main>
+  </div>
+
+  <script>
+    // After htmx navigation: close the search dropdown, and scroll to the
+    // #anchor a member link points at (a plain swap only scrolls to top).
+    document.addEventListener('htmx:afterSettle', (e) => {
+      if (e.detail.target.id !== 'content') return;
+      document.getElementById('search-results').innerHTML = '';
+      const id = decodeURIComponent(location.hash.slice(1));
+      const el = id && document.getElementById(id);
+      if (el) el.scrollIntoView();
+    });
+  </script>
+</body>
+</html>

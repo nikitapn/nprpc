@@ -1,0 +1,22 @@
+<header class="page-head">
+  <h1>{{title}} API</h1>
+  <p class="muted">{{symbols}} declarations · {{documented}} documented</p>
+</header>
+
+{{#namespaces}}
+<section class="namespace" id="{{anchor}}">
+  <h2 class="section-title"><code>{{name}}</code></h2>
+  <ul class="item-list">
+    {{#items}}
+    <li>
+      <a href="{{url}}"><code>{{name}}</code></a>
+      <span class="kind">{{kind}}</span>
+      {{#summary_html}}<p class="summary">{{{summary_html}}}</p>{{/summary_html}}
+    </li>
+    {{/items}}
+  </ul>
+</section>
+{{/namespaces}}
+{{^namespaces}}
+<p class="muted">Nothing documented for this language yet.</p>
+{{/namespaces}}

@@ -1,0 +1,15 @@
+{{#has_results}}
+<ul class="hits">
+  {{#guides}}
+  <li><a href="{{url}}">{{title}}</a> <span class="kind">guide</span></li>
+  {{/guides}}
+  {{#hits}}
+  <li>
+    <a href="{{url}}"><code>{{qualified}}</code></a>
+    <span class="kind">{{lang_title}} {{kind}}</span>
+    {{#summary_html}}<p class="summary">{{{summary_html}}}</p>{{/summary_html}}
+  </li>
+  {{/hits}}
+</ul>
+{{/has_results}}
+{{^has_results}}{{#query}}<p class="muted no-hits">No matches for <strong>{{query}}</strong>.</p>{{/query}}{{/has_results}}
