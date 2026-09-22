@@ -20,10 +20,10 @@
 // Primary template for stream chunk deserialization.
 // npidl generates explicit specializations (inline, in the generated header)
 // for each non-fundamental struct type used as a stream element.
-namespace nprpc_stream {
+namespace nprpc::detail::stream_codec {
 template <typename T>
 T deserialize(::nprpc::flat_buffer& buf);
-} // namespace nprpc_stream
+} // namespace nprpc::detail::stream_codec
 
 namespace nprpc {
 
@@ -174,7 +174,7 @@ public:
         return value;
       }
       return std::nullopt;
-    } else if constexpr (::nprpc::flat::is_owned_direct_v<T>) {
+    } else if constexpr (::nprpc::flat::detail::is_owned_direct_v<T>) {
       // For stream<direct Foo>: move the whole chunk flat_buffer into an owning
       // shared_ptr — zero copy. Compute the offset of the payload data within
       // fb before the move (the pointer stays valid until fb is destroyed).
@@ -186,9 +186,9 @@ public:
     } else {
       // For all non-fundamental, non-direct stream payloads, call the
       // npidl-generated deserialization free function in namespace
-      // nprpc_stream. This keeps string, vector<T>, and struct payloads on a
+      // nprpc::detail::stream_codec. This keeps string, vector<T>, and struct payloads on a
       // single wire format instead of introducing runtime-only special cases.
-      return nprpc_stream::deserialize<T>(fb);
+      return ::nprpc::detail::stream_codec::deserialize<T>(fb);
     }
   }
 

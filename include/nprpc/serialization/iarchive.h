@@ -6,7 +6,7 @@
 #include <nprpc/serialization/serialization.h>
 #include <ostream>
 
-namespace nprpc::serialization {
+namespace nprpc::detail::serialization {
 class binary_iarchive : public basic_iarchive<binary_iarchive>
 {
 public:
@@ -36,4 +36,4 @@ public:
   }
 };
 
-} // namespace nprpc::serialization
+} // namespace nprpc::detail::serialization

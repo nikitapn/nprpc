@@ -184,7 +184,7 @@ std::string escape_json_string(std::string_view value)
 std::string serialize_host_object(const ObjectId& object_id)
 {
   std::ostringstream os;
-  nprpc::serialization::json_oarchive oa(os);
+  nprpc::detail::serialization::json_oarchive oa(os);
   auto copy = object_id;
   oa << copy;
   return os.str();
@@ -927,7 +927,7 @@ NPRPC_API bool RpcImpl::prepare_zero_copy_buffer(SessionContext& ctx,
 
   // The ring requires the exact final wire size to be claimed up-front.
   // Callers (npidl-generated stubs) must measure the payload first via
-  // nprpc::flat::grow_size walks, then pass that size here.
+  // nprpc::flat::detail::grow_size walks, then pass that size here.
   SharedMemoryChannel* channel = ctx.shm_channel;
   if (!channel) {
     // Client-side: session context should carry the channel (set by

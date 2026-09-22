@@ -3,6 +3,15 @@
 
 #pragma once
 
+#include <cstddef>
+#include <string_view>
+#include <utility>
+
+// Name-value pairs for the archives in serialization.h. Implementation
+// detail of host.json and ObjectId serialization; NVP()/NVP2() are the only
+// intended entry points.
+namespace nprpc::detail::serialization {
+
 template <size_t N> class static_string
 {
   const char data_[N + 1];
@@ -46,5 +55,7 @@ inline constexpr auto make_nvp_impl(const char (&lit)[N], T& obj)
   return nvp<N - 1, T>(lit, obj);
 }
 
-#define NVP(x) make_nvp_impl(#x, x)
-#define NVP2(x, y) make_nvp_impl(x, y)
+} // namespace nprpc::detail::serialization
+
+#define NVP(x) ::nprpc::detail::serialization::make_nvp_impl(#x, x)
+#define NVP2(x, y) ::nprpc::detail::serialization::make_nvp_impl(x, y)

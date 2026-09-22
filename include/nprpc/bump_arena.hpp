@@ -15,7 +15,7 @@ namespace nprpc::impl {
  *
  * Each sync proxy call resets the arena at entry, then serializes all input
  * arguments into a contiguous slab without any malloc/realloc.  The key win
- * for deeply-nested structs is try_extend(): when a flat::Vector or
+ * for deeply-nested structs is try_extend(): when a flat::detail::Vector or
  * flat::String grows the flat_buffer, the arena can extend the existing
  * allocation in-place (the tip cursor just moves forward), so no memcpy of
  * the already-written header/struct data occurs.

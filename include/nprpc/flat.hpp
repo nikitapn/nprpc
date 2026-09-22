@@ -41,6 +41,9 @@ public:
   operator bool() const noexcept { return get(); }
 };
 
+// Wire layout and buffer plumbing: used by generated code, not by callers.
+namespace detail {
+
 template <typename T> struct TSpan {
   // Forward iterators for concept compliance
   using iterator = T*;
@@ -68,10 +71,12 @@ template <typename T> struct TSpan {
   const void* data() const { return (const void*)begin(); }
 };
 
-template <typename T> struct Span : public TSpan<T> {
+} // namespace detail
+
+template <typename T> struct Span : public detail::TSpan<T> {
 };
 
-template <> struct Span<char> : public TSpan<char> {
+template <> struct Span<char> : public detail::TSpan<char> {
   void operator=(const char* str)
   {
     for (char& c : *this)
@@ -87,14 +92,14 @@ template <> struct Span<char> : public TSpan<char> {
   }
 };
 
-template <> struct Span<const char> : public TSpan<const char> {
+template <> struct Span<const char> : public detail::TSpan<const char> {
   operator std::string_view() const noexcept
   {
     return {this->first, this->size()};
   }
 };
 
-template <> struct Span<uint8_t> : public TSpan<uint8_t> {
+template <> struct Span<uint8_t> : public detail::TSpan<uint8_t> {
   void operator=(std::string_view str)
   {
     std::memcpy(this->data(), str.data(), str.size());
@@ -179,6 +184,9 @@ template <class T, class TD> struct Span_ref {
     assert(first % alignof(T) == 0);
   }
 };
+
+// In-buffer layout of arrays and vectors, and the allocator they share.
+namespace detail {
 
 template <typename T, size_t Size> class Array
 {
@@ -319,6 +327,8 @@ public:
   }
 };
 
+} // namespace detail
+
 template <typename T> class Vector_Direct
 {
 protected:
@@ -327,12 +337,12 @@ protected:
 
   auto& v() noexcept
   {
-    return *reinterpret_cast<Vector<T>*>((std::byte*)buffer_.data().data() +
+    return *reinterpret_cast<detail::Vector<T>*>((std::byte*)buffer_.data().data() +
                                          offset_);
   }
   auto& v() const noexcept
   {
-    return *reinterpret_cast<const Vector<T>*>(
+    return *reinterpret_cast<const detail::Vector<T>*>(
         (const std::byte*)buffer_.data().data() + offset_);
   }
 
@@ -340,7 +350,7 @@ public:
   std::uint32_t size() const noexcept { return v().size(); }
   void length(size_t length) noexcept
   {
-    new (&v()) Vector<T>(buffer_, static_cast<std::uint32_t>(length));
+    new (&v()) detail::Vector<T>(buffer_, static_cast<std::uint32_t>(length));
   }
   bool _check_size_align(uint32_t max_buffer_size) const noexcept
   {
@@ -383,7 +393,9 @@ public:
   }
 };
 
-class String : public Vector<char>
+// Public, unlike the other layout types: servants taking vector<string>
+// receive Span_ref<String, String_Direct1>.
+class String : public detail::Vector<char>
 {
 public:
   String(flat_buffer& buffer, std::string_view str)
@@ -418,6 +430,9 @@ public:
   {
   }
 };
+
+// In-buffer layout of an optional.
+namespace detail {
 
 template <typename T> class Optional
 {
@@ -458,20 +473,22 @@ public:
   explicit Optional(int) { offset_ = 0; }
 };
 
+} // namespace detail
+
 template <typename T, typename TD = void> class Optional_Direct
 {
   flat_buffer& buffer_;
   std::uint32_t offset_;
 
-  Optional<T>& opt() noexcept
+  detail::Optional<T>& opt() noexcept
   {
-    return *reinterpret_cast<Optional<T>*>((std::byte*)buffer_.data().data() +
+    return *reinterpret_cast<detail::Optional<T>*>((std::byte*)buffer_.data().data() +
                                            offset_);
   }
 
-  const Optional<T>& opt() const noexcept
+  const detail::Optional<T>& opt() const noexcept
   {
-    return *reinterpret_cast<const Optional<T>*>(
+    return *reinterpret_cast<const detail::Optional<T>*>(
         (std::byte*)buffer_.data().data() + offset_);
   }
 
@@ -481,8 +498,8 @@ public:
     return opt().check_size_align(buffer_.data().data(), max_buffer_size);
   }
 
-  void alloc() noexcept { new (&opt()) Optional<T>(buffer_); }
-  void set_nullopt() noexcept { new (&opt()) Optional<T>(0); }
+  void alloc() noexcept { new (&opt()) detail::Optional<T>(buffer_); }
+  void set_nullopt() noexcept { new (&opt()) detail::Optional<T>(0); }
   bool has_value() const noexcept { return opt().has_value(); }
 
   using value_ret_t = std::conditional_t<std::is_same_v<TD, void>, T&, TD>;
@@ -604,12 +621,17 @@ public:
 };
 
 /// Type trait to detect OwnedDirect<D> at compile time.
+// Trait for StreamReader.
+namespace detail {
+
 template<typename T>
 struct is_owned_direct : std::false_type {};
 template<typename D>
 struct is_owned_direct<OwnedDirect<D>> : std::true_type {};
 template<typename T>
 inline constexpr bool is_owned_direct_v = is_owned_direct<T>::value;
+
+} // namespace detail
 
 } // namespace nprpc::flat
 

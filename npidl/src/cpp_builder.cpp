@@ -160,7 +160,7 @@ void CppBuilder::emit_flat_type(AstTypeDecl* type, std::ostream& os)
     os << ns(cflat(type)->nm) << "flat::" << cflat(type)->name;
     break;
   case FieldType::Vector:
-    os << "::nprpc::flat::Vector<";
+    os << "::nprpc::flat::detail::Vector<";
     emit_flat_type(cvec(type)->type, os);
     os << ">";
     break;
@@ -168,12 +168,12 @@ void CppBuilder::emit_flat_type(AstTypeDecl* type, std::ostream& os)
     os << "::nprpc::flat::String";
     break;
   case FieldType::Array:
-    os << "::nprpc::flat::Array<";
+    os << "::nprpc::flat::detail::Array<";
     emit_flat_type(car(type)->type, os);
     os << ',' << car(type)->length << '>';
     break;
   case FieldType::Optional:
-    os << "::nprpc::flat::Optional<";
+    os << "::nprpc::flat::detail::Optional<";
     emit_flat_type(copt(type)->type, os);
     os << ">";
     break;
@@ -497,7 +497,7 @@ void CppBuilder::emit_accessors(const std::string& flat_name, AstFieldDecl* f, s
     break;
 
   case FieldType::Vector:
-    os << "  void " << f->name << "(std::uint32_t elements_size) { new (&base()." << f->name << ") ::nprpc::flat::Vector<";
+    os << "  void " << f->name << "(std::uint32_t elements_size) { new (&base()." << f->name << ") ::nprpc::flat::detail::Vector<";
     emit_flat_type(static_cast<AstWrapType*>(f->type)->type, os);
     os << ">(buffer_, elements_size); }\n";
 
@@ -799,7 +799,7 @@ void CppBuilder::measure_from_cpp_type(AstTypeDecl* type,
     auto real_wt = wt->id == FieldType::Alias ? calias(wt)->get_real_type() : wt;
     auto [elem_size, elem_align] = get_type_size_align(wt);
     // Vector body allocation (N elements of flat elem layout)
-    os << bd << cursor << " = ::nprpc::flat::grow_size(" << cursor << ", "
+    os << bd << cursor << " = ::nprpc::flat::detail::grow_size(" << cursor << ", "
        << elem_align << ", static_cast<std::size_t>(" << expr << ".size()) * "
        << elem_size << ");\n";
     if (!is_flat(real_wt)) {
@@ -836,7 +836,7 @@ void CppBuilder::measure_from_cpp_type(AstTypeDecl* type,
 
   case FieldType::String:
     // String is Vector<char>; body is N bytes, alignof(char) == 1
-    os << bd << cursor << " = ::nprpc::flat::grow_size(" << cursor
+    os << bd << cursor << " = ::nprpc::flat::detail::grow_size(" << cursor
        << ", 1, static_cast<std::size_t>(" << expr << ".size()));\n";
     break;
 
@@ -847,7 +847,7 @@ void CppBuilder::measure_from_cpp_type(AstTypeDecl* type,
     auto bd0 = bd;
     bd = bd + 1;
     // Optional::alloc places one flat T
-    os << bd << cursor << " = ::nprpc::flat::grow_size(" << cursor << ", " << al
+    os << bd << cursor << " = ::nprpc::flat::detail::grow_size(" << cursor << ", " << al
        << ", " << sz << ");\n";
     measure_from_cpp_type(wt, cursor, expr + ".value()", os, false, true);
     bd = bd0;
@@ -868,7 +868,7 @@ void CppBuilder::measure_from_cpp_type(AstTypeDecl* type,
       os << bd << "case " << i << ": {\n";
       bd = bd0 + 1;
       // alloc_arm grows by arm_size with arm_align (always, even if empty arm)
-      os << bd << cursor << " = ::nprpc::flat::grow_size(" << cursor << ", " << al
+      os << bd << cursor << " = ::nprpc::flat::detail::grow_size(" << cursor << ", " << al
          << ", " << sz << ");\n";
       // Nested variable data from the active arm value
       os << bd << "{\n";
@@ -1286,9 +1286,9 @@ void CppBuilder::finalize()
     ocpp << "} // module " << ctx_->nm_root()->to_cpp17_namespace() << "\n";
   }
 
-  // Emit nprpc_stream::deserialize<T> / serialize<T> specialisations outside any IDL namespace.
+  // Emit ::nprpc::detail::stream_codec::deserialize<T> / serialize<T> specialisations outside any IDL namespace.
   // They must be at file scope so the primary templates in stream_reader.hpp / stream_writer.hpp
-  // are visible and the specialisations end up in ::nprpc_stream, not in the IDL namespace.
+  // are visible and the specialisations end up in ::nprpc::detail::stream_codec, not in the IDL namespace.
   std::set<std::string> emitted_stream_deserializers;
   std::set<std::string> emitted_stream_serializers;
   auto stream_codec_type_key = [this](AstTypeDecl* type) {
@@ -2200,11 +2200,11 @@ void CppBuilder::emit_stream_deserialize(AstTypeDecl* stream_type, bool direct)
   if (elem->id == FieldType::Fundamental || elem->id == FieldType::Enum) return;
   if (direct) return; // OwnedDirect path needs no deserializer
 
-  // Fully-qualified names are required because we emit inside namespace nprpc_stream.
+  // Fully-qualified names are required because we emit inside namespace nprpc::detail::stream_codec.
   auto bd_saved = bd; bd = 1;
   always_full_namespace(true);
 
-  oh << "namespace nprpc_stream {\n";
+  oh << "namespace nprpc::detail::stream_codec {\n";
   oh << "template<>\n";
   oh << "inline ";
   emit_type(stream_type, oh);
@@ -2232,7 +2232,7 @@ void CppBuilder::emit_stream_deserialize(AstTypeDecl* stream_type, bool direct)
       oh << "  auto __mb = __elem_buf.prepare(__span.size());\n";
       oh << "  std::memcpy(__mb.data(), __span.data(), __span.size());\n";
       oh << "  __elem_buf.commit(__span.size());\n";
-      oh << "  auto& __arr = *reinterpret_cast<::nprpc::flat::Array<";
+      oh << "  auto& __arr = *reinterpret_cast<::nprpc::flat::detail::Array<";
       emit_flat_type(wt, oh);
       oh << ", " << arr->length << ">*>(__elem_buf.data().data());\n";
       oh << "  auto __items = ::nprpc::flat::Span_ref<";
@@ -2250,7 +2250,7 @@ void CppBuilder::emit_stream_deserialize(AstTypeDecl* stream_type, bool direct)
     }
 
     oh << "  return __result;\n";
-    oh << "}\n} // namespace nprpc_stream\n\n";
+    oh << "}\n} // namespace nprpc::detail::stream_codec\n\n";
 
     always_full_namespace(false);
     bd = bd_saved;
@@ -2272,7 +2272,7 @@ void CppBuilder::emit_stream_deserialize(AstTypeDecl* stream_type, bool direct)
   // top_object=true: __d is the Direct object itself, use . not ().
   assign_from_flat_type(stream_type, "__result", "__d", oh, false, true);
   oh << "  return __result;\n";
-  oh << "}\n} // namespace nprpc_stream\n\n";
+  oh << "}\n} // namespace nprpc::detail::stream_codec\n\n";
 
   always_full_namespace(false);
   bd = bd_saved;
@@ -2299,7 +2299,7 @@ void CppBuilder::emit_stream_serialize(AstTypeDecl* stream_type, bool direct)
     extra_capacity = s->flat ? 0 : 128;
   }
 
-  oh << "namespace nprpc_stream {\n";
+  oh << "namespace nprpc::detail::stream_codec {\n";
   oh << "template<>\n";
   oh << "inline ::nprpc::flat_buffer serialize<";
   emit_type(stream_type, oh);
@@ -2318,7 +2318,7 @@ void CppBuilder::emit_stream_serialize(AstTypeDecl* stream_type, bool direct)
     oh << "  ::nprpc::flat_buffer __buf;\n";
     oh << "  __buf.prepare(" << initial_capacity << ");\n";
     oh << "  __buf.commit(" << arr->length * elem_size << ");\n";
-    oh << "  auto& __arr = *reinterpret_cast<::nprpc::flat::Array<";
+    oh << "  auto& __arr = *reinterpret_cast<::nprpc::flat::detail::Array<";
     emit_flat_type(wt, oh);
     oh << ", " << arr->length << ">*>(__buf.data().data());\n";
 
@@ -2344,7 +2344,7 @@ void CppBuilder::emit_stream_serialize(AstTypeDecl* stream_type, bool direct)
     }
 
     oh << "  return __buf;\n";
-    oh << "}\n} // namespace nprpc_stream\n\n";
+    oh << "}\n} // namespace nprpc::detail::stream_codec\n\n";
 
     always_full_namespace(false);
     bd = bd_saved;
@@ -2363,7 +2363,7 @@ void CppBuilder::emit_stream_serialize(AstTypeDecl* stream_type, bool direct)
   // top_type=true: __d is the Direct object itself, use . not ().
   assign_from_cpp_type(stream_type, "__d", "value", oh, false, true);
   oh << "  return __buf;\n";
-  oh << "}\n} // namespace nprpc_stream\n\n";
+  oh << "}\n} // namespace nprpc::detail::stream_codec\n\n";
 
   always_full_namespace(false);
   bd = bd_saved;
@@ -2527,7 +2527,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   // auto const nm = ctx_->nm_cur()->to_cpp17_namespace();
 
   for (auto fn : ifs->fns) {
-    // Collect stream functions for nprpc_stream codec emission at file end (outside any namespace)
+    // Collect stream functions; their codecs are emitted at file end (outside any IDL namespace)
     if (fn->is_stream) {
       stream_codec_fns_.push_back(fn);
     }

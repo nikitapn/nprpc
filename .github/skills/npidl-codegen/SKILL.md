@@ -80,18 +80,18 @@ Both functions take a `bool top_object` (or `bool top_type`) parameter:
 
 ## 3. Stream Codec Specializations Must Go Outside the IDL Namespace
 
-`nprpc_stream::deserialize<T>` and `nprpc_stream::serialize<T>` are
-specializations of templates defined in `namespace nprpc_stream`. They
+`nprpc::detail::stream_codec::deserialize<T>` and `nprpc::detail::stream_codec::serialize<T>` are
+specializations of templates defined in `namespace nprpc::detail::stream_codec`. They
 **cannot** be emitted inside the IDL namespace (`namespace nprpc::foo`).
 
 ### Correct placement — in `finalize()`
 
 ```
 } // module nprpc::foo     ← close IDL namespace first
-namespace nprpc_stream {
+namespace nprpc::detail::stream_codec {
   template<> inline ::nprpc::foo::Bar deserialize<::nprpc::foo::Bar>(...) { ... }
 }
-namespace nprpc_stream {
+namespace nprpc::detail::stream_codec {
   template<> inline ::nprpc::flat_buffer serialize<::nprpc::foo::Bar>(...) { ... }
 }
 #endif
@@ -145,7 +145,7 @@ types. The correct approach is to call the codec:
 
 ```cpp
 // In StreamWriter::resume(), complex-type branch:
-auto __buf = nprpc_stream::serialize<T>(coro_.promise().current_value_);
+auto __buf = nprpc::detail::stream_codec::serialize<T>(coro_.promise().current_value_);
 auto __span = __buf.data();
 coro_.promise().manager_->send_chunk(
     stream_id_,
@@ -159,12 +159,12 @@ generated header can be found:
 
 ```cpp
 // stream_reader.hpp
-namespace nprpc_stream {
+namespace nprpc::detail::stream_codec {
   template<typename T> T deserialize(::nprpc::flat_buffer& buf);  // defined by generated specialization
 }
 
 // stream_writer.hpp
-namespace nprpc_stream {
+namespace nprpc::detail::stream_codec {
   template<typename T> ::nprpc::flat_buffer serialize(const T& value);  // defined by generated specialization
 }
 ```

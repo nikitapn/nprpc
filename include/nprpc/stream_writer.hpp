@@ -14,10 +14,10 @@
 // Primary template for stream chunk serialization.
 // npidl generates explicit specializations (inline, in the generated header)
 // for each non-fundamental struct type used as a stream element.
-namespace nprpc_stream {
+namespace nprpc::detail::stream_codec {
 template <typename T>
 ::nprpc::flat_buffer serialize(const T& value);
-} // namespace nprpc_stream
+} // namespace nprpc::detail::stream_codec
 
 namespace nprpc {
 
@@ -283,7 +283,7 @@ private:
     } else {
       // All non-trivial stream payloads use the npidl-generated codec so
       // strings, vectors, and structs share one consistent wire format.
-      auto __buf = nprpc_stream::serialize<T>(value);
+      auto __buf = ::nprpc::detail::stream_codec::serialize<T>(value);
       auto __span = __buf.data();
       return manager.send_chunk(
           stream_id,
