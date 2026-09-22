@@ -470,6 +470,8 @@ struct AstEnumDecl : AstFundamentalType, AstNodeWithPosition {
   Namespace* nm;
   std::vector<std::pair<std::string, std::pair<AstNumber, bool>>> items;
   std::vector<SourceRange> item_name_ranges;
+  // Parallel to items; empty string for an undocumented item.
+  std::vector<std::string> item_docs;
 
   AstEnumDecl()
       : AstFundamentalType(TokenId::UInt32)

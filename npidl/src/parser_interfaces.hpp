@@ -122,6 +122,7 @@ public:
   CompilationBuilder& with_language_cpp();
   CompilationBuilder& with_language_ts();
   CompilationBuilder& with_language_swift();
+  CompilationBuilder& with_doc_json();
   std::unique_ptr<ICompilation> build();
 
 private:
@@ -130,6 +131,7 @@ private:
     Cpp = 0x01,        // C++ output
     TypeScript = 0x02, // TypeScript output
     Swift = 0x04,      // Swift output
+    DocJson = 0x08,    // <file>.doc.json for documentation tooling
   };
 
   int language_flags_ = None;

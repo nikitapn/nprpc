@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "lsp_server.hpp"
+#include "utils.hpp"
 #include "parse_for_lsp.hpp"
 #include "parser_implementations.hpp"
 #include "position_index_builder.hpp"
@@ -706,95 +707,67 @@ LspServer::create_hover_content(const npidl::PositionIndex::Entry* entry)
     break;
   }
 
+  if (const auto doc = hover_doc(entry); !doc.empty())
+    md << "\n---\n\n" << doc << '\n';
+
   return md.str();
+}
+
+std::string_view
+LspServer::hover_doc(const npidl::PositionIndex::Entry* entry)
+{
+  using NodeType = npidl::PositionIndex::NodeType;
+  using npidl::FieldType;
+
+  // Type-erased like the rest of the index: a declaration stores its own
+  // node, a reference stores the AstTypeDecl it points at.
+  auto type_doc = [](npidl::AstTypeDecl* type) -> std::string_view {
+    if (!type)
+      return {};
+    switch (type->id) {
+    case FieldType::Interface: return npidl::cifs(type)->doc;
+    case FieldType::Struct:    return npidl::cflat(type)->doc;
+    case FieldType::Enum:      return npidl::cenum(type)->doc;
+    case FieldType::Alias:     return npidl::calias(type)->doc;
+    case FieldType::Variant:   return npidl::cvar(type)->doc;
+    default:                   return {};
+    }
+  };
+
+  switch (entry->node_type) {
+  case NodeType::Interface:
+  case NodeType::Struct:
+  case NodeType::Exception:
+  case NodeType::Enum:
+  case NodeType::Alias:
+    return type_doc(static_cast<npidl::AstTypeDecl*>(entry->node));
+  case NodeType::Function:
+    return static_cast<npidl::AstFunctionDecl*>(entry->node)->doc;
+  case NodeType::Field:
+    return static_cast<npidl::AstFieldDecl*>(entry->node)->doc;
+  case NodeType::Parameter:
+    return static_cast<npidl::AstFunctionArgument*>(entry->node)->doc;
+  case NodeType::EnumValue: {
+    auto* e = static_cast<npidl::AstEnumDecl*>(entry->node);
+    if (!e)
+      return {};
+    const auto n = std::min(e->item_docs.size(), e->item_name_ranges.size());
+    for (size_t i = 0; i < n; ++i) {
+      const auto& r = e->item_name_ranges[i];
+      if (r.start.line == entry->start_line &&
+          r.start.column == entry->start_col)
+        return e->item_docs[i];
+    }
+    return {};
+  }
+  default:
+    return {};
+  }
 }
 
 std::string LspServer::format_type(npidl::AstTypeDecl* type)
 {
-  using FieldType = npidl::FieldType;
-
-  switch (type->id) {
-  case FieldType::Fundamental: {
-    auto* ft = npidl::cft(type);
-    switch (ft->token_id) {
-    case npidl::TokenId::Boolean:
-      return "boolean";
-    case npidl::TokenId::Int8:
-      return "i8";
-    case npidl::TokenId::UInt8:
-      return "u8";
-    case npidl::TokenId::Int16:
-      return "i16";
-    case npidl::TokenId::UInt16:
-      return "u16";
-    case npidl::TokenId::Int32:
-      return "i32";
-    case npidl::TokenId::UInt32:
-      return "u32";
-    case npidl::TokenId::Int64:
-      return "i64";
-    case npidl::TokenId::UInt64:
-      return "u64";
-    case npidl::TokenId::Float32:
-      return "f32";
-    case npidl::TokenId::Float64:
-      return "f64";
-    default:
-      return "?";
-    }
-  }
-  case FieldType::String:
-    return "string";
-  case FieldType::Void:
-    return "void";
-  case FieldType::Object:
-    return "object";
-  case FieldType::Array: {
-    auto* arr = npidl::car(type);
-    return format_type(arr->type) + "[" + std::to_string(arr->length) + "]";
-  }
-  case FieldType::Vector: {
-    auto* vec = npidl::cvec(type);
-    return "vector<" + format_type(vec->type) + ">";
-  }
-  case FieldType::Optional: {
-    auto* opt = npidl::copt(type);
-    return format_type(opt->type) + "?";
-  }
-  case FieldType::Struct: {
-    auto* s = npidl::cflat(type);
-    return s->name;
-  }
-  case FieldType::Interface: {
-    auto* ifs = npidl::cifs(type);
-    return ifs->name;
-  }
-  case FieldType::Enum: {
-    auto* e = npidl::cenum(type);
-    return e->name;
-  }
-  case FieldType::Alias: {
-    auto* alias = npidl::calias(type);
-    return alias->name;
-  }
-  case FieldType::Stream: {
-    auto* stream = static_cast<npidl::AstStreamDecl*>(type);
-    std::string inner = format_type(stream->type);
-    switch (stream->kind) {
-    case npidl::StreamKind::Client:
-      return "client_stream<" + inner + ">";
-    case npidl::StreamKind::Bidi:
-      return "bidi_stream<" +
-             (stream->input_type ? format_type(stream->input_type) : "?") +
-             ", " + inner + ">";
-    default:
-      return std::string(stream->direct ? "stream<direct " : "stream<") + inner +
-             ">";
-    }
-  }
-  default:
-    return "?";
-  }
+  return npidl::idl_type_string(type);
 }
 
 void LspServer::handle_semantic_tokens_full(const glz::generic& id,

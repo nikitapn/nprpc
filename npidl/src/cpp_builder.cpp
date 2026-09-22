@@ -1065,9 +1065,15 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type,
 
 void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
 {
-  auto make_struct = [s, this, &os]<typename T>(T&& fn) {
+  // Docs go on the user-facing type only: not on the flat wire layout, and
+  // not on argument structs, whose docs belong to the function.
+  auto make_struct = [s, this, &os]<typename T>(T&& fn, bool with_docs) {
+    if (with_docs)
+      emit_line_doc(os, "", s->doc);
     os << "struct " << s->name << " {\n";
     for (auto const f : s->fields) {
+      if (with_docs)
+        emit_line_doc(os, "  ", f->doc);
       os << "  ";
       fn(f->type, os);
       os << ' ' << f->name << ";\n";
@@ -1078,14 +1084,16 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
   if (target == Target::Regular) {
     make_struct(std::bind(
         static_cast<void (CppBuilder::*)(AstTypeDecl*, std::ostream&)>(&CppBuilder::emit_type),
-        this, _1, _2));
+        this, _1, _2), true);
   } else if (target == Target::Exception) {
+    emit_line_doc(os, "", s->doc);
     os << "class " << s->name
        << " : public ::nprpc::Exception {\n"
           "public:\n";
 
     if (s->fields.size() > 1) {
       std::for_each(next(begin(s->fields)), end(s->fields), [this, &os](auto f) {
+        emit_line_doc(os, "  ", f->doc);
         os << "  ";
         emit_type(f->type, os);
         os << " " << f->name << ";\n";
@@ -1125,7 +1133,7 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
 
   make_struct(std::bind(
       static_cast<void (CppBuilder::*)(AstTypeDecl*, std::ostream&)>(&CppBuilder::emit_flat_type),
-      this, _1, _2));
+      this, _1, _2), false);
 
   auto const accessor_name = s->name + "_Direct";
 
@@ -2364,6 +2372,7 @@ void CppBuilder::emit_stream_serialize(AstTypeDecl* stream_type, bool direct)
 void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 {
   // Servant definition
+  emit_line_doc(oh, "", ifs->doc);
   oh << "class " << export_macro_name_ << " I" << ifs->name << "_Servant\n";
   if (ifs->plist.size()) {
     oh << "  : public I" << ifs->plist[0]->name << "_Servant\n";
@@ -2386,6 +2395,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
         "from_parent) override;\n";
 
   for (auto fn : ifs->fns) {
+    emit_line_doc(oh, "  ", function_doc(fn, ParamDocStyle::Doxygen));
     oh << "  virtual ";
     if (fn->is_stream) {
       switch (fn->stream_kind) {
@@ -2443,6 +2453,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   oh << "};\n\n";
 
   // Proxy definition
+  emit_line_doc(oh, "", ifs->doc);
   oh << "class " << export_macro_name_ << " " << ifs->name << "\n";
 
   if (ifs->plist.size()) {
@@ -2480,6 +2491,8 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 
   // functions definitions
   for (auto& fn : ifs->fns) {
+    const auto doc = function_doc(fn, ParamDocStyle::Doxygen);
+    emit_line_doc(oh, "  ", doc);
     oh << "  ";
     if (fn->is_stream) {
       emit_stream_proxy_return_type(*this, fn, oh,
@@ -2492,6 +2505,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     oh << proxy_arguments(fn) << ";\n";
     // Coroutine variant for reliable, non-stream TCP methods
     if (!fn->is_stream && fn->is_reliable) {
+      emit_line_doc(oh, "  ", doc);
       oh << "  ::nprpc::Task<";
       emit_type(fn->ret_value, oh);
       oh << "> " << fn->name << "Async ";
@@ -3232,6 +3246,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 
 void CppBuilder::emit_using(AstAliasDecl* u)
 {
+  emit_line_doc(oh, "", u->doc);
   oh << "using " << u->name << " = ";
   emit_type(u->type, oh);
   oh << ";\n";
@@ -3240,6 +3255,7 @@ void CppBuilder::emit_using(AstAliasDecl* u)
 void CppBuilder::emit_variant(AstVariantDecl* v)
 {
   // Regular type: struct with Kind enum + std::variant
+  emit_line_doc(oh, "", v->doc);
   oh << "struct " << v->name << " {\n";
   oh << "  enum class Kind : std::uint32_t {\n";
   for (size_t i = 0; i < v->arms.size(); ++i) {
@@ -3331,9 +3347,11 @@ void CppBuilder::emit_variant(AstVariantDecl* v)
 
 void CppBuilder::emit_enum(AstEnumDecl* e)
 {
+  emit_line_doc(oh, "", e->doc);
   oh << "enum class " << e->name << " : " << fundamental_to_cpp(e->token_id) << " {\n";
   int64_t ix = 0;
   for (size_t i = 0; i < e->items.size(); ++i) {
+    emit_line_doc(oh, "  ", e->item_docs[i]);
     oh << "  " << e->items[i].first;
     auto const n = e->items[i].second;
     if (n.second || ix != n.first) { // explicit

@@ -506,6 +506,8 @@ private:
   // Helper methods for hover
   std::string create_hover_content(const npidl::PositionIndex::Entry* entry);
   std::string format_type(npidl::AstTypeDecl* type);
+  // The `///` text of the hovered declaration (or referenced type), if any.
+  static std::string_view hover_doc(const npidl::PositionIndex::Entry* entry);
 
   // Diagnostics
   void publish_diagnostics(const std::string& uri,

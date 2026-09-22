@@ -4,6 +4,7 @@
 #include "builder.hpp"
 #include "builtins.hpp"
 #include "cpp_builder.hpp"
+#include "doc_json_builder.hpp"
 #include "parse_for_lsp.hpp"
 #include "parser_factory.hpp"
 #include "swift_builder.hpp"
@@ -121,6 +122,12 @@ CompilationBuilder& CompilationBuilder::with_language_swift()
   return *this;
 }
 
+CompilationBuilder& CompilationBuilder::with_doc_json()
+{
+  language_flags_ |= LanguageFlags::DocJson;
+  return *this;
+}
+
 std::unique_ptr<ICompilation> CompilationBuilder::build()
 {
   builders::BuildGroup builder;
@@ -130,6 +137,8 @@ std::unique_ptr<ICompilation> CompilationBuilder::build()
     builder.add<builders::TSBuilder>(output_dir_);
   if (language_flags_ & LanguageFlags::Swift)
     builder.add<builders::SwiftBuilder>(output_dir_);
+  if (language_flags_ & LanguageFlags::DocJson)
+    builder.add<builders::DocJsonBuilder>(output_dir_);
 
   auto compilation = std::make_unique<ICompilation>();
   compilation->impl_ = std::make_unique<Compilation>(std::move(builder),

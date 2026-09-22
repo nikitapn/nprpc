@@ -922,8 +922,10 @@ void TSBuilder::emit_struct2(AstStructDecl* s, bool is_exception)
 {
   // native typescript
   if (!is_exception) {
+    emit_block_doc(out, "", s->doc);
     out << "export interface " << s->name << " {\n";
     for (auto const f : s->fields) {
+      emit_block_doc(out, "  ", f->doc);
       out << "  " << f->name << (f->is_optional() ? "?: " : ": ");
       // For function argument structs with object types, use ObjectId
       // instead of ObjectProxy
@@ -939,12 +941,14 @@ void TSBuilder::emit_struct2(AstStructDecl* s, bool is_exception)
     // interface The interface includes __ex_id for marshalling purposes
     out << "export interface " << s->name << "_Data {\n";
     for (auto const f : s->fields) {
+      emit_block_doc(out, "  ", f->doc);
       out << "  " << f->name << (f->is_optional() ? "?: " : ": ");
       out << emit_type(f->type);
       out << ";\n";
     }
     out << "}\n\n";
 
+    emit_block_doc(out, block_depth_.indent(), s->doc);
     out << bl() << "export class " << s->name << " extends NPRPC.Exception {\n"
         << bb(false) << bl() << "constructor(";
     for (size_t ix = 1; ix < s->fields.size(); ++ix) {
@@ -1064,6 +1068,7 @@ void TSBuilder::finalize()
 
 void TSBuilder::emit_using(AstAliasDecl* u)
 {
+  emit_block_doc(out, block_depth_.indent(), u->doc);
   out << bl() << "export type " << u->name << " = " << emit_type(u->type)
       << ";\n";
 }
@@ -1071,6 +1076,7 @@ void TSBuilder::emit_using(AstAliasDecl* u)
 void TSBuilder::emit_variant(AstVariantDecl* v)
 {
   // Discriminated union type declaration
+  emit_block_doc(out, block_depth_.indent(), v->doc);
   out << bl() << "export type " << v->name << " =\n";
   for (size_t i = 0; i < v->arms.size(); ++i) {
     out << bl() << "  | { kind: '" << v->arms[i].name << "'; value: "
@@ -1158,11 +1164,13 @@ void TSBuilder::emit_variant(AstVariantDecl* v)
 
 void TSBuilder::emit_enum(AstEnumDecl* e)
 {
+  emit_block_doc(out, block_depth_.indent(), e->doc);
   out << bl() << "export enum " << e->name << " { //" << toktype << e->token_id
       << '\n'
       << bb(false);
   std::int64_t ix = 0;
   for (size_t i = 0; i < e->items.size(); ++i) {
+    emit_block_doc(out, block_depth_.indent(), e->item_docs[i]);
     out << bl() << e->items[i].first;
     auto const n = e->items[i].second;
     if (n.second || ix != n.first) { // explicit
@@ -1223,6 +1231,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       };
 
   // Proxy definition =======================================================
+  emit_block_doc(out, block_depth_.indent(), ifs->doc);
   out << bl() << "export class " << ifs->name << ' ';
 
   // if (ifs->plist.size()) {
@@ -1257,6 +1266,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       out << bl() << "// " << inherited_ifs.first->name << '\n';
     }
     for (auto& fn : inherited_ifs.first->fns) {
+      emit_block_doc(out, block_depth_.indent(),
+                     function_doc(fn, ParamDocStyle::Doxygen));
       out << bl() << "public async " << fn->name;
       emit_function_arguments(
           false, fn, out,
@@ -1284,6 +1295,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   // proxy object functions definitions
   out << '\n';
   for (auto& fn : ifs->fns) {
+    emit_block_doc(out, block_depth_.indent(),
+                   function_doc(fn, ParamDocStyle::Doxygen));
     if (fn->is_stream) {
       int visible_arg_count = 0;
       for (auto arg : fn->args) {
@@ -1617,6 +1630,9 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       out << ",\n";
     first_http_method = false;
 
+    // Out arguments come back in the resolved value here, not as parameters.
+    emit_block_doc(out, block_depth_.indent(),
+                   function_doc(fn, ParamDocStyle::Doxygen, true));
     out << bl() << fn->name << ": async (";
 
     // Input parameters only (no 'out' refs)
@@ -1874,6 +1890,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   out << eb(); // Proxy class ends
 
   // Servant definition
+  emit_block_doc(out, block_depth_.indent(), ifs->doc);
   out << bl() << "export interface " << servant_iname << '\n';
   if (ifs->plist.size()) {
     out << " extends I" << ifs->plist[0]->name << "_Servant\n";
@@ -1883,6 +1900,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   }
   out << bb();
   for (auto fn : ifs->fns) {
+    emit_block_doc(out, block_depth_.indent(),
+                   function_doc(fn, ParamDocStyle::Doxygen));
     out << bl() << fn->name;
     if (fn->is_stream) {
       out << '(';
