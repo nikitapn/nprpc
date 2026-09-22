@@ -29,7 +29,8 @@ struct CppOptions {
 // declaration in them: records, enums and enumerators, functions and
 // methods, fields, aliases, namespace-scope variables and concepts.
 // Namespaces named `detail` or `impl` and names starting with `_` are
-// internal and skipped. Throws std::runtime_error if parsing fails.
+// internal and skipped, as are the members of a coroutine `promise_type`.
+// Throws std::runtime_error if parsing fails.
 std::vector<Symbol> extract_cpp(const CppOptions& options);
 
 } // namespace npdoc

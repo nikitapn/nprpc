@@ -166,6 +166,15 @@ template <typename T> T identity(T value);
 
 using Size = int;
 
+/// Coroutine result.
+struct Job {
+  /// Coroutine machinery.
+  struct promise_type {
+    Job get_return_object();
+    void return_void();
+  };
+};
+
 } // namespace lib
 )");
   dir.write("include/lib/impl/internal.hpp", "namespace lib { struct Internal {}; }\n");
@@ -219,6 +228,10 @@ using Size = int;
   EXPECT_EQ(identity->kind, "function");
   ASSERT_TRUE(identity->params);
   EXPECT_EQ((*identity->params)[0].name, "value");
+
+  // promise_type is listed; its protocol members are not.
+  EXPECT_NE(find(symbols, "cpp:lib::Job::promise_type"), nullptr);
+  EXPECT_EQ(find(symbols, "cpp:lib::Job::promise_type::return_void()"), nullptr);
 
   const auto* size = find(symbols, "cpp:lib::Size");
   ASSERT_NE(size, nullptr);

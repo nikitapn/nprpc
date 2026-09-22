@@ -320,6 +320,10 @@ public:
       if (!clang_isCursorDefinition(c))
         return CXChildVisit_Continue;
       add(c, kind, *file, line);
+      // A coroutine's promise_type is listed, but its members are the
+      // language's protocol (initial_suspend, yield_value, ...), not API.
+      if (take(clang_getCursorSpelling(c)) == "promise_type")
+        return CXChildVisit_Continue;
       return CXChildVisit_Recurse;
     }
 

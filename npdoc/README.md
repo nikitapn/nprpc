@@ -22,7 +22,8 @@ found. Otherwise CMake skips it with a status message.
 
 - **C++:** public members and namespace-scope declarations in the given
   header roots. Skipped: `detail`/`impl` namespaces, names starting with `_`,
-  `= delete`, undocumented `= default`, and forward declarations.
+  `= delete`, undocumented `= default`, forward declarations, and the members
+  of coroutine `promise_type`s.
 - **Swift:** the symbol graph is emitted at `public`. Skipped:
   compiler-synthesized members, `_` names, symbols with no source location
   (C declarations re-exported through C++ interop), and `Generated/`, which
