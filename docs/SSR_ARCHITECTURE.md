@@ -1,6 +1,59 @@
 # NPRPC Server-Side Rendering (SSR) Architecture
 
-This document describes the architecture for integrating server-side rendering (SSR) frameworks like SvelteKit with NPRPC's C++ HTTP servers via high-performance shared memory IPC.
+NPRPC offers two ways to serve HTML.
+
+**In-process page handlers** (`with_page_handler` / `withPageHandler`) render in
+the process that owns the services, so a page can be built from data the server
+already holds. No worker process, no IPC, no `NPRPC_ENABLE_SSR` — see
+[Page Handlers](#page-handlers) below. This is the better fit when the backend
+owns the data, which is the usual case.
+
+**The SSR worker** described in the rest of this document runs an external
+Node.js framework (SvelteKit) over shared memory. It suits an existing
+JavaScript app you want to keep, at the cost of a second process that cannot
+reach your services without going back over the wire.
+
+Both can be configured at once; the page handler is consulted first and falls
+through to the SSR worker when it declines.
+
+## Page Handlers
+
+```cpp
+#include <nprpc/page_handler.hpp>
+
+builder.with_page_handler([&](const nprpc::PageRequest& req)
+                              -> std::optional<nprpc::PageResponse> {
+  if (req.path != "/blog") return std::nullopt;  // decline -> normal routing
+  nprpc::PageResponse res;
+  res.body = render_blog(repository.list_posts(page_of(req), 5));
+  return res;
+});
+```
+
+The handler sees every GET/HEAD/POST except framework paths (`/rpc`,
+`/_nprpc/...`), which are excluded so a catch-all route cannot shadow them.
+Returning `std::nullopt` falls through to the SSR worker and then to the
+zero-copy static file cache, so declining unknown paths is how assets keep
+their fast path.
+
+It is called synchronously on an HTTP I/O thread, and on several concurrently
+when the server runs a thread pool, so it must be thread-safe. That suits a
+template render (microseconds); anything slow belongs on another thread.
+
+Swift gets the same hook through `RpcBuilderHttp.withPageHandler`, bridged as a
+C function pointer (`nprpc_swift/Sources/CNprpc/include/nprpc_page_bridge.hpp`).
+`examples/live-blog` uses it with swift-mustache.
+
+**HTTP/3 limitation:** `send_dynamic_response` carries only a content type, so a
+page handler's other response headers are dropped on HTTP/3 (each one is
+logged). HTTP/1.1 carries them all. Lifting this means giving
+`PreparedResponseHeaders` owned storage for arbitrary headers.
+
+## SvelteKit over Shared Memory
+
+The rest of this document describes the Node.js SSR worker: the architecture for
+integrating SSR frameworks like SvelteKit with NPRPC's C++ HTTP servers via
+high-performance shared memory IPC.
 
 ## Overview
 
@@ -347,11 +400,12 @@ This logs:
 
 ## Future Improvements
 
+- [x] In-process rendering with no Node.js — see [Page Handlers](#page-handlers)
+- [ ] Arbitrary response headers for page handlers on HTTP/3
 - [ ] Connection pooling for multiple Node.js workers
 - [ ] Health checks and automatic worker restart
 - [ ] Metrics/tracing integration
 - [ ] Windows named pipe support
-- [ ] WebAssembly SSR option (no Node.js)
 
 ## Related Documentation
 

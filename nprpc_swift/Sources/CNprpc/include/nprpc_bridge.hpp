@@ -12,6 +12,8 @@
 #include <memory>
 #include <optional>
 
+#include "nprpc_page_bridge.hpp"
+
 // Swift interop macros
 #ifndef SWIFT_RETURNS_INDEPENDENT_VALUE
 #define SWIFT_RETURNS_INDEPENDENT_VALUE __attribute__((swift_attr("returns_independent_value")))
@@ -89,6 +91,11 @@ struct RpcBuildConfig {
     size_t http_webtransport_stream_opens_burst;
     std::string ssr_handler_dir;
     bool watch_files;
+
+    // In-process page renderer (see nprpc_page_bridge.hpp).  nullptr means the
+    // server keeps its normal routing: SSR worker if enabled, then static files.
+    nprpc_page_handler_fn page_handler;
+    void* page_handler_ctx;
 
     // QUIC
     uint16_t quic_port;

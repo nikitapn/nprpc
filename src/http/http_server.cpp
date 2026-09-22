@@ -6,6 +6,7 @@
 #include <nprpc/impl/http_rpc_session.hpp>
 #include <nprpc/impl/http_utils.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/page_dispatch.hpp>
 #ifdef NPRPC_WEBSOCKET_ENABLED
 #include <nprpc/impl/websocket_session.hpp>
 #endif
@@ -303,6 +304,52 @@ handle_request(beast::string_view doc_root,
   // Check if this is an RPC request (POST to /rpc or /rpc/*)
   if (req.method() == http::verb::post && is_rpc_http_target(req.target())) {
     return handle_rpc_request(req, remote_ip);
+  }
+
+  // In-process page rendering.  Runs before the SSR worker so an application
+  // that renders its own HTML never pays for the Node round-trip; declining
+  // (nullopt) falls through to SSR and then to the static file cache.
+  {
+    std::string_view target_sv(req.target().data(), req.target().size());
+    const auto [page_path, page_query] = split_page_target(target_sv);
+    std::string_view method_sv = req.method() == http::verb::get    ? "GET"
+                                 : req.method() == http::verb::head ? "HEAD"
+                                                                    : "POST";
+
+    if (page_handler_applies(method_sv, page_path)) {
+      std::map<std::string, std::string> headers;
+      for (const auto& field : req) {
+        headers[to_lower_copy(field.name_string())] = std::string(field.value());
+      }
+
+      auto page = invoke_page_handler(method_sv, target_sv, std::move(headers),
+                                      std::string(req.body()),
+                                      remote_ip.to_string());
+      if (page) {
+        http::response<http::string_body> res{
+            static_cast<http::status>(page->status), req.version()};
+        res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+        for (const auto& [key, value] : page->headers) {
+          if (key != "content-length" && key != "transfer-encoding") {
+            res.set(key, value);
+          }
+        }
+        if (res.find(http::field::content_type) == res.end()) {
+          res.set(http::field::content_type, "text/html; charset=utf-8");
+        }
+        add_alt_svc_header(res);
+        res.keep_alive(req.keep_alive());
+        // A HEAD response carries the headers of the GET but no body; Beast
+        // still needs the length, so set it before clearing.
+        if (req.method() == http::verb::head) {
+          res.content_length(page->body.size());
+        } else {
+          res.body() = std::move(page->body);
+          res.prepare_payload();
+        }
+        return res;
+      }
+    }
   }
 
 #if defined(NPRPC_SSR_ENABLED)

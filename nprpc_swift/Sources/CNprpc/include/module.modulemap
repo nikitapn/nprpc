@@ -1,7 +1,8 @@
 module CNprpc {
     // Bridge module that wraps nprpc for Swift
     header "nprpc_bridge.hpp"
-    
+    header "nprpc_page_bridge.hpp"
+
     requires cplusplus
     export *
 }

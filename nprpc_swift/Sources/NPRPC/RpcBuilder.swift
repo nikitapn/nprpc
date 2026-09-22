@@ -47,6 +47,7 @@ class BuildConfig {
     var httpWebTransportStreamOpensBurst: UInt = 0
     var ssrHandlerDir: String = ""
     var watchFiles: Bool = false
+    var pageHandler: PageHandler? = nil
     var certWatchIntervalSec: UInt32 = 0
     var http3ShmEgressChannel: String = ""
     var http3ShmIngressChannel: String = ""
@@ -188,6 +189,15 @@ extension RpcBuilderInternal {
         cxxConfig.http_webtransport_stream_opens_burst = numericCast(config.httpWebTransportStreamOpensBurst)
         cxxConfig.ssr_handler_dir = std.string(config.ssrHandlerDir)
         cxxConfig.watch_files = config.watchFiles
+
+        // Retained for the life of the process: the C++ server keeps the raw
+        // pointer in its global config and calls it until shutdown.
+        if let pageHandler = config.pageHandler {
+            let box = PageHandlerBox(pageHandler)
+            cxxConfig.page_handler = nprpcPageHandlerTrampoline
+            cxxConfig.page_handler_ctx =
+                UnsafeMutableRawPointer(Unmanaged.passRetained(box).toOpaque())
+        }
         cxxConfig.shm_egress_channel  = std.string(config.http3ShmEgressChannel)
         cxxConfig.shm_ingress_channel = std.string(config.http3ShmIngressChannel)
 
@@ -265,6 +275,26 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
     @discardableResult
     public func enableHttp3() -> RpcBuilderHttp {
         config.http3Enabled = true
+        return self
+    }
+
+    /// Render pages in this process instead of shelling out to an SSR worker.
+    ///
+    /// `handler` is consulted for every GET/HEAD/POST the RPC endpoint did not
+    /// claim.  Returning `nil` falls through to the server's normal routing, so
+    /// static assets keep their zero-copy path.  Unlike ``enableSsr(handlerDir:)``
+    /// this needs no separate worker process.
+    ///
+    /// ```swift
+    /// .withPageHandler { request in
+    ///     guard request.path == "/blog" else { return nil }
+    ///     let page = Int(request.queryItems["page"] ?? "1") ?? 1
+    ///     return PageResponse(html: renderBlog(page))
+    /// }
+    /// ```
+    @discardableResult
+    public func withPageHandler(_ handler: @escaping PageHandler) -> RpcBuilderHttp {
+        config.pageHandler = handler
         return self
     }
 

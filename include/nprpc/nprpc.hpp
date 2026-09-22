@@ -24,6 +24,7 @@
 #include <nprpc/endpoint.hpp>
 #include <nprpc/flat_buffer.hpp>
 #include <nprpc/object_ptr.hpp>
+#include <nprpc/page_handler.hpp>
 #include <nprpc/task.hpp>
 #include <nprpc/serialization/serialization.h>
 #include <nprpc/session_context.h>
@@ -541,6 +542,10 @@ struct BuildConfig {
   size_t http_webtransport_stream_opens_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_BURST;
   std::string ssr_handler_dir; // Path to SSR handler (index.js), defaults to
                                // http_root_dir
+
+  // In-process page renderer.  Consulted before the SSR worker; see
+  // RpcBuilderHttp::with_page_handler.
+  PageHandler page_handler;
   bool watch_files = NPRPC_DEFAULT_WATCH_FILES; // Enable inotify-based cache invalidation (dev mode)
 
   // QUIC settings
@@ -795,6 +800,18 @@ public:
     return *this;
   }
 #endif
+  /// Render pages in this process instead of shelling out to an SSR worker.
+  ///
+  /// @p handler is consulted for every GET/HEAD/POST the RPC endpoint did not
+  /// claim.  Returning std::nullopt falls through to the server's normal
+  /// routing, so static assets keep their zero-copy path.  Unlike enable_ssr
+  /// this needs no NPRPC_ENABLE_SSR build option — there is no worker process.
+  RpcBuilderHttp& with_page_handler(PageHandler handler) noexcept
+  {
+    cfg_->page_handler = std::move(handler);
+    return *this;
+  }
+
   RpcBuilderHttp& root_dir(std::string_view root_dir) noexcept
   {
     cfg_->http_root_dir = root_dir;

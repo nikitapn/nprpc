@@ -79,6 +79,7 @@ struct Config {
   size_t http_webtransport_stream_opens_per_session_per_second = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_PER_SESSION_PER_SECOND;
   size_t http_webtransport_stream_opens_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_BURST;
   std::string ssr_handler_dir; // Path to SSR handler (index.js)
+  PageHandler page_handler;    // In-process renderer (see nprpc/page_handler.hpp)
   bool watch_files = NPRPC_DEFAULT_WATCH_FILES;   // Enable inotify-based cache invalidation (dev mode)
   // SHM channels for npquicrouter integration (see BuildConfig).
   std::string shm_egress_channel;

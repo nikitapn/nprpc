@@ -380,6 +380,7 @@ add_library(nprpc
   include/nprpc/flat.hpp
   include/nprpc/nprpc.hpp
   include/nprpc/object_ptr.hpp
+  include/nprpc/page_handler.hpp
   include/nprpc/session_context.h
   include/nprpc/utils.hpp
   include/nprpc/host_json.hpp
@@ -389,6 +390,7 @@ add_library(nprpc
   # Implementation headers
   include/nprpc/impl/async_connect.hpp
   include/nprpc/impl/nprpc_impl.hpp
+  include/nprpc/impl/page_dispatch.hpp
   include/nprpc/impl/session.hpp
   include/nprpc/impl/quic_transport.hpp
   include/nprpc/impl/http3_server.hpp
@@ -419,6 +421,7 @@ if(NPRPC_ENABLE_HTTP OR NPRPC_ENABLE_HTTP3)
     src/http/http_rpc_session.cpp
     src/http/http_file_cache.cpp
     src/http/http_file_watcher.cpp
+    src/http/page_dispatch.cpp
   )
 endif()
 

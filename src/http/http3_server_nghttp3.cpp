@@ -13,6 +13,7 @@
 #include <nprpc/impl/http_utils.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/misc/thread_identity.hpp>
+#include <nprpc/impl/page_dispatch.hpp>
 #ifdef NPRPC_SSR_ENABLED
 #include <nprpc/impl/ssr_manager.hpp>
 #endif
@@ -392,6 +393,31 @@ struct PreparedResponseHeaders {
   std::string allow_origin;
 };
 
+namespace {
+
+// send_dynamic_response carries only a content type, so a page handler's other
+// response headers cannot be represented on HTTP/3 (PreparedResponseHeaders is
+// a fixed 12-slot no-copy array).  Pull out the content type and warn about
+// anything else rather than dropping it silently.
+std::string page_content_type(const nprpc::PageResponse& page)
+{
+  std::string content_type = "text/html; charset=utf-8";
+  for (const auto& [key, value] : page.headers) {
+    if (nprpc::impl::to_lower_copy(key) == "content-type") {
+      content_type = value;
+    } else {
+      NPRPC_HTTP3_ERROR(
+          "Page handler header '{}' dropped: HTTP/3 responses carry only a "
+          "content type. Serve this route over HTTP/1.1 or extend "
+          "PreparedResponseHeaders.",
+          key);
+    }
+  }
+  return content_type;
+}
+
+} // namespace
+
 struct PendingSendPacketPayload {
   std::array<uint8_t, MAX_UDP_PAYLOAD_SIZE> bytes;
 };
@@ -716,6 +742,10 @@ private:
   int send_cors_preflight(Http3Stream* stream);
   int send_not_modified(Http3Stream* stream, CachedFileGuard cached_file);
   int send_webtransport_connect_response(Http3Stream* stream);
+
+  // In-process page rendering (nprpc/page_handler.hpp).  Returns nullopt when
+  // no handler is installed or it declines, so the caller falls through.
+  std::optional<nprpc::PageResponse> try_render_page(Http3Stream* stream);
 
   // RPC Handling
   int handle_rpc_request(Http3Stream* stream);
@@ -2535,6 +2565,14 @@ int Http3Connection::start_response(Http3Stream* stream)
 
   // Handle the HTTP request
   if (stream->method == "GET" || stream->method == "HEAD") {
+    // In-process page rendering, ahead of the SSR worker (see
+    // nprpc/page_handler.hpp).  nullopt falls through to SSR, then static.
+    if (auto page = try_render_page(stream)) {
+      return send_dynamic_response(stream, page->status,
+                                   page_content_type(*page),
+                                   std::move(page->body));
+    }
+
 #ifdef NPRPC_SSR_ENABLED
     // Check if this request should be handled by SSR
     if (g_cfg.ssr_enabled &&
@@ -2657,6 +2695,12 @@ int Http3Connection::start_response(Http3Stream* stream)
     if (is_rpc_http_target(stream->path)) {
       NPRPC_HTTP3_TRACE("Handling RPC request");
       return handle_rpc_request(stream);
+    }
+
+    if (auto page = try_render_page(stream)) {
+      return send_dynamic_response(stream, page->status,
+                                   page_content_type(*page),
+                                   std::move(page->body));
     }
 
 #ifdef NPRPC_SSR_ENABLED
@@ -2832,6 +2876,36 @@ int Http3Connection::reject_oversized_request_body(Http3Stream* stream)
 
   return send_static_response(stream, 413, "text/plain",
                               "Request body too large");
+}
+
+std::optional<nprpc::PageResponse>
+Http3Connection::try_render_page(Http3Stream* stream)
+{
+  const auto [page_path, page_query] =
+      nprpc::impl::split_page_target(std::string_view(stream->path));
+  if (!nprpc::impl::page_handler_applies(std::string_view(stream->method),
+                                         page_path)) {
+    return std::nullopt;
+  }
+
+  // Drop HTTP/3 pseudo-headers; a page handler expects Web-API header names.
+  std::map<std::string, std::string> headers;
+  for (const auto& [key, value] : stream->headers) {
+    if (!key.empty() && key[0] != ':') {
+      headers[nprpc::impl::to_lower_copy(std::string_view(key))] =
+          std::string(value);
+    }
+  }
+
+  std::string body;
+  if (stream->method == "POST" && stream->request_body.size() > 0) {
+    body.assign(reinterpret_cast<const char*>(stream->request_body.data_ptr()),
+                stream->request_body.size());
+  }
+
+  return nprpc::impl::invoke_page_handler(
+      std::string_view(stream->method), std::string_view(stream->path),
+      std::move(headers), std::move(body), remote_ep_.address().to_string());
 }
 
 PreparedResponseHeaders&

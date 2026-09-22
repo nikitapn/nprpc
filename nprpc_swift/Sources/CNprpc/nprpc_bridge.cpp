@@ -222,6 +222,71 @@ RpcHandle& RpcHandle::operator=(RpcHandle&& other) noexcept {
     return *this;
 }
 
+// ============================================================================
+// Page handler bridge (see include/nprpc_page_bridge.hpp)
+// ============================================================================
+
+extern "C" {
+
+void nprpc_page_response_set_status(void* response, unsigned status) {
+    if (response) static_cast<nprpc::PageResponse*>(response)->status = status;
+}
+
+void nprpc_page_response_set_header(void* response,
+                                    const char* name,
+                                    const char* value) {
+    if (!response || !name) return;
+    static_cast<nprpc::PageResponse*>(response)->headers[name] =
+        value ? value : "";
+}
+
+void nprpc_page_response_set_body(void* response, const char* data, size_t len) {
+    if (!response) return;
+    auto* res = static_cast<nprpc::PageResponse*>(response);
+    res->body.assign(data ? data : "", data ? len : 0);
+}
+
+} // extern "C"
+
+namespace {
+
+/// Wrap the C callback as a nprpc::PageHandler.
+///
+/// The header name/value arrays are rebuilt per request because the C ABI hands
+/// out flat arrays while nprpc::PageRequest carries a map.  Page renders are
+/// already dominated by template work, so this is not worth optimising away.
+nprpc::PageHandler make_page_handler(nprpc_page_handler_fn fn, void* ctx) {
+    return [fn, ctx](const nprpc::PageRequest& req)
+               -> std::optional<nprpc::PageResponse> {
+        std::vector<const char*> names;
+        std::vector<const char*> values;
+        names.reserve(req.headers.size());
+        values.reserve(req.headers.size());
+        for (const auto& [name, value] : req.headers) {
+            names.push_back(name.c_str());
+            values.push_back(value.c_str());
+        }
+
+        nprpc_page_request c_req{};
+        c_req.method = req.method.c_str();
+        c_req.target = req.target.c_str();
+        c_req.path = req.path.c_str();
+        c_req.query = req.query.c_str();
+        c_req.body = req.body.data();
+        c_req.body_len = req.body.size();
+        c_req.client_address = req.client_address.c_str();
+        c_req.header_names = names.data();
+        c_req.header_values = values.data();
+        c_req.header_count = names.size();
+
+        nprpc::PageResponse response;
+        if (!fn(ctx, &c_req, &response)) return std::nullopt;
+        return response;
+    };
+}
+
+} // namespace
+
 bool RpcHandle::initialize(RpcBuildConfig* config) {
     if (initialized_ || !config) {
         return false;  // Already initialized or null config
@@ -290,6 +355,10 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
             config->http_webtransport_stream_opens_burst;
         cxxConfig.ssr_handler_dir = config->ssr_handler_dir;
         cxxConfig.watch_files = config->watch_files;
+        if (config->page_handler) {
+            cxxConfig.page_handler =
+                make_page_handler(config->page_handler, config->page_handler_ctx);
+        }
         cxxConfig.quic_port = config->quic_port;
         cxxConfig.quic_cert_file = config->quic_cert_file;
         cxxConfig.quic_key_file = config->quic_key_file;
