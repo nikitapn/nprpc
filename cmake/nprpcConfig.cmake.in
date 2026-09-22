@@ -4,8 +4,14 @@
 
 include(CMakeFindDependencyMacro)
 
-# Find required dependencies
+# Find required dependencies: every target nprpc::nprpc links to must exist.
 find_dependency(Threads)
+find_dependency(Boost)
+set(_nprpc_need_uring @NPRPC_ENABLE_TCP@)
+if(_nprpc_need_uring)
+  find_dependency(PkgConfig)
+  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+endif()
 set(_nprpc_need_openssl @NPRPC_NEED_OPENSSL@)
 if(_nprpc_need_openssl)
   find_dependency(OpenSSL)
