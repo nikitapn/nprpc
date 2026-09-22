@@ -44,10 +44,9 @@ Swift gets the same hook through `RpcBuilderHttp.withPageHandler`, bridged as a
 C function pointer (`nprpc_swift/Sources/CNprpc/include/nprpc_page_bridge.hpp`).
 `examples/live-blog` uses it with swift-mustache.
 
-**HTTP/3 limitation:** `send_dynamic_response` carries only a content type, so a
-page handler's other response headers are dropped on HTTP/3 (each one is
-logged). HTTP/1.1 carries them all. Lifting this means giving
-`PreparedResponseHeaders` owned storage for arbitrary headers.
+A handler's response headers are carried on both HTTP/1.1 and HTTP/3.
+`content-length` and `transfer-encoding` are ignored — the server owns framing —
+as are pseudo-headers, and names are lowercased for HTTP/3.
 
 ## SvelteKit over Shared Memory
 
@@ -401,7 +400,6 @@ This logs:
 ## Future Improvements
 
 - [x] In-process rendering with no Node.js — see [Page Handlers](#page-handlers)
-- [ ] Arbitrary response headers for page handlers on HTTP/3
 - [ ] Connection pooling for multiple Node.js workers
 - [ ] Health checks and automatic worker restart
 - [ ] Metrics/tracing integration

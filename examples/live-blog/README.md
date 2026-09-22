@@ -181,8 +181,3 @@ npm install --ignore-scripts -w examples/live-blog/client
 `--ignore-scripts` is needed because a plain install tries to rebuild the
 `nprpc_node` native addon, which currently fails to compile for reasons
 unrelated to this example.
-
-## Still To Do
-
-- HTTP/3 responses carry only a content type, so a page handler's other response
-  headers are dropped there (logged when it happens). HTTP/1.1 carries them all.
