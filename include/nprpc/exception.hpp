@@ -6,14 +6,17 @@
 #include <stdexcept>
 
 namespace nprpc {
+/// Base of every exception NPRPC raises, including those declared in IDL.
 class Exception : public std::runtime_error
 {
 public:
+  /// An exception with message `msg`.
   explicit Exception(char const* const msg) noexcept
       : std::runtime_error(msg)
   {
   }
 
+  /// An exception with message `msg`.
   explicit Exception(std::string const& msg) noexcept
       : std::runtime_error(msg)
   {
@@ -24,6 +27,7 @@ public:
 class OperationCancelled : public Exception
 {
 public:
+  /// The exception, with message "OperationCancelled".
   OperationCancelled() : Exception("OperationCancelled") {}
 };
 

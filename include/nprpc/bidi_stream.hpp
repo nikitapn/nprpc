@@ -10,11 +10,16 @@
 
 namespace nprpc {
 
+/// Both directions of a `bidi_stream` method: read what the other side
+/// sends, write what you send. Move-only.
 template <typename TIn, typename TOut>
 struct BidiStream {
+  /// Incoming items.
   StreamReader<TIn> reader;
+  /// Outgoing items.
   StreamWriter<TOut> writer;
 
+  /// Pairs a reader and a writer for one stream.
   BidiStream(StreamReader<TIn>&& in_reader, StreamWriter<TOut>&& out_writer)
       : reader(std::move(in_reader))
       , writer(std::move(out_writer))

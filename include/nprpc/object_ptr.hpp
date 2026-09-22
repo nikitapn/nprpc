@@ -8,6 +8,12 @@
 
 namespace nprpc {
 
+/// Owning handle to a proxy (`Object` or a generated subclass), like a
+/// `shared_ptr` whose count lives in the object: copies call `add_ref()`,
+/// destruction and `reset()` call `release()`.
+///
+/// Constructing from a raw pointer adopts a reference the caller already
+/// holds; it does not add one.
 template <typename T> class ObjectPtr
 {
   T* obj_;
@@ -29,27 +35,32 @@ template <typename T> class ObjectPtr
   }
 
 public:
+  /// An empty handle.
   ObjectPtr() noexcept
       : obj_{nullptr}
   {
   }
 
+  /// Shares `other`'s object, adding a reference.
   ObjectPtr(const ObjectPtr<T>& other) noexcept
       : obj_{other.obj_}
   {
     safe_add_ref();
   }
 
+  /// Adopts `obj` and the reference the caller holds on it.
   explicit ObjectPtr(T* obj) noexcept
       : obj_{obj}
   {
   }
 
+  /// Takes `other`'s object, leaving `other` empty.
   ObjectPtr(ObjectPtr<T>&& other) noexcept
       : obj_{std::exchange(other.obj_, nullptr)}
   {
   }
 
+  /// Shares `other`'s object, adding a reference.
   ObjectPtr<T>& operator=(const ObjectPtr<T>& other) noexcept
   {
     obj_ = other.obj_;
@@ -57,18 +68,22 @@ public:
     return *this;
   }
 
+  /// Takes `other`'s object, leaving `other` empty.
   ObjectPtr<T>& operator=(ObjectPtr<T>&& other) noexcept
   {
     obj_ = std::exchange(other.obj_, nullptr);
     return *this;
   }
 
+  /// Releases the current object, if any, and adopts `obj`.
   void reset(T* obj = nullptr) noexcept
   {
     safe_release();
     obj_ = obj;
   }
 
+  /// Deletes the current proxy without releasing it, e.g. after the
+  /// runtime has shut down, and adopts `obj`.
   void force_reset(T* obj = nullptr) noexcept
   {
     if (obj_)
@@ -76,10 +91,14 @@ public:
     obj_ = obj;
   }
 
+  /// Calls a method on the object.
   T* operator->() noexcept { return obj_; }
+  /// Whether the handle holds an object.
   operator bool() const noexcept { return !(obj_ == nullptr); }
 
+  /// The raw pointer, still owned by this handle.
   T* get() noexcept { return obj_; }
+  /// The stored pointer itself, for out-parameters that fill it in.
   T*& get_address_of() noexcept { return obj_; }
 
   ~ObjectPtr() { reset(nullptr); }

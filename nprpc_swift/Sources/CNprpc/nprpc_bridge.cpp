@@ -365,13 +365,13 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.shm_ingress_channel = config->shm_ingress_channel;
 
         // Build Rpc using the provided config
-        class RpcSwiftBuilder : public nprpc::impl::RpcBuilderBase {
+        class RpcSwiftBuilder : public nprpc::RpcBuilderBase {
         public:
             explicit RpcSwiftBuilder(std::shared_ptr<nprpc::impl::BuildConfig> cfg)
-                : nprpc::impl::RpcBuilderBase(std::move(cfg)) {}
+                : nprpc::RpcBuilderBase(std::move(cfg)) {}
 
             nprpc::Rpc* build() {
-                return nprpc::impl::RpcBuilderBase::build();
+                return nprpc::RpcBuilderBase::build();
             }
         };
 

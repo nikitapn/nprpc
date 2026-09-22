@@ -34,7 +34,7 @@ void log_build_info_once()
 } // namespace
 
 NPRPC_API RpcBuilder::RpcBuilder()
-    : impl::RpcBuilderBase(std::make_shared<impl::BuildConfig>())
+    : RpcBuilderBase(std::make_shared<impl::BuildConfig>())
 {
   log_build_info_once();
 

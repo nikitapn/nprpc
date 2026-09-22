@@ -199,10 +199,13 @@ NPRPC_API boost::asio::io_context& get_io_context() {
 }
 } // namespace nprpc
 
-namespace nprpc::impl {
+namespace nprpc {
 
 NPRPC_API Rpc* RpcBuilderBase::build()
 {
+  // The builders are public API in nprpc; the runtime they start is impl.
+  using namespace impl;
+
   if (impl::g_rpc)
     throw Exception("NPRPC has been previously initialized");
 
@@ -380,6 +383,10 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   impl::g_rpc = new impl::RpcImpl();
   return impl::g_rpc;
 }
+
+} // namespace nprpc
+
+namespace nprpc::impl {
 
 Poa* RpcImpl::create_poa_impl(uint32_t objects_max,
                               PoaPolicy::Lifespan lifespan,

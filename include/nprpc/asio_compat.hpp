@@ -40,6 +40,14 @@ namespace nprpc {
 // as_awaitable — bridges nprpc::Task<T> into boost::asio::awaitable<void>
 // ---------------------------------------------------------------------------
 
+/// Wraps a `Task` so it can be awaited inside a Boost.Asio coroutine:
+///
+/// ```cpp
+/// co_await nprpc::as_awaitable(obj->SomeRpcAsync());
+/// ```
+///
+/// Completion resumes on the awaiting coroutine's executor. The task's value
+/// is discarded; failure is rethrown.
 template<typename T>
 auto as_awaitable(Task<T> task) {
   return boost::asio::async_initiate<
@@ -101,6 +109,18 @@ boost::asio::awaitable<void> spawn_task_impl(Factory factory) {
 }
 } // namespace detail
 
+/// Runs `factory()`, which returns `boost::asio::awaitable<void>`, on `ioc`
+/// without waiting for it:
+///
+/// ```cpp
+/// nprpc::spawn_task(nprpc::get_io_context(),
+///     [obj]() -> boost::asio::awaitable<void> {
+///         co_await nprpc::as_awaitable(obj->SetValueAsync(42));
+///     });
+/// ```
+///
+/// The factory, and so the lambda's captures, stay alive until the coroutine
+/// finishes.
 template<typename Factory>
 void spawn_task(boost::asio::io_context& ioc, Factory factory) {
   boost::asio::co_spawn(ioc,

@@ -16,19 +16,30 @@ namespace nprpc {
 /// already-split halves of `target`, so a handler can switch on the path
 /// without re-parsing.
 struct PageRequest {
-  std::string method;         // "GET", "HEAD", "POST"
-  std::string target;         // "/blog?page=2"
-  std::string path;           // "/blog"
-  std::string query;          // "page=2" (no leading '?')
+  /// "GET", "HEAD" or "POST".
+  std::string method;
+  /// Path and query as sent: "/blog?page=2".
+  std::string target;
+  /// "/blog"
+  std::string path;
+  /// "page=2" (no leading '?')
+  std::string query;
+  /// Request headers, keyed by lowercase name.
   std::map<std::string, std::string> headers;
-  std::string body;           // empty for GET/HEAD
-  std::string client_address; // peer IP, empty if unavailable
+  /// Empty for GET/HEAD.
+  std::string body;
+  /// Peer IP; empty if unavailable.
+  std::string client_address;
 };
 
 /// The application's answer for a PageRequest.
 struct PageResponse {
+  /// HTTP status code.
   unsigned status = 200;
+  /// Response headers. Content-Type defaults to HTML; Content-Length is
+  /// set by the server.
   std::map<std::string, std::string> headers;
+  /// The response body.
   std::string body;
 };
 

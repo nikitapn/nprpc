@@ -60,18 +60,23 @@ template <typename T> struct wrapper1<T, std::true_type> {
 };
 } // namespace detail
 
+/// Uniform `->` access to a value or a pointer to one; used by generated
+/// code to accept both containers of values and containers of pointers.
 template <typename T> auto make_wrapper1(T& t)
 {
   return detail::wrapper1<T, typename detail::is_raw_or_smart_pointer<T>::type>(
       t);
 }
 
+/// Const overload of `make_wrapper1`.
 template <typename T> auto make_wrapper1(const T& t)
 {
   return detail::wrapper1<
       const T, typename detail::is_raw_or_smart_pointer<const T>::type>(t);
 }
 
+/// A sized forward range; generated helpers accept any container that
+/// satisfies it.
 template <typename T>
 concept IterableCollection = requires(T a) {
   typename T::iterator;

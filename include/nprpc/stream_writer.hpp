@@ -21,14 +21,30 @@ template <typename T>
 
 namespace nprpc {
 
-// Typed stream writer with coroutine support
+/// The sending end of a stream of `T`. It works in two ways:
+///
+/// - **As a coroutine**, for a servant's `server_stream` method: `co_yield`
+///   each item and `co_return` when done. The runtime pulls items as the
+///   reader grants credits, so a slow reader slows the producer down.
+///
+///   ```cpp
+///   nprpc::StreamWriter<Post> feed(uint32_t limit) override {
+///     for (auto& post : latest(limit))
+///       co_yield post;
+///   }
+///   ```
+///
+/// - **Pushed**, for the writer half of a client or bidi stream: call
+///   `write()` per item, then `close()` (or `abort()` on failure).
 template <typename T>
 class StreamWriter : public StreamWriterBase
 {
 public:
   struct promise_type;
+  /// The coroutine handle type.
   using handle_type = std::coroutine_handle<promise_type>;
 
+  /// Coroutine machinery; not called directly.
   struct promise_type {
     T current_value_;
     bool has_value_ = false;
@@ -67,11 +83,14 @@ public:
     void unhandled_exception() { exception_ = std::current_exception(); }
   };
 
+  /// Adopts a coroutine; used by `promise_type`.
   explicit StreamWriter(handle_type h)
       : coro_(h)
   {
   }
 
+  /// A pushed writer for stream `stream_id` on `session`; created by
+  /// generated code.
   StreamWriter(SessionContext& session, uint64_t stream_id)
     : client_manager_(session.stream_manager)
     , client_stream_id_(stream_id)
@@ -79,6 +98,7 @@ public:
   {
   }
 
+  /// Takes over `other`'s stream.
   StreamWriter(StreamWriter&& other) noexcept
       : coro_(std::exchange(other.coro_, {}))
       , client_manager_(std::exchange(other.client_manager_, nullptr))
@@ -88,23 +108,25 @@ public:
   {
   }
 
+  /// Destroys a coroutine writer's frame.
   ~StreamWriter() override
   {
     if (coro_)
       coro_.destroy();
   }
 
-  // Probe init-time exceptions for server streams with raises(...).
-  //
-  // StreamWriter uses suspend_always, so constructing the coroutine never
-  // runs the body.  Servants that throw before the first co_yield would
-  // otherwise only fail after StreamInit Success was already sent.
-  //
-  // Resumes once (or until first yield / completion).  Rethrows any
-  // exception stored by unhandled_exception.  If the body yields a value,
-  // it is buffered in the promise for the first real resume() after the
-  // Success reply.  If the body completes empty, a deferred completion is
-  // sent on the first resume().
+  /// Probe init-time exceptions for server streams with raises(...); called
+  /// by the runtime.
+  ///
+  /// StreamWriter uses suspend_always, so constructing the coroutine never
+  /// runs the body. Servants that throw before the first co_yield would
+  /// otherwise only fail after StreamInit Success was already sent.
+  ///
+  /// Resumes once (or until first yield / completion). Rethrows any
+  /// exception stored by unhandled_exception. If the body yields a value,
+  /// it is buffered in the promise for the first real resume() after the
+  /// Success reply. If the body completes empty, a deferred completion is
+  /// sent on the first resume().
   void probe_init()
   {
     if (!coro_ || probed_)
@@ -124,7 +146,8 @@ public:
     // else: suspended at first co_yield with has_value_ possibly set.
   }
 
-  // Resume execution (called by StreamManager when ready to send)
+  /// Runs the coroutine to its next item and sends it; called by the runtime
+  /// when the reader has credits.
   void resume() override
   {
     if (!coro_)
@@ -185,6 +208,7 @@ public:
     }
   }
 
+  /// Whether the stream has finished.
   bool is_done() const override
   {
     // Need one more resume() to emit the empty-stream completion.
@@ -195,6 +219,8 @@ public:
     return client_closed_;
   }
 
+  /// Stops the stream: destroys an unfinished coroutine, or tells the reader
+  /// a pushed stream was cancelled.
   void cancel() override
   {
     if (coro_ && !coro_.done()) {
@@ -210,6 +236,7 @@ public:
     }
   }
 
+  /// Attaches a coroutine writer to its stream; called by the runtime.
   void set_manager(impl::StreamManager* manager, uint64_t stream_id)
   {
     if (coro_) {
@@ -241,11 +268,13 @@ public:
     return false;
   }
 
+  /// Writes one element; see the `const T&` overload.
   bool write(T&& value)
   {
     return write(static_cast<const T&>(value));
   }
 
+  /// Ends a pushed stream normally. Later writes are refused.
   void close()
   {
     if (!client_manager_ || client_closed_)
@@ -254,6 +283,7 @@ public:
     client_closed_ = true;
   }
 
+  /// Ends a pushed stream with an error; the reader rethrows it.
   void abort(uint32_t error_code = 1)
   {
     if (!client_manager_ || client_closed_)

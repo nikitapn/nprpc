@@ -39,6 +39,14 @@ NPRPC_API void abort_zero_copy_reservation(void* channel, uint64_t slot_idx);
 NPRPC_API void rpc_call(const EndPoint& endpoint, flat_buffer& buffer, uint32_t timeout_ms);
 } // namespace impl
 
+// Forward declaration for ADL
+// class flat_buffer;
+
+// Free function declaration for Boost.Beast read_size ADL lookup
+// Must be declared before any Beast headers that might instantiate
+// has_read_size_helper std::size_t read_size_helper(flat_buffer& buffer,
+// std::size_t max_size) noexcept;
+
 /**
  * @brief A flat buffer that can operate in two modes:
  *        1. Owned mode: manages its own heap-allocated memory (like
@@ -64,19 +72,12 @@ NPRPC_API void rpc_call(const EndPoint& endpoint, flat_buffer& buffer, uint32_t 
  * ^                  ^                  ^
  * view_base_        view_base_+size_   view_base_+max_size_
  */
-
-// Forward declaration for ADL
-// class flat_buffer;
-
-// Free function declaration for Boost.Beast read_size ADL lookup
-// Must be declared before any Beast headers that might instantiate
-// has_read_size_helper std::size_t read_size_helper(flat_buffer& buffer,
-// std::size_t max_size) noexcept;
-
 class flat_buffer
 {
 public:
+  /// Readable region, as Boost.Asio sees it.
   using const_buffers_type = boost::asio::const_buffer;
+  /// Writable region, as Boost.Asio sees it.
   using mutable_buffers_type = boost::asio::mutable_buffer;
 
 private:
@@ -623,6 +624,7 @@ public:
     return buffer_ + in_;
   }
 
+  /// Get raw pointer to data (for compatibility with existing code).
   const std::uint8_t* data_ptr() const noexcept
   {
     if (is_view()) {
@@ -700,11 +702,14 @@ public:
     swap(a.has_read_view_, b.has_read_view_);
   }
 
+  /// Capacity an owned buffer starts with: 1 KiB.
   static constexpr std::size_t default_initial_size() noexcept { return 1024; }
 
   friend std::size_t read_size_helper(nprpc::flat_buffer& buf, std::size_t max_size);
 };
 
+/// How much Boost.Beast should read into `buf` at once: at least 64 KiB,
+/// capped by `max_size`.
 inline std::size_t read_size_helper(nprpc::flat_buffer& buf, std::size_t max_size) {
     // Request at least 64KB per read, up to available capacity
     return std::min(max_size, std::max<std::size_t>(65536, buf.capacity() - buf.size()));

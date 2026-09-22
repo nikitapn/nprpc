@@ -27,16 +27,33 @@ T deserialize(::nprpc::flat_buffer& buf);
 
 namespace nprpc {
 
+/// The receiving end of a stream of `T`: what a proxy's `server_stream`
+/// method returns, and what a servant's `client_stream` method receives.
+///
+/// Read it with a range-for (blocking), `read_next()` (blocking), or
+/// `co_await` in a coroutine:
+///
+/// ```cpp
+/// while (auto item = co_await reader) {
+///   use(*item);
+/// }
+/// ```
+///
+/// Flow control is automatic: the reader grants the producer more credits
+/// as it consumes. Destroying the reader cancels an unfinished stream.
 template <typename T>
 class StreamReader : public StreamReaderBase
 {
 public:
-  // producer_window is the credit pool the remote producer is working with:
-  // - client-side readers advertise kDefaultReaderWindow via
-  //   StreamInit.initial_credits, so stubs pass that value here;
-  // - server-side readers (client/bidi uploads) have no advertisement
-  //   channel, so the producer sits on the legacy kInitialWindowSize —
-  //   the default keeps the grant threshold below that window.
+  /// Created by generated code.
+  ///
+  /// `producer_window` is the credit pool the remote producer is working
+  /// with:
+  /// - client-side readers advertise kDefaultReaderWindow via
+  ///   StreamInit.initial_credits, so stubs pass that value here;
+  /// - server-side readers (client/bidi uploads) have no advertisement
+  ///   channel, so the producer sits on the legacy kInitialWindowSize;
+  ///   the default keeps the grant threshold below that window.
   StreamReader(SessionContext& session, uint64_t stream_id,
                uint32_t producer_window =
                    static_cast<uint32_t>(impl::StreamManager::kInitialWindowSize))
@@ -50,7 +67,7 @@ public:
     }
   }
 
-  // Move constructor - re-register with new 'this' pointer
+  /// Takes over `other`'s stream; `other` no longer reads it.
   StreamReader(StreamReader&& other) noexcept
       : session_(other.session_)
       , stream_id_(other.stream_id_)
@@ -76,14 +93,19 @@ public:
   StreamReader& operator=(const StreamReader&) = delete;
   StreamReader& operator=(StreamReader&&) = delete;
 
+  /// Cancels the stream if it has not finished.
   ~StreamReader() override { cancel(); }
 
-  // Async iterator support
+  /// Input iterator for range-for; each increment blocks for the next item.
   struct iterator {
+    /// The reader being iterated.
     StreamReader* reader_;
+    /// The item `operator*` returns.
     std::optional<T> current_;
+    /// Whether the stream is exhausted.
     bool done_ = false;
 
+    /// Positioned at the first item, or at the end when `done`.
     iterator(StreamReader* reader, bool done)
         : reader_(reader)
         , done_(done)
@@ -93,11 +115,13 @@ public:
       }
     }
 
+    /// Whether one iterator is at the end and the other is not.
     bool operator!=(const iterator& other) const
     {
       return done_ != other.done_;
     }
 
+    /// Blocks for the next item.
     iterator& operator++()
     {
       current_ = reader_->read_next();
@@ -107,13 +131,17 @@ public:
       return *this;
     }
 
+    /// The current item.
     T& operator*() { return *current_; }
   };
 
+  /// Waits for the first item.
   iterator begin() { return iterator(this, false); }
+  /// The end of the stream.
   iterator end() { return iterator(this, true); }
 
-  // C++20 coroutine support: for co_await (auto& chunk : reader)
+  /// Waits without blocking a thread; yields the next item, or
+  /// `std::nullopt` once the stream is complete. Rethrows a stream error.
   auto operator co_await()
   {
     struct Awaitable {
@@ -131,7 +159,8 @@ public:
     return Awaitable{this};
   }
 
-  // Blocking read (for non-coroutine usage or fallback)
+  /// Blocks until the next item and returns it, or `std::nullopt` once the
+  /// stream is complete. Rethrows a stream error.
   std::optional<T> read_next()
   {
     std::unique_lock lock(mutex_);
@@ -192,7 +221,7 @@ public:
     }
   }
 
-  // Called by StreamManager when chunk arrives
+  /// Called by the runtime when a chunk arrives.
   void on_chunk_received(flat_buffer fb) override
   {
     std::coroutine_handle<> resume_handle;
@@ -213,6 +242,7 @@ public:
     }
   }
 
+  /// Called by the runtime when the producer finishes.
   void on_complete() override
   {
     std::coroutine_handle<> resume_handle;
@@ -233,6 +263,7 @@ public:
     }
   }
 
+  /// Called by the runtime when the producer fails; readers then throw.
   void on_error(uint32_t error_code, flat_buffer error_data) override
   {
     std::coroutine_handle<> resume_handle;
@@ -255,6 +286,7 @@ public:
     }
   }
 
+  /// Stops reading, and tells the producer to stop if it has not finished.
   void cancel()
   {
     bool should_send_cancel = false;
@@ -273,6 +305,7 @@ public:
     }
   }
 
+  /// Whether the producer finished and every item has been read.
   bool is_complete() const
   {
     std::lock_guard lock(mutex_);
