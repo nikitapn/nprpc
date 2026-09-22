@@ -92,6 +92,8 @@ private let _logDateFormatter: DateFormatter = {
 }()
 private let _logLock = NSLock()
 
+/// Prints `message` in the runtime's log format: timestamp, thread,
+/// `component` and a one-letter `level` ("I", "W", "E", ...).
 public func nplog(_ level: String = "I", _ message: String, component: String = "NPRPC") {
     _logLock.lock()
     let ts = _logDateFormatter.string(from: Date())

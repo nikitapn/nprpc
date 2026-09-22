@@ -46,6 +46,7 @@ open class NPRPCServant: @unchecked Sendable {
     /// Session context pointer for streaming operations (set during dispatch)
     public var sessionContext: UnsafeMutableRawPointer?
     
+    /// A servant not yet activated; see `Poa.activateObject`.
     public init() {}
     
     /// Override this to return the class name/ID of this servant

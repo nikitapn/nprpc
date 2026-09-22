@@ -108,7 +108,10 @@ if(TARGET npidl AND TARGET nprpc)
   endforeach()
   if(NPDOC_SWIFT_ARGS)
     # Generated/ is npidl output; the IDL entries document those types.
-    list(APPEND NPDOC_SWIFT_ARGS --swift-exclude nprpc_swift/Sources/NPRPC/Generated/)
+    # CNprpc is the C bridge, whose structs C++ interop re-exports into NPRPC.
+    list(APPEND NPDOC_SWIFT_ARGS
+         --swift-exclude nprpc_swift/Sources/NPRPC/Generated/
+         --swift-exclude nprpc_swift/Sources/CNprpc/)
   endif()
 
   add_custom_command(

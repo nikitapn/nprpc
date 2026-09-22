@@ -71,12 +71,15 @@ public struct PageRequest: Sendable {
 
 /// A handler's answer for a `PageRequest`.
 public struct PageResponse: Sendable {
+    /// HTTP status code.
     public var status: Int
     /// Response headers.  `content-type` defaults to `text/html; charset=utf-8`
     /// when left unset.
     public var headers: [String: String]
+    /// The response body.
     public var body: [UInt8]
 
+    /// A response with a raw body; see `init(html:status:headers:)` for text.
     public init(status: Int = 200,
                 headers: [String: String] = [:],
                 body: [UInt8]) {

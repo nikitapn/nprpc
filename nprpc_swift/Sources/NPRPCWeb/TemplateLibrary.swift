@@ -18,6 +18,10 @@ public final class TemplateLibrary: @unchecked Sendable {
     private let lock = NSLock()
     private var library: MustacheLibrary
 
+    /// Loads every `.mustache` file under `directory`. Throws `TemplateError`
+    /// if the directory is unreadable, holds no templates, or one fails to
+    /// parse.
+    ///
     /// - Parameters:
     ///   - directory: root of the template tree.  A template's name is its path
     ///     below this directory without the `.mustache` extension, so
@@ -90,6 +94,7 @@ public enum TemplateError: Error, CustomStringConvertible {
     /// A template has a syntax error; `name` is its path without the extension.
     case parseFailed(name: String, underlying: Error)
 
+    /// A message naming the directory or template at fault.
     public var description: String {
         switch self {
         case .directoryUnreadable(let dir):

@@ -12,6 +12,7 @@ import CNprpc
 /// every call.  Safe with async: `send_receive_async` moves storage into the
 /// session; the empty shell returns to the pool on deinit.
 public class FlatBuffer: @unchecked Sendable {
+    /// The C++ `flat_buffer` this wraps, for bridge calls.
     public var handle: UnsafeMutableRawPointer
     private var owned: Bool
     

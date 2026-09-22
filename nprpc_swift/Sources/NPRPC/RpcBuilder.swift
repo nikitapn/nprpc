@@ -222,6 +222,7 @@ extension RpcBuilderInternal {
 public final class RpcBuilder: RpcBuilderInternal {
     internal let config: BuildConfig
 
+    /// A builder with default settings.
     public init() {
         self.config = BuildConfig()
     }

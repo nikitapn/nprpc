@@ -8,23 +8,30 @@ import Foundation
 
 /// Configuration for NPRPC runtime
 public struct RpcConfiguration: Sendable {
-    /// Nameserver address
+    /// Nameserver host.
     public var nameserverHost: String
+    /// Nameserver port.
     public var nameserverPort: UInt16
 
-    /// Listen ports (0 = don't listen on this transport)
+    /// TCP listen port (0 = don't listen on this transport).
     public var listenTcpPort: UInt16
+    /// WebSocket listen port (0 = don't listen on this transport).
     public var listenWsPort: UInt16
+    /// HTTP listen port (0 = don't listen on this transport).
     public var listenHttpPort: UInt16
+    /// QUIC listen port (0 = don't listen on this transport).
     public var listenQuicPort: UInt16
 
-    /// HTTP/WebSocket settings
+    /// Directory served as static files over HTTP.
     public var httpRootDir: String
 
-    /// TLS/SSL settings
+    /// TLS certificate (PEM) for HTTPS and WSS.
     public var sslCertFile: String
+    /// TLS private key (PEM) for HTTPS and WSS.
     public var sslKeyFile: String
+    /// TLS certificate (PEM) for QUIC.
     public var quicCertFile: String
+    /// TLS private key (PEM) for QUIC.
     public var quicKeyFile: String
 
     /// Thread pool size for io_context
