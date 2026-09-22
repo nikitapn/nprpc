@@ -326,7 +326,9 @@ TEST(IdlExtract, DocJson)
  "params":[{"name":"slug","direction":"in","direct":false,"type":"string","doc":"Which."},
            {"name":"post","direction":"out","direct":true,"type":"Post","doc":""}],
  "raises":["NotFound"]}]},
-{"kind":"const","name":"Max","namespace":"blog","file":")" + idl + R"(","value":"10"}
+{"kind":"const","name":"Max","namespace":"blog","file":")" + idl + R"(","value":"10"},
+{"kind":"message","name":"Header","namespace":"blog.impl","file":")" + idl + R"(","line":30,"doc":"Wire.","fields":[]},
+{"kind":"enum","name":"Flags","namespace":"blog.detail.inner","file":")" + idl + R"(","line":40,"doc":"","underlying":"u32","items":[]}
 ]})");
 
   const auto symbols = extract_idl(json, dir.path);
@@ -356,6 +358,10 @@ TEST(IdlExtract, DocJson)
   ASSERT_TRUE(get->params);
   EXPECT_EQ((*get->params)[0].direction, "in");
   EXPECT_EQ((*get->params)[0].doc, "Which.");
+
+  // Internal namespaces are not public API.
+  EXPECT_EQ(find(symbols, "idl:blog.impl.Header"), nullptr);
+  EXPECT_EQ(find(symbols, "idl:blog.detail.inner.Flags"), nullptr);
 
   const auto* max = find(symbols, "idl:blog.Max");
   ASSERT_NE(max, nullptr);

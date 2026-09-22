@@ -3,7 +3,25 @@
 
 module nprpc.common;
 
+/// A process-wide directory of objects by name, served by `npnameserver`.
+///
+/// A server binds the objects it wants to publish; clients resolve them by
+/// name instead of passing object references around by hand.
 interface Nameserver {
-	void Bind(obj: object, name: string);
-	boolean Resolve(name: string, obj: out object);
+	/// Publishes `obj` under `name`, replacing whatever was bound there. The
+	/// nameserver holds a reference, so the object stays alive while bound.
+	void Bind(
+		/// The object to publish.
+		obj: object,
+		/// Lookup key.
+		name: string
+	);
+	/// Looks up the object bound under `name`.
+	/// Returns false, leaving `obj` invalid, if nothing is bound there.
+	boolean Resolve(
+		/// Lookup key.
+		name: string,
+		/// Receives the bound object.
+		obj: out object
+	);
 }

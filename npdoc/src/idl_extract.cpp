@@ -155,6 +155,18 @@ std::vector<Symbol> extract_idl(const fs::path& doc_json, const fs::path& root)
   const auto base = fs::weakly_canonical(root);
   std::vector<Symbol> out;
   for (const auto& d : in.declarations) {
+    // Same rule as for C++: `detail` and `impl` namespaces are internal (the
+    // wire protocol, object ids). Their docs still reach the generated code.
+    bool internal = false;
+    for (std::string_view ns = d.namespace_; !ns.empty();) {
+      const auto dot = ns.find('.');
+      const auto part = ns.substr(0, dot);
+      internal |= part == "detail" || part == "impl";
+      ns = dot == std::string_view::npos ? std::string_view{} : ns.substr(dot + 1);
+    }
+    if (internal)
+      continue;
+
     const auto qualified =
         d.namespace_.empty() ? d.name : d.namespace_ + "." + d.name;
     const auto file =

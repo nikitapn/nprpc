@@ -28,7 +28,8 @@ found. Otherwise CMake skips it with a status message.
   (C declarations re-exported through C++ interop), and `Generated/`, which
   is npidl output the IDL entries already cover.
 - **IDL:** every declaration npidl reports, with fields, enum items and
-  methods as children.
+  methods as children, except those in `detail` or `impl` namespaces (the wire
+  protocol). Their `///` docs still reach the generated code.
 
 Undocumented symbols are kept, so the site can list them and
 `--list-undocumented` can report them.

@@ -13,6 +13,7 @@ namespace npdoc {
 // Reads a `<file>.doc.json` written by `npidl --doc-json`. Messages,
 // exceptions, enums, interfaces and variants become symbols, with their
 // fields, items and methods as children; signatures are spelled in IDL.
+// Declarations in `detail` or `impl` namespaces are skipped.
 // `root` is the base for the `file` field. Throws std::runtime_error on
 // unreadable input.
 std::vector<Symbol> extract_idl(const std::filesystem::path& doc_json,

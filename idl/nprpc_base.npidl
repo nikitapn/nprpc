@@ -3,64 +3,98 @@
 
 module nprpc;
 
+/// Identifier of an object within its POA.
 alias oid_t     = u64;
+/// Index of a POA within its process.
 alias poa_idx_t = u16;
+/// Object flag bits; see `ObjectFlag`.
 alias oflags_t  = u16;
+/// 16-byte UUID, e.g. the machine an object was created on.
 alias uuid_t    = u8[16];
+/// Index of an interface within an object that implements several.
 alias ifs_idx_t = u8;
+/// Index of a method within an interface.
 alias fn_idx_t  = u8;
 
+/// The connection to the object's server failed or was closed while a call
+/// was in flight, or the message was too large to send.
 exception ExceptionCommFailure {
-  // Error message
+  /// Error message
   what: string;
 }
 
+/// No reply arrived within the call's timeout.
 exception ExceptionTimeout {}
+/// The server has no object with the requested id. It was released, or the
+/// server restarted since the reference was obtained.
 exception ExceptionObjectNotExist {}
+/// The object does not have the requested method, usually because client
+/// and server were built from different versions of the IDL.
 exception ExceptionUnknownFunctionIndex {}
+/// The server did not recognise the message kind.
 exception ExceptionUnknownMessageId {}
+/// Reserved: no current transport raises it.
 exception ExceptionUnsecuredObject {
+  /// Class of the object the call was addressed to.
   class_id: string;
 }
+/// The object only accepts calls from the session that activated it
+/// (`ObjectActivationFlags.privateSession`).
 exception ExceptionBadAccess {}
+/// A request or reply failed validation: a length or offset out of bounds,
+/// or an empty reply.
 exception ExceptionBadInput {}
 
+/// Verbosity of the runtime's log, from `off` to `trace`.
 enum LogLevel {
+  /// Nothing is logged.
   off,
+  /// Failures the runtime cannot recover from.
   critical,
+  /// Failed operations, such as a dropped connection.
   error,
+  /// Unexpected but handled conditions.
   warn,
+  /// Lifecycle events, such as a listener starting or the file watcher
+  /// invalidating a cached file.
   info,
+  /// Diagnostic detail.
   debug,
+  /// The most verbose level. Per-message tracing in sessions and streams
+  /// is compiled out by default (`NPRPC_ENABLE_SESSION_TRACE` and siblings).
   trace,
 };
 
+/// The transport an `EndPoint` refers to.
 enum EndPointType {
-  // Plain TCP (no encryption and compression)
+  /// Plain TCP (no encryption and compression)
   Tcp,
+  /// TCP reachable only from the session that activated the object.
   TcpPrivate,
-  // Plain WebSocket with no encryption and deflate compression
+  /// Plain WebSocket with no encryption and deflate compression
   WebSocket,
-  // Secured WebSocket with TLS encryption and deflate compression
+  /// Secured WebSocket with TLS encryption and deflate compression
   SecuredWebSocket,
-  // HTTP or HTTP/3
+  /// HTTP or HTTP/3
   Http,
-  // HTTPS or HTTPS/3
+  /// HTTPS or HTTPS/3
   SecuredHttp,
-  // Shared memory transport
+  /// Shared memory transport
   SharedMemory,
-  // QUIC transport with encryption and compression
+  /// QUIC transport with encryption and compression
   Quic,
-  // Browser WebTransport session on top of HTTPS and HTTP/3
+  /// Browser WebTransport session on top of HTTPS and HTTP/3
   WebTransport
 };
 
 namespace detail {
-// Bitmask controlling which transports an activated object accepts.
-// Note: in Swift the canonical form is the OptionSet in nprpc_swift/Sources/NPRPC/Poa.swift.
+/// Bitmask controlling which transports an activated object accepts.
+///
+/// In Swift the canonical form is the OptionSet in
+/// nprpc_swift/Sources/NPRPC/Poa.swift.
 enum ObjectActivationFlags : u32 {
   NONE              = 0,
-  // Restrict access to the session that activated the object
+  /// Restrict access to the session that activated the object
   privateSession    = 1,
   tcp               = 2,
   http              = 4,
@@ -70,194 +104,231 @@ enum ObjectActivationFlags : u32 {
   wt                = 64,
   shm               = 128,
   quic              = 256,
-  // All transport flags combined (excludes privateSession)
+  /// All transport flags combined (excludes privateSession)
   all               = 510,
 }
 
+/// An object's address within its process: POA plus object id.
 message ObjectIdLocal {
   poa_idx: poa_idx_t;
   object_id: oid_t;
 }
 
+/// Bits of `ObjectId.flags`.
 enum ObjectFlag {
-  // `false`  - transient object
-  // `true`   - persistent object
+  /// Set: persistent object. Clear: transient object.
   Persistent = 1,
 
-  // `true`  - only one client can access the object in the existing opened session
-  // (this is for objects that originate from a Browser or clients behind NAT)
-  // `false` - multiple clients can access the object by opening multiple sessions
+  /// Set: only one client can access the object, in the session that is
+  /// already open. For objects that originate from a browser or from a
+  /// client behind NAT.
+  /// Clear: multiple clients can access it by opening their own sessions.
   Ephemeral  = 2,
 
-  // Object may be reached from the browser over HTTP
+  /// Object may be reached from the browser over HTTP
   HttpUnsecured = 4,
 
-  // Object may be reached from the browser over HTTPS
+  /// Object may be reached from the browser over HTTPS
   HttpSecured = 8,
 
-  // Object may be reached from the browser over WS
+  /// Object may be reached from the browser over WS
   WebSocketUnsecured = 16,
 
-  // Object may be reached from the browser over WSS
+  /// Object may be reached from the browser over WSS
   WebSocketSecured = 32,
 
-  // Object may be reached from the browser over WT
+  /// Object may be reached from the browser over WT
   WebTransport = 64,
 }
 
+/// Everything a client needs to reach an object: which object it is, where
+/// it lives, and how to connect.
 [force_helpers]
 message ObjectId {
-  // Unique object identifier
+  /// Unique object identifier
   object_id: oid_t;
-  // POA index where the object resides
+  /// POA index where the object resides
   poa_idx: poa_idx_t;
-  // Object flags
+  /// Object flags; see `ObjectFlag`.
   flags: oflags_t;
-  // UUID of the machine where the object was created
+  /// UUID of the machine where the object was created
   origin: uuid_t;
-  // Class identifier of the object
+  /// Class identifier of the object
   class_id: string;
-  // List of urls available for connection separated by ';'
-  // Currently supported transports:
-  //   tcp://<hostname|ip>:<port>     -- simple TCP transport (no encryption, no compression)
-  //   web://<hostname|ip>:<port>/rpc -- includes HTTP/HTTPS, WebSocket and WebTransport over HTTP/3
-  //   mem://<uuid>                   -- shared memory transport (only for local clients)
-  //   quic://<hostname>:<port>       -- QUIC native transport
+  /// List of URLs available for connection, separated by `;`.
+  ///
+  /// Currently supported transports:
+  ///
+  /// - `tcp://<hostname|ip>:<port>`: plain TCP (no encryption, no compression)
+  /// - `web://<hostname|ip>:<port>/rpc`: HTTP/HTTPS, WebSocket and
+  ///   WebTransport over HTTP/3
+  /// - `mem://<uuid>`: shared memory (local clients only)
+  /// - `quic://<hostname>:<port>`: native QUIC
   urls: string;
 }
 
 } // namespace detail
 
 namespace impl {
+/// Kind of a wire message, carried in `Header.msg_id`.
 enum MessageId: u32 {
-  // A simple function call
+  /// A simple function call
   FunctionCall,
-  // Streaming initialization
+  /// Streaming initialization
   StreamInitialization,
-  // Streaming data chunk
+  /// Streaming data chunk
   StreamDataChunk,
-  // Streaming completion
+  /// Streaming completion
   StreamCompletion,
-  // Streaming error
+  /// Streaming error
   StreamError,
-  // Streaming cancellation
+  /// Streaming cancellation
   StreamCancellation,
-  // Streaming flow-control credit grant
+  /// Streaming flow-control credit grant
   StreamWindowUpdate,
-  // Function or Stream response
+  /// Function or Stream response
   BlockResponse,
-  // Increase reference count
+  /// Increase reference count
   AddReference,
-  // Decrease reference count
+  /// Decrease reference count
   ReleaseObject,
-  // Success of the operation
+  /// Success of the operation
   Success,
-  // Generic exception
+  /// Generic exception
   Exception,
-  // Poa does not exist
+  /// Poa does not exist
   Error_PoaNotExist,
-  // Object does not exist
+  /// Object does not exist
   Error_ObjectNotExist,
-  // Timeout waiting for response
+  /// Communication failure; the client raises `ExceptionCommFailure`
   Error_CommFailure,
-  // Unknown function index
+  /// Unknown function index
   Error_UnknownFunctionIdx,
-  // Unknown message id
+  /// Unknown message id
   Error_UnknownMessageId,
-  // Attempt to access secured object from a different session
+  /// Attempt to access secured object from a different session
   Error_BadAccess,
-  // Invalid input data (an array out of bounds, etc)
+  /// Invalid input data (an array out of bounds, etc)
   Error_BadInput,
-  // Unknown Exception (for which no specific error code is defined)
+  /// Unknown Exception (for which no specific error code is defined)
   Error_Unknown,
 }
 
+/// Whether a message is a request or the answer to one.
 enum MessageType: u32 {
   Request = 0,
   Answer = 1
 }
 
+/// Prefix of every wire message.
 message Header {
-  // Total message size, including this header
+  /// Total message size, including this header
   size: u32;
-  // Message identifier
+  /// Message identifier
   msg_id: MessageId;
-  // Message type (request/answer)
+  /// Message type (request/answer)
   msg_type: MessageType;
-  // Unique request identifier (for matching requests and responses)
+  /// Unique request identifier (for matching requests and responses)
   request_id: u32;
 }
 
+/// Follows `Header` in a `FunctionCall`: which method of which object.
 message CallHeader {
-  // Target POA index
+  /// Target POA index
   poa_idx: poa_idx_t;
-  // Target interface index
+  /// Target interface index
   interface_idx: ifs_idx_t;
-  // Target function index
+  /// Target function index
   function_idx: fn_idx_t;
-  // Target object identifier
+  /// Target object identifier
   object_id: oid_t;
 }
 
-// Stream control message types
+/// Stream control message types
 enum StreamMessageType : u8 {
-  STREAM_INIT = 0,      // Client initiates stream
-  STREAM_CHUNK = 1,     // Server sends data chunk
-  STREAM_COMPLETE = 2,  // Server signals end of stream
-  STREAM_ERROR = 3,     // Server reports error
-  STREAM_CANCEL = 4     // Client requests cancellation
+  /// Client initiates stream
+  STREAM_INIT = 0,
+  /// Server sends data chunk
+  STREAM_CHUNK = 1,
+  /// Server signals end of stream
+  STREAM_COMPLETE = 2,
+  /// Server reports error
+  STREAM_ERROR = 3,
+  /// Client requests cancellation
+  STREAM_CANCEL = 4
 }
 
+/// Which side of a stream sends data.
 enum StreamKind : u8 {
+  /// Server to client.
   Server = 0,
+  /// Client to server.
   Client = 1,
+  /// Both ways.
   Bidi = 2
 }
 
-// Stream initialization request (replaces normal RPC call for streaming methods)
+/// Stream initialization request (replaces normal RPC call for streaming methods)
 message StreamInit {
-  stream_id: u64;            // Unique stream identifier (client-generated)
-  poa_idx: poa_idx_t;        // Target POA
-  interface_idx: ifs_idx_t;  // Target interface
-  object_id: oid_t;          // Target object
-  func_idx: fn_idx_t;        // Method index
-  stream_kind: StreamKind;   // Direction of the stream
-  initial_credits: u32;      // Consumer's chunk window for producer->consumer
-                             // data (0 = legacy default of 8).  The producer
-                             // uses this as its starting credit pool; the
-                             // consumer grants batched refills as it consumes.
+  /// Unique stream identifier (client-generated)
+  stream_id: u64;
+  /// Target POA
+  poa_idx: poa_idx_t;
+  /// Target interface
+  interface_idx: ifs_idx_t;
+  /// Target object
+  object_id: oid_t;
+  /// Method index
+  func_idx: fn_idx_t;
+  /// Direction of the stream
+  stream_kind: StreamKind;
+  /// Consumer's chunk window for producer-to-consumer data (0 = legacy
+  /// default of 8). The producer uses this as its starting credit pool; the
+  /// consumer grants batched refills as it consumes.
+  initial_credits: u32;
 }
 
-// Data chunk from server to client
+/// Data chunk from server to client
 message StreamChunk {
-  stream_id: u64;       // Stream identifier
-  sequence: u64;        // Monotonic sequence number (for ordering)
-  data: vector<u8>;     // Data payload
+  /// Stream identifier
+  stream_id: u64;
+  /// Monotonic sequence number (for ordering)
+  sequence: u64;
+  /// Data payload
+  data: vector<u8>;
 }
 
-// Stream completion marker
+/// Stream completion marker
 message StreamComplete {
-  stream_id: u64;       // Stream identifier
-  final_sequence: u64;  // Last sequence number sent
+  /// Stream identifier
+  stream_id: u64;
+  /// Last sequence number sent
+  final_sequence: u64;
 }
 
-// Stream error
+/// Stream error
 message StreamError {
-  stream_id: u64;         // Stream identifier
-  error_code: u32;        // Error code (exception ID or system error)
-  error_data: vector<u8>; // Serialized exception data
+  /// Stream identifier
+  stream_id: u64;
+  /// Error code (exception ID or system error)
+  error_code: u32;
+  /// Serialized exception data
+  error_data: vector<u8>;
 }
 
-// Client cancellation request
+/// Client cancellation request
 message StreamCancel {
-  stream_id: u64;       // Stream identifier
+  /// Stream identifier
+  stream_id: u64;
 }
 
-// Flow-control credit grant (receiver → sender)
-// Sent by the stream consumer to allow the producer to send N more chunks.
+/// Flow-control credit grant, from receiver to sender: the stream consumer
+/// allows the producer to send N more chunks.
 message StreamWindowUpdate {
-  stream_id: u64;  // Stream identifier
-  credits: u32;    // Number of additional chunks the sender may transmit
+  /// Stream identifier
+  stream_id: u64;
+  /// Number of additional chunks the sender may transmit
+  credits: u32;
 }
 
 } // namespace impl
