@@ -2,12 +2,12 @@
 
 A development image with NPRPC's C++ library, Swift package and tools
 pre-built, so a Swift or C++ project can build against NPRPC without building
-it first. Use it for building; see the multi-stage example below for a small
-runtime image.
+it first. Use it for building; run applications on the
+[runtime image](DOCKER_RUNTIME_IMAGE.md).
 
 ## What's Included
 
-- **Swift 6.3.0** toolchain (the image is based on `swift:6.3.0`)
+- **Swift 6.3.3** toolchain (the image is based on `swift:6.3.3`)
 - **NPRPC C++ library** (`libnprpc.so`), headers and CMake config
 - **npidl** (IDL compiler) and **npnameserver**
 - **Swift package** `nprpc_swift`, pre-built: the `NPRPC` library, and
@@ -162,27 +162,21 @@ docker tag nprpc-dev:latest myregistry.com/nprpc-dev:latest
 docker push myregistry.com/nprpc-dev:latest
 ```
 
-## Example: Multi-Stage Production Build
+## Example: Production Image
+
+Build in this image, and run on the NPRPC runtime image, which holds only the
+libraries and is shared by every application on a host. See
+[DOCKER_RUNTIME_IMAGE.md](DOCKER_RUNTIME_IMAGE.md).
 
 ```dockerfile
-# Build stage - use NPRPC dev image
 FROM nprpc-dev:latest AS builder
-
 WORKDIR /app
 COPY . .
 RUN swift build -c release
 
-# Runtime stage - minimal image
-FROM swift:6.3.0-slim
-
-# Copy only runtime dependencies
-COPY --from=builder /opt/nprpc/lib/libnprpc.so* /usr/local/lib/
-COPY --from=builder /opt/boost/lib/libboost_*.so* /usr/local/lib/
-COPY --from=builder /app/.build/release/MyApp /usr/local/bin/
-
-RUN ldconfig
-
-CMD ["MyApp"]
+FROM nprpc-runtime:1.0.0-<revision>
+COPY --from=builder /app/.build/release/MyApp /app/MyApp
+CMD ["/app/MyApp"]
 ```
 
 ## Troubleshooting
@@ -209,7 +203,7 @@ Libraries are in `LD_LIBRARY_PATH`, but if running executables outside the image
 
 Run inside the container:
 ```bash
-swift --version        # Swift 6.3.0
+swift --version        # Swift 6.3.3
 npidl --version        # NPRPC IDL compiler
 cmake --version        # CMake
 ```

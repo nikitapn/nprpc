@@ -1,5 +1,5 @@
 #!/bin/bash
-docker run --rm -i swift:6.3.0 bash -c 'clang -v && cat<<EOF
+docker run --rm -i swift:6.3.3 bash -c 'clang -v && cat<<EOF
 #include <iostream>
 #include <functional>
 int main() {

@@ -260,6 +260,49 @@ build-dev-image image="nprpc-dev" tag="latest":
       .
     echo "✓ Image built: ${image}:${tag}"
 
+# Build nprpc-runtime from a dev image: the production base for NPRPC apps (see docs/DOCKER_RUNTIME_IMAGE.md)
+build-runtime-image dev_image="nprpc-dev:latest" image="nprpc-runtime":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    label() { docker image inspect "{{dev_image}}" --format "{{{{index .Config.Labels \"$1\"}}"; }
+    version="$(label org.opencontainers.image.version)"
+    revision="$(label org.opencontainers.image.revision)"
+    if [[ -z "$revision" || "$revision" == "unknown" || "$revision" == "<no value>" ]]; then
+      # Dev images built before the revision label: identify by image id.
+      revision="$(docker image inspect "{{dev_image}}" --format '{{{{.Id}}' | sed 's/^sha256://')"
+      short="img${revision:0:10}"
+    else
+      short="${revision:0:10}"
+    fi
+    tag="${version:-0}-${short}"
+    # Identifies the exact libnprpc apps must be built against (see Dockerfile.runtime).
+    lib_sha="$(docker run --rm --entrypoint sha256sum "{{dev_image}}" /opt/nprpc/lib/libnprpc.so.1.0.0 | cut -d' ' -f1)"
+    export DOCKER_BUILDKIT=1
+    echo "Building {{image}}:${tag} from {{dev_image}} …"
+    docker build -f Dockerfile.runtime \
+      --build-arg DEV_IMAGE="{{dev_image}}" \
+      --build-arg NPRPC_VERSION="${version}" \
+      --build-arg NPRPC_REVISION="${revision}" \
+      --build-arg NPRPC_LIB_SHA256="${lib_sha}" \
+      -t "{{image}}:${tag}" -t "{{image}}:latest" .
+    echo "✓ Image built: {{image}}:${tag} (also tagged latest)"
+    docker image ls "{{image}}"
+
+# Copy a runtime image to a Docker host over ssh, unless it already has it (`just ship-runtime-image debian@host nprpc-runtime:1.0.0-abc`)
+ship-runtime-image ssh image="nprpc-runtime:latest":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    id="$(docker image inspect "{{image}}" --format '{{{{.Id}}')"
+    tags="$(docker image inspect "{{image}}" --format '{{{{join .RepoTags " "}}')"
+    if ssh "{{ssh}}" "docker image inspect --format '{{{{.Id}}' {{image}} 2>/dev/null" | grep -qx "$id"; then
+      echo "{{ssh}} already has {{image}} ($id)"
+    else
+      echo "Sending {{image}} ($tags) to {{ssh}} …"
+      # docker save keeps the layer digests, so images built FROM it on the
+      # host share its layers.
+      docker save $tags | gzip | ssh "{{ssh}}" 'gunzip | docker load'
+    fi
+
 # ── profiling / misc ─────────────────────────────────────────────────────────
 
 # Profile LargeData10MB TCP benchmark with perf

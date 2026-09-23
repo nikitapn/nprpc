@@ -1,0 +1,58 @@
+# NPRPC runtime image: the base for production images of NPRPC applications.
+#
+# Holds only what a built application needs to run: libnprpc and libmsquic,
+# the Boost shared libraries, and the system packages they link against, on
+# the same Ubuntu and Swift runtime as the development image. Applications
+# are compiled in nprpc-dev (or an image derived from it) and copied on top:
+#
+#   FROM nprpc-runtime:1.0.0-<commit>
+#   COPY MyServer /app/MyServer
+#
+# Every image built FROM the same nprpc-runtime shares its layers, so the
+# libraries are stored once on the host and loaded into memory once for all
+# containers. Build it once per NPRPC version (`just build-runtime-image`)
+# and ship that image, rather than rebuilding it per application.
+#
+# See docs/DOCKER_RUNTIME_IMAGE.md.
+
+ARG DEV_IMAGE=nprpc-dev:latest
+
+# The libraries the applications were compiled against, without debug info
+# (libnprpc is ~180 MB with it, ~20 MB without) and without static archives.
+FROM ${DEV_IMAGE} AS libs
+USER root
+RUN set -e \
+ && mkdir -p /out/nprpc/lib /out/boost/lib \
+ && cp -a /opt/nprpc/lib/*.so* /out/nprpc/lib/ \
+ && cp -a /opt/boost/lib/*.so* /out/boost/lib/ \
+ && find /out -type f -name '*.so*' -exec strip --strip-debug {} + \
+ && chmod -R a+rX /out
+
+FROM swift:6.3.3-slim
+
+ARG NPRPC_VERSION=unknown
+ARG NPRPC_REVISION=unknown
+# sha256 of the dev image's (unstripped) libnprpc.so. An application built in
+# an image with a different libnprpc must not run on this one: the Swift
+# bridge is linked into the application, and a mismatched libnprpc misreads
+# its configuration. Deploy scripts compare this label with their builder.
+ARG NPRPC_LIB_SHA256=unknown
+LABEL org.opencontainers.image.title="NPRPC Runtime Image"
+LABEL org.opencontainers.image.description="Swift 6.3.3 runtime with libnprpc, for NPRPC applications"
+LABEL org.opencontainers.image.version="${NPRPC_VERSION}"
+LABEL org.opencontainers.image.revision="${NPRPC_REVISION}"
+LABEL io.nprpc.libnprpc.sha256="${NPRPC_LIB_SHA256}"
+
+# liburing2 and libatomic1 are what libnprpc and libmsquic need beyond the
+# base image; ca-certificates and tzdata are what almost every server wants.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    tzdata \
+    liburing2 \
+    libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=libs /out/nprpc /opt/nprpc
+COPY --from=libs /out/boost /opt/boost
+
+ENV LD_LIBRARY_PATH=/opt/nprpc/lib:/opt/boost/lib:/usr/lib/swift/linux

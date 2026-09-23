@@ -160,3 +160,6 @@ cmake -S . -B build -DNPRPC_BUILD_DEV_DOCKER=ON
 cmake --build build --target nprpc_dev_docker          # builds if inputs changed
 cmake --build build --target nprpc_dev_docker_rebuild  # forces a rebuild
 ```
+
+For production, `just build-runtime-image` makes a small base image from the
+dev image; see [DOCKER_RUNTIME_IMAGE.md](DOCKER_RUNTIME_IMAGE.md).

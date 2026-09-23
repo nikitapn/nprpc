@@ -4,7 +4,7 @@
 # ============================================================================
 # Stage 1: Build Boost
 # ============================================================================
-FROM swift:6.3.0 AS boost-builder
+FROM swift:6.3.3 AS boost-builder
 
 RUN apt-get update && apt-get install -y \
     wget \
@@ -45,7 +45,7 @@ RUN ./b2 --user-config=user-config.jam \
 # Stage 2: Build NPRPC C++
 # (BoringSSL is built in-tree from third_party/boringssl submodule)
 # ============================================================================
-FROM swift:6.3.0 AS nprpc-builder
+FROM swift:6.3.3 AS nprpc-builder
 
 RUN apt-get update && apt-get install -y \
     cmake \
@@ -139,11 +139,14 @@ RUN ar rcs /opt/nprpc/lib/libCNprpc.a \
 # ============================================================================
 # Stage 4: Final runtime image with all artifacts
 # ============================================================================
-FROM swift:6.3.0
+FROM swift:6.3.3
 
 LABEL org.opencontainers.image.title="NPRPC Development Image"
-LABEL org.opencontainers.image.description="Swift 6.3.0 with NPRPC C++ and Swift bindings"
+LABEL org.opencontainers.image.description="Swift 6.3.3 with NPRPC C++ and Swift bindings"
 LABEL org.opencontainers.image.version="1.0.0"
+# The NPRPC commit this image was built from; Dockerfile.runtime tags by it.
+ARG NPRPC_PROJECT_GIT_COMMIT=unknown
+LABEL org.opencontainers.image.revision="${NPRPC_PROJECT_GIT_COMMIT}"
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -200,7 +203,7 @@ Libs: -L/opt/nprpc/lib -L/opt/boost/lib -lCNprpc -lnprpc -lssl -lcrypto
 EOF
 
 # ---------------------------------------------------------------------------
-# swift:6.3.0 already ships an 'ubuntu' user at UID/GID 1000.
+# swift:6.3.3 already ships an 'ubuntu' user at UID/GID 1000.
 # Make /opt trees group-readable and give ubuntu ownership of /project so
 # `docker run --user $(id -u):$(id -g)` writes .build/ files as the host user.
 # ---------------------------------------------------------------------------
