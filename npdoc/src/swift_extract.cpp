@@ -165,6 +165,14 @@ std::vector<Symbol> extract_swift(const fs::path& symbol_graph,
         r.kind == "optionalRequirementOf")
       parent_of.emplace(r.source, r.target);
   }
+  // A protocol extension's default implementation is related only to the
+  // requirement it implements; it belongs where that requirement does.
+  for (const auto& r : graph.relationships) {
+    if (r.kind != "defaultImplementationOf")
+      continue;
+    if (auto req = parent_of.find(r.target); req != parent_of.end())
+      parent_of.emplace(r.source, req->second);
+  }
 
   std::vector<Symbol> out;
   for (const auto& s : graph.symbols) {

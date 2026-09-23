@@ -321,6 +321,37 @@ TEST(SwiftExtract, SymbolGraph)
   EXPECT_EQ((*method->params)[0].name, "port");
 }
 
+TEST(SwiftExtract, DefaultImplementationJoinsItsProtocol)
+{
+  TempDir dir;
+  const auto file = "file://" + (dir.path / "Sources/View.swift").string();
+  auto symbol = [&](std::string precise, std::string kind, std::string path) {
+    return R"({"kind": {"identifier": ")" + kind + R"(", "displayName": ""},
+     "identifier": {"precise": ")" + precise + R"(", "interfaceLanguage": "swift"},
+     "pathComponents": [)" + path + R"(], "names": {"title": "body"},
+     "declarationFragments": [], "accessLevel": "public",
+     "location": {"uri": ")" + file + R"(", "position": {"line": 1, "character": 0}}})";
+  };
+  // The requirement and its default share a path, so the default's id takes
+  // the tail of its mangled name.
+  const auto graph = dir.write("UI.symbols.json",
+    R"({"metadata": {"formatVersion": {"major": 0}}, "module": {"name": "UI", "platform": {}},
+  "symbols": [)" +
+    symbol("s:P", "swift.protocol", R"("View")") + "," +
+    symbol("s:Req", "swift.property", R"("View", "body")") + "," +
+    symbol("s:DefaultImpl", "swift.property", R"("View", "body")") + R"(],
+  "relationships": [
+    {"kind": "requirementOf", "source": "s:Req", "target": "s:P"},
+    {"kind": "defaultImplementationOf", "source": "s:DefaultImpl", "target": "s:Req"}
+  ]})");
+
+  const auto symbols = extract_swift(graph, dir.path, {});
+  ASSERT_EQ(symbols.size(), 3u);
+  const auto* impl = find(symbols, "swift:UI.View.body#aultImpl");
+  ASSERT_NE(impl, nullptr);
+  EXPECT_EQ(impl->parent, "swift:UI.View");
+}
+
 // --- IDL ------------------------------------------------------------------
 
 TEST(IdlExtract, DocJson)
