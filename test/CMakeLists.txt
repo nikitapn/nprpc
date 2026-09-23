@@ -57,6 +57,7 @@ target_compile_definitions(nprpc_test
   PRIVATE
     NPRPC_USE_GTEST
     NPRPC_BUILD_DIR="${CMAKE_BINARY_DIR}"
+    NPRPC_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
     $<$<BOOL:${NPRPC_ENABLE_QUIC}>:NPRPC_HAS_QUIC>
 )
 
@@ -77,6 +78,13 @@ target_include_directories(nprpc_server_test
 target_link_libraries(nprpc_server_test
   PRIVATE
     nprpc::nprpc
+)
+
+target_compile_definitions(nprpc_server_test
+  PRIVATE
+    NPRPC_BUILD_DIR="${CMAKE_BINARY_DIR}"
+    NPRPC_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+    $<$<BOOL:${NPRPC_ENABLE_QUIC}>:NPRPC_HAS_QUIC>
 )
 
 # Add JavaScript tests if enabled

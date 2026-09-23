@@ -186,7 +186,7 @@ cmake --build build
 ./build/client
 ```
 
-The runtime prints a few version lines when it starts, then:
+The client prints:
 
 ```
 2 + 3 = 5

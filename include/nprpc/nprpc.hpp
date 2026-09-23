@@ -14,6 +14,8 @@
 #include <optional>
 #include <stop_token>
 #include <string_view>
+#include <string>
+#include <vector>
 #include <utility>
 
 #include <boost/asio/io_context.hpp>
@@ -871,6 +873,13 @@ public:
       cfg_->http_allowed_origins.emplace_back(origin);
     }
 
+    return *this;
+  }
+
+  /// `allow_origins` for a list built at run time.
+  RpcBuilderHttp& allow_origins(std::vector<std::string> origins) noexcept
+  {
+    cfg_->http_allowed_origins = std::move(origins);
     return *this;
   }
 

@@ -528,9 +528,12 @@ endif()
 
 
 
-# MsQuic linking
+# MsQuic linking. Private: no public header includes msquic.h. libmsquic is
+# installed next to libnprpc, and $ORIGIN lets the installed library find it
+# in any prefix.
 if(NPRPC_ENABLE_QUIC)
-  target_link_libraries(nprpc PUBLIC msquic)
+  target_link_libraries(nprpc PRIVATE msquic)
+  set_target_properties(nprpc PROPERTIES INSTALL_RPATH "$ORIGIN")
   target_include_directories(nprpc PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/msquic/src/inc
   )
@@ -616,6 +619,10 @@ if(NPRPC_BUILD_TOOLS)
     PRIVATE
       nprpc::nprpc
     )
+  # Find the installed libnprpc in any prefix.
+  include(GNUInstallDirs)
+  set_target_properties(npnameserver PROPERTIES
+    INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 
   if(TARGET npidl)
     add_dependencies(npnameserver nprpc_stub_gen)

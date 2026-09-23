@@ -209,6 +209,10 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   if (impl::g_rpc)
     throw Exception("NPRPC has been previously initialized");
 
+  // Apply the level first, so it governs everything build() logs.
+  nprpc::impl::get_logger()->set_level(cfg_->log_level);
+  log_startup_info(*cfg_);
+
 #ifndef NPRPC_TCP_ENABLED
   if (cfg_->tcp_port != 0)
     throw Exception("TCP transport was not compiled in (NPRPC_ENABLE_TCP=OFF)");
@@ -318,8 +322,6 @@ NPRPC_API Rpc* RpcBuilderBase::build()
     ssl_context_client.set_verify_mode(net::ssl::verify_peer);
   }
 #endif // NPRPC_SSL_ENABLED
-
-  nprpc::impl::get_logger()->set_level(cfg_->log_level);
 
   // Copy builder config to global config
   g_cfg.hostname = cfg_->hostname;

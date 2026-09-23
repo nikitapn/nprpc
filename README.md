@@ -30,206 +30,141 @@ TLS for HTTPS/WSS is optional (`-DNPRPC_ENABLE_SSL=OFF`). A shared-memory-only b
 
 ## Quick Start
 
-### 1. Define Your Interface (IDL)
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) walks through this example
+step by step, including the CMake setup.
 
-```
-// calculator.npidl
+### 1. Define the interface
+
+```npidl
+// idl/calculator.npidl
 module example;
 
+/// Raised by Divide for a zero divisor.
 exception CalculationError {
-  message: string;
-  code: i32;
+  reason: string;
 }
 
 interface Calculator {
-  f64 Add(a: in f64, b: in f64);
-  f64 Subtract(a: in f64, b: in f64);
-  f64 Multiply(a: in f64, b: in f64);
-  f64 Divide(a: in f64, b: in f64) raises(CalculationError);
+  f64 Add(a: f64, b: f64);
+  f64 Divide(a: f64, b: f64) raises(CalculationError);
 }
 ```
 
-### 2. Generate Code
+`npidl` generates the C++ (`--cpp`), TypeScript (`--ts`) and Swift (`--swift`)
+code; from CMake, `npidl_generate_idl_files` does it at build time.
 
-```bash
-npidl calculator.npidl --cpp --ts        # C++ + TypeScript
-npidl calculator.npidl --cpp --ts --swift # add Swift
-```
-
-Generates `calculator.hpp` / `calculator.cpp` (C++) and `calculator.ts` (TypeScript).
-
-### 3. Implement the Server (C++)
+### 2. Implement the server (C++)
 
 ```cpp
+#include <fstream>
 #include <nprpc/nprpc.hpp>
 #include "calculator.hpp"
 
 class CalculatorImpl : public example::ICalculator_Servant {
 public:
   double Add(double a, double b) override { return a + b; }
-  double Subtract(double a, double b) override { return a - b; }
-  double Multiply(double a, double b) override { return a * b; }
   double Divide(double a, double b) override {
-    if (b == 0.0) throw example::CalculationError{"Division by zero", 1};
+    if (b == 0)
+      throw example::CalculationError("division by zero");
     return a / b;
   }
 };
 
 int main() {
-  // Build RPC — chain transport builders, then call build()
   auto* rpc = nprpc::RpcBuilder()
-    .set_log_level(nprpc::LogLevel::info)
-    .with_hostname("localhost")
-    .with_tcp(15000)
-    .with_http(8080)
-      .root_dir("./public")
-    .build();
+                  .with_hostname("localhost")
+                  .with_tcp(15100)
+                  .build();
 
-  // Create a POA
-  auto* poa = nprpc::PoaBuilder(rpc)
-    .with_max_objects(10)
-    .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
-    .build();
+  // Persistent: objects published at startup live until the server stops.
+  auto* poa = rpc->create_poa()
+                  .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                  .build();
+  auto oid = poa->activate_object(new CalculatorImpl(),
+                                  nprpc::ObjectActivationFlags::tcp);
 
-  // Activate object — specify which transports it accepts
-  CalculatorImpl calc;
-  auto oid = poa->activate_object(
-    &calc,
-    nprpc::ObjectActivationFlags::tcp  |
-    nprpc::ObjectActivationFlags::ws   |
-    nprpc::ObjectActivationFlags::http
-  );
-
-  // Publish for browser clients (writes <root_dir>/host.json)
-  rpc->add_to_host_json("calculator", oid);
-  rpc->produce_host_json();
-
-  // Or register with the nameserver
-  auto ns = rpc->get_nameserver("localhost:15001");
-  ns->Bind(oid, "calculator");
-
-  rpc->run(); // blocks; use rpc->start_thread_pool(n) for async
-  return 0;
+  std::ofstream("calculator.ref") << oid.to_string();
+  rpc->run();
 }
 ```
 
-### 4. Use the Client (TypeScript)
+### 3. Call it (C++)
 
-#### Via WebSocket (persistent connection)
+```cpp
+auto* rpc = nprpc::RpcBuilder().build();
+rpc->start_thread_pool(1);
+
+nprpc::ObjectPtr<example::Calculator> calc(
+    nprpc::narrow<example::Calculator>(nprpc::Object::from_string(ref)));
+
+calc->Add(2, 3);                 // 5
+try {
+  calc->Divide(1, 0);
+} catch (const example::CalculationError& e) {
+  // e.reason == "division by zero"
+}
+```
+
+### 4. Call it from a browser (TypeScript)
+
+Add `.with_http(8080).root_dir("www")` to the server's builder, activate with
+the `ws | http` flags, and publish the object in `host.json`:
+
+```cpp
+rpc->add_to_host_json("calculator", oid);
+rpc->produce_host_json();
+```
 
 ```typescript
 import * as NPRPC from 'nprpc';
-import * as example from './gen/calculator';
+import { Calculator } from './gen/calculator';
 
-const rpc = await NPRPC.init();
-const ns = NPRPC.get_nameserver('localhost:15001');
-const ref = NPRPC.make_ref<NPRPC.ObjectProxy>();
-await ns.Resolve('calculator', ref);
-
-const calc = NPRPC.narrow(ref.value, example.Calculator);
-console.log(await calc.Add(10, 20));   // 30
-
-try {
-  await calc.Divide(10, 0);
-} catch (e) {
-  if (e instanceof example.CalculationError)
-    console.error(`${e.code}: ${e.message}`);
-}
-```
-
-#### Via HTTP (stateless, from `host.json`)
-
-```typescript
-// host.json is served by the C++ server at /host.json
-const host = await fetch('/host.json').then(r => r.json());
-const calc = NPRPC.narrow(host.objects.calculator, example.Calculator);
-
-// .http sub-proxy returns values directly
-console.log(await calc.http.Add(10, 20));  // 30
+const rpc = await NPRPC.init();   // loads host.json
+const calc = NPRPC.narrow(rpc.host_info.objects.calculator, Calculator);
+console.log(await calc.Add(2, 3));   // 5
 ```
 
 ## Streaming RPC
 
-All three stream directions are supported at the IDL level and map to C++20 coroutines on the server side and range-based iteration / `AsyncThrowingStream` on clients.
+A method can send a sequence of values: server streams, client streams, and
+bidirectional streams, with per-stream flow control on every transport. See
+[docs/STREAMS.md](docs/STREAMS.md).
 
-### IDL Syntax
-
-```
-interface FileServer {
-  // Server → Client  (stream<T> is an alias for server_stream<T>)
-  stream<vector<u8>>       DownloadFile(filename: in string);
-
-  // Client → Server  (void reply after stream closes)
-  void UploadFile(filename: in string, data: client_stream<vector<u8>>);
-
-  // Bidirectional
-  bidi_stream<string, string> Chat(room: in string);
+```npidl
+interface Feed {
+  stream<Item> Watch(limit: u32);                    // server -> client
+  void Upload(tag: string, items: client_stream<Item>); // client -> server
+  bidi_stream<Item, Reply> Echo(prefix: string);     // both ways
 }
 ```
-
-Optional `in` parameters before the stream keyword are sent in the handshake phase; the server can raise exceptions there before any data flows.
-
-### C++ Server (coroutine)
 
 ```cpp
-// server_stream — return a StreamWriter<T> coroutine
-nprpc::StreamWriter<uint8_t>
-FileServerImpl::DownloadFile(std::string_view filename) {
-  auto data = read_file(filename);
-  for (uint8_t byte : data)
-    co_yield byte;
+// Caller
+for (auto& item : feed->Watch(10))
+  show(item);
+
+auto upload = feed->Upload("batch-1");   // the stream parameter is returned
+upload.write(item);
+upload.close();
+
+// Servant: stream methods are coroutines
+nprpc::StreamWriter<Item> Watch(uint32_t limit) override {
+  for (uint32_t i = 0; i < limit; ++i)
+    co_yield Item{i, "item"};
 }
 
-// client_stream — StreamReader<T> delivered as a parameter
-void FileServerImpl::UploadFile(
-    std::string_view filename,
-    nprpc::StreamReader<std::vector<uint8_t>>& data) {
-  std::ofstream out(std::string(filename), std::ios::binary);
-  for (auto& chunk : data)   // blocking range-based for
-    out.write((char*)chunk.data(), chunk.size());
+nprpc::Task<> Upload(std::string tag, nprpc::StreamReader<Item> items) override {
+  while (auto item = co_await items)
+    store(tag, *item);
 }
 ```
-
-### C++ Client
-
-```cpp
-// Server stream — range-based for loop
-auto reader = file_server->DownloadFile("large.bin");
-for (auto& chunk : reader)
-  process(chunk);
-
-// Client stream — write chunks then close
-auto writer = file_server->UploadFile("upload.bin");
-while (has_data())
-  writer.send(next_chunk());
-writer.close();
-```
-
-### TypeScript Client
 
 ```typescript
-// Server stream
-const stream = await fileServer.DownloadFile('large.bin');
-for await (const chunk of stream) {
-  process(chunk);
-}
-
-// Bidirectional
-const chat = await chatService.Chat('lobby');
-chat.send('Hello!');
-for await (const msg of chat) {
-  console.log(msg);
-}
+for await (const item of await feed.Watch(10)) show(item);
 ```
 
-### Swift Client
-
 ```swift
-// Server stream — AsyncThrowingStream
-let stream = try client.downloadFile(filename: "large.bin")
-for try await chunk in stream {
-    process(chunk)
-}
+for try await item in try feed.watch(limit: 10) { show(item) }
 ```
 
 ## WebTransport
@@ -251,7 +186,7 @@ auto* rpc = nprpc::RpcBuilder()
     .enable_http3()
   .build();
 
-auto oid = poa->activate_object(&servant,
+auto oid = poa->activate_object(new MyServant(),
     nprpc::ObjectActivationFlags::https);
 ```
 
@@ -273,7 +208,7 @@ auto* rpc = nprpc::RpcBuilder()
   .build();
 
 // Activate for secure WebSocket only
-poa->activate_object(&obj, nprpc::ObjectActivationFlags::wss);
+poa->activate_object(new MyServant(), nprpc::ObjectActivationFlags::wss);
 ```
 
 ```typescript
@@ -310,18 +245,28 @@ Notes:
 
 ### Nameserver
 
+`npnameserver` keeps a directory of objects by name. It listens on TCP port
+15000 and HTTP/WebSocket port 15001; `npnameserver --help` lists its options
+(hostname, TLS certificate, allowed browser origins).
+
 ```cpp
-// Server: bind by name
-auto ns = rpc->get_nameserver("localhost:15001");
-ns->Bind(calc_oid,  "calculator");
-ns->Bind(auth_oid,  "authorizator");
+// Server: bind by name. get_nameserver takes the host; the ports are fixed.
+auto ns = rpc->get_nameserver("127.0.0.1");   // ObjectPtr<common::Nameserver>
+ns->Bind(calc_oid, "calculator");
+
+// Client: resolve by name
+nprpc::Object* obj = nullptr;
+if (ns->Resolve("calculator", obj)) {
+  nprpc::ObjectPtr<example::Calculator> calc(nprpc::narrow<example::Calculator>(obj));
+}
 ```
 
 ```typescript
-// Client: resolve by name
+const ns = NPRPC.get_nameserver('localhost');
 const ref = NPRPC.make_ref<NPRPC.ObjectProxy>();
-if (await nameserver.Resolve('calculator', ref))
+if (await ns.Resolve('calculator', ref)) {
   const calc = NPRPC.narrow(ref.value, example.Calculator);
+}
 ```
 
 ### Deterministic Object IDs
@@ -336,7 +281,7 @@ auto* poa = nprpc::PoaBuilder(rpc)
   .build();
 
 constexpr nprpc::oid_t kCalcId = 0;
-poa->activate_object_with_id(kCalcId, &calc,
+poa->activate_object_with_id(kCalcId, new CalculatorImpl(),
     nprpc::ObjectActivationFlags::tcp | nprpc::ObjectActivationFlags::http);
 ```
 
@@ -350,18 +295,19 @@ auto* rpc = nprpc::RpcBuilder()
   .with_hostname("localhost")
   .build();
 
-poa->activate_object(&obj, nprpc::ObjectActivationFlags::shm);
+poa->activate_object(new MyServant(), nprpc::ObjectActivationFlags::shm);
 rpc->run();
 ```
 
 ```cpp
 // Client (same machine)
 auto* rpc = nprpc::RpcBuilder().build();
-auto ns = rpc->get_nameserver("localhost:15001");
-Object* obj;
+rpc->start_thread_pool(1);
+auto ns = rpc->get_nameserver("127.0.0.1");   // ObjectPtr<common::Nameserver>
+nprpc::Object* obj = nullptr;
 ns->Resolve("my_object", obj);
-auto* svc = nprpc::narrow<MyInterface>(obj);
-svc->MyMethod(data);
+nprpc::ObjectPtr<MyInterface> svc(nprpc::narrow<MyInterface>(obj));
+svc->MyMethod(data);   // picks shared memory when the server is local
 ```
 
 #### What a client costs
@@ -475,8 +421,8 @@ See [docs/HTTP_AUTH.md](docs/HTTP_AUTH.md) for the full API reference. Quick exa
 
 ```cpp
 // Inside any servant method — read / write httpOnly cookies
-auto token = nprpc::get_cookie("session");
-nprpc::set_cookie("session", new_token, {
+auto token = nprpc::http::get_cookie("session");
+nprpc::http::set_cookie("session", new_token, {
     .http_only = true, .secure = true, .same_site = "Strict", .max_age = 86400
 });
 ```
@@ -614,7 +560,7 @@ interface BlogService {
 
 ## Swift Bindings
 
-NPRPC provides native Swift bindings via Swift 6.2+ C++ interop. The full feature set is supported: servants, client proxies, exceptions, object references, async methods, and all three stream directions.
+NPRPC provides native Swift bindings via Swift 6.3+ C++ interop. The full feature set is supported: servants, client proxies, exceptions, object references, async methods, and all three stream directions.
 
 ### Building (Docker workflow)
 
@@ -664,54 +610,48 @@ npidl myservice.npidl --swift --output-dir nprpc_swift/Sources/NPRPC/Generated
 
 ### Implement a Servant
 
+For the calculator IDL from the Quick Start:
+
 ```swift
 import NPRPC
 
-class CalculatorImpl: CalculatorServant, @unchecked Sendable {
-    override func add(a: Float64, b: Float64) throws -> Float64 { a + b }
-    override func divide(a: Float64, b: Float64) throws -> Float64 {
-        guard b != 0 else { throw CalculationError(message: "div/0", code: 1) }
+final class CalculatorImpl: CalculatorServant, @unchecked Sendable {
+    override func add(a: Double, b: Double) -> Double { a + b }
+    override func divide(a: Double, b: Double) throws -> Double {
+        guard b != 0 else { throw CalculationError(reason: "division by zero") }
         return a / b
     }
 }
 ```
 
+A servant method is `throws` only when its IDL declares `raises`.
+
 ### Activate and Call
 
 ```swift
 let rpc = try RpcBuilder()
-    .setLogLevel(.info)
-    .setHostname("localhost")
+    .withHostname("localhost")
     .withTcp(15000)
-    .withHttp(15001)
-        .ssl(certFile: "cert.crt", keyFile: "key.key")
     .build()
+try rpc.startThreadPool(2)
 
-let poa = try rpc.createPoa(maxObjects: 100)
+let poa = try rpc.createPoa(maxObjects: 100)   // persistent by default
+let oid = try poa.activateObject(CalculatorImpl(), flags: [.tcp, .shm])
 
-let servant = CalculatorImpl()
-let oid = try poa.activateObject(servant, flags: [.tcp, .ws])
-
-let obj = NPRPCObject.fromObjectId(oid)!
-let client = narrow(obj, to: Calculator.self)!
-let result = try client.add(a: 10, b: 20)   // 30.0
+// Proxy methods are async.
+let calc = narrow(NPRPCObject.fromObjectId(oid)!, to: Calculator.self)!
+let sum = try await calc.add(a: 10, b: 20)   // 30.0
 ```
 
 ### Streaming (Swift)
 
 ```swift
-// Server stream
-let stream = try client.downloadFile(filename: "data.bin")
-for try await chunk in stream {
-    process(chunk)
+for try await item in try feed.watch(limit: 10) {
+    show(item)
 }
-
-// Async fire-and-forget
-await client.playerMoved(x: 1.0, y: 2.0, z: 0.0)
-
-// Async with out value
-let reply = try await client.method2(arg1: 42)
 ```
+
+See [docs/STREAMS.md](docs/STREAMS.md) for client and bidi streams.
 
 See [nprpc_swift/README.md](nprpc_swift/README.md) and [nprpc_swift/EXAMPLES.md](nprpc_swift/EXAMPLES.md) for more.
 
@@ -735,7 +675,6 @@ just test-all                         # C++ + JS + Docker Swift
 just run-cpp-tests -R NprpcTest.TestBasic   # filtered
 
 # Pre-merge: always run the full suite (C++ / JS / Swift) before merging to main.
-# See docs/BUILD.md "Pre-merge workflow".
 
 # Minimal build (library only)
 cmake -S . -B build
@@ -760,9 +699,13 @@ See [benchmark/README.md](benchmark/README.md) for methodology and results.
 
 | Topic | Document |
 |-------|----------|
+| First project, step by step | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) |
 | Full build options | [docs/BUILD.md](docs/BUILD.md) |
+| Object lifetimes and dispatch | [docs/POA.md](docs/POA.md) |
+| Streams | [docs/STREAMS.md](docs/STREAMS.md) |
 | Server-rendered pages | [docs/PAGE_RENDERING.md](docs/PAGE_RENDERING.md) |
 | Cookie auth API | [docs/HTTP_AUTH.md](docs/HTTP_AUTH.md) |
+| API reference site | `just docs-api && just docs-serve` ([docs/site/README.md](docs/site/README.md)) |
 | HTTP/3 + WebTransport debugging | [.github/skills/http3-webtransport-debugging/SKILL.md](.github/skills/http3-webtransport-debugging/SKILL.md) |
 | Nameserver source | [npnameserver/npnameserver.cpp](npnameserver/npnameserver.cpp) |
 | Swift integration tests | [nprpc_swift/Tests/NPRPCTests/IntegrationTest.swift](nprpc_swift/Tests/NPRPCTests/IntegrationTest.swift) |

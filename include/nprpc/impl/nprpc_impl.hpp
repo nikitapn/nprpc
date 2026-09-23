@@ -89,6 +89,10 @@ struct Config {
 
 NPRPC_API void fill_guid(std::array<std::uint8_t, 16>& guid) noexcept;
 
+// Logs the version, dependency commits and UUID; build() calls it once the
+// configured log level is in effect.
+void log_startup_info(const BuildConfig& cfg);
+
 class RpcImpl;
 class PoaImpl;
 
