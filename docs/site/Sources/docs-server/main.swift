@@ -12,6 +12,8 @@
 //   DOCS_TLS_CERT   with DOCS_TLS_KEY, serve HTTPS instead; SIGHUP re-reads
 //                   them, so a certbot renewal needs no restart
 //   DOCS_HTTP3=1    also serve HTTP/3 on the same port (needs TLS)
+//   DOCS_SHM_CHANNEL  take HTTP/3 through npquicrouter's shared-memory rings
+//                   /nprpc_<name>_c2s and _s2c instead of loopback UDP
 //   DOCS_TEMPLATE_RELOAD=1  re-read templates on every request
 //
 // SIGINT and SIGTERM stop the server.
@@ -48,6 +50,11 @@ do {
         http = http.ssl(certFile: env["DOCS_TLS_CERT"]!, keyFile: env["DOCS_TLS_KEY"]!)
         if env["DOCS_HTTP3"] == "1" {
             http = http.enableHttp3().http3Workers(1)
+            // One name for both rings: the router's route uses it as this
+            // site's ingress and egress channel alike.
+            if let channel = env["DOCS_SHM_CHANNEL"], !channel.isEmpty {
+                http = http.http3ShmChannels(egress: channel, ingress: channel)
+            }
         }
     }
     let rpc = try http
