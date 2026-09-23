@@ -196,7 +196,9 @@ Each UDP route that names a `shm_ingress_channel` gets its own independent ingre
 
 The egress ring is shared across all backends: backends write packets tagged with the real client `sockaddr`, so npquicrouter's egress reader can call `sendmsg()` directly without any lookup.
 
-All rings are created by npquicrouter worker 0 at startup (stale rings from a previous run are removed first). With multiple UDP workers, workers 1..N-1 open the existing ingress rings as additional MPSC producers (multiple worker threads → one backend consumer per ring). Only worker 0 drains the egress ring.
+All rings are created by npquicrouter worker 0 at startup (stale rings from a previous run are removed first).
+
+Removing a ring only unlinks its name: a backend that opened the old one keeps it mapped, reading a ring nothing writes and writing one nothing reads. NPRPC backends therefore check once a second which object each name points at and reattach when it changes, logging `SHM ingress '…' was recreated (npquicrouter restarted?) — reattached`. The router and its backends can be started and restarted in any order, and open QUIC connections survive a router restart. (Backends built against libnprpc before this change do not reattach: restart them after the router, or HTTP/3 goes silently dark while HTTPS keeps working.) With multiple UDP workers, workers 1..N-1 open the existing ingress rings as additional MPSC producers (multiple worker threads → one backend consumer per ring). Only worker 0 drains the egress ring.
 
 Egress frames carry a `gso_segment_size` field. When set, the egress reader issues `sendmsg()` with a `UDP_SEGMENT` cmsg, preserving the GSO batch assembled by the backend across the double-hop and avoiding per-packet syscall overhead.
 
@@ -275,6 +277,12 @@ After=network.target
 
 [Service]
 User=www-data
+# The SHM rings shared with HTTP/3 backends live in a directory of their own,
+# which is /dev/shm for this service and is mounted as /dev/shm into a backend
+# container. A directory, not the ring files: a file bind mount pins the object
+# it saw, and the rings are recreated every time this service starts.
+ExecStartPre=+/usr/bin/install -d -o www-data -g www-data -m 0755 /dev/shm/npquicrouter
+BindPaths=/dev/shm/npquicrouter:/dev/shm
 ExecStart=/usr/local/bin/npquicrouter /etc/npquicrouter/config.json
 Restart=on-failure
 RestartSec=5
@@ -282,6 +290,20 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 ```
+
+A backend in a container gets the rings by mounting the same directory as its
+`/dev/shm`:
+
+```bash
+docker run -v /dev/shm/npquicrouter:/dev/shm ...
+```
+
+Not the ring files one by one. A bind mount of a file is fixed to the object
+it named when the container started, the router recreates its rings each time
+it starts, and a backend holding the old ones hears nothing. Through a
+directory the backend sees the new rings and reattaches to them (see
+[SHM Fast Path](#shm-fast-path)), so the router and the backend can restart in
+either order.
 
 Create `/etc/npquicrouter/config.json` with your routing config, then:
 

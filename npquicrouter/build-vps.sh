@@ -43,6 +43,12 @@ After=network.target
 
 [Service]
 User=www-data
+# The SHM rings shared with HTTP/3 backends live in a directory of their own,
+# which is /dev/shm for this service and is mounted as /dev/shm into a backend
+# container. A directory, not the ring files: a file bind mount pins the object
+# it saw, and the rings are recreated every time this service starts.
+ExecStartPre=+/usr/bin/install -d -o www-data -g www-data -m 0755 /dev/shm/npquicrouter
+BindPaths=/dev/shm/npquicrouter:/dev/shm
 ExecStart=/usr/local/bin/npquicrouter /etc/npquicrouter/config.json
 Restart=on-failure
 RestartSec=5

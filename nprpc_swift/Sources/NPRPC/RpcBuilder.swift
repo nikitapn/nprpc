@@ -425,8 +425,12 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
     }
 
     /// Configure shared memory channels for npquicrouter integration.
-    /// - Parameter egressChannel:  Matches "http3_shm_channel" in npquicrouter's config.json.
-    /// - Parameter ingressChannel: Matches the route's "shm_channel" in npquicrouter's config.json.
+    ///
+    /// The router recreates its rings each time it starts. The server checks
+    /// once a second and reattaches, logging a warning, so the two can
+    /// restart in any order.
+    /// - Parameter egressChannel:  Matches "shm_egress_channel" in npquicrouter's config.json.
+    /// - Parameter ingressChannel: Matches the route's "shm_ingress_channel" in npquicrouter's config.json.
     @discardableResult
     public func http3ShmChannels(egress egressChannel: String,
                                  ingress ingressChannel: String) -> RpcBuilderHttp {

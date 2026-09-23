@@ -166,6 +166,19 @@ struct alignas(64) RingBufferHeader {
   }
 };
 
+// Which shared-memory object a ring is, as opposed to what it is called.
+//
+// A name is only a pointer: remove() unlinks it and a later create() points
+// it at a new object, while every process that had the old one mapped keeps
+// the old one — alive, readable, writable, and read or written by nobody
+// else.  Comparing identities is how a peer that did not do the recreating
+// finds out it happened.
+struct ShmSegmentId {
+  uint64_t dev = 0;
+  uint64_t ino = 0;
+  friend bool operator==(const ShmSegmentId&, const ShmSegmentId&) = default;
+};
+
 class LockFreeRingBuffer
 {
 public:
@@ -195,6 +208,15 @@ public:
 
   // Remove shared memory region (call when destroying channel)
   static void remove(const std::string& name);
+
+  // The object `name` points at right now, or nullopt if nothing is called
+  // that.  One shm_open and one fstat: cheap enough to poll once a second.
+  static std::optional<ShmSegmentId> segment_id_of(const std::string& name);
+
+  // The object this ring mapped, fixed when it was created or opened.
+  // Differs from segment_id_of(name()) once the name has been recreated.
+  const ShmSegmentId& segment_id() const noexcept { return segment_id_; }
+  const std::string& name() const noexcept { return name_; }
 
   ~LockFreeRingBuffer();
 
@@ -286,7 +308,8 @@ private:
                      uint8_t*          payload_region,
                      void*             mirror_base,
                      size_t            ring_window,
-                     bool              is_creator);
+                     bool              is_creator,
+                     ShmSegmentId      segment_id);
 
   // Calculate total shared memory size needed
   static size_t calculate_shm_size(size_t buffer_size);
@@ -308,6 +331,7 @@ private:
   void*             mirror_base_;    // Base address for munmap
   size_t            ring_window_;    // Size of each mapped window (page-aligned)
   bool              is_creator_;     // Should we remove shm on destruction?
+  ShmSegmentId      segment_id_;
 };
 
 // Helper: Generate unique names for shared memory regions

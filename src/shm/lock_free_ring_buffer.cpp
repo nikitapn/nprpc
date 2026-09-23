@@ -60,6 +60,14 @@ static size_t header_ring_bytes()
 // inside a try_ function.
 static constexpr int kCommitSpinYields = 1024;
 
+static ShmSegmentId segment_id_of_fd(int fd)
+{
+  struct stat st {};
+  if (fstat(fd, &st) != 0)
+    return {};
+  return {static_cast<uint64_t>(st.st_dev), static_cast<uint64_t>(st.st_ino)};
+}
+
 // Shared mmap setup used by both create() and open().
 static bool setup_mappings(int fd,
                            size_t page_size,
@@ -176,6 +184,7 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size, size_t m
     void*       mirror_base    = nullptr;
     bool ok = setup_mappings(fd, page_size, hdr_ring_sz, ring_window,
                              &slot_headers, &payload_region, &mirror_base);
+    const ShmSegmentId segment_id = segment_id_of_fd(fd);
     close(fd);
     if (!ok)
       throw std::runtime_error("setup_mappings failed");
@@ -190,7 +199,7 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size, size_t m
 
     return std::unique_ptr<LockFreeRingBuffer>(new LockFreeRingBuffer(
         name, std::move(shm), header, slot_headers, payload_region,
-        mirror_base, ring_window, true));
+        mirror_base, ring_window, true, segment_id));
 
   } catch (const boost::interprocess::interprocess_exception& e) {
     NPRPC_LOG_ERROR("Failed to create ring buffer '{}': {}", name, e.what());
@@ -253,6 +262,7 @@ LockFreeRingBuffer::open(const std::string& name)
     void*       mirror_base    = nullptr;
     bool ok = setup_mappings(fd, page_size, hdr_ring_sz, ring_window,
                              &slot_headers, &payload_region, &mirror_base);
+    const ShmSegmentId segment_id = segment_id_of_fd(fd);
     close(fd);
     if (!ok)
       throw std::runtime_error("setup_mappings failed");
@@ -263,12 +273,26 @@ LockFreeRingBuffer::open(const std::string& name)
 
     return std::unique_ptr<LockFreeRingBuffer>(new LockFreeRingBuffer(
         name, std::move(shm), header, slot_headers, payload_region,
-        mirror_base, ring_window, false));
+        mirror_base, ring_window, false, segment_id));
 
   } catch (const boost::interprocess::interprocess_exception& e) {
     NPRPC_LOG_ERROR("Failed to open ring buffer '{}': {}", name, e.what());
     throw;
   }
+}
+
+std::optional<ShmSegmentId>
+LockFreeRingBuffer::segment_id_of(const std::string& name)
+{
+  std::string posix_name = name;
+  if (posix_name.empty() || posix_name[0] != '/')
+    posix_name.insert(posix_name.begin(), '/');
+  const int fd = shm_open(posix_name.c_str(), O_RDONLY | O_CLOEXEC, 0);
+  if (fd == -1)
+    return std::nullopt;
+  const ShmSegmentId id = segment_id_of_fd(fd);
+  close(fd);
+  return id;
 }
 
 void LockFreeRingBuffer::remove(const std::string& name)
@@ -285,7 +309,8 @@ LockFreeRingBuffer::LockFreeRingBuffer(
     uint8_t*          payload_region,
     void*             mirror_base,
     size_t            ring_window,
-    bool              is_creator)
+    bool              is_creator,
+    ShmSegmentId      segment_id)
     : name_(name)
     , shm_(std::move(shm))
     , header_(header)
@@ -294,6 +319,7 @@ LockFreeRingBuffer::LockFreeRingBuffer(
     , mirror_base_(mirror_base)
     , ring_window_(ring_window)
     , is_creator_(is_creator)
+    , segment_id_(segment_id)
 {
 }
 

@@ -512,3 +512,41 @@ TEST(LockFreeRingBuffer, UncommittedSlotDoesNotHangReader)
   for (size_t i = 0; i < 100; ++i)
     ASSERT_EQ(static_cast<uint8_t>(buf[i]), 0xAB);
 }
+
+// npquicrouter recreates its rings on every start.  A backend that opened the
+// old ones keeps them mapped and hears nothing — and nothing about the
+// mapping itself says so.  segment_id_of(name) against the mapped ring's
+// segment_id() is what the HTTP/3 server polls to notice and reattach.
+TEST(LockFreeRingBuffer, SegmentIdTracksRecreatedName)
+{
+  const std::string name = "test_segment_recreate";
+  LockFreeRingBuffer::remove(name);
+
+  auto creator = LockFreeRingBuffer::create(name, 4096);
+  auto reader  = LockFreeRingBuffer::open(name);
+  ASSERT_EQ(creator->segment_id(), reader->segment_id());
+  ASSERT_EQ(LockFreeRingBuffer::segment_id_of(name), reader->segment_id());
+
+  // The router goes away (its destructor unlinks the name)...
+  creator.reset();
+  EXPECT_FALSE(LockFreeRingBuffer::segment_id_of(name).has_value());
+
+  // ...and a new one creates the ring again under the same name.
+  auto recreated = LockFreeRingBuffer::create(name, 4096);
+  const auto now = LockFreeRingBuffer::segment_id_of(name);
+  ASSERT_TRUE(now.has_value());
+  EXPECT_EQ(*now, recreated->segment_id());
+  EXPECT_NE(*now, reader->segment_id());
+
+  // The stale reader is exactly the failure: a write to the name's ring never
+  // reaches it.  Reopening by name is the cure.
+  const char msg[] = "after restart";
+  ASSERT_TRUE(recreated->try_write(msg, sizeof(msg)));
+  char buf[64] = {};
+  EXPECT_EQ(reader->try_read(buf, sizeof(buf)), 0u);
+
+  reader = LockFreeRingBuffer::open(name);
+  EXPECT_EQ(reader->segment_id(), *now);
+  ASSERT_EQ(reader->try_read(buf, sizeof(buf)), sizeof(msg));
+  EXPECT_STREQ(buf, msg);
+}

@@ -119,9 +119,19 @@ public:
       };
       const uint16_t http_port = parse_port(::getenv("NPRPC_BENCH_HTTP_PORT"), 22223);
       const uint16_t quic_port = parse_port(::getenv("NPRPC_BENCH_QUIC_PORT"), 22225);
+      // One worker needs no reuseport BPF program, and so no capabilities:
+      // the way to run this server from a shell that cannot setcap.
+      const uint16_t http3_workers =
+          parse_port(::getenv("NPRPC_BENCH_HTTP3_WORKERS"), 8);
+      // Warnings are how the HTTP/3 server reports SHM ring trouble (a ring
+      // npquicrouter recreated, one that is not there yet); error-only hides
+      // them, which is right for a benchmark and wrong for chasing those.
+      const auto log_level = ::getenv("NPRPC_BENCH_LOG_WARN")
+                                 ? nprpc::LogLevel::warn
+                                 : nprpc::LogLevel::error;
 
       auto builder = nprpc::RpcBuilder()
-                .set_log_level(nprpc::LogLevel::error)
+                .set_log_level(log_level)
                 .with_hostname("localhost")
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
                 .with_tcp(22222).with_epoll_if(use_epoll).with_uring_if(use_uring)
@@ -135,7 +145,7 @@ public:
                   .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
                        "/home/nikita/projects/nprpc/certs/out/localhost.key")
                   .enable_http3()
-                  .http3_workers(8)
+                  .http3_workers(http3_workers)
                   .max_websocket_message_size(12 * 1024 * 1024);
 
       const char* shm_ingress_env = ::getenv("NPRPC_BENCH_SHM_INGRESS");

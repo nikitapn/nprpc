@@ -674,10 +674,10 @@ struct BuildConfig {
   // shm_egress_channel — Http3Server writes GSO batches to /nprpc_<name>_s2c
   //   instead of calling sendmsg directly.  npquicrouter drains the ring and
   //   forwards as a single sendmsg(GSO) call, preserving kernel batching.
-  //   Matches "http3_shm_channel" in npquicrouter's config.json.
+  //   Matches "shm_egress_channel" in npquicrouter's config.json.
   // shm_ingress_channel — Http3Server reads incoming QUIC datagrams from
   //   /nprpc_<name>_c2s written by npquicrouter instead of recvmsg.
-  //   Matches "shm_channel" of the corresponding route entry in
+  //   Matches "shm_ingress_channel" of the corresponding route entry in
   //   npquicrouter's config.json.
   std::string shm_egress_channel;
   std::string shm_ingress_channel;
@@ -895,12 +895,21 @@ public:
   }
 
   /// Enable SHM channel offload via npquicrouter.
+  /// Exchange HTTP/3 datagrams with npquicrouter through its shared-memory
+  /// rings instead of loopback UDP.
+  ///
+  /// The router creates the rings and recreates them each time it starts.
+  /// The server follows: it checks once a second what the names point at and
+  /// reattaches, logging a warning, so the two can start and restart in any
+  /// order. Open QUIC connections survive a router restart.
+  ///
   /// @param egress_channel  Name used to open /nprpc_<name>_s2c — Http3Server
   ///   writes GSO batches there instead of calling sendmsg directly.
-  ///   Must match "http3_shm_channel" in npquicrouter's config.json.
+  ///   Must match "shm_egress_channel" in npquicrouter's config.json.
   /// @param ingress_channel Name used to open /nprpc_<name>_c2s — Http3Server
   ///   reads incoming QUIC datagrams from there instead of recvmsg.
-  ///   Must match the route's "shm_channel" in npquicrouter's config.json.
+  ///   Must match the route's "shm_ingress_channel" in npquicrouter's
+  ///   config.json.
   RpcBuilderHttp& shm_egress_channel(std::string_view egress_channel,
                                      std::string_view ingress_channel) noexcept
   {

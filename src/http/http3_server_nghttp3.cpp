@@ -1348,6 +1348,13 @@ public:
   // Connections already established keep their existing certificate.
   bool reload_certificates();
 
+  // Point egress at the ring npquicrouter's egress channel names now, if that
+  // is not the one already mapped.  Runs on ioc_, the only thread that writes
+  // egress_ring_, so the swap never lands under send_aggregated().  The
+  // runtime's SHM watcher posts it once a second with what the name
+  // currently resolves to; a no-op unless the router recreated the ring.
+  void reattach_egress(nprpc::impl::ShmSegmentId current);
+
   // Run `work` on ioc_ and wait for it to finish.
   //
   // stop() runs from outside the io_context, normally while this worker's
@@ -4368,28 +4375,21 @@ bool Http3Server::start()
   NPRPC_HTTP3_TRACE("Server listening on port {} (nghttp3/ngtcp2 backend)",
                     port_);
 
-  // Open SHM rings created by npquicrouter (if configured).
+  // Open the SHM egress ring created by npquicrouter (if configured).  One
+  // attempt: a router that is not up yet, or restarts later, is picked up by
+  // the runtime's SHM watcher (reattach_egress), so there is nothing to wait
+  // for here.
   if (!g_cfg.shm_egress_channel.empty()) {
     const auto egress_name =
         nprpc::impl::make_shm_name(g_cfg.shm_egress_channel, "s2c");
-    // Retry a few times — npquicrouter may start slightly after nprpc.
-    for (int attempt = 0; attempt < 50; ++attempt) {
-      try {
-        egress_ring_  = nprpc::impl::LockFreeRingBuffer::open(egress_name);
-        NPRPC_LOG_INFO("Http3Server[{}]: opened SHM egress '{}'",
-                       worker_id_, egress_name);
-        break;
-      } catch (...) {
-        if (attempt == 49) {
-          NPRPC_LOG_WARN(
-              "Http3Server[{}]: SHM egress ring '{}' not found after retries — "
-              "falling back to direct sendmsg",
-              worker_id_, egress_name);
-        } else {
-          struct timespec ts = {0, 100'000'000}; // 100 ms
-          nanosleep(&ts, nullptr);
-        }
-      }
+    try {
+      egress_ring_ = nprpc::impl::LockFreeRingBuffer::open(egress_name);
+      NPRPC_LOG_INFO("Http3Server[{}]: opened SHM egress '{}'",
+                     worker_id_, egress_name);
+    } catch (...) {
+      NPRPC_LOG_WARN("Http3Server[{}]: SHM egress ring '{}' not there yet — "
+                     "sending directly until npquicrouter creates it",
+                     worker_id_, egress_name);
     }
   }
 
@@ -4785,6 +4785,31 @@ void Http3Server::send_batch(PendingSendPacket** packets, size_t count)
     send_packet(packets[i]);
   }
 #endif
+}
+
+void Http3Server::reattach_egress(nprpc::impl::ShmSegmentId current)
+{
+  if (egress_ring_ && egress_ring_->segment_id() == current)
+    return;
+  const auto egress_name =
+      nprpc::impl::make_shm_name(g_cfg.shm_egress_channel, "s2c");
+  try {
+    auto ring = nprpc::impl::LockFreeRingBuffer::open(egress_name);
+    // A ring this worker already had means the router recreated it — the
+    // old one is still mapped here and read by nobody.  Say so: this is the
+    // case that used to black-hole HTTP/3 with nothing in any log.
+    if (egress_ring_)
+      NPRPC_LOG_WARN("Http3Server[{}]: SHM egress '{}' was recreated "
+                     "(npquicrouter restarted?) — reattached",
+                     worker_id_, egress_name);
+    else
+      NPRPC_LOG_INFO("Http3Server[{}]: opened SHM egress '{}'",
+                     worker_id_, egress_name);
+    egress_ring_ = std::move(ring);
+  } catch (...) {
+    // Created but not yet initialised by the router, or gone again.  The
+    // watcher asks again in a second.
+  }
 }
 
 void Http3Server::send_aggregated(
@@ -5401,29 +5426,13 @@ public:
     NPRPC_LOG_INFO("[HTTP/3] Started {} dedicated worker(s) on UDP port {}",
                    worker_count, port);
 
-    // Start the single SHM ingress reader (if configured).
-    if (!g_cfg.shm_ingress_channel.empty()) {
-      const auto ingress_name =
-          nprpc::impl::make_shm_name(g_cfg.shm_ingress_channel, "c2s");
-      for (int attempt = 0; attempt < 50; ++attempt) {
-        try {
-          ingress_ring_ = nprpc::impl::LockFreeRingBuffer::open(ingress_name);
-          NPRPC_LOG_INFO("[HTTP/3] Opened SHM ingress ring '{}'", ingress_name);
-          break;
-        } catch (...) {
-          if (attempt == 49) {
-            NPRPC_LOG_WARN("[HTTP/3] SHM ingress ring '{}' not found — "
-                           "falling back to UDP receive", ingress_name);
-          } else {
-            struct timespec ts = {0, 100'000'000};
-            nanosleep(&ts, nullptr);
-          }
-        }
-      }
-      if (ingress_ring_) {
-        ingress_running_.store(true, std::memory_order_release);
-        ingress_thread_ = std::thread(&Http3ServerRuntime::ingress_loop_impl, this);
-      }
+    // The SHM thread reads the ingress ring and keeps both rings attached to
+    // whatever npquicrouter currently calls them (see shm_loop).  It runs
+    // even when the rings do not exist yet: they appear when the router
+    // starts, whichever of the two processes came up first.
+    if (!g_cfg.shm_ingress_channel.empty() || !g_cfg.shm_egress_channel.empty()) {
+      shm_running_.store(true, std::memory_order_release);
+      shm_thread_ = std::thread(&Http3ServerRuntime::shm_loop, this);
     }
 
     return true;
@@ -5446,8 +5455,8 @@ public:
   {
     // Stop ingress reader before shutting down workers so no new packets
     // are posted after workers' connections_ are cleared.
-    if (ingress_running_.exchange(false, std::memory_order_acq_rel)) {
-      if (ingress_thread_.joinable()) ingress_thread_.join();
+    if (shm_running_.exchange(false, std::memory_order_acq_rel)) {
+      if (shm_thread_.joinable()) shm_thread_.join();
     }
     ingress_ring_.reset();
 
@@ -5569,13 +5578,16 @@ private:
   std::unique_ptr<Http3ReusePortBpfProgram> reuseport_bpf_;
 #endif
 
-  // Single SHM ingress reader — replaces per-worker ingress_thread_.
-  // Reads the c2s ring, parses DCID, and dispatches each packet to the
-  // correct worker's ioc_ so that handle_packet() always runs on the
-  // thread that owns the corresponding Http3Connection.
+  // Single SHM thread (shm_loop).  Reads the c2s ring, parses the DCID and
+  // dispatches each packet to the correct worker's ioc_, so handle_packet()
+  // always runs on the thread that owns the Http3Connection.  ingress_ring_
+  // is touched by this thread alone, and by stop() after joining it.
   std::unique_ptr<nprpc::impl::LockFreeRingBuffer> ingress_ring_;
-  std::thread                                      ingress_thread_;
-  std::atomic<bool>                                ingress_running_{false};
+  std::thread                                      shm_thread_;
+  std::atomic<bool>                                shm_running_{false};
+
+  // How often shm_loop asks whether npquicrouter recreated a ring.
+  static constexpr auto kShmRecheckInterval = std::chrono::seconds(1);
 
   // Dispatch a packet payload to the correct worker by DCID routing,
   // mirroring the BPF program's logic:
@@ -5617,10 +5629,78 @@ private:
                       });
   }
 
-  void ingress_loop_impl()
+  // npquicrouter creates the rings, and recreates them every time it starts:
+  // it unlinks the names and makes new objects under them.  A backend that
+  // opened the old ones keeps them mapped — reading a c2s ring nothing
+  // writes to, writing an s2c ring nothing reads — so HTTP/3 went dark in
+  // both directions while HTTPS over TCP carried on, and browsers fell back
+  // without a word.  Once a second this asks what the names point at now and
+  // follows them.  QUIC connections survive it: their state is here, and
+  // the client's next packet arrives through the new ring.
+  void check_shm_rings()
   {
-    nprpc::impl::set_thread_name("h3_ingress");
-    while (ingress_running_.load(std::memory_order_acquire)) {
+    using nprpc::impl::LockFreeRingBuffer;
+
+    if (!g_cfg.shm_ingress_channel.empty()) {
+      const auto name =
+          nprpc::impl::make_shm_name(g_cfg.shm_ingress_channel, "c2s");
+      const auto current = LockFreeRingBuffer::segment_id_of(name);
+      if (current && (!ingress_ring_ || ingress_ring_->segment_id() != *current)) {
+        try {
+          auto ring = LockFreeRingBuffer::open(name);
+          if (ingress_ring_)
+            NPRPC_LOG_WARN("[HTTP/3] SHM ingress '{}' was recreated "
+                           "(npquicrouter restarted?) — reattached", name);
+          else
+            NPRPC_LOG_INFO("[HTTP/3] Opened SHM ingress ring '{}'", name);
+          ingress_ring_ = std::move(ring);
+        } catch (...) {
+          // Not initialised yet; next check.
+        }
+      }
+    }
+
+    if (!g_cfg.shm_egress_channel.empty()) {
+      const auto name =
+          nprpc::impl::make_shm_name(g_cfg.shm_egress_channel, "s2c");
+      if (const auto current = LockFreeRingBuffer::segment_id_of(name)) {
+        // Each worker owns its egress mapping and compares for itself —
+        // no syscall there unless the ring actually changed.
+        for (auto& worker : workers_) {
+          auto* server = worker->server.get();
+          boost::asio::post(worker->ioc, [server, id = *current] {
+            if (server->running())
+              server->reattach_egress(id);
+          });
+        }
+      }
+    }
+  }
+
+  void shm_loop()
+  {
+    nprpc::impl::set_thread_name("h3_shm");
+    auto next_check = std::chrono::steady_clock::now();
+    bool warned_missing = false;
+
+    while (shm_running_.load(std::memory_order_acquire)) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= next_check) {
+        check_shm_rings();
+        next_check = now + kShmRecheckInterval;
+        if (!ingress_ring_ && !g_cfg.shm_ingress_channel.empty() && !warned_missing) {
+          NPRPC_LOG_WARN("[HTTP/3] SHM ingress ring for '{}' not there yet — "
+                         "waiting for npquicrouter",
+                         g_cfg.shm_ingress_channel);
+          warned_missing = true;
+        }
+      }
+
+      if (!ingress_ring_) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        continue;
+      }
+
       auto view = ingress_ring_->try_read_view();
       if (!view) {
         // Spin briefly then sleep via condvar; zero cost for the producer
