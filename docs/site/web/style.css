@@ -12,6 +12,14 @@
   --kind: #56607a;
   --kind-bg: #eceef4;
   --shadow: 0 1px 2px rgb(0 0 0 / 5%), 0 4px 16px rgb(0 0 0 / 5%);
+  /* syntax highlighting (web/code.js) */
+  --syn-keyword: #a3361a;
+  --syn-type: #2f5f8a;
+  --syn-title: #6b3fa0;
+  --syn-string: #3d7a2a;
+  --syn-number: #a0611b;
+  --syn-comment: #8a8d93;
+  --syn-meta: #7a5d1e;
   --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
@@ -29,6 +37,13 @@
     --kind: #aeb6cc;
     --kind-bg: #272c36;
     --shadow: none;
+    --syn-keyword: #f0875a;
+    --syn-type: #7fb4e0;
+    --syn-title: #c9a2f0;
+    --syn-string: #9fcf7e;
+    --syn-number: #e6b56a;
+    --syn-comment: #7d828b;
+    --syn-meta: #d7bf7f;
   }
 }
 
@@ -234,3 +249,14 @@ h1 .kind { font-size: 0.8rem; vertical-align: 0.35em; }
 .guide { max-width: 52rem; }
 
 a.xref code { color: var(--accent); }
+
+/* ---- syntax highlighting (highlight.js classes) ------------------------- */
+
+.hljs-keyword, .hljs-built_in, .hljs-literal, .hljs-selector-tag { color: var(--syn-keyword); }
+.hljs-type, .hljs-class .hljs-title { color: var(--syn-type); }
+.hljs-title, .hljs-title.class_, .hljs-title.function_ { color: var(--syn-title); }
+.hljs-string, .hljs-regexp, .hljs-char { color: var(--syn-string); }
+.hljs-number, .hljs-symbol { color: var(--syn-number); }
+.hljs-comment, .hljs-quote, .hljs-doctag { color: var(--syn-comment); font-style: italic; }
+.hljs-meta, .hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable { color: var(--syn-meta); }
+.hljs-params { color: inherit; }

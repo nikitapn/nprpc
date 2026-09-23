@@ -2,7 +2,7 @@
 
 The documentation site, served by NPRPC itself. It's a page handler that
 renders Mustache templates from `api.json`, with htmx for navigation and
-search. There's no JavaScript build and no Node.
+search. There's no JavaScript build and no Node; the vendored scripts are served as they are.
 
 ```sh
 just docs-api      # C++ headers + Swift package + IDL + docs/*.md -> <build>/docs/api.json
@@ -21,7 +21,7 @@ on the next request. A broken file keeps the last good copy and logs why.
 | `Sources/DocsWeb` | routing, view models, template loading |
 | `Sources/docs-server` | the executable |
 | `templates/` | Mustache; `layout` wraps every full page |
-| `web/` | static root: `style.css`, `vendor/htmx.min.js` |
+| `web/` | static root: `style.css`, `code.js` (syntax highlighting, including an npidl grammar), `vendor/` (htmx; highlight.js 11.11.1 core and language modules, unmodified) |
 
 ## URLs
 

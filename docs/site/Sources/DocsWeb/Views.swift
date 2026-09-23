@@ -39,6 +39,8 @@ struct DeclView {
     let kind: String
     let name: String
     let signature: String
+    /// highlight.js language of the signature (see web/code.js).
+    let code_lang: String
     let doc_html: String?
     let summary_html: String?
     let params: [ParamView]
@@ -54,6 +56,7 @@ struct DeclView {
         kind = s.kind
         name = s.name
         signature = s.signature
+        code_lang = s.lang == "idl" ? "npidl" : s.lang
         doc_html = s.doc_html.nonEmpty
         summary_html = s.summary_html.nonEmpty
         // Undocumented parameters add a table of names the signature already
