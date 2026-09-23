@@ -8,18 +8,30 @@
 //                   (default ../../.build_relwith_debinfo/docs/api.json)
 //   DOCS_ROOT       directory holding templates/ and web/ (default: .)
 //   DOCS_PORT       HTTP port (default 8080)
-//   DOCS_TLS_CERT   with DOCS_TLS_KEY, serve HTTPS instead
+//   DOCS_HOSTNAME   public hostname (default localhost)
+//   DOCS_TLS_CERT   with DOCS_TLS_KEY, serve HTTPS instead; SIGHUP re-reads
+//                   them, so a certbot renewal needs no restart
+//   DOCS_HTTP3=1    also serve HTTP/3 on the same port (needs TLS)
 //   DOCS_TEMPLATE_RELOAD=1  re-read templates on every request
+//
+// SIGINT and SIGTERM stop the server.
 
 import Dispatch
 import DocsWeb
 import Foundation
 import NPRPC
 
+// Unbuffered, so `docker logs` shows each line as it happens (print buffers
+// when stdout is not a terminal).
+func log(_ line: String) {
+    FileHandle.standardOutput.write(Data((line + "\n").utf8))
+}
+
 let env = ProcessInfo.processInfo.environment
 let root = env["DOCS_ROOT"] ?? FileManager.default.currentDirectoryPath
 let apiPath = env["DOCS_API"] ?? root + "/../../.build_relwith_debinfo/docs/api.json"
 let port = UInt16(env["DOCS_PORT"] ?? "") ?? 8080
+let hostname = env["DOCS_HOSTNAME"] ?? "localhost"
 
 do {
     let store = try DocsStore(path: apiPath)
@@ -29,28 +41,48 @@ do {
 
     var http = RpcBuilder()
         .setLogLevel(.warn)
-        .withHostname("localhost")
+        .withHostname(hostname)
         .withHttp(port)
-    if let cert = env["DOCS_TLS_CERT"], let key = env["DOCS_TLS_KEY"] {
-        http = http.ssl(certFile: cert, keyFile: key)
+    let tls = env["DOCS_TLS_CERT"] != nil && env["DOCS_TLS_KEY"] != nil
+    if tls {
+        http = http.ssl(certFile: env["DOCS_TLS_CERT"]!, keyFile: env["DOCS_TLS_KEY"]!)
+        if env["DOCS_HTTP3"] == "1" {
+            http = http.enableHttp3().http3Workers(1)
+        }
     }
     let rpc = try http
         .withPageHandler { site.handle($0) }
         .rootDir(root + "/web")
         .build()
 
-    let scheme = env["DOCS_TLS_CERT"] == nil ? "http" : "https"
-    print("NPRPC docs: \(scheme)://localhost:\(port)/")
-    print("  api.json:  \(apiPath) (reloaded when it changes)")
-    print("  templates: \(site.templateNames.joined(separator: ", "))")
+    let scheme = tls ? "https" : "http"
+    log("NPRPC docs: \(scheme)://\(hostname):\(port)/")
+    log("  api.json:  \(apiPath) (reloaded when it changes)")
+    log("  templates: \(site.templateNames.joined(separator: ", "))")
 
-    let signalSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-    signalSource.setEventHandler {
-        rpc.stop()
-        exit(0)
+    // Signal sources only fire once the default action is disabled.
+    var signalSources: [DispatchSourceSignal] = []
+    for sig in [SIGINT, SIGTERM] {
+        signal(sig, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+        source.setEventHandler {
+            rpc.stop()
+            exit(0)
+        }
+        source.resume()
+        signalSources.append(source)
     }
-    signal(SIGINT, SIG_IGN)
-    signalSource.resume()
+    if tls {
+        signal(SIGHUP, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
+        source.setEventHandler {
+            log(rpc.reloadCertificates()
+                ? "SIGHUP: TLS certificates reloaded"
+                : "SIGHUP: certificate reload failed; still serving the previous certificate")
+        }
+        source.resume()
+        signalSources.append(source)
+    }
 
     try rpc.startThreadPool(2)
     dispatchMain()

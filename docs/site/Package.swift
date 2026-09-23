@@ -3,11 +3,15 @@
 // handler from the api.json that `just docs-api` produces.
 import PackageDescription
 
+// NPRPC's Swift package: the repo checkout by default, or the prebuilt copy
+// in the nprpc-dev image, which sets NPRPC_SWIFT_ROOT=/opt/nprpc_swift.
+let nprpcSwift = Context.environment["NPRPC_SWIFT_ROOT"] ?? "../../nprpc_swift"
+
 let package = Package(
   name: "docs-site",
   platforms: [.macOS(.v13)],
   dependencies: [
-    .package(path: "../../nprpc_swift"),
+    .package(path: nprpcSwift),
   ],
   targets: [
     // api.json -> an index of pages, links and search. No NPRPC, no

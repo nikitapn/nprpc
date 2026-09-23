@@ -52,5 +52,51 @@ a name that is unique among them.
 | `DOCS_API` | `../../.build_relwith_debinfo/docs/api.json` |
 | `DOCS_ROOT` | current directory (holds `templates/` and `web/`) |
 | `DOCS_PORT` | `8080` |
-| `DOCS_TLS_CERT`, `DOCS_TLS_KEY` | unset: plain HTTP |
+| `DOCS_HOSTNAME` | `localhost` |
+| `DOCS_TLS_CERT`, `DOCS_TLS_KEY` | unset: plain HTTP. `SIGHUP` re-reads them. |
+| `DOCS_HTTP3` | unset; `1` also serves HTTP/3 (needs TLS) |
 | `DOCS_TEMPLATE_RELOAD` | unset; `1` re-reads templates per request |
+
+`SIGINT` and `SIGTERM` stop the server.
+
+## Deploying
+
+`deploy/deploy.sh` publishes the site to a Docker host behind
+[npquicrouter](../../npquicrouter/README.md). It builds `api.json` and a
+release `docs-server` (compiled in `nprpc-dev`), builds an image on the
+shared [runtime image](../DOCKER_RUNTIME_IMAGE.md), and runs it on the
+server's loopback, where the router forwards the hostname's TCP and UDP.
+
+```sh
+docs/site/deploy/deploy.sh --ssh debian@nikitapn.com
+docs/site/deploy/deploy.sh --help     # hostname, port, certificate options
+```
+
+It needs `nprpc-dev` and an `nprpc-runtime` built from it
+(`just build-dev-image`, `just build-runtime-image`), and refuses to deploy if
+the two differ. The runtime image is copied to the server only when the
+server doesn't have it.
+
+The container runs with a read-only filesystem and no capabilities except
+binding port 443, publishes its port on `127.0.0.1` only, and restarts unless
+stopped.
+
+### A new hostname, once
+
+For `nprpc.nikitapn.com` (defaults shown; change them with the options):
+
+1. **DNS:** an `A` record (and `AAAA` for IPv6) for the name, pointing at
+   the server.
+2. **Router:** add a route to npquicrouter's config and restart it:
+   ```json
+   { "sni": "nprpc.nikitapn.com", "tcp_backend": "127.0.0.1:9443", "udp_backend": "127.0.0.1:9443" }
+   ```
+3. **Certificate:** once DNS resolves, issue it through the router's ACME
+   webroot. The deploy hook makes the running server reload it on renewal:
+   ```sh
+   sudo certbot certonly --webroot -w /var/www/acme -d nprpc.nikitapn.com \
+     --deploy-hook 'docker kill -s HUP nprpc-docs'
+   ```
+4. **Deploy** with the script above.
+
+See [CERTBOT.md](../CERTBOT.md) for the router's ACME setup.
