@@ -250,5 +250,8 @@ cat <<EOF
 Deployed: https://$HOSTNAME/
 
 npquicrouter needs a route for it (once), in its config's "routes":
-  { "sni": "$HOSTNAME", "tcp_backend": "127.0.0.1:$PORT", "udp_backend": "127.0.0.1:$PORT" }
+  { "sni": "$HOSTNAME", "tcp_backend": "127.0.0.1:$PORT", "udp_backend": "127.0.0.1:$PORT",
+    "shm_ingress_channel": "$SHM_CHANNEL", "shm_egress_channel": "$SHM_CHANNEL",
+    "shm_ingress_ring_kib": 512, "shm_egress_ring_kib": 1024 }
+(Without --shm-channel, leave out the four shm_ fields.)
 EOF

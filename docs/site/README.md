@@ -55,6 +55,7 @@ a name that is unique among them.
 | `DOCS_HOSTNAME` | `localhost` |
 | `DOCS_TLS_CERT`, `DOCS_TLS_KEY` | unset: plain HTTP. `SIGHUP` re-reads them. |
 | `DOCS_HTTP3` | unset; `1` also serves HTTP/3 (needs TLS) |
+| `DOCS_SHM_CHANNEL` | unset; a name takes HTTP/3 through npquicrouter's shared-memory rings `/nprpc_<name>_c2s` / `_s2c` instead of loopback UDP. The deploy script sets it (`--shm-channel`, `--no-shm`) and mounts the router's directory as `/dev/shm` |
 | `DOCS_TEMPLATE_RELOAD` | unset; `1` re-reads templates per request |
 
 `SIGINT` and `SIGTERM` stop the server.
@@ -89,7 +90,9 @@ For `nprpc.nikitapn.com` (defaults shown; change them with the options):
    the server.
 2. **Router:** add a route to npquicrouter's config and restart it:
    ```json
-   { "sni": "nprpc.nikitapn.com", "tcp_backend": "127.0.0.1:9443", "udp_backend": "127.0.0.1:9443" }
+   { "sni": "nprpc.nikitapn.com", "tcp_backend": "127.0.0.1:9443", "udp_backend": "127.0.0.1:9443",
+     "shm_ingress_channel": "nprpc_docs", "shm_egress_channel": "nprpc_docs",
+     "shm_ingress_ring_kib": 512, "shm_egress_ring_kib": 1024 }
    ```
 3. **Certificate:** once DNS resolves, issue it through the router's ACME
    webroot. The deploy hook makes the running server reload it on renewal:
