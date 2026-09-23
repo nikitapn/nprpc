@@ -143,11 +143,7 @@ void SharedMemoryChannel::exchange_identities()
   const auto self = current_process_identity();
 
   if (send_ring_) {
-    auto* header = send_ring_->header();
-    header->writer_start_token.store(self.start_token,
-                                     std::memory_order_relaxed);
-    // Release: a non-zero pid tells the consumer both fields are readable.
-    header->writer_pid.store(self.pid, std::memory_order_release);
+    send_ring_->header()->publish_writer(self);
   }
 
   // Whoever already produces into the ring we read is our peer.  The server
@@ -155,13 +151,11 @@ void SharedMemoryChannel::exchange_identities()
   // client always learns the server here; the server's own client is still
   // absent at this point and arrives via the handshake instead.
   if (recv_ring_ && !peer_process_.valid()) {
-    auto* header = recv_ring_->header();
-    const uint32_t pid = header->writer_pid.load(std::memory_order_acquire);
-    if (pid != 0) {
-      peer_process_ = ProcessIdentity{
-          pid, header->writer_start_token.load(std::memory_order_relaxed)};
+    const auto writer = recv_ring_->header()->writer();
+    if (writer.valid()) {
+      peer_process_ = writer;
       NPRPC_LOG_INFO("SharedMemoryChannel {}: peer process is pid {}",
-                     channel_id_, pid);
+                     channel_id_, writer.pid);
     }
   }
 }

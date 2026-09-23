@@ -221,11 +221,7 @@ LockFreeRingBuffer::peek_owner(const std::string& name)
     if (result.first == nullptr)
       return std::nullopt;
 
-    const RingBufferHeader* header = result.first;
-    // Acquire on the pid: a non-zero one says the token is readable too.
-    const uint32_t pid = header->writer_pid.load(std::memory_order_acquire);
-    return ProcessIdentity{
-        pid, header->writer_start_token.load(std::memory_order_relaxed)};
+    return result.first->writer();
   } catch (...) {
     // Someone else's segment, a truncated one, a name that stopped existing
     // between the directory listing and here.  All of them mean "not mine".

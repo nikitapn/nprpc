@@ -48,17 +48,19 @@ bool segment_exists(const std::string& shm_name)
 
 // Create a ring in a child process that then dies without unwinding, which
 // is the only way to produce the state under test: a live segment whose
-// writer is provably gone.
-void orphan_a_ring(const std::string& shm_name)
+// writer is provably gone.  `pid_ns`, when given, overrides the namespace the
+// child records — standing in for a writer that lived in another container.
+void orphan_a_ring(const std::string& shm_name, uint64_t pid_ns = 0)
 {
   const pid_t pid = ::fork();
   ASSERT_NE(pid, -1) << "fork failed";
 
   if (pid == 0) {
     auto ring = LockFreeRingBuffer::create(shm_name, 64 * 1024);
-    const auto self = current_process_identity();
-    ring->header()->writer_start_token.store(self.start_token);
-    ring->header()->writer_pid.store(self.pid);
+    auto self = current_process_identity();
+    if (pid_ns != 0)
+      self.pid_ns = pid_ns;
+    ring->header()->publish_writer(self);
     // _exit, not exit: no destructors, no removal — exactly what a killed
     // server does.  The ring is deliberately leaked.
     (void)ring.release();
@@ -82,6 +84,28 @@ TEST(SharedMemoryReaper, TakesARingWhoseProcessIsGone)
 
   EXPECT_GT(reap_stale_shm_segments(), 0u);
   EXPECT_FALSE(segment_exists(name));
+}
+
+// Containers sharing one /dev/shm directory (npquicrouter's, mounted into
+// each backend) each have their own pid namespace, where the owner's pid is
+// usually 1 and names some other process — or none.  The sweep cannot tell a
+// dead owner from one it cannot see, so it must leave the ring alone.  The
+// same dead writer recorded in our own namespace is taken, which is the
+// test above.
+TEST(SharedMemoryReaper, LeavesARingOwnedFromAnotherPidNamespace)
+{
+  const std::string name = "/nprpc_" + unique_channel("foreignns") + "_s2c";
+
+  const uint64_t own_ns = current_process_identity().pid_ns;
+  ASSERT_NE(own_ns, 0u) << "no /proc/self/ns/pid to compare against";
+
+  orphan_a_ring(name, own_ns + 1);
+  ASSERT_TRUE(segment_exists(name));
+
+  reap_stale_shm_segments();
+
+  EXPECT_TRUE(segment_exists(name));
+  LockFreeRingBuffer::remove(name);
 }
 
 // The failure that would matter far more than the leak: sweeping away a ring

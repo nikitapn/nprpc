@@ -154,15 +154,40 @@ struct alignas(64) RingBufferHeader {
 
   // Which process produces into this ring, published when its channel opens.
   // The consumer probes it to catch a producer that died without ever
-  // reaching writer_detached.  Publish start_token first, then pid: a
-  // non-zero pid (acquire) is the signal that both fields are readable.
+  // reaching writer_detached.  Publish start_token and pid_ns first, then
+  // pid: a non-zero pid (acquire) is the signal that the others are readable.
   std::atomic<uint64_t> writer_start_token{0};
   std::atomic<uint32_t> writer_pid{0};
+
+  // The writer's pid namespace (ProcessIdentity::pid_ns).  Last in the
+  // struct so that a reader built before it never looks at it; a ring made
+  // by such a writer leaves it 0, which means "judge by pid alone".
+  std::atomic<uint64_t> writer_pid_ns{0};
 
   RingBufferHeader(size_t buf_size, uint32_t max_msg_sz)
       : buffer_size(buf_size)
       , max_message_size(max_msg_sz)
   {
+  }
+
+  // Name `self` as this ring's writer (or owner, for an accept ring).
+  void publish_writer(const ProcessIdentity& self) noexcept
+  {
+    writer_start_token.store(self.start_token, std::memory_order_relaxed);
+    writer_pid_ns.store(self.pid_ns, std::memory_order_relaxed);
+    // Release: a non-zero pid tells a reader the other fields are readable.
+    writer_pid.store(self.pid, std::memory_order_release);
+  }
+
+  // Who publish_writer() named; pid 0 while nobody has.
+  ProcessIdentity writer() const noexcept
+  {
+    const uint32_t pid = writer_pid.load(std::memory_order_acquire);
+    if (pid == 0)
+      return {};
+    return ProcessIdentity{pid,
+                           writer_start_token.load(std::memory_order_relaxed),
+                           writer_pid_ns.load(std::memory_order_relaxed)};
   }
 };
 

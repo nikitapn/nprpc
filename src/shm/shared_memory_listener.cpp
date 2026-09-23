@@ -52,11 +52,7 @@ SharedMemoryListener::SharedMemoryListener(boost::asio::io_context& ioc,
     // and without this an accept ring belongs to nobody and outlives every
     // server that ever made one.
     {
-      const auto self = current_process_identity();
-      auto* header = accept_ring_->header();
-      header->writer_start_token.store(self.start_token,
-                                       std::memory_order_relaxed);
-      header->writer_pid.store(self.pid, std::memory_order_release);
+      accept_ring_->header()->publish_writer(current_process_identity());
     }
 
     NPRPC_LOG_INFO("SharedMemoryListener created: {}", listener_name_);

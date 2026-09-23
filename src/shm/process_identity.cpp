@@ -12,6 +12,7 @@
 #else
 # include <cerrno>
 # include <signal.h>
+# include <sys/stat.h>
 # include <unistd.h>
 #endif
 
@@ -105,6 +106,19 @@ uint64_t read_start_token(uint32_t pid) noexcept
 #endif
 }
 
+// Inode of this process' pid namespace, or 0 where there is no such thing.
+uint64_t read_pid_ns() noexcept
+{
+#if defined(__linux__)
+  struct stat st {};
+  if (::stat("/proc/self/ns/pid", &st) != 0)
+    return 0;
+  return static_cast<uint64_t>(st.st_ino);
+#else
+  return 0;
+#endif
+}
+
 } // namespace
 
 ProcessIdentity current_process_identity() noexcept
@@ -114,13 +128,20 @@ ProcessIdentity current_process_identity() noexcept
 #else
   const uint32_t pid = static_cast<uint32_t>(::getpid());
 #endif
-  return ProcessIdentity{pid, read_start_token(pid)};
+  return ProcessIdentity{pid, read_start_token(pid), read_pid_ns()};
 }
 
 bool process_alive(const ProcessIdentity& id) noexcept
 {
   if (!id.valid())
     return true; // Unknown peer — never reap on a guess.
+
+  // Owned from another pid namespace (another container sharing this
+  // /dev/shm): its pid names something else here, or nothing.  Not ours to
+  // judge.  The namespace of this process never changes, so read it once.
+  static const uint64_t own_pid_ns = read_pid_ns();
+  if (id.pid_ns != 0 && own_pid_ns != 0 && id.pid_ns != own_pid_ns)
+    return true;
 
 #if defined(_WIN32)
   HANDLE h = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
