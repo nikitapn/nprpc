@@ -76,7 +76,8 @@ All settings live in a single JSON file passed as the sole command-line argument
 | `default_tcp_backend` | string | `""` | Fallback TCP backend (`host:port`) when no route matches the SNI. If empty, unmatched connections are dropped. |
 | `default_udp_backend` | string | `""` | Fallback UDP backend (`host:port`). Same rules as `default_tcp_backend`. |
 | `udp_session_timeout_sec` | int | `120` | Idle timeout for UDP sessions. Sessions idle longer than this are garbage-collected. |
-| `shm_egress_channel` | string | `""` | Shared-memory channel name for the egress (server→client) ring. See [SHM Fast Path](#shm-fast-path). Empty disables SHM egress. |
+| `shm_egress_channel` | string | `""` | Shared-memory channel name for the egress (server→client) ring. See [SHM Fast Path](#shm-fast-path). Empty disables SHM egress. Used by every SHM route that does not name its own. |
+| `shm_egress_ring_kib` | uint32 | `0` | Size of that ring in KiB. `0` = 32 MiB. |
 | `num_workers` | int | `1` | Number of UDP worker threads. Values > 1 require `SO_REUSEPORT` support (Linux 3.9+). With eBPF enabled, each worker gets its own socket and the BPF program routes packets deterministically. |
 | `routes` | array | `[]` | Ordered list of SNI → backend mappings. Each entry has `sni`, and optionally `tcp_backend`, `udp_backend`, and `shm_ingress_channel`. |
 
@@ -90,6 +91,18 @@ Route fields:
 | `tcp_backend` | TCP backend (`host:port`). Optional — omit if the route is UDP-only. |
 | `udp_backend` | UDP/QUIC backend (`host:port`). Optional — omit if the route is TCP-only. |
 | `shm_ingress_channel` | SHM ingress channel name for this UDP backend (see [SHM Fast Path](#shm-fast-path)). Empty or absent = UDP mode for this route. |
+| `shm_egress_channel` | This backend's own egress ring. Empty or absent = the top-level `shm_egress_channel`. |
+| `shm_ingress_ring_kib`, `shm_egress_ring_kib` | Ring sizes in KiB. `0` or absent = 32 MiB. |
+
+Give each backend its own egress ring. Backends write into an egress ring from
+their own processes, and a writer killed between reserving a slot and
+committing it (a `docker rm -f` at the wrong moment) leaves a slot the reader
+waits on until the router restarts. On a shared ring that stops every
+backend's HTTP/3; on its own ring, only the one that died, and that one is
+restarting anyway. Sizes can be small. A site that answers GETs runs fine on
+512 KiB in and 1 MiB out: QUIC's congestion window, not the ring, bounds what
+is in flight. A 5 MB download over 512 KiB rings, on loopback where the
+backend outpaces any real client, arrives intact.
 
 ## ACME HTTP-01
 
@@ -298,7 +311,7 @@ unit cannot create it itself. `build-vps.sh` installs a tmpfiles entry that
 creates it at every boot:
 
 ```bash
-echo 'd /dev/shm/npquicrouter 0755 www-data www-data -' | sudo tee /etc/tmpfiles.d/npquicrouter.conf
+echo 'd /dev/shm/npquicrouter 0770 www-data www-data -' | sudo tee /etc/tmpfiles.d/npquicrouter.conf
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/npquicrouter.conf
 ```
 
@@ -306,8 +319,17 @@ A backend in a container gets the rings by mounting the same directory as its
 `/dev/shm`:
 
 ```bash
-docker run -v /dev/shm/npquicrouter:/dev/shm ...
+docker run -v /dev/shm/npquicrouter:/dev/shm --group-add "$(getent group www-data | cut -d: -f3)" ...
 ```
+
+The group is what grants access. The router makes its rings 0660 and the
+directory is 0770 `www-data`, so a container needs no capability to open the
+rings or to create its own segments next to them. Root inside a container
+started with `--cap-drop ALL` has no `CAP_DAC_OVERRIDE`, so without the group
+it can do neither. Every NPRPC server creates a small segment of its own at
+startup, a local listener, and sweeps the directory for segments whose owner
+has died. Each segment records its owner's pid namespace, so a sweep leaves
+alone what belongs to another container.
 
 Not the ring files one by one. A bind mount of a file is fixed to the object
 it named when the container started, the router recreates its rings each time

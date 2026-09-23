@@ -41,6 +41,10 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#include <iostream>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <fcntl.h>
 
 #include <arpa/inet.h>  // inet_ntop
 #include <cerrno>
@@ -86,6 +90,22 @@ static_assert(sizeof(ShmEgressFrame) == 36,
 static constexpr size_t kShmIngressRingSize = 32 * 1024 * 1024;
 static constexpr size_t kShmEgressRingSize  = 32 * 1024 * 1024;
 
+// Backends open the rings read-write (a reader commits its cursor into the
+// ring too), and a backend in a container is typically root without
+// CAP_DAC_OVERRIDE, joined to this service's group instead.  So the rings
+// are group-writable; the directory they live in is what keeps everybody
+// else out (see README: Systemd Service).
+inline void make_ring_group_writable(const std::string& ring_name)
+{
+  const int fd = ::shm_open(ring_name.c_str(), O_RDWR | O_CLOEXEC, 0);
+  if (fd == -1)
+    return;
+  if (::fchmod(fd, 0660) != 0)
+    std::cerr << "[SHM] fchmod(" << ring_name << ", 0660): "
+              << std::strerror(errno) << "\n";
+  ::close(fd);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ShmIngressWriter  (npquicrouter side, c2s ring)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,13 +118,14 @@ class ShmIngressWriter
 {
 public:
   explicit ShmIngressWriter(const std::string& channel_name,
-                            bool create_ring = true)
+                            bool create_ring = true,
+                            size_t ring_size = kShmIngressRingSize)
       : ring_name_(nprpc::impl::make_shm_name(channel_name, "c2s"))
   {
     if (create_ring) {
       nprpc::impl::LockFreeRingBuffer::remove(ring_name_);
-      ring_ = nprpc::impl::LockFreeRingBuffer::create(ring_name_,
-                                                      kShmIngressRingSize);
+      ring_ = nprpc::impl::LockFreeRingBuffer::create(ring_name_, ring_size);
+      make_ring_group_writable(ring_name_);
     } else {
       // Secondary producer: open the ring already created by the primary.
       ring_ = nprpc::impl::LockFreeRingBuffer::open(ring_name_);
@@ -157,12 +178,15 @@ class ShmEgressReader
 public:
   // @param channel_name  Config name, e.g. "quic_edge".
   // @param send_sock_fd  npquicrouter's listening UDP socket fd.
-  ShmEgressReader(const std::string& channel_name, int send_sock_fd)
+  // @param ring_size     Payload bytes; the writer adapts to whatever it opens.
+  ShmEgressReader(const std::string& channel_name, int send_sock_fd,
+                  size_t ring_size = kShmEgressRingSize)
       : sock_fd_(send_sock_fd)
       , ring_name_(nprpc::impl::make_shm_name(channel_name, "s2c"))
   {
     nprpc::impl::LockFreeRingBuffer::remove(ring_name_);
-    ring_ = nprpc::impl::LockFreeRingBuffer::create(ring_name_, kShmEgressRingSize);
+    ring_ = nprpc::impl::LockFreeRingBuffer::create(ring_name_, ring_size);
+    make_ring_group_writable(ring_name_);
   }
 
   ~ShmEgressReader() { stop(); }

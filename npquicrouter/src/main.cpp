@@ -59,6 +59,15 @@ struct RouteEntry {
     std::string tcp_backend;  // "ip:port"
     std::string udp_backend;  // "ip:port"
     std::string shm_ingress_channel;  // ingress SHM channel name for this UDP backend (empty = UDP mode)
+    // Egress ring for this backend; empty = the top-level shm_egress_channel.
+    // A ring of its own keeps backends' fates apart: a writer killed between
+    // reserving a slot and committing it stalls the ring's reader for good,
+    // and on a shared ring that is every backend's HTTP/3.
+    std::string shm_egress_channel;
+    // Ring sizes in KiB; 0 = the defaults in quic_shm_channel.hpp (32 MiB).
+    // A site that answers GETs needs far less than a busy RPC backend.
+    uint32_t    shm_ingress_ring_kib = 0;
+    uint32_t    shm_egress_ring_kib  = 0;
 };
 
 struct Config {
@@ -82,6 +91,7 @@ struct Config {
     // batching across the double-UDP-hop.
     // Per-backend ingress channels are configured per-route via RouteEntry::shm_ingress_channel.
     std::string  shm_egress_channel;
+    uint32_t     shm_egress_ring_kib  = 0;     // 0 = kShmEgressRingSize
     int          num_workers          = 1;     // UDP worker threads (1 = single-threaded)
 };
 
@@ -93,7 +103,10 @@ struct glz::meta<RouteEntry> {
         "sni",         &T::sni,
         "tcp_backend", &T::tcp_backend,
         "udp_backend", &T::udp_backend,
-        "shm_ingress_channel", &T::shm_ingress_channel);
+        "shm_ingress_channel", &T::shm_ingress_channel,
+        "shm_egress_channel",  &T::shm_egress_channel,
+        "shm_ingress_ring_kib", &T::shm_ingress_ring_kib,
+        "shm_egress_ring_kib",  &T::shm_egress_ring_kib);
 };
 
 template <>
@@ -110,6 +123,7 @@ struct glz::meta<Config> {
         "udp_session_timeout_sec", &T::udp_session_timeout_sec,
         "routes",                  &T::routes,
         "shm_egress_channel",      &T::shm_egress_channel,
+        "shm_egress_ring_kib",     &T::shm_egress_ring_kib,
         "num_workers",             &T::num_workers);
 };
 
@@ -821,11 +835,13 @@ class UdpRouter {
 
     // SHM channels (populated from cfg.routes entries with non-empty shm_ingress_channel):
     //   shm_ingress_map_  — one c2s ring per backend, keyed by channel name.
-    //   shm_egress_       — single s2c ring driven by cfg.shm_egress_channel;
+    //   shm_egress_map_   — one s2c ring per distinct egress channel: the
+    //                       top-level cfg.shm_egress_channel and any a route
+    //                       names for itself.  Each reader has its own thread,
     //                       reads packets from Http3Server and sendmsg to client.
     // When a route has no shm_ingress_channel, a per-session UDP backend_sock is used.
     std::unordered_map<std::string, std::unique_ptr<ShmIngressWriter>> shm_ingress_map_;
-    std::unique_ptr<ShmEgressReader>  shm_egress_;
+    std::unordered_map<std::string, std::unique_ptr<ShmEgressReader>> shm_egress_map_;
 
 public:
     // Single-worker constructor: creates and binds the socket internally.
@@ -874,13 +890,17 @@ public:
         schedule_gc();
         for (const auto& [name, writer] : shm_ingress_map_)
             std::clog << "  SHM ingress channel: " << writer->ring_name() << "\n";
-        if (shm_egress_) {
-            shm_egress_->start();
-            std::clog << "  SHM egress  channel: " << shm_egress_->ring_name() << "\n";
+        for (const auto& [name, reader] : shm_egress_map_) {
+            reader->start();
+            std::clog << "  SHM egress  channel: " << reader->ring_name() << "\n";
         }
     }
 
 private:
+    static size_t ring_bytes(uint32_t kib, size_t fallback) {
+        return kib ? size_t(kib) * 1024 : fallback;
+    }
+
     void init_shm(const Config& cfg, size_t worker_index, bool is_primary) {
         const bool creates_rings = (worker_index == 0);
         // Create one ingress ring per route that names a SHM channel.
@@ -890,15 +910,27 @@ private:
             if (!r.shm_ingress_channel.empty() && !r.udp_backend.empty()) {
                 if (shm_ingress_map_.find(r.shm_ingress_channel) == shm_ingress_map_.end()) {
                     shm_ingress_map_.emplace(r.shm_ingress_channel,
-                        std::make_unique<ShmIngressWriter>(r.shm_ingress_channel, creates_rings));
+                        std::make_unique<ShmIngressWriter>(
+                            r.shm_ingress_channel, creates_rings,
+                            ring_bytes(r.shm_ingress_ring_kib, kShmIngressRingSize)));
                 }
             }
         }
-        // Create the single egress ring (s2c) from the top-level channel name.
-        // Only the primary worker (worker 0) drains it.
-        if (!cfg.shm_egress_channel.empty() && is_primary) {
-            shm_egress_ = std::make_unique<ShmEgressReader>(
-                cfg.shm_egress_channel, listen_sock_.native_handle());
+        // Create the egress rings (s2c): the top-level one, and one per route
+        // that names its own.  Only the primary worker (worker 0) drains them.
+        // Two routes naming one channel share it, sized by the first.
+        if (is_primary) {
+            auto add_egress = [&](const std::string& channel, uint32_t kib) {
+                if (channel.empty() || shm_egress_map_.count(channel))
+                    return;
+                shm_egress_map_.emplace(channel, std::make_unique<ShmEgressReader>(
+                    channel, listen_sock_.native_handle(),
+                    ring_bytes(kib, kShmEgressRingSize)));
+            };
+            add_egress(cfg.shm_egress_channel, cfg.shm_egress_ring_kib);
+            for (const auto& r : cfg.routes)
+                if (!r.shm_ingress_channel.empty() && !r.udp_backend.empty())
+                    add_egress(r.shm_egress_channel, r.shm_egress_ring_kib);
         }
     }
 

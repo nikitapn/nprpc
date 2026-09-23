@@ -59,7 +59,7 @@ WantedBy=multi-user.target
 EOF
 
   # The unit's shared-memory directory: made at every boot, and now.
-  ssh "$DEST" "echo 'd /dev/shm/npquicrouter 0755 www-data www-data -' | sudo tee /etc/tmpfiles.d/npquicrouter.conf >/dev/null && sudo systemd-tmpfiles --create /etc/tmpfiles.d/npquicrouter.conf"
+  ssh "$DEST" "echo 'd /dev/shm/npquicrouter 0770 www-data www-data -' | sudo tee /etc/tmpfiles.d/npquicrouter.conf >/dev/null && sudo systemd-tmpfiles --create /etc/tmpfiles.d/npquicrouter.conf"
 
   scp "$OUT" "$DEST:/tmp/npquicrouter"
   ssh "$DEST" "sudo mv /tmp/npquicrouter /usr/local/bin/ && sudo mv /tmp/npquicrouter.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable npquicrouter"
