@@ -62,9 +62,22 @@ internal let nprpcStreamReaderOnDestroy: @convention(c) (UnsafeMutableRawPointer
     Unmanaged<StreamReaderBridgeBase>.fromOpaque(context).release()
 }
 
-/// Client-side stream reader wrapper
-/// Wraps AsyncThrowingStream to receive chunks from server
+/// The receiving end of a stream: what a proxy's `server_stream` method
+/// returns, and what a servant's `client_stream` method receives.
+///
+/// Iterate it with `for try await`; the loop ends when the producer
+/// finishes and throws if it fails:
+///
+/// ```swift
+/// for try await post in try blog.feed(limit: 10) {
+///     show(post)
+/// }
+/// ```
+///
+/// Flow control is automatic: the reader grants the producer more credits as
+/// items are consumed.
 public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence {
+    /// The item type.
     public typealias Element = T
 
     private let streamId: UInt64
@@ -86,6 +99,7 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     private var firstAccessFired = false
     private let firstAccessLock = NSLock()
 
+    /// Created by generated code; `deserializer` decodes one chunk's payload.
     public init(streamId: UInt64, buffer: FlatBuffer, deserializer: @escaping (UnsafeRawPointer, Int) -> T) {
         self.streamId = streamId
         self.buffer = buffer
@@ -103,6 +117,7 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
         return stream
     }
 
+    /// `for try await` support.
     public func makeAsyncIterator() -> WindowedIterator {
         WindowedIterator(
             base: stream.makeAsyncIterator(),
@@ -142,6 +157,8 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
             self.onFirstAccess = onFirstAccess
         }
 
+        /// The next item, or nil once the stream is complete. Rethrows a
+        /// stream error.
         public mutating func next() async throws -> T? {
             if first {
                 first = false
@@ -205,6 +222,7 @@ public func createByteStreamReader(streamId: UInt64, buffer: FlatBuffer) -> NPRP
     }
 }
 
+/// Encodes a plain value as a stream chunk payload. Used by generated code.
 public func marshal_stream_fundamental<T>(buffer: FlatBuffer, offset: Int, value: T) {
     let elementSize = MemoryLayout<T>.stride
     let missingBytes = offset + elementSize - buffer.size
@@ -216,6 +234,9 @@ public func marshal_stream_fundamental<T>(buffer: FlatBuffer, offset: Int, value
     data.storeBytes(of: value, toByteOffset: offset, as: T.self)
 }
 
+/// Encodes a message as a stream chunk payload, growing `buffer` by
+/// `rootSize` plus `extraCapacity` for its variable parts. Used by generated
+/// code.
 public func marshal_stream_struct<T>(
     buffer: FlatBuffer,
     offset: Int,
@@ -232,6 +253,7 @@ public func marshal_stream_struct<T>(
     marshalElement(buffer, offset, value)
 }
 
+/// Encodes a string as a stream chunk payload. Used by generated code.
 public func marshal_stream_string(buffer: FlatBuffer, offset: Int, value: String) {
     let missingBytes = offset + 8 - buffer.size
     if missingBytes > 0 {
@@ -241,6 +263,8 @@ public func marshal_stream_string(buffer: FlatBuffer, offset: Int, value: String
     marshal_string(buffer: buffer, offset: offset, string: value)
 }
 
+/// Encodes an array of plain values as a stream chunk payload. Used by
+/// generated code.
 public func marshal_stream_fundamental_vector<T>(buffer: FlatBuffer, offset: Int, value: [T]) {
     let missingBytes = offset + 8 - buffer.size
     if missingBytes > 0 {
@@ -250,10 +274,14 @@ public func marshal_stream_fundamental_vector<T>(buffer: FlatBuffer, offset: Int
     marshal_fundamental_vector(buffer: buffer, offset: offset, vector: value)
 }
 
+/// Decodes an array of plain values from a stream chunk payload. Used by
+/// generated code.
 public func unmarshal_stream_fundamental_vector<T>(data: UnsafeRawPointer, offset: Int = 0) -> [T] {
     unmarshal_fundamental_vector(buffer: data, offset: offset)
 }
 
+/// A reader for stream `streamId` opened through a proxy's object handle.
+/// Used by generated code.
 public func createObjectStreamReader<T: Sendable>(
     objectHandle: UnsafeMutableRawPointer,
     streamId: UInt64,
@@ -280,13 +308,15 @@ public func createObjectStreamReader<T: Sendable>(
     return reader
 }
 
-// Window a consumer advertises in StreamInit.initial_credits when opening a
-// stream; refills are granted in batches of half this window.
+/// Window a consumer advertises in StreamInit.initial_credits when opening a
+/// stream; refills are granted in batches of half this window.
 public let defaultReaderWindow: UInt32 = 32
 
-// Producer's starting credit pool when nothing was advertised (legacy peers).
+/// Producer's starting credit pool when nothing was advertised (legacy peers).
 public let kInitialWindowSize: UInt32 = 8
 
+/// A reader for stream `streamId` on a session's stream manager, granting
+/// credits back in batches of half `producerWindow`. Used by generated code.
 public func createStreamManagerReader<T: Sendable>(
     streamManager: UnsafeMutableRawPointer,
     streamId: UInt64,
@@ -329,6 +359,12 @@ public func createStreamManagerReader<T: Sendable>(
     return reader
 }
 
+/// The sending end of a stream: the writer half of a client or bidi stream,
+/// and what a servant uses to push a `server_stream`.
+///
+/// Call `write(_:)` per item, then `close()`, or `abort(errorCode:)` on
+/// failure. The `async` write waits for the reader's credits, so a slow
+/// reader slows the writer down.
 public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
     private let streamId: UInt64
     private let buffer: FlatBuffer
@@ -467,6 +503,7 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
         }
     }
 
+    /// Ends the stream normally. Later writes throw.
     public func close() {
         lock.lock()
         defer { lock.unlock() }
@@ -475,6 +512,7 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
         closed = true
     }
 
+    /// Ends the stream with an error; the reader's loop throws.
     public func abort(errorCode: UInt32 = 1) {
         lock.lock()
         defer { lock.unlock() }
@@ -483,6 +521,7 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
         closed = true
     }
 
+    /// Stops the stream from this side, telling the peer it was cancelled.
     public func cancel() {
         lock.lock()
         defer { lock.unlock() }
@@ -506,10 +545,15 @@ public final class NPRPCStreamWriter<T: Sendable>: @unchecked Sendable {
     }
 }
 
+/// Both directions of a `bidi_stream` method: write what you send, iterate
+/// what the other side sends.
 public struct NPRPCBidiStream<TWrite: Sendable, TRead: Sendable>: @unchecked Sendable {
+    /// Outgoing items.
     public let writer: NPRPCStreamWriter<TWrite>
+    /// Incoming items.
     public let reader: NPRPCStreamReader<TRead>
 
+    /// Pairs a writer and a reader for one stream.
     public init(writer: NPRPCStreamWriter<TWrite>, reader: NPRPCStreamReader<TRead>) {
         self.writer = writer
         self.reader = reader
@@ -601,6 +645,8 @@ private let nprpcCallbackTrampoline: @convention(c) (UnsafeMutableRawPointer?, B
     Unmanaged<CallbackBox>.fromOpaque(ctx).takeRetainedValue().fn(success)
 }
 
+/// A writer for stream `streamId` on a session's stream manager, starting
+/// with the consumer's advertised `initialCredits`. Used by generated code.
 public func createStreamManagerWriter<T: Sendable>(
     streamManager: UnsafeMutableRawPointer,
     streamId: UInt64,
@@ -646,6 +692,8 @@ public func createStreamManagerWriter<T: Sendable>(
     return writer
 }
 
+/// A writer for stream `streamId` opened through a proxy's object handle.
+/// Used by generated code.
 public func createObjectStreamWriter<T: Sendable>(
     objectHandle: UnsafeMutableRawPointer,
     streamId: UInt64,
@@ -664,6 +712,8 @@ public func createObjectStreamWriter<T: Sendable>(
     )
 }
 
+/// Both halves of a bidi stream opened through a proxy's object handle.
+/// Used by generated code.
 public func createObjectBidiStream<TWrite: Sendable, TRead: Sendable>(
     objectHandle: UnsafeMutableRawPointer,
     streamId: UInt64,
@@ -689,10 +739,14 @@ public func createObjectBidiStream<TWrite: Sendable, TRead: Sendable>(
     return NPRPCBidiStream(writer: writer, reader: reader)
 }
 
-// initialCredits: consumer's advertised window for our writer direction
-// (from StreamInit.initial_credits when we're the servant; 0 = legacy).
-// producerWindow: the window we advertised for our reader direction (pass
-// defaultReaderWindow when the stub sent it in StreamInit).
+/// Both halves of a bidi stream on a session's stream manager. Used by
+/// generated code.
+///
+/// - Parameters:
+///   - initialCredits: consumer's advertised window for our writer direction
+///     (from StreamInit.initial_credits when we're the servant; 0 = legacy).
+///   - producerWindow: the window we advertised for our reader direction
+///     (pass defaultReaderWindow when the stub sent it in StreamInit).
 public func createStreamManagerBidiStream<TWrite: Sendable, TRead: Sendable>(
     streamManager: UnsafeMutableRawPointer,
     streamId: UInt64,

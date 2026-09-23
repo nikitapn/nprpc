@@ -40,6 +40,10 @@ inline void log(
 
 namespace nprpctest {
 // Helper class to manage nameserver process
+// NPRPC_BUILD_DIR and NPRPC_SOURCE_DIR come from test/CMakeLists.txt.
+#define NPRPC_TEST_CERT NPRPC_SOURCE_DIR "/certs/out/localhost.crt"
+#define NPRPC_TEST_KEY NPRPC_SOURCE_DIR "/certs/out/localhost.key"
+
 class NameserverManager {
     pid_t nameserver_pid = -1;
 public:
@@ -68,17 +72,12 @@ public:
                 close(stderr_fd);
             }
 
-            // Child process - run the nameserver
-            // Use the build directory configured by CMake
-#ifdef NPRPC_BUILD_DIR
+            // Child process - run the nameserver from this build, with the
+            // repo's development certificate so browser tests can use HTTPS.
             std::string nameserver_path = std::string(NPRPC_BUILD_DIR) + "/npnameserver";
-            execl(nameserver_path.c_str(), "npnameserver", nullptr);
-#else
-            // Fallback: try common build directories
-            execl("/home/nikita/projects/nprpc/.build_relwith_debinfo/npnameserver", "npnameserver", nullptr);
-            execl("/home/nikita/projects/nprpc/.build_release/npnameserver", "npnameserver", nullptr);
-            execl("/home/nikita/projects/nprpc/.build_debug/npnameserver", "npnameserver", nullptr);
-#endif
+            execl(nameserver_path.c_str(), "npnameserver",
+                  "--cert", NPRPC_TEST_CERT, "--key", NPRPC_TEST_KEY,
+                  "--allow-origin", "https://localhost:24443", nullptr);
             // If all fail, exit with error
             std::cerr << "Failed to execute npnameserver" << std::endl;
             _exit(1);
@@ -139,7 +138,7 @@ public:
             rpc = nprpc::RpcBuilder()
                 .set_log_level(nprpc::LogLevel::trace)
                 .with_hostname("localhost")
-                .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
+                .enable_ssl_client_self_signed_cert(NPRPC_TEST_CERT)
                 // TestLargeMessage and TestNested send megabytes in one call,
                 // which the default ring is deliberately too small for — see
                 // config_default.hpp.  Raised here alongside the WebSocket and
@@ -152,17 +151,17 @@ public:
                     .max_websocket_message_size(24 * 1024 * 1024)
                     .max_webtransport_message_size(24 * 1024 * 1024)
                     .max_http_rpc_requests_per_ip_per_second(64, 64)
-                    .root_dir("/home/nikita/projects/nprpc/test/http")
+                    .root_dir(NPRPC_SOURCE_DIR "/test/http")
                     .allow_origins({"https://localhost:24443"})
-                    .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
-                         "/home/nikita/projects/nprpc/certs/out/localhost.key")
+                    .ssl(NPRPC_TEST_CERT,
+                         NPRPC_TEST_KEY)
 #ifdef NPRPC_HTTP3_ENABLED
                     .enable_http3()
 #endif
 #if defined(NPRPC_HAS_QUIC) || defined(NPRPC_QUIC_ENABLED)
                 .with_quic(22225)
-                    .ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
-                         "/home/nikita/projects/nprpc/certs/out/localhost.key")
+                    .ssl(NPRPC_TEST_CERT,
+                         NPRPC_TEST_KEY)
 #endif
                 .build();
 

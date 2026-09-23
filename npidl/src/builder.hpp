@@ -6,6 +6,9 @@
 #include "ast.hpp"
 #include "arguments_builder.hpp"
 #include <functional>
+#include <ostream>
+#include <string>
+#include <string_view>
 #include <memory>
 
 namespace npidl::builders {
@@ -29,6 +32,7 @@ class BlockDepth
 
 public:
   std::string str() const noexcept { return std::to_string(depth_); }
+  std::string indent() const { return std::string(depth_ * 2, ' '); }
 
   BlockDepth& operator=(size_t n)
   {
@@ -93,6 +97,25 @@ inline std::ostream& operator<<(std::ostream& os, const BlockDepth& block)
     os << "  ";
   return os;
 }
+
+// How a generated language spells per-parameter documentation inside the
+// comment block of a function.
+enum class ParamDocStyle {
+  Doxygen, // @param name text   (C++, TypeScript JSDoc)
+  Swift,   // - Parameter name: text
+};
+
+// Writes `doc` as `///` lines (C++, Swift). Nothing for an empty doc.
+void emit_line_doc(std::ostream& os, std::string_view indent, std::string_view doc);
+
+// Writes `doc` as a `/** ... */` block (TypeScript). Nothing for an empty doc.
+void emit_block_doc(std::ostream& os, std::string_view indent, std::string_view doc);
+
+// A function's own doc followed by one entry for every documented argument.
+// `inputs_only` leaves out `out` arguments, for languages that return them
+// instead of taking them as parameters.
+std::string function_doc(const AstFunctionDecl* fn, ParamDocStyle style,
+                         bool inputs_only = false);
 
 class Builder
 {

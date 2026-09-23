@@ -28,12 +28,8 @@ namespace nprpc::impl {
 // ─── Linux implementation ───────────────────────────────────────────────────
 #ifdef __linux__
 
-HttpFileWatcher::HttpFileWatcher(std::filesystem::path root,
-                                 std::filesystem::path ssr_server_root,
-                                 std::function<void()> on_server_rebuilt)
+HttpFileWatcher::HttpFileWatcher(std::filesystem::path root)
     : root_(std::move(root))
-    , ssr_server_root_(std::move(ssr_server_root))
-    , on_server_rebuilt_(std::move(on_server_rebuilt))
 {
   inotify_fd_ = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
   if (inotify_fd_ < 0)
@@ -70,20 +66,12 @@ HttpFileWatcher::HttpFileWatcher(std::filesystem::path root,
   if (std::filesystem::exists(root_, ec) && !ec) {
     add_tree(root_);
   }
-  if (!ssr_server_root_.empty() &&
-      std::filesystem::exists(ssr_server_root_, ec) && !ec) {
-    add_tree(ssr_server_root_);
-  }
 
   thread_ = std::thread([this] { 
     nprpc::impl::set_thread_name("file_watcher");
     run(); 
   });
   NPRPC_LOG_INFO("[FileWatcher] Watching {} for changes", root_.string());
-  if (!ssr_server_root_.empty()) {
-    NPRPC_LOG_INFO("[FileWatcher] Watching {} for SSR restarts",
-                   ssr_server_root_.string());
-  }
 }
 
 HttpFileWatcher::~HttpFileWatcher()
@@ -124,23 +112,6 @@ void HttpFileWatcher::run()
   if (std::filesystem::exists(root_, ec) && !ec) {
     watch_dir(root_);
   }
-  if (!ssr_server_root_.empty()) {
-    if (std::filesystem::exists(ssr_server_root_, ec) && !ec) {
-      watch_dir(ssr_server_root_);
-    }
-    // Watch the PARENT of ssr_server_root_ (e.g. the project dir containing
-    // 'build/') with a single non-recursive watch.  This lets us detect when
-    // ssr_server_root_ itself is deleted and recreated — which is exactly what
-    // `npm run build` does via `builder.rimraf(out)` — so we can re-add the
-    // recursive watches and arm a restart even when the old watches were lost.
-    auto ssr_parent = ssr_server_root_.parent_path();
-    if (!ssr_parent.empty() && std::filesystem::exists(ssr_parent, ec) && !ec) {
-      int wd = inotify_add_watch(inotify_fd_, ssr_parent.c_str(), kFlags);
-      if (wd >= 0) {
-        wd_to_dir[wd] = ssr_parent;
-      }
-    }
-  }
 
   // Buffer large enough for ~64 typical events.
   constexpr size_t kBufSize = 64 * (sizeof(inotify_event) + NAME_MAX + 1);
@@ -157,28 +128,11 @@ void HttpFileWatcher::run()
   // written before nodes/2.js exists).
   constexpr int kDebounceMs = 500;
   std::vector<std::filesystem::path> pending_client;
-  bool pending_server = false;
-
-  // Helper: does `path` live under `ssr_server_root_` but NOT under `root_`
-  // (client assets under ssr_server_root_/client/ must not trigger SSR restart).
-  auto is_server_file = [this](const std::filesystem::path& p) -> bool {
-    if (ssr_server_root_.empty()) return false;
-    const auto& ps = p.string();
-    const auto& ss = ssr_server_root_.string();
-    if (!(ps.size() >= ss.size() && ps.compare(0, ss.size(), ss) == 0))
-      return false; // not under ssr root
-    // exclude paths that also live under the client static root
-    const auto& rs = root_.string();
-    if (!rs.empty() && ps.size() >= rs.size() &&
-        ps.compare(0, rs.size(), rs) == 0)
-      return false;
-    return true;
-  };
 
   for (;;) {
     fds[0].revents = fds[1].revents = 0;
     // While events are pending use a timeout so we detect the quiet period.
-    int timeout = (pending_client.empty() && !pending_server) ? -1 : kDebounceMs;
+    int timeout = pending_client.empty() ? -1 : kDebounceMs;
     int n = poll(fds, 2, timeout);
     if (n < 0) {
       if (errno == EINTR) continue;
@@ -194,12 +148,7 @@ void HttpFileWatcher::run()
         cache.invalidate(p);
         NPRPC_LOG_INFO("[FileWatcher] Invalidated: {}", p.string());
       }
-      if (pending_server && on_server_rebuilt_) {
-        NPRPC_LOG_INFO("[FileWatcher] Server files settled, restarting SSR...");
-        on_server_rebuilt_();
-      }
       pending_client.clear();
-      pending_server = false;
       continue;
     }
 
@@ -224,15 +173,7 @@ void HttpFileWatcher::run()
       if ((ev->mask & IN_CREATE) && (ev->mask & IN_ISDIR) && ev->len > 0) {
         auto parent_it = wd_to_dir.find(ev->wd);
         if (parent_it != wd_to_dir.end()) {
-          auto new_dir = parent_it->second / ev->name;
-          watch_dir(new_dir);
-          // ssr_server_root_ itself was (re)created (e.g. `build/` after rimraf).
-          // Arm a restart so Node.js is reloaded once the build settles.
-          if (!ssr_server_root_.empty() && new_dir == ssr_server_root_) {
-            pending_server = true;
-            NPRPC_LOG_INFO("[FileWatcher] SSR build dir recreated — restart armed: {}",
-                           new_dir.string());
-          }
+          watch_dir(parent_it->second / ev->name);
         }
         continue;
       }
@@ -245,28 +186,10 @@ void HttpFileWatcher::run()
       if (dir_it == wd_to_dir.end()) continue;
 
       auto file_path = dir_it->second / ev->name;
-      bool server    = is_server_file(file_path);
 
-      if (ev->mask & (IN_CLOSE_WRITE | IN_MOVED_TO)) {
-        // A file was written/renamed — record it in the appropriate bucket.
-        if (server) {
-          if (!pending_server) {
-            NPRPC_LOG_INFO("[FileWatcher] SSR build activity detected: {}",
-                           file_path.string());
-          }
-          pending_server = true;   // arm SSR restart after quiet period
-        } else {
-          pending_client.push_back(file_path);
-        }
-      } else if (ev->mask & IN_DELETE) {
-        if (!server) {
-          // Client static file removed — purge the cache entry immediately
-          // (next request will get a 404 / reloaded file).
-          pending_client.push_back(file_path);
-        }
-        // Server file DELETE means the build just started clearing old output.
-        // Do NOT arm pending_server here; we only want to restart once the
-        // new files have been written (IN_CLOSE_WRITE / IN_MOVED_TO above).
+      // Written, renamed in, or removed — either way the cached copy is stale.
+      if (ev->mask & (IN_CLOSE_WRITE | IN_MOVED_TO | IN_DELETE)) {
+        pending_client.push_back(file_path);
       }
     }
   }
@@ -275,9 +198,7 @@ void HttpFileWatcher::run()
 // ─── Non-Linux stub ──────────────────────────────────────────────────────────
 #else
 
-HttpFileWatcher::HttpFileWatcher(std::filesystem::path,
-                                 std::filesystem::path,
-                                 std::function<void()>)
+HttpFileWatcher::HttpFileWatcher(std::filesystem::path)
 {
   NPRPC_LOG_INFO("[FileWatcher] inotify not available on this platform; "
                  "falling back to mtime polling.");
@@ -294,13 +215,10 @@ std::unique_ptr<HttpFileWatcher> g_watcher;
 std::once_flag g_watcher_flag;
 } // namespace
 
-void start_file_watcher(const std::filesystem::path& client_root,
-                        const std::filesystem::path& ssr_server_root,
-                        std::function<void()>        on_server_rebuilt)
+void start_file_watcher(const std::filesystem::path& client_root)
 {
   std::call_once(g_watcher_flag, [&] {
-    g_watcher = std::make_unique<HttpFileWatcher>(
-        client_root, ssr_server_root, std::move(on_server_rebuilt));
+    g_watcher = std::make_unique<HttpFileWatcher>(client_root);
   });
 }
 

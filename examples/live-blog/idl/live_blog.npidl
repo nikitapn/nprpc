@@ -1,87 +1,206 @@
 // Blog post and chat example for nprpc, demonstrating various features
 module live_blog;
 
+/// Raw bytes of a media stream chunk.
 alias binary = u8[];
 
+/// What a `PresenceEvent` reports about a chat participant.
 enum PresenceEventKind {
+  /// The participant entered the room.
   Joined,
+  /// The participant left the room.
   Left,
+  /// Sent with ordinary chat messages, not as a typing indicator. Clients
+  /// should act on presence only for `Joined` and `Left`.
   Typing,
 }
 
+/// An author, as shown on post cards and at the top of an author page.
 message AuthorPreview {
+  /// Unique author id. 0 means no author matched the requested slug.
   id: u64;
+  /// URL-safe identifier, as in `/author/<slug>`.
   slug: string;
+  /// Display name.
   name: string;
+  /// One-paragraph plain-text biography.
   bio: string;
+  /// Absolute URL of the avatar image. Empty when there is none.
   avatar_url: string;
 }
 
+/// A post as shown in listings: enough for a card, without the body.
 message PostPreview {
+  /// Unique post id. Chat and media calls take this id, not the slug.
   id: u64;
+  /// URL-safe identifier, as in `/post/<slug>`.
   slug: string;
   title: string;
+  /// Plain-text teaser for the card.
   excerpt: string;
+  /// Publication time as an ISO 8601 UTC timestamp, e.g.
+  /// `2026-03-01T09:00:00Z`.
   published_at: string;
+  /// Absolute URL of the cover image, if the post has one.
   cover_url?: string;
   author: AuthorPreview;
 }
 
+/// One page of the post listing.
 message PostPage {
+  /// The 1-based page number actually served, after normalization.
   page: u32;
+  /// The page size actually used, after normalization.
   page_size: u32;
+  /// Number of posts across all pages, for building pagination.
   total_posts: u32;
+  /// Posts on this page. Empty when `page` is past the last page.
   posts: PostPreview[];
 }
 
+/// A full post, for the post page.
 message PostDetail {
+  /// Unique post id. 0 means no post matched the requested slug.
   id: u64;
   slug: string;
   title: string;
+  /// One-sentence plain-text standfirst shown under the title.
   summary: string;
+  /// The post body as trusted HTML, rendered without escaping.
   body_html: string;
+  /// Publication time as an ISO 8601 UTC timestamp. Empty for a post that
+  /// was not found.
   published_at: string;
   author: AuthorPreview;
+  /// Free-form topic tags.
   tags: string[];
 }
 
+/// A reader comment on a post.
 message Comment {
   id: u64;
+  /// Name the commenter gave. Not tied to an account.
   author_name: string;
+  /// Comment text, plain text.
   body: string;
+  /// Creation time as an ISO 8601 UTC timestamp.
   created_at: string;
 }
 
+/// A chat message. The client sends one per message, and the server relays
+/// it to the room inside a `ChatServerEvent`.
 message ChatEnvelope {
+  /// Sender name. Clients may leave it empty; the server then uses the
+  /// `user_name` passed to `JoinPostChat`. Server notices use `system`.
   author: string;
+  /// Message text, plain text. An empty body means the event carries no
+  /// message to display.
   body: string;
+  /// Send time as an ISO 8601 UTC timestamp. Clients may leave it empty;
+  /// the server then fills it in.
   created_at: string;
 }
 
+/// A change in who is in a post's chat room.
 message PresenceEvent {
+  /// The participant the event is about.
   user_name: string;
   kind: PresenceEventKind;
 }
 
+/// One event on a chat stream.
+///
+/// Every event carries both parts. Show `message` when its body is not
+/// empty. Act on `presence` only when its kind is `Joined` or `Left`: join
+/// and leave events also carry a `system` message describing them.
 message ChatServerEvent {
   message: ChatEnvelope;
   presence: PresenceEvent;
 }
 
+/// Read-only access to posts, authors and comments.
+///
+/// Lookups by slug do not fail. An unknown slug returns a placeholder whose
+/// `id` is 0, which callers check to render a not-found page.
+///
+/// All list methods page the same way: `page` is 1-based, `page` and
+/// `page_size` below 1 are treated as 1, and a page past the end returns an
+/// empty list. Results keep the dataset's order.
 interface BlogService {
+  /// One page of all posts, with the totals needed for pagination.
   PostPage ListPosts(page: u32, page_size: u32);
-  PostDetail GetPost(slug: string);
-  Comment[] ListComments(post_id: u64, page: u32, page_size: u32);
-  PostPreview[] ListAuthorPosts(author_slug: string, page: u32, page_size: u32);
-  AuthorPreview GetAuthor(author_slug: string);
+
+  /// The full post with the given slug.
+  PostDetail GetPost(
+    /// Post slug, as in `/post/<slug>`.
+    slug: string
+  );
+
+  /// One page of a post's comments, oldest first.
+  Comment[] ListComments(
+    /// `PostDetail.id` of the post.
+    post_id: u64,
+    page: u32,
+    page_size: u32
+  );
+
+  /// One page of the posts written by an author.
+  PostPreview[] ListAuthorPosts(
+    /// Author slug, as in `/author/<slug>`.
+    author_slug: string,
+    page: u32,
+    page_size: u32
+  );
+
+  /// The author with the given slug.
+  AuthorPreview GetAuthor(
+    /// Author slug, as in `/author/<slug>`.
+    author_slug: string
+  );
 }
 
+/// Live chat rooms, one per post.
 interface ChatService {
-  bidi_stream<ChatEnvelope, ChatServerEvent> JoinPostChat(post_id: u64, user_name: string);
+  /// Joins the chat room of a post for as long as the stream stays open.
+  ///
+  /// Write a `ChatEnvelope` to send a message; the server relays it to
+  /// everyone in the room, the sender included. The first event received
+  /// announces the join. Closing the write side leaves the room.
+  bidi_stream<ChatEnvelope, ChatServerEvent> JoinPostChat(
+    /// `PostDetail.id` of the post whose room to join.
+    post_id: u64,
+    /// Name to join under, and the default author of messages sent
+    /// without one.
+    user_name: string
+  );
 }
 
+/// Video attached to a post.
+///
+/// A post has video only if the server's media directory has files for it.
+/// Otherwise every method here returns an empty result rather than an
+/// error.
 interface MediaService {
+  /// The post's whole video as fragmented MP4, streamed from the start in
+  /// chunks, ready to append to a Media Source Extensions `SourceBuffer`.
+  /// The stream ends right away if the post has no video.
   server_stream<binary> OpenPostVideo(post_id: u64);
+
+  /// The post's DASH manifest (MPD XML), or an empty string if it has none.
+  ///
+  /// The manifest describes a single-file on-demand representation. Fetch
+  /// its segments with `GetVideoDashSegmentRange`.
   string GetVideoDashManifest(post_id: u64);
-  server_stream<binary> GetVideoDashSegmentRange(post_id: u64, byte_offset: u64, byte_length: u64);
+
+  /// A byte range of the file the DASH manifest refers to, streamed in
+  /// chunks. This is how a DASH player (e.g. Shaka) fetches the segments
+  /// listed in the file's `sidx` box.
+  server_stream<binary> GetVideoDashSegmentRange(
+    post_id: u64,
+    /// Offset of the first byte to send.
+    byte_offset: u64,
+    /// Number of bytes to send. It is cut short at the end of the file, and
+    /// a range that starts past the end yields an empty stream.
+    byte_length: u64
+  );
 }

@@ -1,0 +1,30 @@
+<nav class="crumbs" aria-label="Breadcrumb">
+  {{#crumbs}}<a href="{{url}}">{{title}}</a><span aria-hidden="true">›</span>{{/crumbs}}
+  <span>{{title}}</span>
+</nav>
+
+<header class="page-head">
+  <h1><span class="kind">{{kind}}</span> {{title}}</h1>
+  <p class="muted">{{lang_title}}</p>
+</header>
+
+{{#decls}}
+{{> partials/decl}}
+{{/decls}}
+
+{{#groups}}
+<section class="members">
+  <h2 class="section-title">{{title}}</h2>
+  {{#members}}
+  {{#url}}
+  <div class="decl decl-link" id="{{anchor}}">
+    <a href="{{url}}"><code>{{name}}</code></a> <span class="kind">{{kind}}</span>
+    {{#summary_html}}<p class="summary">{{{summary_html}}}</p>{{/summary_html}}
+  </div>
+  {{/url}}
+  {{^url}}
+  {{> partials/decl}}
+  {{/url}}
+  {{/members}}
+</section>
+{{/groups}}

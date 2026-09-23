@@ -72,6 +72,7 @@ public func unmarshal_fundamental_vector<T>(buffer: UnsafeRawPointer, offset: In
 
 /// MARK: - String Vector Marshalling (special case of vector of fundamental type)
 
+/// Encodes an array of strings as a `vector<string>` field. Used by generated code.
 public func marshal_string_vector(buffer: FlatBuffer, offset: Int, vector: [String]) {
     let dataOffset = _alloc(buffer: buffer, vectorOffset: offset, count: vector.count, elementSize: 8, align: 4)
 
@@ -82,6 +83,7 @@ public func marshal_string_vector(buffer: FlatBuffer, offset: Int, vector: [Stri
     }
 }
 
+/// Decodes a `vector<string>` field. Used by generated code.
 public func unmarshal_string_vector(buffer: UnsafeRawPointer, offset: Int) -> [String] {
     let dataOffset = Int(buffer.load(fromByteOffset: offset + 0, as: UInt32.self)) + offset
     let count = Int(buffer.load(fromByteOffset: offset + 4, as: UInt32.self))
@@ -100,6 +102,7 @@ public func unmarshal_string_vector(buffer: UnsafeRawPointer, offset: Int) -> [S
 
 /// MARK: - Struct Vector Marshalling (for vectors of non-fundamental types)
 
+/// Encodes an array of messages as a `vector<Message>` field. Used by generated code.
 public func marshal_struct_vector<T>(
     buffer: FlatBuffer,
     offset: Int,
@@ -117,6 +120,7 @@ public func marshal_struct_vector<T>(
     }
 }
 
+/// Decodes a `vector<Message>` field. Used by generated code.
 public func unmarshal_struct_vector<T>(
     buffer: UnsafeRawPointer,
     offset: Int,
@@ -140,6 +144,7 @@ public func unmarshal_struct_vector<T>(
 
 // MARK: - Array Marshalling
 
+/// Encodes a fixed-size array of plain values (`T[N]`). Used by generated code.
 public func marshal_fundamental_array<T>(buffer: FlatBuffer, offset: Int, array: [T], count: Int) {
     guard let data = buffer.data else { return }
     array.withUnsafeBytes { bytes in
@@ -150,6 +155,7 @@ public func marshal_fundamental_array<T>(buffer: FlatBuffer, offset: Int, array:
     }
 }
 
+/// Decodes a fixed-size array of plain values. Used by generated code.
 public func unmarshal_fundamental_array<T>(buffer: UnsafeRawPointer, offset: Int, count: Int) -> [T] {
     let pointer = buffer.advanced(by: offset).assumingMemoryBound(to: T.self)
     return Array(UnsafeBufferPointer(start: pointer, count: count))
@@ -157,12 +163,14 @@ public func unmarshal_fundamental_array<T>(buffer: UnsafeRawPointer, offset: Int
 
 /// MARK: - String Array Marshalling (special case of array of fundamental type)
 
+/// Encodes a fixed-size array of strings. Used by generated code.
 public func marshal_string_array(buffer: FlatBuffer, offset: Int, stringArray: [String], count: Int) {
     for i in 0..<count {
         marshal_string(buffer: buffer, offset: offset + i * 8, string: stringArray[i])
     }
 }
 
+/// Decodes a fixed-size array of strings. Used by generated code.
 public func unmarshal_string_array(buffer: UnsafeRawPointer, offset: Int, count: Int) -> [String] {
     var result: [String] = []
     result.reserveCapacity(count)
@@ -176,6 +184,7 @@ public func unmarshal_string_array(buffer: UnsafeRawPointer, offset: Int, count:
 
 /// MARK: - Struct Array Marshalling (for arrays of non-fundamental types)
 
+/// Encodes a fixed-size array of messages. Used by generated code.
 public func marshal_struct_array<T>(
     buffer: FlatBuffer,
     offset: Int,
@@ -189,6 +198,7 @@ public func marshal_struct_array<T>(
     }
 }
 
+/// Decodes a fixed-size array of messages. Used by generated code.
 public func unmarshal_struct_array<T>(
     buffer: UnsafeRawPointer,
     offset: Int,
@@ -210,6 +220,7 @@ public func unmarshal_struct_array<T>(
 
 // MARK: - Optional Marshalling
 
+/// Encodes an optional plain value (`name?: T`) that is present. Used by generated code.
 public func marshal_optional_fundamental<T>(buffer: FlatBuffer, offset: Int, value: T) {
     let elementSize = MemoryLayout<T>.stride
     let alignment = MemoryLayout<T>.alignment
@@ -222,6 +233,7 @@ public func marshal_optional_fundamental<T>(buffer: FlatBuffer, offset: Int, val
     data.storeBytes(of: value, toByteOffset: dataOffset, as: T.self)
 }
 
+/// Encodes an optional message that is present. Used by generated code.
 public func marshal_optional_struct<T>(
     buffer: FlatBuffer,
     offset: Int,
@@ -234,6 +246,7 @@ public func marshal_optional_struct<T>(
     marshalFunc(buffer, dataOffset)
 }
 
+/// Decodes an optional plain value; nil when absent. Used by generated code.
 public func unmarshal_optional_fundamental<T>(buffer: UnsafeRawPointer, offset: Int) -> T? {
     // Read the relative offset
     let relativeOffset = buffer.load(fromByteOffset: offset, as: UInt32.self)
@@ -244,6 +257,7 @@ public func unmarshal_optional_fundamental<T>(buffer: UnsafeRawPointer, offset: 
     return buffer.load(fromByteOffset: dataOffset, as: T.self)
 }
 
+/// Decodes an optional message; nil when absent. Used by generated code.
 public func unmarshal_optional_struct<T>(
     buffer: UnsafeRawPointer,
     offset: Int,
@@ -262,18 +276,6 @@ public func unmarshal_optional_struct<T>(
 // MARK: - ObjectId Marshalling
 
 let marshal_object_id = detail.marshal_ObjectId
-
-// MARK: - Span/View helpers for compatibility
-
-public struct Span<T> {
-    public let pointer: UnsafePointer<T>
-    public let count: Int
-    
-    public init(_ array: [T]) {
-        self.pointer = array.withUnsafeBufferPointer { $0.baseAddress! }
-        self.count = array.count
-    }
-}
 
 // MARK: - NPRPCObject marshalling
 

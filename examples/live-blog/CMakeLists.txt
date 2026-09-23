@@ -16,17 +16,10 @@ set(LIVE_BLOG_BUILD_SCRIPT ${LIVE_BLOG_ROOT}/scripts/build-swift-server.sh)
 set(LIVE_BLOG_RUN_SCRIPT ${LIVE_BLOG_ROOT}/scripts/run-swift-server.sh)
 set(LIVE_BLOG_CLIENT_ROOT ${LIVE_BLOG_ROOT}/client)
 set(LIVE_BLOG_CLIENT_WORKSPACE examples/live-blog/client)
-set(LIVE_BLOG_CPP_ROOT ${LIVE_BLOG_ROOT}/cpp)
-set(LIVE_BLOG_CPP_STATIC_ROOT ${LIVE_BLOG_CLIENT_ROOT}/build/client)
-set(LIVE_BLOG_CPP_RUNTIME_ROOT ${LIVE_BLOG_CLIENT_ROOT}/build)
-set(LIVE_BLOG_CPP_MEDIA_ROOT ${LIVE_BLOG_ROOT}/media)
-set(LIVE_BLOG_IDL_FILES ${LIVE_BLOG_ROOT}/idl/live_blog.npidl)
-
-npidl_generate_idl_files("${LIVE_BLOG_IDL_FILES}" live_blog_cpp_stub)
-
 file(GLOB_RECURSE LIVE_BLOG_CLIENT_SOURCES CONFIGURE_DEPENDS
   ${LIVE_BLOG_CLIENT_ROOT}/src/*
-  ${LIVE_BLOG_CLIENT_ROOT}/static/*
+  ${LIVE_BLOG_ROOT}/templates/*
+  ${LIVE_BLOG_ROOT}/web/*
 )
 
 add_custom_target(live_blog_stubs
@@ -39,61 +32,30 @@ add_custom_target(live_blog_stubs
 )
 
 add_custom_target(live_blog_client_deps
-  COMMAND ${NPM_EXECUTABLE} ls --workspace ${LIVE_BLOG_CLIENT_WORKSPACE} --depth=0 vite @sveltejs/kit @tailwindcss/vite @nprpc/vite-plugin @nprpc/adapter-sveltekit
+  COMMAND ${NPM_EXECUTABLE} ls --workspace ${LIVE_BLOG_CLIENT_WORKSPACE} --depth=0 vite @tailwindcss/cli
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   DEPENDS
     ${CMAKE_SOURCE_DIR}/package.json
     ${CMAKE_SOURCE_DIR}/package-lock.json
     ${LIVE_BLOG_CLIENT_ROOT}/package.json
-    ${CMAKE_SOURCE_DIR}/nprpc_node/package.json
-    ${CMAKE_SOURCE_DIR}/nprpc_adapter_sveltekit/package.json
-    ${CMAKE_SOURCE_DIR}/nprpc_vite_plugin/package.json
   COMMENT "Checking live-blog client workspace dependencies (run 'npm ci' at the repo root if this fails)"
   USES_TERMINAL
   VERBATIM
 )
 
 add_custom_target(live_blog_client
-  COMMAND ${NPM_EXECUTABLE} run build --workspace ${LIVE_BLOG_CLIENT_WORKSPACE}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMAND ${LIVE_BLOG_ROOT}/scripts/build-assets.sh
+  WORKING_DIRECTORY ${LIVE_BLOG_ROOT}
   DEPENDS
     live_blog_client_deps
     live_blog_stubs
     ${LIVE_BLOG_CLIENT_ROOT}/package.json
-    ${LIVE_BLOG_CLIENT_ROOT}/svelte.config.js
     ${LIVE_BLOG_CLIENT_ROOT}/tsconfig.json
     ${LIVE_BLOG_CLIENT_ROOT}/vite.config.ts
     ${LIVE_BLOG_CLIENT_SOURCES}
-  COMMENT "Building live-blog Vite client"
+  COMMENT "Building live-blog static root (islands, CSS, vendored assets)"
   USES_TERMINAL
   VERBATIM
-)
-
-add_executable(live_blog_cpp_server
-  ${LIVE_BLOG_CPP_ROOT}/main.cpp
-  ${live_blog_cpp_stub_GENERATED_SOURCES}
-)
-
-add_dependencies(live_blog_cpp_server live_blog_client live_blog_cpp_stub_gen)
-
-target_include_directories(live_blog_cpp_server
-  PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${live_blog_cpp_stub_INCLUDE_DIR}
-)
-
-target_link_libraries(live_blog_cpp_server
-  PRIVATE
-    nprpc::nprpc
-)
-
-target_compile_definitions(live_blog_cpp_server
-  PRIVATE
-    NPRPC_LIVE_BLOG_STATIC_ROOT="${LIVE_BLOG_CPP_STATIC_ROOT}"
-    NPRPC_LIVE_BLOG_RUNTIME_ROOT="${LIVE_BLOG_CPP_RUNTIME_ROOT}"
-    NPRPC_LIVE_BLOG_MEDIA_ROOT="${LIVE_BLOG_CPP_MEDIA_ROOT}"
-    NPRPC_LIVE_BLOG_CERT_FILE="${CMAKE_SOURCE_DIR}/certs/out/localhost.crt"
-    NPRPC_LIVE_BLOG_KEY_FILE="${CMAKE_SOURCE_DIR}/certs/out/localhost.key"
 )
 
 add_custom_target(live_blog_swift_server
@@ -106,15 +68,7 @@ add_custom_target(live_blog_swift_server
 )
 
 add_custom_target(live_blog_example ALL
-  DEPENDS live_blog_client live_blog_cpp_server live_blog_swift_server
-)
-
-add_custom_target(run_live_blog_cpp_server
-  COMMAND $<TARGET_FILE:live_blog_cpp_server>
-  DEPENDS live_blog_cpp_server
-  COMMENT "Running live-blog C++ server"
-  USES_TERMINAL
-  VERBATIM
+  DEPENDS live_blog_client live_blog_swift_server
 )
 
 add_custom_target(run_live_blog_swift_server

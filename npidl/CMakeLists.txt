@@ -17,6 +17,8 @@ add_library(npidl_core STATIC
   src/arguments_builder.cpp
   src/cpp_builder.cpp
   src/cpp_builder.hpp
+  src/doc_json_builder.cpp
+  src/doc_json_builder.hpp
   src/lsp_server.hpp
   src/lsp_server.cpp
   src/parse_for_lsp.hpp

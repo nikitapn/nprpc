@@ -1,0 +1,21 @@
+<div class="grid gap-6">
+  <section class="glass-card grain overflow-hidden p-8 md:p-12">
+    <div class="flex flex-wrap items-center gap-6">
+      {{#author.avatar_url}}
+      <img class="h-24 w-24 rounded-full border border-amber-900/15 object-cover"
+           src="{{.}}" alt="" />
+      {{/author.avatar_url}}
+      <div class="space-y-3">
+        <p class="eyebrow">Author</p>
+        <h1 class="text-4xl font-semibold tracking-tight text-stone-900">{{author.name}}</h1>
+        <p class="max-w-2xl text-lg leading-8 text-stone-700">{{author.bio}}</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="space-y-4">
+    <div id="post-list" class="grid gap-4">
+      {{> partials/post_cards}}
+    </div>
+  </section>
+</div>

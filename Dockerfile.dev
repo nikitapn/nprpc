@@ -96,7 +96,6 @@ RUN --mount=type=cache,id=nprpc-build,target=/workspace/.build_relwith_debinfo \
     -DNPRPC_BUILD_TOOLS=ON \
     -DNPRPC_ENABLE_QUIC=ON \
     -DNPRPC_ENABLE_HTTP3=ON \
-    -DNPRPC_ENABLE_SSR=ON \
     -DBUILD_SHARED_LIBS=ON \
     -DNPRPC_BUILD_TESTS=OFF \
     -DNPRPC_BUILD_JS=OFF \
@@ -171,6 +170,8 @@ COPY --from=swift-builder /opt/nprpc/lib/libCNprpc.a /opt/nprpc/lib/libCNprpc.a
 
 # Copy Swift package source for dependent projects
 COPY --from=swift-builder /workspace/nprpc_swift /opt/nprpc_swift
+# NPRPCWeb's template engine; Package.installed.swift points here.
+COPY --from=swift-builder /workspace/third_party/swift-mustache /opt/swift-mustache
 
 # Copy built Swift artifacts
 COPY --from=swift-builder /workspace/nprpc_swift/.build/release /opt/nprpc_swift/.build/release

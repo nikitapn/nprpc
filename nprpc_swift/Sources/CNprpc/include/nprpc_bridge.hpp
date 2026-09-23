@@ -12,6 +12,8 @@
 #include <memory>
 #include <optional>
 
+#include "nprpc_page_bridge.hpp"
+
 // Swift interop macros
 #ifndef SWIFT_RETURNS_INDEPENDENT_VALUE
 #define SWIFT_RETURNS_INDEPENDENT_VALUE __attribute__((swift_attr("returns_independent_value")))
@@ -57,7 +59,6 @@ struct RpcBuildConfig {
     uint16_t http_port;
     bool http_ssl_enabled;
     bool http3_enabled;
-    bool ssr_enabled;
     bool http_ssl_client_disable_verification;
     std::string http_cert_file;
     std::string http_key_file;
@@ -87,8 +88,12 @@ struct RpcBuildConfig {
     size_t http_webtransport_requests_burst;
     size_t http_webtransport_stream_opens_per_session_per_second;
     size_t http_webtransport_stream_opens_burst;
-    std::string ssr_handler_dir;
     bool watch_files;
+
+    // In-process page renderer (see nprpc_page_bridge.hpp).  nullptr means the
+    // server serves static files as usual.
+    nprpc_page_handler_fn page_handler;
+    void* page_handler_ctx;
 
     // QUIC
     uint16_t quic_port;

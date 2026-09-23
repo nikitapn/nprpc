@@ -1,0 +1,37 @@
+<div class="grid gap-6">
+  <section class="glass-card grain overflow-hidden p-8 md:p-12">
+    <div class="grid gap-8 md:grid-cols-[1.5fr_0.9fr] md:items-end">
+      <div class="space-y-5">
+        <p class="eyebrow">Blog listing</p>
+        <h1 class="max-w-3xl text-4xl font-semibold tracking-tight text-stone-900 md:text-6xl">
+          {{total_posts}} posts
+        </h1>
+        <p class="max-w-2xl text-lg leading-8 text-stone-700 md:text-xl">
+          Rendered server-side straight from <code>BlogService.ListPosts</code>.
+          No shell, no skeletons, no hydration round-trip.
+        </p>
+      </div>
+
+      <div class="rounded-[28px] border border-amber-800/15 bg-stone-950 p-5 text-stone-50 shadow-2xl">
+        <div class="mb-4 flex items-center justify-between text-xs uppercase tracking-[0.24em] text-stone-400">
+          <span>In-process SSR</span>
+          <span>Swift</span>
+        </div>
+        <div class="space-y-3 text-sm leading-6 text-stone-300">
+          <p>HTML from the process that owns the data. Chat and video stay on the typed RPC client.</p>
+          <div class="grid grid-cols-3 gap-2 text-center text-xs font-medium">
+            <div class="rounded-full bg-amber-700/80 px-3 py-2">Blog</div>
+            <div class="rounded-full bg-stone-900 px-3 py-2">Chat</div>
+            <div class="rounded-full bg-stone-800 px-3 py-2">Video</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="space-y-4">
+    <div id="post-list" class="grid gap-4">
+      {{> partials/post_cards}}
+    </div>
+  </section>
+</div>

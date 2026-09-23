@@ -19,6 +19,9 @@ bool is_flat(AstTypeDecl* type);
 bool is_fundamental(AstTypeDecl* type);
 bool contains_object(AstTypeDecl* type);
 
+// The type as it is spelled in IDL source (`vector<Post>`, `u32?`, ...).
+std::string idl_type_string(const AstTypeDecl* type);
+
 constexpr uint32_t size_of_header = 16;
 constexpr uint32_t size_of_call_header = 16;
 constexpr uint32_t align_of_call_header = 8;

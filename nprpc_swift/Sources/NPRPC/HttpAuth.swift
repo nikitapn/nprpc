@@ -36,6 +36,8 @@ public struct CookieOptions {
     /// Domain scope.  Empty string = current host only (the default).
     public var domain: String = ""
 
+    /// Options with safe defaults: HttpOnly, Secure, SameSite=Strict, a
+    /// session cookie scoped to the whole host.
     public init(
         httpOnly: Bool = true,
         secure: Bool = true,

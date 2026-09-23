@@ -10,11 +10,17 @@
 #include <nprpc_base_ext.hpp>
 
 namespace nprpc {
+/// URL scheme of native TCP endpoints.
 static constexpr std::string_view tcp_prefix = "tcp://";
+/// URL scheme shared by HTTP, WebSocket and WebTransport endpoints.
 static constexpr std::string_view web_prefix = "web://";
+/// URL scheme of shared-memory endpoints (same machine only).
 static constexpr std::string_view mem_prefix = "mem://";
+/// URL scheme of native QUIC endpoints.
 static constexpr std::string_view quic_prefix = "quic://";
 
+/// A transport plus an address: host and port, or a shared-memory channel
+/// id. One entry of `ObjectId::urls()`, parsed.
 class EndPoint
 {
   EndPointType type_;
@@ -22,6 +28,7 @@ class EndPoint
   std::uint16_t port_;
 
 public:
+  /// The URL scheme for `type`, e.g. `tcp://`.
   static constexpr std::string_view to_string(EndPointType type) noexcept
   {
     switch (type) {
@@ -44,6 +51,7 @@ public:
     }
   }
 
+  /// The endpoint as a URL: `tcp://host:port`, or `mem://<channel>`.
   std::string to_string() const noexcept
   {
     if (type_ == EndPointType::SharedMemory) {
@@ -54,21 +62,29 @@ public:
            std::to_string(port_);
   }
 
+  /// Same transport, host and port.
   bool operator==(const EndPoint& other) const noexcept
   {
     return type_ == other.type_ && hostname_ == other.hostname_ &&
            port_ == other.port_;
   }
 
+  /// Differs in transport, host or port.
   bool operator!=(const EndPoint& other) const noexcept
   {
     return !(*this == other);
   }
 
+  /// The transport.
   EndPointType type() const noexcept { return type_; }
+  /// Host name or IP address; the channel id for shared memory.
   std::string_view hostname() const noexcept { return hostname_; }
+  /// Port; 0 for shared memory.
   std::uint16_t port() const noexcept { return port_; }
+  /// Whether no address is set.
   bool empty() const noexcept { return hostname_.empty(); }
+  /// Whether the transport is encrypted with TLS (WSS, HTTPS,
+  /// WebTransport).
   bool is_ssl() const noexcept
   {
     return type_ == EndPointType::SecuredWebSocket ||
@@ -76,13 +92,14 @@ public:
            type_ == EndPointType::WebTransport;
   }
 
-  // For shared memory endpoints, return the channel ID (stored in hostname_)
+  /// For shared memory endpoints, the channel id; empty otherwise.
   std::string_view memory_channel_id() const noexcept
   {
     return (type_ == EndPointType::SharedMemory) ? hostname_
                                                  : std::string_view{};
   }
 
+  /// `host:port` without the scheme; the channel id for shared memory.
   std::string get_full() const noexcept
   {
     if (type_ == EndPointType::SharedMemory) {
@@ -92,8 +109,10 @@ public:
     return hostname_ + ":" + std::to_string(port_);
   }
 
+  /// An empty endpoint.
   EndPoint() = default;
 
+  /// An endpoint from its parts.
   EndPoint(EndPointType type, std::string_view hostname, std::uint16_t port) noexcept
       : type_{type}
       , hostname_{hostname}
@@ -101,6 +120,11 @@ public:
   {
   }
 
+  /// Parses a URL such as `tcp://host:port` or `mem://<channel>`.
+  ///
+  /// `web://` URLs serve several transports, so `type` says which one this
+  /// is. Throws `std::invalid_argument` for an unknown scheme, a missing or
+  /// malformed port, or a `web://` URL without `type`.
   EndPoint(std::string_view url, std::optional<EndPointType> type = std::nullopt)
   {
     if (url.empty()) {
@@ -157,6 +181,7 @@ public:
   }
 };
 
+/// Prints the endpoint as a URL.
 inline std::ostream& operator<<(std::ostream& os, const EndPoint& endpoint)
 {
   return os << endpoint.to_string();

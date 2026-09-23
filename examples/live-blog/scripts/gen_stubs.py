@@ -4,7 +4,7 @@ Generate NPRPC stubs for TypeScript and Swift from IDL files.
 Uses the nprpc-dev:latest Docker image which contains the npidl compiler.
 
 Usage:
-    python3 gen_stubs.py          # generate both TS and Swift
+    python3 gen_stubs.py          # generate TS and Swift
     python3 gen_stubs.py --ts     # generate TypeScript only
     python3 gen_stubs.py --swift  # generate Swift only
 """
@@ -82,9 +82,11 @@ def main() -> None:
     parser.add_argument("--swift", action="store_true", help="Generate Swift stubs only")
     args = parser.parse_args()
 
-    # Default: generate both
-    gen_ts    = args.ts    or (not args.ts and not args.swift)
-    gen_swift = args.swift or (not args.ts and not args.swift)
+    # No language flag at all means every language; naming one means only that
+    # one (so --ts must not also drag in Swift).
+    none_selected = not (args.ts or args.swift)
+    gen_ts    = args.ts    or none_selected
+    gen_swift = args.swift or none_selected
 
     print("=== Generating NPRPC stubs ===")
     print(f"  Docker image : {DOCKER_IMAGE}")

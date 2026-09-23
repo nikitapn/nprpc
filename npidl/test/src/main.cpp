@@ -2,11 +2,16 @@
 // SPDX-License-Identifier: MIT
 
 #include <gtest/gtest.h>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "../../src/ast.hpp"
+#include "../../src/builder.hpp"
+#include "../../src/parser_interfaces.hpp"
 #include "../../src/parse_for_lsp.hpp"
 #include "../../src/position_index.hpp"
 #include "../../src/position_index_builder.hpp"
@@ -506,6 +511,184 @@ TEST(LspReparse, HoverPositionSurvivesContentEdit)
   const auto* after_entry = index.find_at_position(line2, col2);
   ASSERT_NE(after_entry, nullptr);
   EXPECT_EQ(after_entry->node_type, npidl::PositionIndex::NodeType::Struct);
+}
+
+
+// --- /// documentation comments -------------------------------------------
+
+namespace {
+
+const char* const kDocSample = R"(
+module docs;
+
+//// separator line, not documentation
+
+/// A post.
+///
+///   indented line keeps its indent
+message Post {
+  /// The slug.
+  slug: string;
+  title: string; /// trailing, belongs to nothing
+  views: u32;
+}
+
+// ordinary comment
+/// Post state.
+enum State {
+  /// Not public yet.
+  Draft,
+  Published = 5,
+  /// Hidden.
+  Archived
+}
+
+/// Missing post.
+exception NotFound { slug: string; }
+
+/// Posts on a page.
+alias Posts = vector<Post>;
+
+/// Blog access.
+[trusted]
+interface Blog {
+  /// Fetch one.
+  void get(
+    /// Which post.
+    slug: in string,
+    /// The result.
+    post: out Post
+  ) raises(NotFound);
+
+  /// Counter.
+  [unreliable]
+  void bump(slug: in string);
+}
+)";
+
+npidl::AstStructDecl* find_struct(npidl::Context& ctx, std::string_view name)
+{
+  auto* t = ctx.nm_root()->find_type(name, true);
+  return t && t->id == npidl::FieldType::Struct ? npidl::cflat(t) : nullptr;
+}
+
+} // namespace
+
+TEST(DocComments, AttachToDeclarations)
+{
+  npidl::Context ctx;
+  std::vector<npidl::ParseError> errors;
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, kDocSample, errors))
+      << (errors.empty() ? "" : errors.front().message);
+
+  auto* post = find_struct(ctx, "Post");
+  ASSERT_NE(post, nullptr);
+  // One space after `///` is the separator; anything beyond is content.
+  EXPECT_EQ(post->doc, "A post.\n\n  indented line keeps its indent");
+  ASSERT_EQ(post->fields.size(), 3u);
+  EXPECT_EQ(post->fields[0]->doc, "The slug.");
+  EXPECT_EQ(post->fields[1]->doc, "");
+  // A `///` after code on the same line must not drift onto the next field.
+  EXPECT_EQ(post->fields[2]->doc, "");
+
+  auto* state_t = ctx.nm_root()->find_type("State", true);
+  ASSERT_NE(state_t, nullptr);
+  auto* state = npidl::cenum(state_t);
+  EXPECT_EQ(state->doc, "Post state.");
+  ASSERT_EQ(state->item_docs.size(), state->items.size());
+  EXPECT_EQ(state->item_docs[0], "Not public yet.");
+  EXPECT_EQ(state->item_docs[1], "");
+  EXPECT_EQ(state->item_docs[2], "Hidden.");
+
+  auto* nf = find_struct(ctx, "NotFound");
+  ASSERT_NE(nf, nullptr);
+  EXPECT_EQ(nf->doc, "Missing post.");
+
+  auto* posts = ctx.nm_root()->find_type("Posts", true);
+  ASSERT_NE(posts, nullptr);
+  EXPECT_EQ(npidl::calias(posts)->doc, "Posts on a page.");
+
+  // Docs sit above attribute lists on both interfaces and methods.
+  ASSERT_EQ(ctx.interfaces.size(), 1u);
+  auto* blog = ctx.interfaces[0];
+  EXPECT_EQ(blog->doc, "Blog access.");
+  EXPECT_TRUE(blog->trusted);
+  ASSERT_EQ(blog->fns.size(), 2u);
+  EXPECT_EQ(blog->fns[0]->doc, "Fetch one.");
+  ASSERT_EQ(blog->fns[0]->args.size(), 2u);
+  EXPECT_EQ(blog->fns[0]->args[0]->doc, "Which post.");
+  EXPECT_EQ(blog->fns[0]->args[1]->doc, "The result.");
+  EXPECT_EQ(blog->fns[1]->doc, "Counter.");
+  EXPECT_FALSE(blog->fns[1]->is_reliable);
+}
+
+TEST(DocComments, LineDocFormatting)
+{
+  std::ostringstream os;
+  npidl::builders::emit_line_doc(os, "  ", "First.\n\nThird, hard break\\");
+  EXPECT_EQ(os.str(), "  /// First.\n  ///\n  /// Third, hard break\n");
+
+  std::ostringstream empty;
+  npidl::builders::emit_line_doc(empty, "", "");
+  EXPECT_EQ(empty.str(), "");
+}
+
+TEST(DocComments, BlockDocEscapesTerminator)
+{
+  std::ostringstream os;
+  npidl::builders::emit_block_doc(os, "", "a */ b */\n\nc");
+  EXPECT_EQ(os.str(), "/**\n * a *\\/ b *\\/\n *\n * c\n */\n");
+}
+
+TEST(DocComments, FunctionDocParameters)
+{
+  npidl::Context ctx;
+  std::vector<npidl::ParseError> errors;
+  ASSERT_TRUE(npidl::parse_for_lsp(ctx, kDocSample, errors));
+  auto* get = ctx.interfaces[0]->fns[0];
+
+  using npidl::builders::ParamDocStyle;
+  EXPECT_EQ(npidl::builders::function_doc(get, ParamDocStyle::Doxygen),
+            "Fetch one.\n@param slug Which post.\n@param post The result.");
+  // Languages that return the lone out argument document it as the result.
+  EXPECT_EQ(npidl::builders::function_doc(get, ParamDocStyle::Swift, true),
+            "Fetch one.\n- Parameter slug: Which post.\n- Returns: The result.");
+  EXPECT_EQ(npidl::builders::function_doc(get, ParamDocStyle::Doxygen, true),
+            "Fetch one.\n@param slug Which post.\n@returns The result.");
+}
+
+TEST(DocComments, DocJsonOutput)
+{
+  const auto dir = std::filesystem::temp_directory_path() /
+                   ("npidl_doc_json_" + std::to_string(::getpid()));
+  std::filesystem::create_directories(dir);
+  const auto idl = dir / "docs.npidl";
+  std::ofstream(idl) << kDocSample;
+
+  npidl::CompilationBuilder builder;
+  builder.set_input_files({idl}).set_output_dir(dir).with_doc_json();
+  builder.build()->compile();
+
+  std::ifstream in(dir / "docs.doc.json");
+  ASSERT_TRUE(in.good());
+  std::stringstream json;
+  json << in.rdbuf();
+  const auto text = json.str();
+  std::filesystem::remove_all(dir);
+
+  EXPECT_NE(text.find(R"("module":"docs")"), std::string::npos);
+  EXPECT_NE(text.find(R"("doc":"A post.\n\n  indented line keeps its indent")"),
+            std::string::npos);
+  EXPECT_NE(text.find(R"({"name":"Published","value":5,"doc":""})"),
+            std::string::npos);
+  EXPECT_NE(text.find(R"({"name":"Archived","value":6,"doc":"Hidden."})"),
+            std::string::npos);
+  EXPECT_NE(text.find(R"("target":"vector<Post>")"), std::string::npos);
+  EXPECT_NE(text.find(R"("raises":["NotFound"])"), std::string::npos);
+  EXPECT_NE(text.find(R"("direction":"out","direct":false,"type":"Post","doc":"The result.")"),
+            std::string::npos);
+  // The synthesized exception id is marshalling detail.
+  EXPECT_EQ(text.find("__ex_id"), std::string::npos);
 }
 
 } // namespace npidltest

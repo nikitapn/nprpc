@@ -2,8 +2,6 @@
 
 This directory contains the Swift backend for the `examples/live-blog` demo.
 
-The Svelte client is shared with the C++ backend under `examples/live-blog/cpp`, so both server implementations expose the same browser-facing contracts.
-
 ## Current State
 
 - standalone Swift package using the preinstalled `nprpc_swift` package from the dev image

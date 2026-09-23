@@ -13,12 +13,12 @@
 #include <nprpc/impl/http_utils.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/misc/thread_identity.hpp>
-#ifdef NPRPC_SSR_ENABLED
-#include <nprpc/impl/ssr_manager.hpp>
-#endif
+#include <nprpc/impl/page_dispatch.hpp>
 #include <nprpc/common.hpp>
 
 #include <nghttp3/nghttp3.h>
+
+#include <boost/container/small_vector.hpp>
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
 #if defined(OPENSSL_IS_BORINGSSL)
@@ -370,27 +370,34 @@ enum class RawWritePriority : uint8_t {
 };
 
 struct PreparedResponseHeaders {
-  // Fixed-size inline array — no heap allocation for response header vectors.
-  // Max entries: 12 — CORS RPC (9) or static file + cache headers (7):
+  // Inline capacity 12 covers every built-in response without allocating —
+  // CORS RPC (9) or static file + cache headers (7):
   //   status, server, content-type, content-length,
   //   cache-control, etag, last-modified,
   //   access-control-allow-origin, access-control-allow-credentials,
   //   vary, access-control-allow-methods, access-control-allow-headers.
-  struct NvArray {
-    std::array<nghttp3_nv, 12> storage{};
-    size_t count = 0;
-    void clear() noexcept { count = 0; }
-    void reserve(size_t) noexcept {}
-    void push_back(nghttp3_nv nv) noexcept { storage[count++] = nv; }
-    nghttp3_nv* data() noexcept { return storage.data(); }
-    const nghttp3_nv* data() const noexcept { return storage.data(); }
-    size_t size() const noexcept { return count; }
-  } headers;
+  // A page handler may add arbitrary headers on top, so it grows past that
+  // rather than silently truncating.
+  boost::container::small_vector<nghttp3_nv, 12> headers;
   std::string status;
   std::string content_length;
   std::string content_type;
   std::string allow_origin;
 };
+
+namespace {
+
+// A page handler's content type rides the dedicated parameter; everything else
+// it set becomes an extra header.
+std::string page_content_type(const nprpc::PageResponse& page)
+{
+  for (const auto& [key, value] : page.headers) {
+    if (nprpc::impl::to_lower_copy(key) == "content-type") return value;
+  }
+  return "text/html; charset=utf-8";
+}
+
+} // namespace
 
 struct PendingSendPacketPayload {
   std::array<uint8_t, MAX_UDP_PAYLOAD_SIZE> bytes;
@@ -470,6 +477,10 @@ struct Http3Stream {
   // For static responses: response_data points to body data
   // For dynamic responses: use a string to hold the body
   flat_buffer dynamic_body;
+  // Extra response headers from a page handler, consumed by the next
+  // submit_response on this stream.  Owned here so the bytes outlive the
+  // PageResponse they came from.
+  std::vector<std::pair<std::string, std::string>> pending_page_headers;
   std::pmr::string response_content_type{alloc_}; // Store response content-type for lifetime
   PreparedResponseHeaders response_headers;
   CachedFileGuard cached_file;
@@ -716,6 +727,11 @@ private:
   int send_cors_preflight(Http3Stream* stream);
   int send_not_modified(Http3Stream* stream, CachedFileGuard cached_file);
   int send_webtransport_connect_response(Http3Stream* stream);
+
+  // In-process page rendering (nprpc/page_handler.hpp).  Returns nullopt when
+  // no handler is installed or it declines, so the caller falls through.
+  std::optional<nprpc::PageResponse> try_render_page(Http3Stream* stream);
+  int send_page_response(Http3Stream* stream, nprpc::PageResponse&& page);
 
   // RPC Handling
   int handle_rpc_request(Http3Stream* stream);
@@ -2535,54 +2551,11 @@ int Http3Connection::start_response(Http3Stream* stream)
 
   // Handle the HTTP request
   if (stream->method == "GET" || stream->method == "HEAD") {
-#ifdef NPRPC_SSR_ENABLED
-    // Check if this request should be handled by SSR
-    if (g_cfg.ssr_enabled &&
-        nprpc::impl::should_ssr(stream->method, stream->path, stream->accept)) {
-      NPRPC_HTTP3_TRACE("Forwarding to SSR: {} {}", stream->method,
-                        stream->path);
-
-      // Build full URL
-      std::string url =
-          std::string("https://") + stream->authority.c_str() + stream->path.c_str();
-
-      // Filter out HTTP/2 pseudo-headers (start with ':') for Web API
-      // compatibility
-      std::map<std::string, std::string> filtered_headers;
-      for (const auto& [key, value] : stream->headers) {
-        if (!key.empty() && key[0] != ':') {
-          filtered_headers[std::string(key)] = std::string(value);
-        }
-      }
-
-      // Forward to SSR (synchronous call)
-      auto ssr_response =
-          nprpc::impl::forward_to_ssr(std::string_view(stream->method), url, filtered_headers,
-                                      "", // No body for GET/HEAD
-                                      remote_ep_.address().to_string());
-
-      if (ssr_response) {
-        NPRPC_HTTP3_TRACE("SSR response: {} ({} bytes)",
-                          ssr_response->status_code, ssr_response->body.size());
-
-        // Determine content type from SSR response headers
-        std::string content_type = "text/html; charset=utf-8";
-        for (const auto& [key, value] : ssr_response->headers) {
-          if (key == "content-type" || key == "Content-Type") {
-            content_type = value;
-            break;
-          }
-        }
-
-        return send_dynamic_response(stream, ssr_response->status_code,
-                                     content_type,
-                                     std::move(ssr_response->body));
-      } else {
-        NPRPC_HTTP3_ERROR("SSR failed, falling back to static file");
-        // Fall through to static file serving
-      }
+    // In-process page rendering (see nprpc/page_handler.hpp).  nullopt
+    // falls through to static file serving.
+    if (auto page = try_render_page(stream)) {
+      return send_page_response(stream, std::move(*page));
     }
-#endif
 
     // Serve static file
     std::string request_path(stream->path);
@@ -2659,53 +2632,9 @@ int Http3Connection::start_response(Http3Stream* stream)
       return handle_rpc_request(stream);
     }
 
-#ifdef NPRPC_SSR_ENABLED
-    // Check if this is a SvelteKit form action (POST with ?/ in path)
-    if (g_cfg.ssr_enabled &&
-        nprpc::impl::should_ssr(stream->method, stream->path, stream->accept)) {
-      NPRPC_HTTP3_TRACE("Forwarding POST to SSR: {}", stream->path);
-
-      // Build full URL
-      std::string url =
-          std::string("https://") + stream->authority.c_str() + stream->path.c_str();
-
-      // Filter out HTTP/2 pseudo-headers
-      std::map<std::string, std::string> filtered_headers;
-      for (const auto& [key, value] : stream->headers) {
-        if (!key.empty() && key[0] != ':') {
-          filtered_headers[std::string(key)] = std::string(value);
-        }
-      }
-
-      // Get request body as string
-        std::string body_str(
-          reinterpret_cast<const char*>(stream->request_body.data_ptr()),
-          stream->request_body.size());
-
-      // Forward to SSR
-      auto ssr_response = nprpc::impl::forward_to_ssr(
-          stream->method, url, filtered_headers, body_str,
-          remote_ep_.address().to_string());
-
-      if (ssr_response) {
-        NPRPC_HTTP3_TRACE("SSR POST response: {} ({} bytes)",
-                          ssr_response->status_code, ssr_response->body.size());
-
-        std::string content_type = "text/html; charset=utf-8";
-        for (const auto& [key, value] : ssr_response->headers) {
-          if (key == "content-type" || key == "Content-Type") {
-            content_type = value;
-            break;
-          }
-        }
-
-        return send_dynamic_response(stream, ssr_response->status_code,
-                                     content_type,
-                                     std::move(ssr_response->body));
-      }
-      // Fall through to default response on error
+    if (auto page = try_render_page(stream)) {
+      return send_page_response(stream, std::move(*page));
     }
-#endif
 
     // Default: return 200 OK for other POST requests
     return send_static_response(stream, 200, "text/plain", "OK");
@@ -2832,6 +2761,66 @@ int Http3Connection::reject_oversized_request_body(Http3Stream* stream)
 
   return send_static_response(stream, 413, "text/plain",
                               "Request body too large");
+}
+
+std::optional<nprpc::PageResponse>
+Http3Connection::try_render_page(Http3Stream* stream)
+{
+  const auto [page_path, page_query] =
+      nprpc::impl::split_page_target(std::string_view(stream->path));
+  if (!nprpc::impl::page_handler_applies(std::string_view(stream->method),
+                                         page_path)) {
+    return std::nullopt;
+  }
+
+  // Drop HTTP/3 pseudo-headers; a page handler expects Web-API header names.
+  std::map<std::string, std::string> headers;
+  for (const auto& [key, value] : stream->headers) {
+    if (!key.empty() && key[0] != ':') {
+      headers[nprpc::impl::to_lower_copy(std::string_view(key))] =
+          std::string(value);
+    }
+  }
+
+  std::string body;
+  if (stream->method == "POST" && stream->request_body.size() > 0) {
+    body.assign(reinterpret_cast<const char*>(stream->request_body.data_ptr()),
+                stream->request_body.size());
+  }
+
+  return nprpc::impl::invoke_page_handler(
+      std::string_view(stream->method), std::string_view(stream->path),
+      std::move(headers), std::move(body), remote_ep_.address().to_string());
+}
+
+/// Submit a page handler's response, carrying whatever headers it set.
+///
+/// nghttp3 does not copy a NO_COPY name or value, so the bytes must outlive the
+/// submit.  The handler's strings belong to the PageResponse, which dies with
+/// this call, so they are moved into the stream first — the same lifetime the
+/// built-in headers already rely on.
+int Http3Connection::send_page_response(Http3Stream* stream,
+                                        nprpc::PageResponse&& page)
+{
+  std::vector<std::pair<std::string, std::string>> extra;
+  extra.reserve(page.headers.size());
+  for (auto& [key, value] : page.headers) {
+    auto name = nprpc::impl::to_lower_copy(key);
+    // content-type rides its own parameter; content-length and
+    // transfer-encoding are framing the server owns; pseudo-headers are
+    // nghttp3's to emit.
+    if (name == "content-type" || name == "content-length" ||
+        name == "transfer-encoding" || name.empty() || name[0] == ':') {
+      continue;
+    }
+    extra.emplace_back(std::move(name), value);
+  }
+
+  stream->pending_page_headers = std::move(extra);
+  const auto status = page.status;
+  auto content_type = page_content_type(page);
+  return send_dynamic_response(stream, status, content_type,
+                               std::move(page.body));
 }
 
 PreparedResponseHeaders&
@@ -3264,6 +3253,22 @@ int Http3Connection::send_dynamic_response(Http3Stream* stream,
   auto& headers = make_response_headers(stream, status_code,
                                         stream->response_content_type,
                                         stream->response_len, include_cors);
+
+  // Extra headers from a page handler, referenced without copying: the vector
+  // lives in the stream, and start_response() is guarded by response_started,
+  // so a stream carries exactly one response and nothing rewrites these bytes
+  // between submit and the wire.
+  constexpr uint8_t page_nv_flags =
+      NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE;
+  for (const auto& [name, value] : stream->pending_page_headers) {
+    headers.headers.push_back({
+        .name = reinterpret_cast<uint8_t*>(const_cast<char*>(name.data())),
+        .value = reinterpret_cast<uint8_t*>(const_cast<char*>(value.data())),
+        .namelen = name.size(),
+        .valuelen = value.size(),
+        .flags = page_nv_flags,
+    });
+  }
 
   nghttp3_data_reader dr{
       .read_data = http_read_data_cb,

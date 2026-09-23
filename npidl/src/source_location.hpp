@@ -70,6 +70,8 @@ struct AstNodeWithPosition {
   SourceRange name_range;
   // For named nodes (interfaces, structs, functions, fields, etc.)
   std::string name;
+  // Markdown from the `///` block above the declaration; empty if none.
+  std::string doc;
 
   void set_position(const SourceRange& r) { range = r; }
   void set_position(const SourcePosition& start, const SourcePosition& end)

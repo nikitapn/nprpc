@@ -1,0 +1,50 @@
+{{#posts}}
+<article class="glass-card overflow-hidden">
+  {{#cover_url}}
+  <div class="h-44 w-full bg-cover bg-center" style="background-image: url('{{.}}')"></div>
+  {{/cover_url}}
+  <div class="p-6">
+    <div class="flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
+      <span>{{author.name}}</span>
+      <time datetime="{{iso(published)}}">{{published}}</time>
+    </div>
+    <h3 class="mt-3 text-2xl font-semibold text-stone-950">
+      <a class="transition hover:text-amber-800" href="{{href}}">{{title}}</a>
+    </h3>
+    <p class="mt-3 text-base leading-7 text-stone-700">{{excerpt}}</p>
+    <div class="mt-5 flex flex-wrap items-center gap-3 text-sm text-stone-500">
+      <a class="rounded-full border border-amber-900/15 px-3 py-1 hover:bg-white/80"
+         href="/author/{{author.slug}}">{{author.slug}}</a>
+      <span>post #{{id}}</span>
+    </div>
+  </div>
+</article>
+{{/posts}}
+
+{{^posts}}
+<div class="rounded-2xl border border-dashed border-amber-900/20 bg-white/60 p-5 text-stone-600">
+  No posts on page {{page}}.
+</div>
+{{/posts}}
+
+<nav class="mt-2 flex items-center justify-between">
+  {{#has_prev}}
+  <button class="rounded-full border border-amber-900/15 px-4 py-2 text-sm hover:bg-white/80"
+          hx-get="/blog?page={{minusone(page)}}"
+          hx-target="#post-list"
+          hx-swap="innerHTML"
+          hx-push-url="/blog?page={{minusone(page)}}">&larr; Newer</button>
+  {{/has_prev}}
+  {{^has_prev}}<span></span>{{/has_prev}}
+
+  <span class="text-sm text-stone-500">Page {{page}} of {{total_pages}}</span>
+
+  {{#has_next}}
+  <button class="rounded-full border border-amber-900/15 px-4 py-2 text-sm hover:bg-white/80"
+          hx-get="/blog?page={{plusone(page)}}"
+          hx-target="#post-list"
+          hx-swap="innerHTML"
+          hx-push-url="/blog?page={{plusone(page)}}">Older &rarr;</button>
+  {{/has_next}}
+  {{^has_next}}<span></span>{{/has_next}}
+</nav>

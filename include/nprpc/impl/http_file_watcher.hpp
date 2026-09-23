@@ -23,13 +23,7 @@ class HttpFileWatcher
 {
 public:
   /// Start watching `client_root` recursively for HTTP cache invalidation.
-  /// If `ssr_server_root` is non-empty its tree is also watched; when any
-  /// file there changes `on_server_rebuilt` is called after a 500 ms quiet
-  /// period (debounce) so that mid-build partial states are never exposed.
-  explicit HttpFileWatcher(
-      std::filesystem::path client_root,
-      std::filesystem::path ssr_server_root = {},
-      std::function<void()> on_server_rebuilt = {});
+  explicit HttpFileWatcher(std::filesystem::path client_root);
 
   /// Stop the background thread and release inotify resources.
   ~HttpFileWatcher();
@@ -42,25 +36,16 @@ private:
   void run();
 
   std::filesystem::path root_;             ///< client static root
-  std::filesystem::path ssr_server_root_;  ///< server SSR build root (may be empty)
-  std::function<void()> on_server_rebuilt_;
   int inotify_fd_ = -1;
   int stop_fd_    = -1; // eventfd used to unblock the poll loop
   std::thread thread_;
 #endif
 };
 
-/// Start a global file watcher.
-/// `client_root`       — directory tree watched for HTTP cache invalidation.
-/// `ssr_server_root`   — optional additional tree; when any file there
-///                       changes `on_server_rebuilt` is invoked after a
-///                       500 ms debounce so the SSR Node.js process can
-///                       be restarted after a full build.
+/// Start a global file watcher on `client_root`, the directory tree watched
+/// for HTTP cache invalidation.
 /// Safe to call multiple times; only the first call has effect.
-void start_file_watcher(
-    const std::filesystem::path& client_root,
-    const std::filesystem::path& ssr_server_root = {},
-    std::function<void()>        on_server_rebuilt = {});
+void start_file_watcher(const std::filesystem::path& client_root);
 
 /// Stop the global file watcher (called from RpcImpl::destroy).
 void stop_file_watcher();

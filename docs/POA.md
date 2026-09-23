@@ -1,32 +1,18 @@
 # Portable Object Adapter (POA)
 
-This document describes the NPRPC **POA** API: how servants are activated, which transports they accept, and **where their methods run** (threading / hop trees). Examples are given in **C++** and **Swift**.
+A POA holds your servants (the objects that implement IDL interfaces) and
+routes incoming calls to them. You create one or more POAs, activate servants
+in them, and hand the resulting object references to clients.
 
-Related tests:
+A POA decides three things about the objects in it:
 
-- C++: `NprpcTest.PoaDispatchExecutor` in `test/src/basic.cpp`
-- Swift: `PoaDispatchExecutorTests` in `nprpc_swift/Tests/NPRPCTests/PoaDispatchExecutorTests.swift`
+- **Lifespan:** reference counted, or alive until deactivated.
+- **Object ids:** assigned by the POA, or chosen by you.
+- **Where servant methods run:** on the transport thread, or on a thread or
+  queue you choose.
 
----
-
-## What is a POA?
-
-A **Portable Object Adapter** is a container for **servants** (object implementations):
-
-| Responsibility | Notes |
-|----------------|--------|
-| Object IDs | Assign or accept IDs; map `oid → servant` |
-| Activation | Bind a servant to transports (TCP, SHM, WS, …) |
-| Dispatch routing | Incoming `FunctionCall` / `StreamInit` look up POA + object |
-| Lifecycle | Persistent vs transient policies |
-| **Dispatch placement** | Optional executor + transport affinity (this doc’s focus) |
-
-An application may use **several POAs**:
-
-- A **hot-path POA** for cheap, latency-critical servants (default: run on the transport thread).
-- A **UI POA** whose servants always run on the main queue (Swift) or another serial executor.
-
----
+An application often uses several POAs, for example one for cheap,
+latency-critical servants and one whose servants must run on the UI thread.
 
 ## Creating a POA
 
@@ -36,28 +22,32 @@ An application may use **several POAs**:
 #include <nprpc/nprpc.hpp>
 
 auto* rpc = nprpc::RpcBuilder()
-  .with_hostname("localhost")
-  .with_tcp(15000)
-  .build();
+                .with_hostname("localhost")
+                .with_tcp(15000)
+                .build();
 rpc->start_thread_pool(4);
 
-// Default: persistent objects, system-generated IDs, dispatch on transport thread.
 auto* poa = rpc->create_poa()
-  .with_max_objects(128)
-  .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
-  .with_object_id_policy(nprpc::PoaPolicy::ObjectIdPolicy::SystemGenerated)
-  .build();
+                .with_max_objects(128)
+                .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                .build();
 ```
 
-Builder options:
+| Builder method | Default | Purpose |
+|---|---|---|
+| `with_max_objects(n)` | 32 | Objects active at once |
+| `with_lifespan(...)` | `Transient` | `Transient`: owned by the clients that hold it; deleted when the last one releases it. `Persistent`: lives until deactivated. |
+| `with_object_id_policy(...)` | `SystemGenerated` | Whether the POA or you assign object ids |
+| `with_transport_affinity(...)` | `AllowBlockTransport` | Whether methods may run on the transport thread |
+| `with_dispatch_executor(...)` | none | Run methods on your own executor |
 
-| Method | Purpose |
-|--------|---------|
-| `with_max_objects(n)` | Capacity of the object table |
-| `with_lifespan(Transient \| Persistent)` | Object lifetime policy |
-| `with_object_id_policy(SystemGenerated \| UserSupplied)` | Who assigns OIDs |
-| `with_dispatch_executor(DispatchExecutor)` | Hop target for servant work (optional) |
-| `with_transport_affinity(TransportAffinity)` | Whether transport may run dispatch inline |
+A transient object belongs to the client it was created for, so it can only
+be activated inside a call, with that client's session:
+`activate_object(servant, flags, &nprpc::get_context())`. Objects you publish
+at startup belong in a persistent POA.
+
+The runtime owns the POA; remove it with `rpc->destroy_poa(poa)`, never
+`delete`.
 
 ### Swift
 
@@ -65,483 +55,162 @@ Builder options:
 import NPRPC
 
 let rpc = try RpcBuilder()
-  .setLogLevel(.info)
-  .withHostname("localhost")
-  .withTcp(15000)
-  .build()
+    .withHostname("localhost")
+    .withTcp(15000)
+    .build()
 try rpc.startThreadPool(4)
 
-// Default: inline on transport / SHM ring thread
 let poa = try rpc.createPoa(maxObjects: 128)
-
-// UI servants — whole request+reply hops to main (SHM path)
-let uiPoa = try rpc.createPoa(
-  maxObjects: 32,
-  dispatch: .main
-)
-
-// Dedicated serial queue (must be serial for SHM FIFO replies)
-let workQ = DispatchQueue(label: "app.nprpc.servants")
-let workPoa = try rpc.createPoa(
-  maxObjects: 64,
-  dispatch: .queue(workQ)
-)
 ```
 
-`PoaDispatchExecutor`:
-
-| Case | Meaning |
-|------|---------|
-| `.inlineOnTransportThread` | Default — lowest latency |
-| `.main` | Fire-and-forget hop to `DispatchQueue.main` |
-| `.queue(DispatchQueue)` | Hop to a **serial** custom queue |
-| `.loop(any PoaExecutor)` | Hop to a thread that is not a queue — see below |
-
----
+`createPoa` takes `lifetime:` (default `.Persistent`), `idPolicy:` (default
+`.systemGenerated`) and `dispatch:` (default `.inlineOnTransportThread`; see
+below).
 
 ## Activating objects
+
+Activation registers a servant and returns its `ObjectId`: the reference
+clients use to reach it. The flags choose which transports may call it.
 
 ### C++
 
 ```cpp
-class CalcImpl : public example::ICalculator_Servant {
+class CalculatorImpl : public example::ICalculator_Servant {
 public:
   double Add(double a, double b) override { return a + b; }
-  // ...
 };
 
-CalcImpl calc;
 auto oid = poa->activate_object(
-  &calc,
-  nprpc::ObjectActivationFlags::tcp |
-  nprpc::ObjectActivationFlags::shm |
-  nprpc::ObjectActivationFlags::ws
-);
-
-// Session-scoped (ephemeral) activation uses a SessionContext* when available.
-// User-supplied IDs (UserSupplied policy):
-//   poa->activate_object_with_id(manual_id, &calc, flags);
+    new CalculatorImpl(),
+    nprpc::ObjectActivationFlags::tcp | nprpc::ObjectActivationFlags::shm |
+        nprpc::ObjectActivationFlags::ws);
 ```
+
+The runtime calls the servant's `destroy()` when it is done with it, which
+deletes it by default, so allocate servants with `new`. With the
+`UserSupplied` id policy, use `activate_object_with_id(id, servant, flags)`.
 
 ### Swift
 
 ```swift
-let servant = CalculatorImpl()
-let oid = try poa.activateObject(
-  servant,
-  flags: [.tcp, .shm, .ws]
-)
-// oid.urls contains transport URLs, e.g. "tcp://…;mem://…;web://…"
+let oid = try poa.activateObject(CalculatorImpl(), flags: [.tcp, .shm, .ws])
+// oid.urls lists where it can be reached, e.g. "tcp://…;mem://…;web://…"
 ```
 
-Common flags (Swift `ObjectActivationFlags` / C++ `ObjectActivationFlags`):
+### Activation flags
 
 | Flag | Transport |
-|------|-----------|
+|---|---|
 | `tcp` | TCP |
-| `shm` | Shared memory |
+| `shm` | Shared memory (same machine) |
 | `ws` / `wss` | WebSocket |
-| `http` / `https` | HTTP(S) |
-| `quic` | QUIC |
+| `http` / `https` | RPC over HTTP |
+| `quic` | Native QUIC |
 | `wt` | WebTransport |
-| `allowAll` | All of the above |
-| `privateSession` | Session-scoped (ephemeral) |
+| `privateSession` | Only the session that activated the object may call it |
 
----
+Swift also has `.allowAll` and `.networkOnly`; C++ has `all`.
 
-## Dispatch placement policies
+To publish an object, give its `ObjectId` to clients: through the nameserver
+(`Bind`/`Resolve`), host.json for browsers (`Rpc::add_to_host_json`), or as a
+string (`ObjectId::to_string()`).
 
-### `TransportAffinity`
+## Choosing where servant methods run
+
+By default a servant method runs on the thread that received the call: the
+transport's I/O thread, or for shared memory the thread reading the ring. That
+is the lowest-latency option, and right for methods that finish in
+microseconds. A method that blocks, allocates heavily or touches UI state
+should run elsewhere, so the transport keeps serving other calls.
+
+| Setup | Methods run on | Use for |
+|---|---|---|
+| Default | The transport thread | Cheap, latency-critical methods |
+| `NeverBlockTransport` affinity | The runtime's thread pool | Methods that may block, with no thread requirement |
+| Swift `dispatch: .main` | The main queue | UI servants |
+| Swift `dispatch: .queue(q)` | Your serial queue | State owned by one queue |
+| Swift `dispatch: .loop(executor)` | Your event-loop thread | A render loop, GLFW, epoll |
+| C++ `with_dispatch_executor(ex)` | Wherever `ex.post` schedules work | Your own executor |
+
+With any of the non-default options, the transport hands the call off and
+immediately moves on. The method and its reply both run on the target.
+
+### C++
 
 ```cpp
-namespace nprpc::PoaPolicy {
-enum class TransportAffinity {
-  /// Prefer transport/ring thread when there is no DispatchExecutor (default).
-  AllowBlockTransport = 0,
-  /// Never run servant dispatch on the transport thread.
-  NeverBlockTransport = 1,
+// Keep the transport free, run on the runtime's thread pool.
+auto* offload = rpc->create_poa()
+                    .with_transport_affinity(
+                        nprpc::PoaPolicy::TransportAffinity::NeverBlockTransport)
+                    .build();
+
+// Or run on your own executor.
+nprpc::DispatchExecutor ex;
+ex.post = [](void* ctx, nprpc::DispatchExecutor::WorkFn fn, void* arg) {
+  static_cast<MyQueue*>(ctx)->push([fn, arg] { fn(arg); });
 };
+ex.is_running_on = [](void* ctx) {
+  return static_cast<MyQueue*>(ctx)->is_current_thread();
+};
+ex.ctx = &my_queue;
+
+auto* poa = rpc->create_poa().with_dispatch_executor(ex).build();
+```
+
+`post` must not wait for the work to run. `is_running_on` lets the runtime
+run work inline when it is already on your executor, instead of posting and
+waiting for itself.
+
+### Swift
+
+```swift
+let uiPoa = try rpc.createPoa(maxObjects: 32, dispatch: .main)
+
+final class DashboardImpl: DashboardServant, @unchecked Sendable {
+    override func updateTitle(title: String) throws {
+        label.stringValue = title   // already on main
+    }
 }
 ```
 
-```cpp
-// Cheap, latency-critical (default affinity)
-auto* hot = rpc->create_poa()
-  .with_max_objects(64)
-  .build();
+`.queue` must be a **serial** queue. A shared-memory client matches replies
+to requests by order, so a concurrent queue could send them back out of order.
 
-// Keep SHM ring free even without a custom executor
-auto* offload = rpc->create_poa()
-  .with_max_objects(64)
-  .with_transport_affinity(
-      nprpc::PoaPolicy::TransportAffinity::NeverBlockTransport)
-  .build();
-```
+### A thread with its own event loop (Swift)
 
-### `DispatchExecutor` (C++)
-
-Opaque C-callable hop, typically wired from Swift to GCD:
-
-```cpp
-struct DispatchExecutor {
-  using WorkFn = void (*)(void* arg);
-  using PostFn = void (*)(void* ctx, WorkFn fn, void* arg);
-  using IsRunningOnFn = bool (*)(void* ctx);
-
-  PostFn post = nullptr;              // schedule work (fire-and-forget OK)
-  IsRunningOnFn is_running_on = nullptr; // avoid nested post / deadlock
-  void* ctx = nullptr;
-};
-```
-
-**Uses:**
-
-1. **Fire-and-forget** (SHM offload): ring calls `post(ctx, drain_fn, job)` and returns immediately so the ring can free the slot.
-2. **`invoke_sync`**: post+wait when code is not already on the target queue; if `is_running_on` is true, runs **inline**.
-
-```cpp
-nprpc::DispatchExecutor ex;
-ex.post = my_post;                 // e.g. wrap a worker queue
-ex.is_running_on = my_is_on_queue;
-ex.ctx = my_ctx;
-
-auto* uiPoa = rpc->create_poa()
-  .with_max_objects(32)
-  .with_dispatch_executor(ex)      // implies off-transport for SHM
-  .build();
-```
-
-Swift does not require you to fill `DispatchExecutor` by hand — `createPoa(dispatch:)` installs the GCD trampolines.
-
-### `PoaExecutor` (Swift) — a loop that is not a queue
-
-`.main` and `.queue` cover everything GCD owns. They cannot express the case
-they are most wanted for: **a thread with its own event loop** — a GLFW/X11
-pump, an epoll loop, a game loop — that blocks in someone else's `wait` and
-owns state which may only be touched from *that thread*.
-
-GCD cannot pin a serial queue to a chosen thread (only `.main` is pinned, and
-draining it means the loop can never block), so such a loop can be neither a
-hop target nor woken by one. `PoaExecutor` is the escape hatch, and it is the
-same two function pointers the C++ `DispatchExecutor` takes:
+`.main` and `.queue` cover everything GCD owns. A thread that runs its own
+loop, blocking in `glfwWaitEvents` or `epoll_wait` and owning state only it
+may touch, needs `.loop` with a `PoaExecutor`:
 
 ```swift
 final class RenderLoop: PoaExecutor {
-  func post(_ work: @escaping @Sendable () -> Void) {
-    lock.lock(); pending.append(work); lock.unlock()
-    wakeTheLoop()                       // e.g. glfwPostEmptyEvent
-  }
-  var isRunningOnExecutor: Bool { Thread.current === loopThread }
+    func post(_ work: @escaping @Sendable () -> Void) {
+        lock.lock(); pending.append(work); lock.unlock()
+        wakeTheLoop()                      // e.g. glfwPostEmptyEvent()
+    }
+    var isRunningOnExecutor: Bool { Thread.current === loopThread }
 
-  func drain() {                        // once per loop iteration
-    lock.lock(); let work = pending; pending.removeAll(); lock.unlock()
-    for item in work { item() }
-  }
+    func drain() {                         // call once per loop iteration
+        lock.lock(); let work = pending; pending.removeAll(); lock.unlock()
+        for item in work { item() }
+    }
 }
 
 let poa = try rpc.createPoa(maxObjects: 8, dispatch: .loop(renderLoop))
 ```
 
-Three rules, in order of how much they hurt when broken:
-
-1. **`post` must wake the loop.** The ring fires and forgets; nothing else will
-   tell the loop that a request is waiting. A `post` that only enqueues leaves
-   the servant unrun until the loop wakes for its own reasons — on an idle
-   process, never.
-2. **Drain in FIFO order**, for the same reason `.queue` demands a serial
-   queue: a shared-memory session matches replies by ring slot order.
-3. **`isRunningOnExecutor` must be honest.** It is what keeps `invoke_sync`
-   from posting to a loop it is already on and then waiting for a drain that
-   cannot happen until it returns.
-
-```text
-SHM ring
-  └─ PoaExecutor.post → enqueue + wake
-       │
-render thread (blocked in pumpEvents / epoll_wait)
-  ├─ wakes
-  ├─ drain()  → handle_request + reply   ← servant runs HERE, on the GPU thread
-  └─ renders the frame
-```
-
-**Hops to servant:** 1 (`ring → loop`).
-
-### `requires_off_transport_dispatch()`
-
-True when either:
-
-- a non-empty `DispatchExecutor` is set, or  
-- affinity is `NeverBlockTransport`.
-
-SHM uses this to choose **inline** vs **offload**.
-
----
-
-## Shared-memory receive path (hybrid)
-
-1. **Always** copy the message out of the ring (owned buffer).
-2. **Inline** (default POA, affinity allows, no in-flight offload drain):  
-   `handle_request` on the **ring thread**.
-3. **Offload** (executor / NeverBlock / drain already busy for FIFO):  
-   enqueue; kick via **`DispatchExecutor.post`** if present, else **`asio::post(ioc)`**.
-
-Replies stay **FIFO** on a single SHM session when offloads share one serial queue (e.g. main) or when the session serializes the drain. The client matches replies by ring slot order, not `request_id`.
-
----
-
-## Threading hop trees
-
-Trees below describe **server-side** placement of servant methods for a **Shared Memory** client call. TCP/WS/QUIC use similar policy for offload intent; their I/O threads differ (strand / epoll / etc.) but default remains “dispatch on the transport thread.”
-
-### 1. Default POA — inline on the ring (lowest latency)
-
-Typical for benchmarks and thin servants (~µs path).
-
-```text
-Client thread
-  └─ send_receive (c2s ring)
-       │
-SHM ring consumer thread
-  ├─ try_read_view / copy → owned rx
-  ├─ commit_read (slot free)          [after callback returns]
-  ├─ handle_request(rx, tx)           ← servant runs HERE
-  │    └─ YourServant::Method(...)
-  └─ commit_write (s2c reply)
-       │
-Client thread
-  └─ wakes with reply
-```
-
-**Hops to servant:** 0 (same as ring consumer).
-
-```swift
-let poa = try rpc.createPoa(maxObjects: 64)  // .inlineOnTransportThread
-```
-
-```cpp
-auto* poa = rpc->create_poa().with_max_objects(64).build();
-```
-
----
-
-### 2. UI POA — `dispatch: .main` (Swift)
-
-Ring does **not** wait. One hop to main; no Asio in the path.
-
-```text
-Client thread
-  └─ send_receive_async / await proxy method
-       │
-SHM ring consumer thread
-  ├─ copy rx, commit_read
-  ├─ DispatchExecutor.post(...)       ← fire-and-forget (GCD / main)
-  └─ return (ring free for next msg)
-       │
-DispatchQueue.main
-  ├─ drain_pending (serial)
-  ├─ handle_request
-  │    └─ invoke_sync → is_running_on(main)? yes → inline
-  │         └─ YourServant.method()   ← MainActor-safe UI work
-  └─ commit_write (s2c reply)
-       │
-Client thread
-  └─ continuation resumes
-```
-
-**Hops to servant:** 1 (`ring → main`).
-
-```swift
-let uiPoa = try rpc.createPoa(maxObjects: 32, dispatch: .main)
-
-final class DashboardServant: MyIfaceServant, @unchecked Sendable {
-  override func updateTitle(title: String) throws {
-    // Already on main — update UI directly
-    self.label.stringValue = title
-  }
-}
-
-let oid = try uiPoa.activateObject(servant, flags: .shm)
-```
-
----
-
-### 3. Custom serial queue
-
-Same as main, but the hop target is your queue (must be **serial** for SHM reply order).
-
-```text
-SHM ring
-  └─ post(custom serial queue)
-       │
-app.nprpc.servants (serial)
-  └─ servant method + reply
-```
-
-```swift
-let q = DispatchQueue(label: "app.nprpc.servants")  // serial by default
-let poa = try rpc.createPoa(maxObjects: 64, dispatch: .queue(q))
-```
-
----
-
-### 4. `NeverBlockTransport` without a custom executor
-
-Offload uses the process **Asio `io_context`** thread pool (generic C++ fallback).
-
-```text
-SHM ring
-  └─ asio::post(ioc)
-       │
-rpc_worker_N (Asio)
-  └─ handle_request + reply
-```
-
-**Hops to servant:** 1 (`ring → ioc`).
-
-```cpp
-auto* poa = rpc->create_poa()
-  .with_max_objects(64)
-  .with_transport_affinity(
-      nprpc::PoaPolicy::TransportAffinity::NeverBlockTransport)
-  .build();
-```
-
----
-
-### 5. Anti-pattern (avoided by design)
-
-```text
-// BAD historical shape — double hop + blocked ring
-ring ──wait──► asio ──post+wait──► main ──servant──► …
-```
-
-Current offload with executor:
-
-```text
-// GOOD
-ring ──post(f&f)──► main ──servant + reply──► …
-```
-
-`invoke_sync` is only a post+wait **when not already** on the target queue (`is_running_on`).
-
----
-
-### Comparison
-
-| POA setup | Servant thread | Ring blocked on servant? | Extra hops |
-|-----------|----------------|---------------------------|------------|
-| Default / AllowBlock | Ring consumer | Yes (cheap work only) | 0 |
-| `.main` / GCD executor | Main (or custom serial) | No | 1 |
-| `.loop(PoaExecutor)` | Your loop's own thread | No | 1 |
-| NeverBlock, no executor | Asio worker | No | 1 |
-| Executor **and** nested wait without `is_running_on` | — | Can deadlock | — |
-
----
-
-## Choosing a policy
-
-```text
-                    ┌─────────────────────────────┐
-                    │ Servant does UI / heavy I/O? │
-                    └─────────────┬───────────────┘
-                         yes      │      no
-                          ▼       │       ▼
-              ┌────────────────┐  │  ┌──────────────────────┐
-              │ .main / .queue │  │  │ Default POA (inline) │
-              │ or NeverBlock  │  │  │ lowest SHM latency   │
-              └────────────────┘  │  └──────────────────────┘
-                                  │
-                    ┌─────────────┴──────────────┐
-                    │ May block briefly but no UI?│
-                    └─────────────┬──────────────┘
-                           yes    │
-                            ▼
-                 NeverBlockTransport
-                 (or private serial queue)
-```
-
-Guidelines:
-
-- **Benchmark / Ping / pure compute on SHM** → default POA.
-- **Swift UI** → `dispatch: .main` (or a dedicated serial queue if you must leave main free for rendering only).
-- **A render / event loop that owns a device** (Vulkan, GL, a window) → `dispatch: .loop(…)`, so servants land on the only thread allowed to touch it.
-- **Do not** block main on NPRPC that waits on main again.
-- **Do not** use concurrent (global) queues for SHM offload if multiple replies can interleave on one connection—use **serial** queues.
-
----
-
-## End-to-end examples
-
-### C++: two POAs (hot + offload)
-
-```cpp
-auto* hot = rpc->create_poa()
-  .with_max_objects(128)
-  .build();
-
-auto* slow = rpc->create_poa()
-  .with_max_objects(32)
-  .with_transport_affinity(
-      nprpc::PoaPolicy::TransportAffinity::NeverBlockTransport)
-  .build();
-
-PingImpl ping;
-HeavyImpl heavy;
-hot->activate_object(&ping, nprpc::ObjectActivationFlags::shm);
-slow->activate_object(&heavy, nprpc::ObjectActivationFlags::shm);
-```
-
-### Swift: UI POA + hot POA
-
-```swift
-let hotPoa = try rpc.createPoa(maxObjects: 128)
-let uiPoa  = try rpc.createPoa(maxObjects: 32, dispatch: .main)
-
-let metrics = MetricsServant()           // cheap
-let dashboard = DashboardServant()       // touches AppKit/UIKit
-
-_ = try hotPoa.activateObject(metrics, flags: .shm)
-_ = try uiPoa.activateObject(dashboard, flags: [.shm, .ws])
-```
-
-### C++: custom executor sketch (worker thread)
-
-```cpp
-// Pseudocode — post to your own serial queue
-struct MyCtx { /* queue + mutex + condvar or eventfd */ };
-
-void my_post(void* ctx, void (*fn)(void*), void* arg) {
-  static_cast<MyCtx*>(ctx)->enqueue([=]{ fn(arg); });
-}
-bool my_on_queue(void* ctx) {
-  return static_cast<MyCtx*>(ctx)->is_this_thread();
-}
-
-nprpc::DispatchExecutor ex{my_post, my_on_queue, &g_ctx};
-auto* poa = rpc->create_poa()
-  .with_dispatch_executor(ex)
-  .build();
-```
-
----
-
-## Related APIs
-
-| API | Role |
-|-----|------|
-| `Session::handle_request` | Sync dispatch (TCP/QUIC/epoll default entry) |
-| `Session::handle_request_async` | Awaitable form (body still sync today; SHM offload target) |
-| `RpcImpl::get_poa` | `std::expected<PoaImpl*, PoaLookupError>` — no throw on bad index |
-| `ObjectServant::dispatch` | Generated entry for one RPC |
-| Nameserver `Bind` / `Resolve` | Publish and look up activated objects |
-
----
-
-## Summary
-
-- **POA** = servant container + activation flags + optional **where** dispatch runs.
-- **Default** = transport/ring inline for minimum latency.
-- **Swift UI** = `createPoa(dispatch: .main)` → ring posts once to main; servant and reply run there.
-- **Swift render loop** = `createPoa(dispatch: .loop(x))` where `x: PoaExecutor` enqueues *and wakes* — for a thread GCD cannot be.
-- **Affinity** = force offload without a custom queue (`NeverBlockTransport`).
-- Prefer **serial** hop targets so SHM reply order stays correct.
+Three rules, in order of how badly they fail when broken:
+
+1. **`post` must wake the loop.** Nothing else will tell it a call is waiting.
+   An idle loop would otherwise never run the servant.
+2. **Drain in FIFO order**, for the same reason `.queue` must be serial.
+3. **`isRunningOnExecutor` must be accurate.** It stops the runtime from
+   posting to the loop it is already on and then waiting for a drain that
+   cannot start until it returns.
+
+## Avoiding deadlocks
+
+Do not make a blocking NPRPC call from a servant running on a queue if that
+call needs the same queue to complete. For example, a `.main` servant must not
+block main waiting for a reply that is also delivered on main. Use the `async`
+form of the call instead.

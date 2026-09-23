@@ -130,7 +130,7 @@ certbot certonly --webroot -w /var/www/acme \
 ```
 
 The `--deploy-hook` is where the *backend* picks up the new certificate; see
-[Certificate reload](../docs/certbot.md) for the nprpc side.
+[Certificate reload](../docs/CERTBOT.md) for the nprpc side.
 
 npquicrouter runs as `www-data` in the sample unit, while certbot runs as
 root, so make the webroot readable by both:

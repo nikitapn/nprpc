@@ -13,10 +13,14 @@ import Glibc
 import Darwin
 #endif
 
-// /// Object activation flags controlling which transports an object is available on
+/// Object activation flags controlling which transports an object is available on.
+///
+/// Combine them: `[.tcp, .wss]`.
 public struct ObjectActivationFlags: OptionSet, Sendable {
+    /// The IDL `ObjectActivationFlags` bits.
     public let rawValue: UInt32
 
+    /// Flags from their raw bits.
     public init(rawValue: UInt32) {
         self.rawValue = rawValue
     }
@@ -91,9 +95,13 @@ public enum PoaLifetime {
 ///
 /// Avoid blocking main on NPRPC work that itself waits on main.
 public enum PoaDispatchExecutor: Sendable {
+    /// On the transport thread; the default.
     case inlineOnTransportThread
+    /// On `DispatchQueue.main`.
     case main
+    /// On a custom serial queue.
     case queue(DispatchQueue)
+    /// On a thread with its own event loop; see `PoaExecutor`.
     case loop(any PoaExecutor)
 }
 
@@ -374,6 +382,15 @@ public final class Poa {
         return objectId
     }
 
+    /// Activate a servant under an id you choose. The POA must use
+    /// `ObjectIdPolicy.userSupplied`.
+    /// - Parameters:
+    ///   - objectId: The id to activate the servant under
+    ///   - servant: The servant to activate
+    ///   - flags: Transport flags controlling how the object is accessible
+    ///   - sessionContext: Optional session context for session-specific activation
+    /// - Returns: ObjectId data for the activated object
+    /// - Throws: RuntimeError if activation fails
     public func activateObjectWithId(
         objectId: UInt64,
         servant: NPRPCServant,

@@ -18,7 +18,6 @@ class BuildConfig {
     var httpPort: UInt16 = 0
     var httpSslEnabled: Bool = false
     var http3Enabled: Bool = false
-    var ssrEnabled: Bool = false
     var httpCertFile: String = ""
     var httpKeyFile: String = ""
     var httpDhparamsFile: String = ""
@@ -45,8 +44,8 @@ class BuildConfig {
     var httpWebTransportRequestsBurst: UInt = 0
     var httpWebTransportStreamOpensPerSessionPerSecond: UInt = 0
     var httpWebTransportStreamOpensBurst: UInt = 0
-    var ssrHandlerDir: String = ""
     var watchFiles: Bool = false
+    var pageHandler: PageHandler? = nil
     var certWatchIntervalSec: UInt32 = 0
     var http3ShmEgressChannel: String = ""
     var http3ShmIngressChannel: String = ""
@@ -157,7 +156,6 @@ extension RpcBuilderInternal {
         // HTTP/WebSocket settings
         cxxConfig.http_ssl_enabled = config.httpSslEnabled
         cxxConfig.http3_enabled = config.http3Enabled
-        cxxConfig.ssr_enabled = config.ssrEnabled
         cxxConfig.http_ssl_client_disable_verification = config.httpSslClientDisableVerification
         cxxConfig.http_cert_file = std.string(config.httpCertFile)
         cxxConfig.http_key_file = std.string(config.httpKeyFile)
@@ -186,8 +184,16 @@ extension RpcBuilderInternal {
         cxxConfig.http_webtransport_requests_burst = numericCast(config.httpWebTransportRequestsBurst)
         cxxConfig.http_webtransport_stream_opens_per_session_per_second = numericCast(config.httpWebTransportStreamOpensPerSessionPerSecond)
         cxxConfig.http_webtransport_stream_opens_burst = numericCast(config.httpWebTransportStreamOpensBurst)
-        cxxConfig.ssr_handler_dir = std.string(config.ssrHandlerDir)
         cxxConfig.watch_files = config.watchFiles
+
+        // Retained for the life of the process: the C++ server keeps the raw
+        // pointer in its global config and calls it until shutdown.
+        if let pageHandler = config.pageHandler {
+            let box = PageHandlerBox(pageHandler)
+            cxxConfig.page_handler = nprpcPageHandlerTrampoline
+            cxxConfig.page_handler_ctx =
+                UnsafeMutableRawPointer(Unmanaged.passRetained(box).toOpaque())
+        }
         cxxConfig.shm_egress_channel  = std.string(config.http3ShmEgressChannel)
         cxxConfig.shm_ingress_channel = std.string(config.http3ShmIngressChannel)
 
@@ -216,6 +222,7 @@ extension RpcBuilderInternal {
 public final class RpcBuilder: RpcBuilderInternal {
     internal let config: BuildConfig
 
+    /// A builder with default settings.
     public init() {
         self.config = BuildConfig()
     }
@@ -230,7 +237,7 @@ public final class RpcBuilderTcp: RpcBuilderInternal {
     }
 }
 
-/// HTTP/WebSocket-specific builder with SSL and SSR options
+/// HTTP/WebSocket-specific builder with SSL and page-rendering options
 public final class RpcBuilderHttp: RpcBuilderInternal {
     internal let config: BuildConfig
 
@@ -268,13 +275,22 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
         return self
     }
 
-    /// Enable server-side rendering
+    /// Render pages in this process.
+    ///
+    /// `handler` is consulted for every GET/HEAD/POST the RPC endpoint did not
+    /// claim.  Returning `nil` falls through to static file serving, so assets
+    /// keep their zero-copy path.
+    ///
+    /// ```swift
+    /// .withPageHandler { request in
+    ///     guard request.path == "/blog" else { return nil }
+    ///     let page = Int(request.queryItems["page"] ?? "1") ?? 1
+    ///     return PageResponse(html: renderBlog(page))
+    /// }
+    /// ```
     @discardableResult
-    public func enableSsr(handlerDir: String = "") -> RpcBuilderHttp {
-        config.ssrEnabled = true
-        if !handlerDir.isEmpty {
-            config.ssrHandlerDir = handlerDir
-        }
+    public func withPageHandler(_ handler: @escaping PageHandler) -> RpcBuilderHttp {
+        config.pageHandler = handler
         return self
     }
 

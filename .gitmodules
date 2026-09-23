@@ -19,3 +19,9 @@
 [submodule "third_party/boringssl"]
 	path = third_party/boringssl
 	url = https://boringssl.googlesource.com/boringssl
+[submodule "third_party/Mustache"]
+	path = third_party/Mustache
+	url = git@github.com:kainjow/Mustache.git
+[submodule "third_party/swift-mustache"]
+	path = third_party/swift-mustache
+	url = git@github.com:hummingbird-project/swift-mustache.git

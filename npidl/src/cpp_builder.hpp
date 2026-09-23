@@ -28,7 +28,7 @@ private:
 
   std::unordered_map<AstFunctionDecl*, std::string> proxy_arguments_;
   std::string export_macro_name_;
-  std::vector<AstFunctionDecl*> stream_codec_fns_; // collected for nprpc_stream codecs at file end
+  std::vector<AstFunctionDecl*> stream_codec_fns_; // collected for nprpc::detail::stream_codec codecs at file end
 
   BlockDepth bd;
 
@@ -98,7 +98,7 @@ private:
                             bool from_iterator = false,
                             bool top_type = false);
 
-  // Emits the nprpc_stream::deserialize<T> specialisation for a stream
+  // Emits the ::nprpc::detail::stream_codec::deserialize<T> specialisation for a stream
   // method whose element type is a non-fundamental struct/complex type.
   // Called once per such stream function from emit_interface.
   void emit_stream_deserialize(AstTypeDecl* type, bool direct);

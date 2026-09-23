@@ -5,13 +5,16 @@
 
 /// Base protocol for all NPRPC errors
 public protocol NPRPCError: Error {
+    /// What went wrong, for logs and error messages.
     var message: String { get }
 }
 
 /// Generic NPRPC runtime error
 public struct RuntimeError: NPRPCError {
+    /// What went wrong.
     public let message: String
     
+    /// An error with `message`.
     public init(message: String) {
         self.message = message
     }
@@ -19,8 +22,10 @@ public struct RuntimeError: NPRPCError {
 
 /// Connection-related error
 public struct ConnectionError: NPRPCError {
+    /// What went wrong.
     public let message: String
     
+    /// An error with `message`.
     public init(message: String) {
         self.message = message
     }
@@ -28,8 +33,10 @@ public struct ConnectionError: NPRPCError {
 
 /// Buffer operation error
 public struct BufferError: NPRPCError {
+    /// What went wrong.
     public let message: String
     
+    /// An error with `message`.
     public init(message: String) {
         self.message = message
     }
@@ -37,8 +44,10 @@ public struct BufferError: NPRPCError {
 
 /// Unexpected reply error
 public struct UnexpectedReplyError: NPRPCError {
+    /// What went wrong.
     public let message: String
     
+    /// An error with `message`.
     public init(message: String) {
         self.message = message
     }

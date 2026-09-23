@@ -1,6 +1,7 @@
 import Dispatch
 import Foundation
 import LiveBlogAPI
+import LiveBlogWeb
 import NPRPC
 
 private struct BlogPostRecord: Sendable {
@@ -237,6 +238,10 @@ private struct BlogRepository: Sendable {
   }
 }
 
+// The page handler reads through the same methods the RPC servant calls, so a
+// page and an RPC response for the same route cannot disagree.
+extension BlogRepository: BlogDataSource {}
+
 private final class BlogServiceImpl: BlogServiceServant, @unchecked Sendable {
   private let repository: BlogRepository
 
@@ -441,8 +446,17 @@ do {
   let runtimeRoot = "/app/runtime-www"
   let staticRoot = runtimeRoot + "/client"
   let mediaDir = "/app/media"
+  let templateDir = ProcessInfo.processInfo.environment["LIVE_BLOG_TEMPLATES"]
+    ?? "/app/templates"
+  let hotReloadTemplates =
+    ProcessInfo.processInfo.environment["LIVE_BLOG_TEMPLATE_RELOAD"] == "1"
   let httpPort: UInt16 = 8443
   let repository = BlogRepository()
+
+  // Pages are rendered here, from the same repository the RPC servants use.
+  let web = try BlogWeb(templateDirectory: templateDir,
+                        data: repository,
+                        hotReload: hotReloadTemplates)
 
   try FileManager.default.createDirectory(atPath: runtimeRoot, withIntermediateDirectories: true)
   try FileManager.default.createDirectory(atPath: staticRoot, withIntermediateDirectories: true)
@@ -454,9 +468,10 @@ do {
     .withHostname("localhost")
     .withHttp(httpPort)
       .ssl(certFile: certFile, keyFile: keyFile)
-      .enableSsr(handlerDir: runtimeRoot)
+      .withPageHandler { web.handle($0) }
       .rootDir(staticRoot)
       .enableHttp3()
+      .http3Workers(1)
       .watchFiles()
     .build()
 
@@ -474,7 +489,8 @@ do {
   let hostJsonPath = try rpc.produceHostJson()
 
   print("HTTP root: \(staticRoot)")
-  print("SSR handler root: \(runtimeRoot)")
+  print("Templates: \(templateDir)  \(web.templateNames.joined(separator: ", "))")
+  if hotReloadTemplates { print("Template hot reload: on") }
   print("Media dir: \(mediaDir)  (place post-<id>.fmp4 files here)")
   print("HTTPS/WebTransport port: \(httpPort)")
   print("host.json: \(hostJsonPath)")

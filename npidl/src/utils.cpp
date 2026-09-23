@@ -339,4 +339,96 @@ void dfs_interface(std::function<void(AstInterfaceDecl*)> fn,
   } while (!stack.empty());
 };
 
+
+std::string idl_type_string(const AstTypeDecl* const_type)
+{
+  // The cast helpers below take mutable pointers; nothing here writes.
+  auto* type = const_cast<AstTypeDecl*>(const_type);
+
+  switch (type->id) {
+  case FieldType::Fundamental: {
+    const auto* ft = cft(type);
+    switch (ft->token_id) {
+    case TokenId::Boolean:
+      return "boolean";
+    case TokenId::Int8:
+      return "i8";
+    case TokenId::UInt8:
+      return "u8";
+    case TokenId::Int16:
+      return "i16";
+    case TokenId::UInt16:
+      return "u16";
+    case TokenId::Int32:
+      return "i32";
+    case TokenId::UInt32:
+      return "u32";
+    case TokenId::Int64:
+      return "i64";
+    case TokenId::UInt64:
+      return "u64";
+    case TokenId::Float32:
+      return "f32";
+    case TokenId::Float64:
+      return "f64";
+    default:
+      return "?";
+    }
+  }
+  case FieldType::String:
+    return "string";
+  case FieldType::Void:
+    return "void";
+  case FieldType::Object:
+    return "object";
+  case FieldType::Array: {
+    const auto* arr = car(type);
+    return idl_type_string(arr->type) + "[" + std::to_string(arr->length) + "]";
+  }
+  case FieldType::Vector: {
+    const auto* vec = cvec(type);
+    return "vector<" + idl_type_string(vec->type) + ">";
+  }
+  case FieldType::Optional: {
+    const auto* opt = copt(type);
+    return idl_type_string(opt->type) + "?";
+  }
+  case FieldType::Struct: {
+    const auto* s = cflat(type);
+    return s->name;
+  }
+  case FieldType::Interface: {
+    const auto* ifs = cifs(type);
+    return ifs->name;
+  }
+  case FieldType::Enum: {
+    const auto* e = cenum(type);
+    return e->name;
+  }
+  case FieldType::Alias: {
+    const auto* alias = calias(type);
+    return alias->name;
+  }
+  case FieldType::Stream: {
+    const auto* stream = static_cast<AstStreamDecl*>(type);
+    std::string inner = idl_type_string(stream->type);
+    switch (stream->kind) {
+    case StreamKind::Client:
+      return "client_stream<" + inner + ">";
+    case StreamKind::Bidi:
+      return "bidi_stream<" +
+             (stream->input_type ? idl_type_string(stream->input_type) : "?") +
+             ", " + inner + ">";
+    default:
+      return std::string(stream->direct ? "stream<direct " : "stream<") + inner +
+             ">";
+    }
+  }
+  case FieldType::Variant:
+    return cvar(type)->name;
+  default:
+    return "?";
+  }
+}
+
 } // namespace npidl

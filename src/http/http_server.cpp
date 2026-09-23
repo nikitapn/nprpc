@@ -6,15 +6,13 @@
 #include <nprpc/impl/http_rpc_session.hpp>
 #include <nprpc/impl/http_utils.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/page_dispatch.hpp>
 #ifdef NPRPC_WEBSOCKET_ENABLED
 #include <nprpc/impl/websocket_session.hpp>
 #endif
 #ifdef NPRPC_SSL_ENABLED
 #include <nprpc/impl/ssl.hpp>
 #include <boost/asio/ssl.hpp>
-#endif
-#ifdef NPRPC_SSR_ENABLED
-#include <nprpc/impl/ssr_manager.hpp>
 #endif
 
 #include <boost/beast/http.hpp>
@@ -305,114 +303,50 @@ handle_request(beast::string_view doc_root,
     return handle_rpc_request(req, remote_ip);
   }
 
-#if defined(NPRPC_SSR_ENABLED)
-  // Dev-mode reload endpoint: POST /_nprpc/dev/reload
-  // Called by the Vite plugin after each successful build so the SSR worker
-  // is restarted and host.json is regenerated without needing inotify.
-  if (g_cfg.watch_files &&
-      req.method() == http::verb::post &&
-      req.target() == "/_nprpc/dev/reload") {
-    try {
-      g_rpc->produce_host_json();
-      NPRPC_LOG_INFO("[DevReload] host.json regenerated");
-    } catch (const std::exception& e) {
-      NPRPC_LOG_ERROR("[DevReload] Failed to regenerate host.json: {}", e.what());
-    }
-    restart_ssr();
-    NPRPC_LOG_INFO("[DevReload] SSR restart triggered by Vite");
-    http::response<http::string_body> res{http::status::ok, req.version()};
-    res.set(http::field::content_type, "text/plain");
-    res.keep_alive(false);
-    res.body() = "ok";
-    res.prepare_payload();
-    return res;
-  }
-#endif
+  // In-process page rendering.  Declining (nullopt) falls through to the
+  // static file cache, so assets keep their zero-copy path.
+  {
+    std::string_view target_sv(req.target().data(), req.target().size());
+    const auto [page_path, page_query] = split_page_target(target_sv);
+    std::string_view method_sv = req.method() == http::verb::get    ? "GET"
+                                 : req.method() == http::verb::head ? "HEAD"
+                                                                    : "POST";
 
-#ifdef NPRPC_SSR_ENABLED
-  // Check if this request should be handled by SSR
-  if (g_cfg.ssr_enabled &&
-      (req.method() == http::verb::get || req.method() == http::verb::head)) {
-    std::string_view method =
-        (req.method() == http::verb::get) ? "GET" : "HEAD";
-    std::string_view target = req.target();
-
-    // Get Accept header
-    std::string accept_header;
-    auto it = req.find(http::field::accept);
-    if (it != req.end()) {
-      accept_header = std::string(it->value());
-    }
-
-    if (should_ssr(method, target, accept_header)) {
-      // Build headers map
+    if (page_handler_applies(method_sv, page_path)) {
       std::map<std::string, std::string> headers;
       for (const auto& field : req) {
-        headers[std::string(field.name_string())] = std::string(field.value());
+        headers[to_lower_copy(field.name_string())] = std::string(field.value());
       }
 
-      // Get host for URL construction
-      std::string host = "localhost"; // Default
-      auto host_it = req.find(http::field::host);
-      if (host_it != req.end()) {
-        host = std::string(host_it->value());
-      }
-
-      // Build full URL (SSL if cert files are configured)
-      std::string scheme = !g_cfg.http_cert_file.empty() ? "https" : "http";
-      std::string url = scheme + "://" + host + std::string(target);
-
-      // Forward to SSR
-      auto ssr_response =
-          forward_to_ssr(method, url, headers,
-                         "", // No body for GET/HEAD
-                         ""  // TODO: Get client address from session
-          );
-
-      if (ssr_response) {
-        // Create response with SSR result
+      auto page = invoke_page_handler(method_sv, target_sv, std::move(headers),
+                                      std::string(req.body()),
+                                      remote_ip.to_string());
+      if (page) {
         http::response<http::string_body> res{
-            static_cast<http::status>(ssr_response->status_code),
-            req.version()};
+            static_cast<http::status>(page->status), req.version()};
         res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
-
-        // Copy headers from SSR response
-        for (const auto& [key, value] : ssr_response->headers) {
-          // Skip certain headers that Beast handles
+        for (const auto& [key, value] : page->headers) {
           if (key != "content-length" && key != "transfer-encoding") {
             res.set(key, value);
           }
         }
-
-        // If no content-type set, default to HTML
-        auto ct_it = res.find(http::field::content_type);
-        if (ct_it == res.end()) {
+        if (res.find(http::field::content_type) == res.end()) {
           res.set(http::field::content_type, "text/html; charset=utf-8");
         }
-
         add_alt_svc_header(res);
         res.keep_alive(req.keep_alive());
-        res.body() = std::move(ssr_response->body);
-        res.prepare_payload();
+        // A HEAD response carries the headers of the GET but no body; Beast
+        // still needs the length, so set it before clearing.
+        if (req.method() == http::verb::head) {
+          res.content_length(page->body.size());
+        } else {
+          res.body() = std::move(page->body);
+          res.prepare_payload();
+        }
         return res;
       }
-      // SSR is mid-restart — tell the browser to retry rather than caching
-      // a bad fallback response (e.g. 404 "resource not found").
-      if (is_ssr_restarting()) {
-        http::response<http::string_body> res{http::status::service_unavailable,
-                                             req.version()};
-        res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
-        res.set(http::field::retry_after, "2");
-        res.set(http::field::content_type, "text/plain");
-        res.keep_alive(false);
-        res.body() = "SSR restarting, please retry.";
-        res.prepare_payload();
-        return res;
-      }
-      // SSR not ready (disabled/crashed) — fall through to static file serving
     }
   }
-#endif
 
   if (g_cfg.http_root_dir.empty())
     return bad_request("Illegal request: only Upgrade is allowed");

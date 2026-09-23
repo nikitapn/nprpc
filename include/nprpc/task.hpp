@@ -113,9 +113,20 @@ struct TaskPromiseBase {
 // Task<T>
 // ---------------------------------------------------------------------------
 
+/// A coroutine result: `Task<T> f() { co_return value; }`.
+///
+/// Starts running as soon as it is called (there is no initial suspension)
+/// and needs no executor. Wait for it with `co_await task` inside another
+/// coroutine, or `task.get()` from ordinary code. Generated proxies return
+/// one from each `<method>Async`, and servants return one from streaming
+/// methods.
+///
+/// Move-only; destroying a Task destroys its coroutine frame, so keep it
+/// alive until it is done.
 template<typename T = void>
 class Task {
 public:
+  /// Coroutine machinery; not called directly.
   struct promise_type : detail::TaskPromiseBase<T> {
     Task get_return_object() noexcept {
       return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
@@ -128,31 +139,40 @@ public:
     void return_value(U&& v) { this->result.set_value(std::forward<U>(v)); }
   };
 
+  /// The coroutine handle type.
   using handle_t = std::coroutine_handle<promise_type>;
 
   // --- Awaitable interface (used inside other coroutines) ------------------
 
+  /// `co_await` support: whether the task has already finished.
   bool await_ready() noexcept { return handle_.done(); }
 
+  /// `co_await` support: resumes `h` when the task finishes.
   void await_suspend(std::coroutine_handle<> h) noexcept {
     handle_.promise().continuation = h;
     // If the task already finished (race), resume immediately.
     if (handle_.done()) h.resume();
   }
 
+  /// `co_await` support: the result, or the exception the task threw.
   decltype(auto) await_resume() { return handle_.promise().result.get(); }
 
   // --- Blocking bridge (non-coroutine callers) -----------------------------
 
+  /// Blocks the calling thread until the task finishes, then returns its
+  /// result or rethrows its exception. Do not call it on the thread the
+  /// task needs in order to finish.
   decltype(auto) get() {
     handle_.promise().ready.acquire();
     return handle_.promise().result.get();
   }
 
+  /// Whether the task has finished (or holds no coroutine).
   bool done() const noexcept {
     return !handle_ || handle_.done();
   }
 
+  /// Rethrows the task's exception if it finished with one.
   void rethrow_if_exception() const {
     if (!handle_)
       return;
@@ -160,6 +180,8 @@ public:
       std::rethrow_exception(ep);
   }
 
+  /// Calls `handler` when the task finishes, with its exception or null.
+  /// For fire-and-forget tasks that still need to report failure.
   void set_completion_handler(std::move_only_function<void(std::exception_ptr)> handler) {
     if (!handle_)
       return;
@@ -168,9 +190,13 @@ public:
 
   // --- Lifecycle -----------------------------------------------------------
 
+  /// An empty task, holding no coroutine.
   Task() noexcept : handle_{} {}
+  /// Adopts a coroutine; used by `promise_type`.
   explicit Task(handle_t h) noexcept : handle_(h) {}
+  /// Takes `o`'s coroutine, leaving `o` empty.
   Task(Task&& o) noexcept : handle_(std::exchange(o.handle_, {})) {}
+  /// Destroys the current coroutine and takes `o`'s.
   Task& operator=(Task&& o) noexcept {
     if (this != &o) {
       if (handle_) handle_.destroy();
@@ -183,6 +209,7 @@ public:
 
   ~Task() { if (handle_) handle_.destroy(); }
 
+  /// Whether the task holds a coroutine.
   bool valid() const noexcept { return static_cast<bool>(handle_); }
 
 private:

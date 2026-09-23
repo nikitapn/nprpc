@@ -442,6 +442,8 @@ void SwiftBuilder::emit_struct2(AstStructDecl* s, Target target)
 {
   const std::string type_keyword = target == Target::FunctionArgument ? "fileprivate struct" : "public struct";
 
+  if (target != Target::FunctionArgument)
+    emit_line_doc(out, block_depth_.indent(), s->doc);
   out << bl() << type_keyword << " " << swift_type_name(s->name);
 
   if (target == Target::Exception) {
@@ -458,6 +460,8 @@ void SwiftBuilder::emit_struct2(AstStructDecl* s, Target target)
       // Skip __ex_id for exceptions, it's only used for marshalling and should not be part of the public API
       continue;
     }
+    if (target != Target::FunctionArgument)
+      emit_line_doc(out, block_depth_.indent(), field->doc);
     out << bl() << "public var " << field->name << ": ";
     emit_type(field->type, out);
 
@@ -589,12 +593,15 @@ void SwiftBuilder::emit_exception(AstStructDecl* s)
 
 void SwiftBuilder::emit_enum(AstEnumDecl* e)
 {
+  emit_line_doc(out, block_depth_.indent(), e->doc);
   out << bl() << "public enum " << swift_type_name(e->name) << ": ";
   emit_fundamental_type(e->token_id, out);
   out <<", Codable, Sendable " << bb();
 
   // Emit cases
-  for (auto& item : e->items) {
+  for (size_t i = 0; i < e->items.size(); ++i) {
+    const auto& item = e->items[i];
+    emit_line_doc(out, block_depth_.indent(), e->item_docs[i]);
     out << bl() << "case " << item.first;
     if (item.second.second) { // has explicit value
       out << " = " << item.second.first;
@@ -607,6 +614,7 @@ void SwiftBuilder::emit_enum(AstEnumDecl* e)
 
 void SwiftBuilder::emit_using(AstAliasDecl* u)
 {
+  emit_line_doc(out, block_depth_.indent(), u->doc);
   out << bl() << "public typealias " << swift_type_name(u->name) << " = ";
   emit_type(u->type, out);
   out << "\n";
@@ -617,6 +625,7 @@ void SwiftBuilder::emit_variant(AstVariantDecl* v)
   const std::string type_name = swift_type_name(v->name);
 
   // Associated-value enum declaration
+  emit_line_doc(out, block_depth_.indent(), v->doc);
   out << bl() << "public enum " << type_name << ": Codable, Sendable " << bb();
   for (auto& arm : v->arms) {
     out << bl() << "case " << arm.name << "(";
@@ -708,11 +717,14 @@ void SwiftBuilder::emit_variant(AstVariantDecl* v)
 void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
 {
   // Generate Swift protocol for the interface
+  emit_line_doc(out, block_depth_.indent(), ifs->doc);
   out << bl() << "public protocol " << swift_type_name(ifs->name) << "Protocol"
       << " " << bb();
 
   // Emit method signatures
   for (auto& fn : ifs->fns) {
+    emit_line_doc(out, block_depth_.indent(),
+                  function_doc(fn, ParamDocStyle::Swift, true));
     out << bl() << "func " << swift_method_name(fn->name) << "(";
 
     // Only emit 'in' parameters
@@ -824,6 +836,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
   out << bl() << "// Client proxy for " << class_name << "\n";
   out << bl() << "// Pure Swift implementation with direct marshalling\n";
+  emit_line_doc(out, block_depth_.indent(), ifs->doc);
   if (can_conform) {
     out << bl() << "final public class " << class_name << ": NPRPCObject, " << class_name << "Protocol, @unchecked Sendable " << bb();
   } else {
@@ -853,6 +866,8 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
       continue;
     }
 
+    emit_line_doc(out, block_depth_.indent(),
+                  function_doc(fn, ParamDocStyle::Swift, true));
     out << bl() << "public func " << swift_method_name(fn->name) << "(";
 
     // Emit only 'in' parameters (to match protocol)
@@ -1049,6 +1064,8 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
   auto* stream_decl = fn->stream_decl;
   assert(stream_decl != nullptr);
 
+  emit_line_doc(out, block_depth_.indent(),
+                function_doc(fn, ParamDocStyle::Swift, true));
   out << bl() << "public func " << swift_method_name(fn->name) << "(";
 
   // Emit only 'in' parameters
@@ -1207,6 +1224,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
   const std::string servant_name = class_name + "Servant";
 
   out << bl() << "// Servant base for " << class_name << "\n";
+  emit_line_doc(out, block_depth_.indent(), ifs->doc);
   out << bl() << "open class " << servant_name << ": NPRPCServant, " << class_name << "Protocol, @unchecked Sendable " << bb();
 
   // Constructor
@@ -1220,6 +1238,8 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
 
   // Protocol method stubs (abstract methods to be implemented by subclass)
   for (auto& fn : ifs->fns) {
+    emit_line_doc(out, block_depth_.indent(),
+                  function_doc(fn, ParamDocStyle::Swift, true));
     out << bl() << "open func " << swift_method_name(fn->name) << "(";
 
     // Emit only 'in' parameters (to match protocol)

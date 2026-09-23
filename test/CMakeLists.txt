@@ -57,6 +57,7 @@ target_compile_definitions(nprpc_test
   PRIVATE
     NPRPC_USE_GTEST
     NPRPC_BUILD_DIR="${CMAKE_BINARY_DIR}"
+    NPRPC_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
     $<$<BOOL:${NPRPC_ENABLE_QUIC}>:NPRPC_HAS_QUIC>
 )
 
@@ -77,6 +78,13 @@ target_include_directories(nprpc_server_test
 target_link_libraries(nprpc_server_test
   PRIVATE
     nprpc::nprpc
+)
+
+target_compile_definitions(nprpc_server_test
+  PRIVATE
+    NPRPC_BUILD_DIR="${CMAKE_BINARY_DIR}"
+    NPRPC_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+    $<$<BOOL:${NPRPC_ENABLE_QUIC}>:NPRPC_HAS_QUIC>
 )
 
 # Add JavaScript tests if enabled
@@ -186,6 +194,28 @@ target_link_libraries(test_variant
 )
 
 gtest_discover_tests(test_variant
+  PROPERTIES
+    TIMEOUT 30
+  DISCOVERY_TIMEOUT 15
+  DISCOVERY_MODE PRE_TEST
+)
+
+# ObjectPtr reference counting (header-only, no runtime needed)
+add_executable(test_object_ptr
+  src/test_object_ptr.cpp
+)
+
+target_include_directories(test_object_ptr
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+target_link_libraries(test_object_ptr
+  PRIVATE
+    GTest::gtest_main
+)
+
+gtest_discover_tests(test_object_ptr
   PROPERTIES
     TIMEOUT 30
   DISCOVERY_TIMEOUT 15

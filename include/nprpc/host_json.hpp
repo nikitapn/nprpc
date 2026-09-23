@@ -59,7 +59,7 @@
 #define SAVE_HOST_JSON_TO_FILE(host_json, http_dir)                            \
   do {                                                                         \
     std::ofstream os(fs::path(http_dir) / "host.json");                        \
-    nprpc::serialization::json_oarchive oa(os);                                \
+    nprpc::detail::serialization::json_oarchive oa(os);                                \
     oa << host_json;                                                           \
   } while (0)
 
@@ -100,7 +100,7 @@ std::tuple<ObjectTypes...>>> obj) { std::get<Index>(objects_) = obj;
   // Generate and activate all objects
   std::string generate_host_json(nprpc::Poa* poa, uint32_t flags) {
     std::ostringstream oss;
-    nprpc::serialization::json_oarchive oa(oss);
+    nprpc::detail::serialization::json_oarchive oa(oss);
 
     // Create the JSON structure
     oa.start_object();
@@ -120,7 +120,7 @@ std::tuple<ObjectTypes...>>> obj) { std::get<Index>(objects_) = obj;
 
 private:
   template<std::size_t Index>
-  void activate_objects(nprpc::serialization::json_oarchive& oa, nprpc::Poa*
+  void activate_objects(nprpc::detail::serialization::json_oarchive& oa, nprpc::Poa*
 poa, uint32_t flags) { if constexpr (Index < sizeof...(ObjectTypes)) { auto& obj
 = std::get<Index>(objects_); auto& name = std::get<Index>(object_names_);
 

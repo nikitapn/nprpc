@@ -128,7 +128,6 @@ configure_and_build() {
       -DNPRPC_BUILD_TOOLS=ON \
       -DNPRPC_ENABLE_QUIC=ON \
       -DNPRPC_ENABLE_HTTP3=ON \
-      -DNPRPC_ENABLE_SSR=ON \
       -DNPRPC_BUILD_EXAMPLES=ON \
       -DNPRPC_BUILD_NODE_ADDON=ON
   fi

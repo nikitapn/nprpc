@@ -37,6 +37,9 @@ struct Token {
   TokenId id;
   std::string name;
   std::string_view static_name;
+  // Text of the `///` lines immediately above this token, markers stripped.
+  // Parser rules that start a declaration copy it onto the AST node.
+  std::string doc;
   int line;
   int col;
 
@@ -136,6 +139,10 @@ class Lexer : public ILexer
   const char* ptr_;
   int line_ = 1;
   int col_ = 1;
+  // Line of the last token handed out, to tell a leading `///` from a
+  // trailing one.
+  int last_token_line_ = 0;
+  std::string pending_doc_;
 
   static constexpr bool is_digit(char c) noexcept
   {
@@ -174,6 +181,28 @@ class Lexer : public ILexer
   {
     while (*ptr_ != '\n' && *ptr_ != '\0')
       next();
+  }
+
+  // Consumes one `///` line (ptr_ just past the third slash) into
+  // pending_doc_. Only a comment that begins its line is documentation: a
+  // trailing `/// ...` after code would otherwise attach to whatever
+  // declaration happens to come next.
+  void read_doc_line(bool leading)
+  {
+    if (!leading) {
+      skip_line_comment();
+      return;
+    }
+    if (cur() == ' ')
+      next();
+    const char* begin = ptr_;
+    skip_line_comment();
+    const char* end = ptr_;
+    if (end != begin && *(end - 1) == '\r')
+      --end;
+    if (!pending_doc_.empty())
+      pending_doc_ += '\n';
+    pending_doc_.append(begin, end);
   }
 
   void skip_comments()
@@ -308,6 +337,15 @@ public:
 
   Token tok() override
   {
+    Token t = next_token();
+    t.doc = std::move(pending_doc_);
+    pending_doc_.clear();
+    last_token_line_ = t.line;
+    return t;
+  }
+
+  Token next_token()
+  {
     skip_wp();
     int tok_line = line_;
     int tok_col = col_;
@@ -333,7 +371,14 @@ public:
     case '/':
       next();
       if (cur() == '/') {
-        skip_line_comment();
+        next();
+        // Exactly three slashes: `////` and longer are separator lines.
+        if (cur() == '/' && look() != '/') {
+          next();
+          read_doc_line(tok_line != last_token_line_);
+        } else {
+          skip_line_comment();
+        }
       } else if (cur() == '*') {
         next();
         skip_comments();
@@ -341,7 +386,7 @@ public:
         throw lexical_error(ctx_.current_file_path(), line_, col_,
                             "Unknown token '/'.");
       }
-      return tok();
+      return next_token();
     case quote_char: {
       next();
       const char* begin = ptr_;
@@ -980,6 +1025,7 @@ class Parser : public IParser
 
     field = ast<AstFieldDecl>();
     field->name = std::move(field_name.name);
+    field->doc = std::move(field_name.doc);
     field->type = optional ? ast<AstOptionalDecl>(type) : type;
     field->type_refs = std::move(type_sites);
 
@@ -1044,6 +1090,7 @@ class Parser : public IParser
       return false;
 
     arg.name = arg_name.name;
+    arg.doc = arg_name.doc;
     arg.type = optional ? ast<AstOptionalDecl>(type) : type;
 
     for (const auto& site : arg.type_refs) {
@@ -1087,7 +1134,7 @@ class Parser : public IParser
 
   // struct_decl ::= ('message' | 'exception') IDENTIFIER '{' (field_decl ';'
   // | version_decl)* '}'
-  bool struct_decl(attributes_t& attr)
+  bool struct_decl(attributes_t& attr, std::string& doc)
   {
     auto first_tok = peek();
     if (first_tok != TokenId::Message && first_tok != TokenId::Exception)
@@ -1099,6 +1146,7 @@ class Parser : public IParser
     auto s = ast<AstStructDecl>();
     bool is_exception = first_tok == TokenId::Exception;
     s->name = name_tok.name;
+    s->doc = std::move(doc);
     set_name_from_token(s, name_tok);
     if (is_exception) {
       s->exception_id = ctx_.next_exception_id();
@@ -1358,6 +1406,7 @@ class Parser : public IParser
       return false;
 
     f = ast<AstFunctionDecl>();
+    f->doc = std::move(start_tok.doc);
     f->ret_value = ret_type;
     f->ret_type_refs = std::move(ret_sites);
     f->is_async = false;
@@ -1526,7 +1575,7 @@ class Parser : public IParser
 
   // interface_decl ::= 'interface' IDENTIFIER (':' IDENTIFIER (','
   // IDENTIFIER)*)? '{' function_decl* '}'
-  bool interface_decl(attributes_t& attr)
+  bool interface_decl(attributes_t& attr, std::string& doc)
   {
     auto start_tok = peek();
     if (start_tok != TokenId::Interface)
@@ -1536,6 +1585,7 @@ class Parser : public IParser
     auto ifs = ast<AstInterfaceDecl>();
     auto name_tok = match(TokenId::Identifier);
     ifs->name = name_tok.name;
+    ifs->doc = std::move(doc);
     set_name_from_token(ifs, name_tok);
 
     for (const auto& a : attr) {
@@ -1578,11 +1628,19 @@ class Parser : public IParser
       if (check(&Parser::one, TokenId::BracketClose))
         break;
 
+      std::string fn_doc;
+      {
+        PeekGuard pg(*this);
+        fn_doc = peek().doc;
+      }
+
       // Check for function-level attributes like [unreliable]
       attributes_t fn_attr;
       check(&Parser::attributes_decl, std::ref(fn_attr));
 
       if (check(&Parser::function_decl, std::ref(f))) {
+        if (!fn_attr.empty())
+          f->doc = std::move(fn_doc);
         // Apply function-level attributes
         for (const auto& a : fn_attr) {
           if (a.first == "unreliable")
@@ -1692,6 +1750,7 @@ class Parser : public IParser
     if (right->id == FieldType::Variant) {
       auto* v = cvar(right);
       v->name = left.name;
+      v->doc = std::move(start_tok.doc);
       v->nm = ctx_.nm_cur();
       set_node_position(v, start_tok);
       set_name_from_token(v, left);
@@ -1704,6 +1763,7 @@ class Parser : public IParser
     }
 
     auto a = ast<AstAliasDecl>(std::string(left.name), ctx_.nm_cur(), right);
+    a->doc = std::move(start_tok.doc);
     set_name_from_token(a, left);
 
     // Set position for the using declaration
@@ -1729,6 +1789,7 @@ class Parser : public IParser
     flush();
 
     auto e = ast<AstEnumDecl>();
+    e->doc = std::move(start_tok.doc);
 
     auto enum_name_tok = match(TokenId::Identifier);
     set_name_from_token(e, enum_name_tok);
@@ -1763,6 +1824,7 @@ class Parser : public IParser
 
       auto item_range = range_from_token(tok);
       auto name = std::move(tok.name);
+      e->item_docs.push_back(std::move(tok.doc));
 
       tok = peek();
 
@@ -1817,11 +1879,19 @@ class Parser : public IParser
   // Helper to parse declarations that can have attributes
   bool something_that_could_have_attributes()
   {
+    // The doc block sits above the attribute list when there is one, so read
+    // it off the first token before the attributes are consumed.
+    std::string doc;
+    {
+      PeekGuard pg(*this);
+      doc = peek().doc;
+    }
+
     attributes_t attr;
     check(&Parser::attributes_decl, std::ref(attr));
 
-    return check(&Parser::interface_decl, std::ref(attr)) ||
-           check(&Parser::struct_decl, std::ref(attr));
+    return check(&Parser::interface_decl, std::ref(attr), std::ref(doc)) ||
+           check(&Parser::struct_decl, std::ref(attr), std::ref(doc));
   }
 
   // stmt_decl ::= const_decl | namespace_decl | attributes_decl?

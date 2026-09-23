@@ -4,7 +4,10 @@
 #include "nprpc_base.hpp"
 #include <iostream>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include <nprpc_nameserver.hpp>
 
@@ -54,10 +57,81 @@ public:
   }
 };
 
-int main()
+namespace {
+
+// Clients reach the nameserver at fixed ports (see Rpc::get_nameserver), so
+// only the hostname, TLS and CORS are configurable.
+struct Options {
+  std::string hostname = "localhost";
+  std::string cert_file;
+  std::string key_file;
+  std::vector<std::string> allowed_origins;
+};
+
+constexpr std::string_view usage =
+    "Usage: npnameserver [options]\n"
+    "\n"
+    "Serves the NPRPC nameserver on TCP port 15000 and HTTP/WebSocket port\n"
+    "15001 (for transports compiled into NPRPC).\n"
+    "\n"
+    "Options:\n"
+    "  --hostname NAME        Host written into object references (default: localhost)\n"
+    "  --cert FILE            TLS certificate; with --key, serves HTTPS/WSS on 15001\n"
+    "  --key FILE             TLS private key\n"
+    "  --allow-origin ORIGIN  Allow cross-origin browser calls from ORIGIN (repeatable)\n"
+    "  -h, --help             Show this help\n";
+
+// Returns false after printing a message if the arguments are invalid or
+// --help was given; `exit_code` says which.
+bool parse_args(int argc, char** argv, Options& opts, int& exit_code)
 {
+  for (int i = 1; i < argc; ++i) {
+    std::string_view arg = argv[i];
+    if (arg == "-h" || arg == "--help") {
+      std::cout << usage;
+      exit_code = 0;
+      return false;
+    }
+    std::string* target = nullptr;
+    if (arg == "--hostname")
+      target = &opts.hostname;
+    else if (arg == "--cert")
+      target = &opts.cert_file;
+    else if (arg == "--key")
+      target = &opts.key_file;
+    else if (arg == "--allow-origin")
+      target = &opts.allowed_origins.emplace_back();
+    else {
+      std::cerr << "npnameserver: unknown option '" << arg << "'\n\n" << usage;
+      exit_code = 2;
+      return false;
+    }
+    if (++i == argc) {
+      std::cerr << "npnameserver: " << arg << " needs a value\n";
+      exit_code = 2;
+      return false;
+    }
+    *target = argv[i];
+  }
+  if (opts.cert_file.empty() != opts.key_file.empty()) {
+    std::cerr << "npnameserver: --cert and --key must be given together\n";
+    exit_code = 2;
+    return false;
+  }
+  return true;
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+  Options opts;
+  if (int exit_code; !parse_args(argc, argv, opts, exit_code))
+    return exit_code;
+
+  [[maybe_unused]] const bool use_tls = !opts.cert_file.empty();
+
   NameserverImpl server;
-  boost::asio::io_context ioc;
 
   try {
     nprpc::RpcBuilder builder;
@@ -65,19 +139,23 @@ int main()
 
 #if defined(NPRPC_ENABLE_TCP) || defined(NPRPC_ENABLE_HTTP) || \
     defined(NPRPC_ENABLE_WEBSOCKET) || defined(NPRPC_ENABLE_QUIC)
-    builder.with_hostname("localhost");
+    builder.with_hostname(opts.hostname);
 #endif
 
 #ifdef NPRPC_ENABLE_TCP
     builder.with_tcp(15000);
 #endif
 #ifdef NPRPC_ENABLE_HTTP
-    auto http = builder.with_http(15001)
-                    .allow_origins({"https://localhost:24443"});
+    auto http = builder.with_http(15001);
+    if (!opts.allowed_origins.empty())
+      http.allow_origins(std::move(opts.allowed_origins));
+    if (use_tls) {
 #ifdef NPRPC_ENABLE_SSL
-    http.ssl("/home/nikita/projects/nprpc/certs/out/localhost.crt",
-             "/home/nikita/projects/nprpc/certs/out/localhost.key");
+      http.ssl(opts.cert_file, opts.key_file);
+#else
+      throw std::runtime_error("TLS was not compiled in (NPRPC_ENABLE_SSL=OFF)");
 #endif
+    }
 #endif
 
     auto rpc = builder.build();
@@ -94,17 +172,17 @@ int main()
 #ifdef NPRPC_ENABLE_TCP
     flags = flags | F::tcp;
 #endif
+    // The HTTP listener detects TLS per connection, so with a certificate it
+    // serves both plain and secure clients on the same port.
 #ifdef NPRPC_ENABLE_HTTP
     flags = flags | F::http;
-# ifdef NPRPC_ENABLE_SSL
-    flags = flags | F::https;
-# endif
+    if (use_tls)
+      flags = flags | F::https;
 #endif
 #if defined(NPRPC_ENABLE_WEBSOCKET) && defined(NPRPC_ENABLE_HTTP)
     flags = flags | F::ws;
-# ifdef NPRPC_ENABLE_SSL
-    flags = flags | F::wss;
-# endif
+    if (use_tls)
+      flags = flags | F::wss;
 #endif
 #ifdef NPRPC_ENABLE_QUIC
     flags = flags | F::quic;

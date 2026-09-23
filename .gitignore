@@ -5,7 +5,6 @@
 /include/nprpc_base.hpp
 /include/nprpc_base.cpp
 /include/nprpc_nameserver.hpp
-/include/nprpc_node.hpp
 
 /compile_commands.json
 

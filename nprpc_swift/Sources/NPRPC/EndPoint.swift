@@ -7,11 +7,17 @@ import CNprpc
 
 /// Transport protocol for NPRPC communication
 public enum TransportType: UInt8, Sendable {
+    /// Not a recognised transport.
     case Unknown = 0
+    /// Native TCP.
     case Tcp = 1
+    /// WebSocket (WS or WSS).
     case WebSocket = 2
+    /// RPC over HTTP (HTTP/1.1 or HTTP/3).
     case Http = 3
+    /// Native QUIC.
     case Quic = 4
+    /// Shared memory, same machine only.
     case SharedMemory = 6
 
     /// Initialize from C++ EndPointType
@@ -51,9 +57,13 @@ public enum TransportType: UInt8, Sendable {
 
 /// Network endpoint identifying a remote NPRPC object
 public struct EndPoint: Sendable {
+    /// The transport.
     public let type: TransportType
+    /// Host name or IP address; the channel UUID for shared memory.
     public let hostname: String
+    /// Port; 0 for shared memory.
     public let port: UInt16
+    /// URL path for HTTP and WebSocket endpoints; empty otherwise.
     public let path: String
     
     /// Create an endpoint with explicit parameters
@@ -91,23 +101,27 @@ public struct EndPoint: Sendable {
         return String(info.to_url())
     }
     
-    /// Convenience initializers for common transports
+    /// A native TCP endpoint.
     public static func tcp(host: String, port: UInt16) -> EndPoint {
         return EndPoint(type: .Tcp, hostname: host, port: port)
     }
     
+    /// A WebSocket endpoint.
     public static func webSocket(host: String, port: UInt16, path: String = "/nprpc") -> EndPoint {
         return EndPoint(type: .WebSocket, hostname: host, port: port, path: path)
     }
     
+    /// An RPC-over-HTTP endpoint.
     public static func http(host: String, port: UInt16, path: String = "/nprpc") -> EndPoint {
         return EndPoint(type: .Http, hostname: host, port: port, path: path)
     }
     
+    /// A native QUIC endpoint.
     public static func quic(host: String, port: UInt16) -> EndPoint {
         return EndPoint(type: .Quic, hostname: host, port: port)
     }
 
+    /// A shared-memory endpoint for the channel `uuid`.
     public static func sharedMemory(uuid: String) -> EndPoint {
         return EndPoint(type: .SharedMemory, hostname: uuid, port: 0)
     }
@@ -115,6 +129,7 @@ public struct EndPoint: Sendable {
 
 // MARK: - CustomStringConvertible
 extension EndPoint: CustomStringConvertible {
+    /// The endpoint as a URL; see `toURL()`.
     public var description: String {
         return toURL()
     }
@@ -122,6 +137,7 @@ extension EndPoint: CustomStringConvertible {
 
 // MARK: - Equatable
 extension EndPoint: Equatable {
+    /// Same transport, host, port and path.
     public static func == (lhs: EndPoint, rhs: EndPoint) -> Bool {
         return lhs.type == rhs.type &&
                lhs.hostname == rhs.hostname &&
@@ -132,6 +148,7 @@ extension EndPoint: Equatable {
 
 // MARK: - Hashable
 extension EndPoint: Hashable {
+    /// Hashes the fields `==` compares.
     public func hash(into hasher: inout Hasher) {
         hasher.combine(type)
         hasher.combine(hostname)

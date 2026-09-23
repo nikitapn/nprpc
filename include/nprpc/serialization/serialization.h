@@ -13,7 +13,7 @@
 
 #include <nprpc/serialization/nvp.hpp>
 
-namespace nprpc::serialization {
+namespace nprpc::detail::serialization {
 
 class json_iarchive;
 class json_oarchive;
@@ -350,4 +350,4 @@ public:
   }
 };
 
-} // namespace nprpc::serialization
+} // namespace nprpc::detail::serialization

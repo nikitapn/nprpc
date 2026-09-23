@@ -18,8 +18,8 @@ private final class ContinuationBox<T> {
 /// Swift representation of a remote C++ nprpc::Object
 /// All data is accessed through the C++ object via the bridge - no duplication
 open class NPRPCObject: Codable, @unchecked Sendable {
-    // Class ID for this object type (used for type checking in narrow)
-    // Will be overridden in subclasses to return the correct class ID string
+    /// Class ID for this proxy type, used for type checking in `narrow`.
+    /// Generated subclasses override it with their interface's id.
     open class var classId: String {
       "unknown"
     }
@@ -33,11 +33,13 @@ open class NPRPCObject: Codable, @unchecked Sendable {
         case ior
     }
 
+    /// Encodes the reference as its IOR string (`ObjectId.toString()`).
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(toString(), forKey: .ior)
     }
 
+    /// Decodes a reference from its IOR string. Throws for a malformed one.
     public required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let ior = try container.decode(String.self, forKey: .ior)

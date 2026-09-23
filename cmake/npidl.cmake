@@ -1,4 +1,19 @@
+# Remembered at include time: inside the function, CMAKE_CURRENT_LIST_DIR is
+# the caller's directory.
+set(_NPIDL_CMAKE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+
 function(npidl_generate_idl_files idl_files_list module_name)
+  # In the NPRPC tree, npidl is a target and CMake runs the built executable.
+  # From an installed package, find the installed one.
+  if(TARGET npidl)
+    set(_npidl npidl)
+  else()
+    find_program(NPIDL_EXECUTABLE npidl
+      HINTS "${_NPIDL_CMAKE_DIR}/../../../bin"
+      REQUIRED)
+    set(_npidl ${NPIDL_EXECUTABLE})
+  endif()
+
   # Track all input IDL files for the custom target
   set(all_idl_files)
   
@@ -12,7 +27,7 @@ function(npidl_generate_idl_files idl_files_list module_name)
       COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${module_name}/src/gen/include
       COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${module_name}/src/gen/js
       COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/npidl_tmp
-      COMMAND npidl
+      COMMAND ${_npidl}
         --cpp --ts
         --output-dir ${CMAKE_BINARY_DIR}/npidl_tmp
         ${file}
@@ -25,7 +40,7 @@ function(npidl_generate_idl_files idl_files_list module_name)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_BINARY_DIR}/npidl_tmp/${basename}.ts
         ${CMAKE_BINARY_DIR}/${module_name}/src/gen/js/${basename}.ts
-      DEPENDS npidl ${file}
+      DEPENDS ${_npidl} ${file}
       COMMENT "Generating stubs from ${file}"
       VERBATIM
     )

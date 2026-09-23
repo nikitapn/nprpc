@@ -25,7 +25,6 @@ configure:
       -DNPRPC_BUILD_TOOLS=ON \
       -DNPRPC_ENABLE_QUIC=ON \
       -DNPRPC_ENABLE_HTTP3=ON \
-      -DNPRPC_ENABLE_SSR=ON \
       -DNPRPC_BUILD_DEV_DOCKER=ON \
       -DNPRPC_BUILD_EXAMPLES=ON
 
@@ -39,7 +38,6 @@ configure-shm:
       -DNPRPC_ENABLE_SSL=OFF \
       -DNPRPC_ENABLE_QUIC=OFF \
       -DNPRPC_ENABLE_HTTP3=OFF \
-      -DNPRPC_ENABLE_SSR=OFF \
       -DNPRPC_BUILD_TESTS=OFF \
       -DNPRPC_BUILD_TOOLS=ON \
       -DNPRPC_BUILD_JS=OFF \
@@ -154,6 +152,35 @@ gen-test-idl: (bt "npidl")
     cp /tmp/nprpc_test.cpp "{{build_dir}}/nprpc_test_stub/src/gen/"
     cp /tmp/nprpc_test.hpp "{{build_dir}}/nprpc_test_stub/src/gen/include/"
 
+# ── docs ─────────────────────────────────────────────────────────────────────
+
+# Collect API docs (C++ headers, Swift package, IDL) into <build>/docs/api.json
+docs-api:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="$PWD/{{build_dir}}/docs"
+    # Swift has no standalone extractor that copes with C++ interop; the
+    # compiler writes the symbol graph during an ordinary build instead.
+    modules=(NPRPC NPRPCWeb)
+    graphs=()
+    for module in "${modules[@]}"; do
+      swift build --package-path nprpc_swift --target "$module" \
+        --scratch-path "$out/swift-build" \
+        -Xswiftc -emit-symbol-graph -Xswiftc -emit-symbol-graph-dir -Xswiftc "$out/swift-symbols" \
+        -Xswiftc -symbol-graph-minimum-access-level -Xswiftc public
+      graphs+=("$out/swift-symbols/$module.symbols.json")
+    done
+    cmake -S . -B "{{build_dir}}" -DNPRPC_DOCS_SWIFT_SYMBOLS="$(IFS=';'; echo "${graphs[*]}")" >/dev/null
+    cmake --build "{{build_dir}}" --target docs_api
+    echo "API docs: $out/api.json"
+
+# Serve the docs site with live reload of api.json and templates (after docs-api)
+docs-serve port="8080":
+    cd docs/site && swift build --product docs-server
+    cd docs/site && DOCS_PORT={{port}} DOCS_TEMPLATE_RELOAD=1 \
+      DOCS_API="{{join(justfile_directory(), build_dir)}}/docs/api.json" \
+      ./.build/debug/docs-server
+
 # ── benchmarks ───────────────────────────────────────────────────────────────
 
 # Build and run Google Benchmark suite (pass filters after --)
@@ -246,7 +273,6 @@ profile:
       -DNPRPC_BUILD_TOOLS=ON \
       -DNPRPC_ENABLE_QUIC=ON \
       -DNPRPC_ENABLE_HTTP3=ON \
-      -DNPRPC_ENABLE_SSR=ON \
       -DNPRPC_BUILD_EXAMPLES=ON
     cmake --build .build_perf --target nprpc_benchmarks -j{{nproc}}
     just _kill-test-procs
@@ -264,8 +290,8 @@ profile-http3-1mb *args:
 statistics:
     cloc . --exclude-lang=SVG,XML,zsh \
       --fullpath \
-      --not-match-d='build|gen|Generated|node_modules|third_party|dist|\.build_.*|\.cache|\.github|\.svelte-kit|\.clang-format' \
-      --not-match-f='nprpc_nameserver\.hpp|package-lock\.json|nprpc_node\.hpp|nprpc_base\.hpp'
+      --not-match-d='build|gen|Generated|node_modules|third_party|dist|\.build_.*|\.cache|\.github|\.clang-format' \
+      --not-match-f='nprpc_nameserver\.hpp|package-lock\.json|nprpc_base\.hpp'
 
 # ── nprpc_devtools ───────────────────────────────────────────────────────────
 

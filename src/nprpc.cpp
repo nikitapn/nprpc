@@ -15,40 +15,36 @@ using namespace nprpc;
 
 namespace nprpc {
 
-namespace {
+namespace impl {
 
-void log_build_info_once()
+void log_startup_info(const BuildConfig& cfg)
 {
   static std::once_flag once;
   std::call_once(once, [] {
-    NPRPC_LOG_INFO("nprpc version {} commit {}", impl::build_info::project_version,
-                   impl::build_info::project_commit);
+    NPRPC_LOG_INFO("nprpc version {} commit {}", build_info::project_version,
+                   build_info::project_commit);
 
-    for (const auto& dependency : impl::build_info::third_party_dependencies) {
+    for (const auto& dependency : build_info::third_party_dependencies) {
       NPRPC_LOG_INFO("third-party {} commit {}", dependency.name,
                      dependency.commit);
     }
   });
+
+  std::string buf(36, '0');
+  bool ret = boost::uuids::to_chars(
+      reinterpret_cast<const boost::uuids::uuid&>(cfg.uuid), buf.data(),
+      buf.data() + buf.size());
+  assert(ret);
+  NPRPC_LOG_INFO("UUID: {}", buf);
 }
 
-} // namespace
+} // namespace impl
 
 NPRPC_API RpcBuilder::RpcBuilder()
-    : impl::RpcBuilderBase(std::make_shared<impl::BuildConfig>())
+    : RpcBuilderBase(std::make_shared<impl::BuildConfig>())
 {
-  log_build_info_once();
-
   auto& uuid = impl::SharedUUID::instance().get();
   memcpy(cfg_->uuid.data(), &uuid, 16);
-
-  if (1) {
-    std::string buf(36, '0');
-    bool ret = boost::uuids::to_chars(
-        reinterpret_cast<const boost::uuids::uuid&>(uuid), buf.data(),
-        buf.data() + buf.size());
-    assert(ret);
-    NPRPC_LOG_INFO("UUID: {}", buf);
-  }
 }
 
 NPRPC_API uint32_t ObjectServant::release() noexcept
@@ -309,7 +305,6 @@ bool ReferenceList::remove_ref(poa_idx_t poa_idx, oid_t oid)
 
 Poa* PoaBuilder::build()
 {
-  log_build_info_once();
   return static_cast<impl::RpcImpl*>(rpc_)->create_poa_impl(
       objects_max_, lifespan_policy_, object_id_policy_, dispatch_executor_,
       transport_affinity_);

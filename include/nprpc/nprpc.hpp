@@ -14,6 +14,8 @@
 #include <optional>
 #include <stop_token>
 #include <string_view>
+#include <string>
+#include <vector>
 #include <utility>
 
 #include <boost/asio/io_context.hpp>
@@ -24,6 +26,7 @@
 #include <nprpc/endpoint.hpp>
 #include <nprpc/flat_buffer.hpp>
 #include <nprpc/object_ptr.hpp>
+#include <nprpc/page_handler.hpp>
 #include <nprpc/task.hpp>
 #include <nprpc/serialization/serialization.h>
 #include <nprpc/session_context.h>
@@ -41,6 +44,7 @@ class Poa;
 class ObjectServant;
 class Object;
 
+/// Object id that names no object, e.g. a failed nameserver lookup.
 constexpr oid_t invalid_object_id = std::numeric_limits<oid_t>::max();
 
 /**
@@ -73,6 +77,11 @@ NPRPC_API Object* create_object_from_flat(detail::flat::ObjectId_Direct oid,
                                           EndPoint remote_endpoint);
 } // namespace impl
 
+/// A reference to an object: its id, where it lives, and the URLs it can be
+/// reached at. `Object` adds a connection to it.
+///
+/// Converts to a string (`to_string()` / `from_string()`) so a reference
+/// can be handed out of band, e.g. in a config file.
 class ObjectId
 {
   friend impl::PoaImpl;
@@ -81,6 +90,7 @@ protected:
   ::nprpc::detail::ObjectId data_;
 
 public:
+  /// Writes or reads the fields through `ar`; used for host.json.
   template <typename Archive> void serialize(Archive& ar)
   {
     ar& NVP2("object_id", data_.object_id);
@@ -91,46 +101,72 @@ public:
     ar& NVP2("urls", data_.urls);
   }
 
+  /// Copies from the wire form, as received in a call.
   void assign_from_direct(const detail::flat::ObjectId_Direct& other)
   {
     data_ = nprpc::detail::helpers::ObjectId::from_flat(
         const_cast<detail::flat::ObjectId_Direct&>(other));
   }
 
+  /// Copies `oid` into its wire form, to send it in a call.
   static void assign_to_direct(const ::nprpc::ObjectId& oid,
                                detail::flat::ObjectId_Direct& direct)
   {
     nprpc::detail::helpers::ObjectId::to_flat(direct, oid.data_);
   }
 
+  /// The object's id within its POA.
   auto object_id() const noexcept { return data_.object_id; }
+  /// Index of the POA the object lives in.
   auto poa_idx() const noexcept { return data_.poa_idx; }
+  /// `detail::ObjectFlag` bits: lifespan, and which browser transports may
+  /// reach the object.
   auto flags() const noexcept { return data_.flags; }
+  /// UUID of the process that created the object.
   const auto& origin() const noexcept { return data_.origin; }
+  /// Interface identifier, `<idl file>/<namespace>.<interface>`.
   const auto& class_id() const noexcept { return data_.class_id; }
+  /// Where the object can be reached, `;`-separated
+  /// (`tcp://`, `web://`, `mem://`, `quic://`).
   const auto& urls() const noexcept { return data_.urls; }
 
+  /// Whether the object was created by the process with UUID `other`.
   bool is_same_origin(const uuid_t& other) const noexcept
   {
     return origin() == other;
   }
 
+  /// The underlying record, for code that builds references by hand.
   auto& get_data() noexcept { return data_; }
+  /// The underlying record.
   const auto& get_data() const noexcept { return data_; }
 
-  // Serialize ObjectId to a string (NPRPC IOR format)
-  // Format: "NPRPC1:<base64_encoded_binary_data>"
+  /// Serialize ObjectId to a string (NPRPC IOR format).
+  /// Format: `NPRPC1:<base64_encoded_binary_data>`
   NPRPC_API std::string to_string() const;
 
-  // Deserialize ObjectId from string
-  // Returns true on success, false on parse error
+  /// Deserialize ObjectId from string.
+  /// Returns true on success, false on parse error.
   NPRPC_API bool from_string(std::string_view str);
 };
 
+/// Policies a POA is created with; see `PoaBuilder`.
 namespace PoaPolicy {
-enum class Lifespan { Transient = 0, Persistent = 1 };
+/// How long a POA's objects live.
+enum class Lifespan {
+  /// Reference counted: deleted when the last client releases it.
+  Transient = 0,
+  /// Lives until deactivated explicitly, whatever clients hold.
+  Persistent = 1
+};
 
-enum class ObjectIdPolicy { SystemGenerated = 0, UserSupplied = 1 };
+/// Who picks object ids.
+enum class ObjectIdPolicy {
+  /// The POA assigns ids; use `Poa::activate_object`.
+  SystemGenerated = 0,
+  /// The caller supplies them; use `Poa::activate_object_with_id`.
+  UserSupplied = 1
+};
 
 /// Where servant dispatch may run relative to the transport I/O thread
 /// (SHM ring consumer, TCP read loop, etc.).
@@ -167,15 +203,21 @@ enum class TransportAffinity {
  *   is_running_on:  Thread.isMainThread / queue-specific key
  */
 struct DispatchExecutor {
+  /// A unit of work: call with its argument.
   using WorkFn = void (*)(void* arg);
+  /// Schedule `fn(arg)` on the executor identified by `ctx`.
   using PostFn = void (*)(void* ctx, WorkFn fn, void* arg);
   /// Return true if the calling thread is already the executor's thread.
   using IsRunningOnFn = bool (*)(void* ctx);
 
+  /// Schedules `fn(arg)` on the executor and returns without waiting.
   PostFn post = nullptr;
+  /// Optional; lets `invoke_sync` run inline instead of deadlocking.
   IsRunningOnFn is_running_on = nullptr;
+  /// Passed back to `post` and `is_running_on`.
   void* ctx = nullptr;
 
+  /// Whether an executor is set.
   explicit operator bool() const noexcept { return post != nullptr; }
 
   /**
@@ -225,6 +267,15 @@ struct DispatchExecutor {
   }
 };
 
+/// Configures a POA; get one from `Rpc::create_poa()` and finish with
+/// `build()`.
+///
+/// ```cpp
+/// auto poa = rpc->create_poa()
+///                .with_max_objects(64)
+///                .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+///                .build();
+/// ```
 class NPRPC_API PoaBuilder
 {
   uint32_t objects_max_ = 32;
@@ -237,26 +288,29 @@ class NPRPC_API PoaBuilder
   Rpc* rpc_ = nullptr;
 
 public:
+  /// Prefer `Rpc::create_poa()`.
   explicit PoaBuilder(Rpc* rpc)
       : rpc_(rpc)
   {
   }
 
-  // Set maximum number of objects this POA can handle
+  /// Maximum number of objects active at once. Default: 32.
   PoaBuilder& with_max_objects(uint32_t max)
   {
     objects_max_ = max;
     return *this;
   }
 
-  // Set lifespan policy
+  /// Whether objects are reference counted or live until deactivated.
+  /// Default: `Transient`.
   PoaBuilder& with_lifespan(PoaPolicy::Lifespan policy)
   {
     lifespan_policy_ = policy;
     return *this;
   }
 
-  // Set object id policy (system-generated vs user-supplied)
+  /// Whether the POA assigns object ids or the caller does.
+  /// Default: `SystemGenerated`.
   PoaBuilder& with_object_id_policy(PoaPolicy::ObjectIdPolicy policy)
   {
     object_id_policy_ = policy;
@@ -279,10 +333,14 @@ public:
     return *this;
   }
 
-  // Build the POA
+  /// Creates the POA. The runtime owns it: do not delete it, call
+  /// `Rpc::destroy_poa` to remove it.
   Poa* build();
 };
 
+/// Portable Object Adapter: holds servants and routes incoming calls to
+/// them. Create one with `Rpc::create_poa()`; see the POA guide for the
+/// threading options.
 class NPRPC_API Poa
 {
   poa_idx_t idx_;
@@ -297,16 +355,19 @@ public:
     return dispatch_executor_;
   }
 
+  /// Replaces the executor set by `PoaBuilder::with_dispatch_executor`.
   void set_dispatch_executor(DispatchExecutor ex) noexcept
   {
     dispatch_executor_ = ex;
   }
 
+  /// Whether dispatch may run on the transport thread.
   PoaPolicy::TransportAffinity transport_affinity() const noexcept
   {
     return transport_affinity_;
   }
 
+  /// Replaces the affinity set by `PoaBuilder::with_transport_affinity`.
   void set_transport_affinity(PoaPolicy::TransportAffinity a) noexcept
   {
     transport_affinity_ = a;
@@ -348,8 +409,10 @@ public:
    */
   virtual void deactivate_object(oid_t object_id) = 0;
 
+  /// This POA's index within the process.
   poa_idx_t get_index() const noexcept { return idx_; }
 
+  /// Created by the runtime; see `PoaBuilder`.
   Poa(poa_idx_t idx)
       : idx_{idx}
   {
@@ -360,6 +423,9 @@ public:
   virtual ~Poa() = default;
 };
 
+/// Base of every server-side object. npidl generates `I<Interface>_Servant`
+/// from it; implement the interface's methods in a subclass and activate an
+/// instance with `Poa::activate_object`.
 class ObjectServant
 {
   friend impl::PoaImpl;
@@ -374,18 +440,34 @@ class ObjectServant
   SessionContext* session_ctx_ = nullptr;
 
 public:
+  /// Interface identifier; generated.
   virtual std::string_view get_class() const noexcept = 0;
+  /// Decodes a call and invokes the matching method; generated.
   virtual void dispatch(::nprpc::SessionContext& ctx, bool from_parent) = 0;
+  /// Called when the runtime is done with the servant. Deletes it by
+  /// default; override for servants that are not heap-allocated.
   virtual void destroy() noexcept { delete this; }
 
+  /// The POA the servant is active in.
   Poa* poa() const noexcept { return poa_.get(); }
+  /// The servant's object id.
   oid_t oid() const noexcept { return object_id_; }
+  /// Index of the POA the servant is active in.
   poa_idx_t poa_index() const noexcept { return poa_->get_index(); }
+  /// Adds a client reference. Returns the new count.
   NPRPC_API uint32_t add_ref() noexcept;
+  /// Drops a client reference. In a transient POA the servant is
+  /// deactivated and destroyed when the count reaches zero; in a persistent
+  /// one this does nothing. Returns the new count.
   NPRPC_API uint32_t release() noexcept;
+  /// When the servant was activated.
   auto activation_time() const noexcept { return activation_time_; }
+  /// Whether no client holds a reference.
   bool is_unused() const noexcept { return ref_cnt_.load() == 0; }
+  /// Whether the servant has been deactivated and awaits deletion.
   bool is_deleted() const noexcept { return to_delete_.load(); }
+  /// Whether `ctx` may call the servant: always, unless it was activated
+  /// for one session only.
   bool validate_session(SessionContext& ctx) const noexcept
   {
     return (!session_ctx_ || session_ctx_ == &ctx);
@@ -393,6 +475,11 @@ public:
   virtual ~ObjectServant() = default;
 };
 
+/// Client-side proxy for a remote object. npidl generates a subclass per
+/// interface with a method for each call.
+///
+/// Reference counted with `add_ref()`/`release()`; hold it in an
+/// `ObjectPtr` rather than calling them by hand.
 class Object : public ObjectId
 {
   friend impl::RpcImpl;
@@ -410,8 +497,10 @@ class Object : public ObjectId
   std::optional<EndPointType> preferred_transport_;
 
 public:
+  /// Interface identifier; same as `class_id()`.
   std::string_view get_class() const noexcept { return class_id(); };
 
+  /// Lifespan of the POA the object lives in.
   PoaPolicy::Lifespan policy_lifespan() const noexcept
   {
     return static_cast<PoaPolicy::Lifespan>(
@@ -419,10 +508,15 @@ public:
                       detail::ObjectFlag::Persistent));
   }
 
+  /// Adds a local reference. The first one on a transient object also
+  /// registers this client with the server. Returns the new count.
   NPRPC_API uint32_t add_ref();
+  /// Drops a local reference. The last one tells a transient object's server
+  /// that this client is done, then deletes the proxy. Returns the new count.
   NPRPC_API uint32_t release();
-  // Returns true if the endpoint was selected, false otherwise
-  // and will indicate that something is wrong
+  /// Picks the transport to call through from `urls()`, honouring
+  /// `set_preferred_transport()`, or uses `remote_endpoint` when given.
+  /// Returns false if none of the URLs is usable here.
   NPRPC_API bool select_endpoint(
       std::optional<EndPoint> remote_endpoint = std::nullopt) noexcept;
 
@@ -436,22 +530,27 @@ public:
     preferred_transport_ = type;
   }
 
+  /// The transport set with `set_preferred_transport()`, if any.
   std::optional<EndPointType> preferred_transport() const noexcept
   {
     return preferred_transport_;
   }
 
+  /// Sets how long a call waits for its reply before raising
+  /// `ExceptionTimeout`. Returns the previous value. Default: 1000 ms.
   uint32_t set_timeout(uint32_t timeout_ms) noexcept
   {
     return boost::exchange(timeout_ms_, timeout_ms);
   }
 
+  /// Call timeout in milliseconds.
   uint32_t get_timeout() const noexcept { return timeout_ms_; }
 
+  /// The transport and address calls go to; see `select_endpoint()`.
   const EndPoint& get_endpoint() const noexcept { return endpoint_; }
 
-  // Create an Object from a serialized string (NPRPC IOR format)
-  // Returns nullptr on parse error
+  /// Create an Object from a serialized string (NPRPC IOR format).
+  /// Returns nullptr on parse error.
   NPRPC_API static Object* from_string(std::string_view str);
 
   NPRPC_API virtual ~Object() = default;
@@ -460,6 +559,8 @@ public:
   Object& operator=(const Object&) = delete;
 
   Object(Object&&) = delete;
+  /// Takes over `other`'s reference, connection and settings; used by
+  /// `narrow()`.
   Object& operator=(Object&& other)
   {
     if (this != &other) {
@@ -478,22 +579,42 @@ protected:
   Object() = default;
 };
 
+/// The runtime: listeners, sessions and POAs. Create it with `RpcBuilder`.
+///
+/// ```cpp
+/// auto rpc = nprpc::RpcBuilder().with_tcp(15000).build();
+/// auto poa = rpc->create_poa().build();
+/// auto oid = poa->activate_object(new CalculatorImpl(),
+///                                 nprpc::ObjectActivationFlags::tcp);
+/// rpc->run();
+/// ```
 class NPRPC_API Rpc
 {
 public:
-  // Create a new POA builder
+  /// Starts configuring a new POA.
   PoaBuilder create_poa() { return PoaBuilder(this); }
+  /// Removes a POA created by `PoaBuilder::build()`.
   virtual void destroy_poa(Poa* poa) = 0;
+  /// The Boost.Asio context the runtime's I/O runs on.
   virtual boost::asio::io_context& ioc() noexcept = 0;
-  // Start the RPC event loop in a thread pool with the specified number of threads
+  /// Runs the event loop on `thread_count` background threads and returns.
   virtual void start_thread_pool(size_t thread_count) noexcept = 0;
-  // Run the RPC event loop (blocks until stopped)
+  /// Runs the event loop on the calling thread until `destroy()`.
   virtual void run() = 0;
+  /// Stops every listener and the event loop, and frees the runtime.
   virtual void destroy() = 0;
+  /// Adds (or replaces) an entry in host.json, which tells browser clients
+  /// which objects to connect to. Throws `Exception` for an empty name.
   virtual void add_to_host_json(std::string_view name, const ObjectId& object_id) = 0;
+  /// Removes every host.json entry.
   virtual void clear_host_json() = 0;
+  /// Writes host.json to `output_path`, or to the HTTP root when empty, and
+  /// returns the path written. Throws `Exception` if neither is set.
   virtual std::string produce_host_json(std::string_view output_path = {}) = 0;
+  /// A proxy for the `npnameserver` at `nameserver_ip` (TCP port 15000 or
+  /// WebSocket port 15001, whichever transports are compiled in).
   virtual ObjectPtr<common::Nameserver> get_nameserver(std::string_view nameserver_ip) = 0;
+  /// The session calls to `obj` go through, or nullptr if none is open.
   virtual SessionContext* get_object_session_context(Object* obj) = 0;
   virtual ~Rpc() = default;
 };
@@ -510,7 +631,6 @@ struct BuildConfig {
   uint16_t http_port = 0;
   bool http_ssl_enabled = false;
   bool http3_enabled = false;
-  bool ssr_enabled = false;
   bool http_ssl_client_disable_verification = false;
   std::string http_cert_file;
   std::string http_key_file;
@@ -539,8 +659,9 @@ struct BuildConfig {
   size_t http_webtransport_requests_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_REQUESTS_BURST;
   size_t http_webtransport_stream_opens_per_session_per_second = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_PER_SESSION_PER_SECOND;
   size_t http_webtransport_stream_opens_burst = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_STREAM_OPENS_BURST;
-  std::string ssr_handler_dir; // Path to SSR handler (index.js), defaults to
-                               // http_root_dir
+  // In-process page renderer; see
+  // RpcBuilderHttp::with_page_handler.
+  PageHandler page_handler;
   bool watch_files = NPRPC_DEFAULT_WATCH_FILES; // Enable inotify-based cache invalidation (dev mode)
 
   // QUIC settings
@@ -572,18 +693,38 @@ struct BuildConfig {
   bool use_uring_tcp = false; // Use io_uring server instead of Asio (Linux only)
 };
 
+} // namespace impl
+
 class RpcBuilderHttp;
 class RpcBuilderQuic;
 class RpcBuilderTcp;
 
+/// Settings shared by every transport. Start from `RpcBuilder`, call
+/// `with_tcp()`, `with_http()` or `with_quic()` for transport-specific ones,
+/// and finish with `build()`.
+///
+/// The transport builders are returned by value but share one configuration,
+/// so any of them can call `build()`:
+///
+/// ```cpp
+/// auto rpc = nprpc::RpcBuilder()
+///                .set_log_level(nprpc::LogLevel::warn)
+///                .with_hostname("example.com")
+///                .with_http(8443)
+///                .ssl("cert.pem", "key.pem")
+///                .root_dir("www")
+///                .build();
+/// ```
 class RpcBuilderBase
 {
 protected:
-  std::shared_ptr<BuildConfig> cfg_;
+  std::shared_ptr<impl::BuildConfig> cfg_;
   RpcBuilderBase(std::shared_ptr<impl::BuildConfig> cfg)
       : cfg_(std::move(cfg)) {};
 
 public:
+  /// Runtime log verbosity. Default: set at build time
+  /// (`NPRPC_DEFAULT_LOG_LEVEL`).
   RpcBuilderBase& set_log_level(::nprpc::LogLevel level) noexcept
   {
     cfg_->log_level = level;
@@ -593,6 +734,8 @@ public:
 #if defined(NPRPC_ENABLE_TCP) || defined(NPRPC_ENABLE_WEBSOCKET) || \
     defined(NPRPC_ENABLE_HTTP) || defined(NPRPC_ENABLE_HTTP3) || \
     defined(NPRPC_ENABLE_QUIC) || defined(NPRPC_ENABLE_SSL)
+  /// Host name advertised in the URLs of objects activated here, so clients
+  /// on other machines can reach them.
   RpcBuilderBase& with_hostname(std::string_view hostname) noexcept
   {
     cfg_->hostname = hostname;
@@ -601,6 +744,8 @@ public:
 #endif
 
 #if defined(NPRPC_ENABLE_SSL)
+  /// Trusts the certificate at `cert_path` for outgoing TLS connections,
+  /// e.g. a development server's self-signed one.
   RpcBuilderBase&
   enable_ssl_client_self_signed_cert(std::string_view cert_path) noexcept
   {
@@ -608,6 +753,7 @@ public:
     return *this;
   }
 
+  /// Accepts any certificate on outgoing TLS connections. For testing only.
   RpcBuilderBase& disable_ssl_client_verification() noexcept
   {
     cfg_->http_ssl_client_disable_verification = true;
@@ -638,24 +784,31 @@ public:
   }
 
 #if defined(NPRPC_ENABLE_TCP)
+  /// Listens for native TCP clients on `port`.
   RpcBuilderTcp with_tcp(uint16_t port) noexcept;
 #endif
 
 #if defined(NPRPC_ENABLE_HTTP) || defined(NPRPC_ENABLE_WEBSOCKET)
+  /// Serves HTTP, WebSocket and (with `enable_http3`) HTTP/3 and
+  /// WebTransport on `port`: RPC at `/rpc`, pages, and static files.
   RpcBuilderHttp with_http(uint16_t port) noexcept;
 #endif
 
 #if defined(NPRPC_ENABLE_QUIC)
+  /// Listens for native QUIC clients on `port`.
   RpcBuilderQuic with_quic(uint16_t port) noexcept;
 #endif
 
+  /// Starts the runtime with this configuration. There is one per process.
   NPRPC_API Rpc* build();
 };
 
 #if defined(NPRPC_ENABLE_TCP)
+/// TCP settings; see `RpcBuilderBase::with_tcp`.
 class RpcBuilderTcp : public RpcBuilderBase
 {
 public:
+  /// Prefer `RpcBuilderBase::with_tcp`.
   explicit RpcBuilderTcp(std::shared_ptr<impl::BuildConfig> cfg)
       : RpcBuilderBase(std::move(cfg))
   {
@@ -694,14 +847,22 @@ public:
 #endif
 
 #if defined(NPRPC_ENABLE_HTTP) || defined(NPRPC_ENABLE_WEBSOCKET)
+/// HTTP, WebSocket, HTTP/3 and WebTransport settings; see
+/// `RpcBuilderBase::with_http`.
+///
+/// The `max_*_per_second` limits are token buckets per client IP or
+/// session: `rate` tokens a second, holding at most `burst` (0 = `rate`).
 class RpcBuilderHttp : public RpcBuilderBase
 {
 public:
+  /// Prefer `RpcBuilderBase::with_http`.
   explicit RpcBuilderHttp(std::shared_ptr<impl::BuildConfig> cfg)
       : RpcBuilderBase(std::move(cfg))
   {
   }
 
+  /// Browser origins allowed to call cross-origin, e.g.
+  /// `{"https://app.example.com"}`. Replaces any earlier list.
   RpcBuilderHttp&
   allow_origins(std::initializer_list<std::string_view> origins) noexcept
   {
@@ -712,6 +873,13 @@ public:
       cfg_->http_allowed_origins.emplace_back(origin);
     }
 
+    return *this;
+  }
+
+  /// `allow_origins` for a list built at run time.
+  RpcBuilderHttp& allow_origins(std::vector<std::string> origins) noexcept
+  {
+    cfg_->http_allowed_origins = std::move(origins);
     return *this;
   }
 
@@ -741,6 +909,7 @@ public:
     return *this;
   }
 
+  /// Limits RPC-over-HTTP requests per client IP.
   RpcBuilderHttp& max_http_rpc_requests_per_ip_per_second(
       size_t rate,
       size_t burst = 0) noexcept
@@ -750,6 +919,8 @@ public:
     return *this;
   }
 #if defined(NPRPC_ENABLE_SSL)
+  /// Serves HTTPS/WSS (and HTTP/3) with this certificate chain and key,
+  /// both PEM. See also `watch_certificates` and `reload_certificates`.
   RpcBuilderHttp& ssl(std::string_view cert_file,
                       std::string_view key_file,
                       std::string_view dhparams_file = "") noexcept
@@ -761,11 +932,11 @@ public:
     return *this;
   }
 
-  // Poll the certificate and key files every `interval` and reload them
-  // in-process when they change on disk, so a certbot renewal is picked up
-  // without a restart.  Zero (the default) disables polling; the certificate
-  // can still be reloaded on demand with nprpc::reload_certificates(), which
-  // is the better fit when certbot can run a --deploy-hook.
+  /// Poll the certificate and key files every `interval` and reload them
+  /// in-process when they change on disk, so a certbot renewal is picked up
+  /// without a restart. Zero (the default) disables polling; the certificate
+  /// can still be reloaded on demand with `reload_certificates()`, which
+  /// is the better fit when certbot can run a --deploy-hook.
   RpcBuilderHttp& watch_certificates(std::chrono::seconds interval) noexcept
   {
     cfg_->cert_watch_interval_sec = static_cast<uint32_t>(interval.count());
@@ -773,52 +944,62 @@ public:
   }
 #endif
 #if defined(NPRPC_ENABLE_HTTP3)
+  /// `enable_http3()` when `condition` holds.
   RpcBuilderHttp& enable_if_http3(bool condition) noexcept
   {
     if (condition) cfg_->http3_enabled = true;
     return *this;
   }
 
+  /// Also serves HTTP/3 and WebTransport on the same port (UDP). Needs
+  /// `ssl()`.
   RpcBuilderHttp& enable_http3() noexcept
   {
     cfg_->http3_enabled = true;
     return *this;
   }
 #endif
-#if defined(NPRPC_ENABLE_SSR)
-  RpcBuilderHttp& enable_ssr(std::string_view handler_dir = "") noexcept
+  /// Render pages in this process.
+  ///
+  /// @p handler is consulted for every GET/HEAD/POST the RPC endpoint did not
+  /// claim.  Returning std::nullopt falls through to the server's normal
+  /// routing, so static assets keep their zero-copy path.
+  RpcBuilderHttp& with_page_handler(PageHandler handler) noexcept
   {
-    cfg_->ssr_enabled = true;
-    if (!handler_dir.empty()) {
-      cfg_->ssr_handler_dir = handler_dir;
-    }
+    cfg_->page_handler = std::move(handler);
     return *this;
   }
-#endif
+
+  /// Directory served as static files, from an in-memory cache. Also
+  /// where `Rpc::produce_host_json()` writes by default.
   RpcBuilderHttp& root_dir(std::string_view root_dir) noexcept
   {
     cfg_->http_root_dir = root_dir;
     return *this;
   }
 
+  /// Largest HTTP request body accepted.
   RpcBuilderHttp& max_request_body_size(size_t bytes) noexcept
   {
     cfg_->http_max_request_body_size = bytes;
     return *this;
   }
 #if defined(NPRPC_ENABLE_WEBSOCKET)
+  /// Negotiates permessage-deflate on WebSocket connections.
   RpcBuilderHttp& websocket_compression(bool enabled = true) noexcept
   {
     cfg_->http_websocket_compression_enabled = enabled;
     return *this;
   }
 
+  /// Limits concurrent WebSocket sessions per client IP.
   RpcBuilderHttp& max_websocket_sessions_per_ip(size_t count) noexcept
   {
     cfg_->http_websocket_max_active_sessions_per_ip = count;
     return *this;
   }
 
+  /// Limits new WebSocket connections per client IP.
   RpcBuilderHttp& max_websocket_upgrades_per_ip_per_second(
       size_t rate,
       size_t burst = 0) noexcept
@@ -828,6 +1009,7 @@ public:
     return *this;
   }
 
+  /// Limits calls per WebSocket session.
   RpcBuilderHttp& max_websocket_requests_per_session_per_second(
       size_t rate,
       size_t burst = 0) noexcept
@@ -839,12 +1021,14 @@ public:
 #endif
 
 #if defined(NPRPC_ENABLE_HTTP3)
+  /// Largest WebSocket message accepted.
   RpcBuilderHttp& max_websocket_message_size(size_t bytes) noexcept
   {
     cfg_->http_websocket_max_message_size = bytes;
     return *this;
   }
 
+  /// Largest WebTransport message accepted.
   RpcBuilderHttp& max_webtransport_message_size(size_t bytes) noexcept
   {
     cfg_->http_webtransport_max_message_size = bytes;
@@ -858,12 +1042,14 @@ public:
     return *this;
   }
 
+  /// Limits concurrent HTTP/3 connections per client IP.
   RpcBuilderHttp& max_http3_connections_per_ip(size_t count) noexcept
   {
     cfg_->http3_max_active_connections_per_ip = count;
     return *this;
   }
 
+  /// Limits new HTTP/3 connections per client IP.
   RpcBuilderHttp& max_http3_new_connections_per_ip_per_second(
       size_t rate,
       size_t burst = 0) noexcept
@@ -873,6 +1059,7 @@ public:
     return *this;
   }
 
+  /// Limits new WebTransport sessions per client IP.
   RpcBuilderHttp& max_webtransport_connects_per_ip_per_second(
       size_t rate,
       size_t burst = 0) noexcept
@@ -882,6 +1069,7 @@ public:
     return *this;
   }
 
+  /// Limits calls per WebTransport session.
   RpcBuilderHttp& max_webtransport_requests_per_session_per_second(
       size_t rate,
       size_t burst = 0) noexcept
@@ -891,6 +1079,7 @@ public:
     return *this;
   }
 
+  /// Limits streams opened per WebTransport session.
   RpcBuilderHttp& max_webtransport_stream_opens_per_session_per_second(
       size_t rate,
       size_t burst = 0) noexcept
@@ -904,14 +1093,17 @@ public:
 #endif
 
 #if defined(NPRPC_ENABLE_QUIC)
+/// Native QUIC settings; see `RpcBuilderBase::with_quic`.
 class RpcBuilderQuic : public RpcBuilderBase
 {
 public:
+  /// Prefer `RpcBuilderBase::with_quic`.
   explicit RpcBuilderQuic(std::shared_ptr<impl::BuildConfig> cfg)
       : RpcBuilderBase(std::move(cfg))
   {
   }
 
+  /// Certificate chain and key (PEM) for the QUIC handshake; required.
   RpcBuilderQuic& ssl(std::string_view cert_file,
                       std::string_view key_file) noexcept
   {
@@ -950,14 +1142,20 @@ inline RpcBuilderQuic RpcBuilderBase::with_quic(uint16_t port) noexcept
 // (e.g. auto b = builder.with_http(...); b.shm_egress_channel(...); b.build();)
 // is safe regardless of the original RpcBuilder's lifetime.
 
-} // namespace impl
-
-class RpcBuilder : public impl::RpcBuilderBase
+/// Entry point for configuring and starting the runtime; see
+/// `RpcBuilderBase` for the settings and an example.
+class RpcBuilder : public RpcBuilderBase
 {
 public:
+  /// A builder with default settings.
   NPRPC_API RpcBuilder();
 };
 
+/// Converts a generic `Object` to the proxy type `T` of its interface.
+///
+/// On success `obj` is consumed (set to nullptr) and the new proxy returned.
+/// Returns nullptr, leaving `obj` alone, if the object does not implement
+/// `T`'s interface.
 template <class T>
   requires(std::is_base_of_v<Object, T>)
 T* narrow(Object*& obj) noexcept
@@ -981,6 +1179,7 @@ T* narrow(Object*& obj) noexcept
 #include <iomanip>
 #include <ostream>
 
+/// Prints an object reference's fields, one per line.
 inline std::ostream& operator<<(std::ostream& os, const nprpc::Object& obj)
 {
   os << "object_id: " << std::hex << std::setw(16) << std::setfill('0')

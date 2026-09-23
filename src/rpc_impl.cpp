@@ -184,7 +184,7 @@ std::string escape_json_string(std::string_view value)
 std::string serialize_host_object(const ObjectId& object_id)
 {
   std::ostringstream os;
-  nprpc::serialization::json_oarchive oa(os);
+  nprpc::detail::serialization::json_oarchive oa(os);
   auto copy = object_id;
   oa << copy;
   return os.str();
@@ -199,12 +199,19 @@ NPRPC_API boost::asio::io_context& get_io_context() {
 }
 } // namespace nprpc
 
-namespace nprpc::impl {
+namespace nprpc {
 
 NPRPC_API Rpc* RpcBuilderBase::build()
 {
+  // The builders are public API in nprpc; the runtime they start is impl.
+  using namespace impl;
+
   if (impl::g_rpc)
     throw Exception("NPRPC has been previously initialized");
+
+  // Apply the level first, so it governs everything build() logs.
+  nprpc::impl::get_logger()->set_level(cfg_->log_level);
+  log_startup_info(*cfg_);
 
 #ifndef NPRPC_TCP_ENABLED
   if (cfg_->tcp_port != 0)
@@ -227,10 +234,6 @@ NPRPC_API Rpc* RpcBuilderBase::build()
 #ifndef NPRPC_HTTP3_ENABLED
   if (cfg_->http3_enabled)
     throw Exception("HTTP/3 was not compiled in (NPRPC_ENABLE_HTTP3=OFF)");
-#endif
-#ifndef NPRPC_SSR_ENABLED
-  if (cfg_->ssr_enabled)
-    throw Exception("SSR was not compiled in (NPRPC_ENABLE_SSR=OFF)");
 #endif
 
   // First check if the configuration is valid
@@ -320,15 +323,12 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   }
 #endif // NPRPC_SSL_ENABLED
 
-  nprpc::impl::get_logger()->set_level(cfg_->log_level);
-
   // Copy builder config to global config
   g_cfg.hostname = cfg_->hostname;
   g_cfg.listen_tcp_port = cfg_->tcp_port;
   g_cfg.listen_http_port = cfg_->http_port;
   g_cfg.listen_quic_port = cfg_->quic_port;
   g_cfg.http3_enabled = cfg_->http3_enabled;
-  g_cfg.ssr_enabled = cfg_->ssr_enabled;
   g_cfg.use_epoll_tcp = cfg_->use_epoll_tcp;
   g_cfg.use_uring_tcp = cfg_->use_uring_tcp;
   g_cfg.http_ssl_enabled = cfg_->http_ssl_enabled;
@@ -373,9 +373,8 @@ NPRPC_API Rpc* RpcBuilderBase::build()
       cfg_->http_webtransport_stream_opens_per_session_per_second;
     g_cfg.http_webtransport_stream_opens_burst =
       cfg_->http_webtransport_stream_opens_burst;
-  g_cfg.ssr_handler_dir =
-      cfg_->ssr_handler_dir.empty() ? cfg_->http_root_dir : cfg_->ssr_handler_dir;
   g_cfg.watch_files = cfg_->watch_files;
+  g_cfg.page_handler = cfg_->page_handler;
   g_cfg.quic_cert_file = cfg_->quic_cert_file;
   g_cfg.quic_key_file = cfg_->quic_key_file;
   g_cfg.shm_egress_channel  = cfg_->shm_egress_channel;
@@ -386,6 +385,10 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   impl::g_rpc = new impl::RpcImpl();
   return impl::g_rpc;
 }
+
+} // namespace nprpc
+
+namespace nprpc::impl {
 
 Poa* RpcImpl::create_poa_impl(uint32_t objects_max,
                               PoaPolicy::Lifespan lifespan,
@@ -453,10 +456,6 @@ void stop_file_watcher();
 #endif
 #ifdef NPRPC_HTTP3_ENABLED
 void stop_http3_server();
-#endif
-#ifdef NPRPC_SSR_ENABLED
-extern void init_ssr(boost::asio::io_context& ioc);
-extern void stop_ssr();
 #endif
 
 #ifdef NPRPC_HTTP3_ENABLED
@@ -639,9 +638,6 @@ void RpcImpl::destroy()
 #endif
 #ifdef NPRPC_HTTP3_ENABLED
   stop_http3_server();
-#endif
-#ifdef NPRPC_SSR_ENABLED
-  stop_ssr();
 #endif
 
   // Shutdown and clear open sessions to release their async operations
@@ -940,7 +936,7 @@ NPRPC_API bool RpcImpl::prepare_zero_copy_buffer(SessionContext& ctx,
 
   // The ring requires the exact final wire size to be claimed up-front.
   // Callers (npidl-generated stubs) must measure the payload first via
-  // nprpc::flat::grow_size walks, then pass that size here.
+  // nprpc::flat::detail::grow_size walks, then pass that size here.
   SharedMemoryChannel* channel = ctx.shm_channel;
   if (!channel) {
     // Client-side: session context should carry the channel (set by
@@ -1116,36 +1112,8 @@ RpcImpl::RpcImpl()
 
 #if defined(NPRPC_HTTP_ENABLED) || defined(NPRPC_HTTP3_ENABLED)
   if (g_cfg.watch_files && !g_cfg.http_root_dir.empty()) {
-    extern void start_file_watcher(const std::filesystem::path&,
-                                   const std::filesystem::path&,
-                                   std::function<void()>);
-#ifdef NPRPC_SSR_ENABLED
-    std::filesystem::path ssr_server_root;
-    if (g_cfg.ssr_enabled && !g_cfg.ssr_handler_dir.empty()) {
-      // Watch the whole handler dir (e.g. build/), not just build/server/.
-      // npm run build deletes build/server/ entirely and recreates it, which
-      // invalidates any inotify watch placed on that subdirectory.  By watching
-      // the parent we survive the delete+recreate cycle.
-      ssr_server_root = std::filesystem::path(g_cfg.ssr_handler_dir);
-    }
-    start_file_watcher(
-        g_cfg.http_root_dir,
-        ssr_server_root,
-        ssr_server_root.empty() ? std::function<void()>{} : []() {
-          // Re-emit host.json into the freshly-built static root so the
-          // browser can discover the object IDs after a full build wipe.
-          try {
-            g_rpc->produce_host_json();
-            NPRPC_LOG_INFO("[FileWatcher] host.json regenerated after build");
-          } catch (const std::exception& e) {
-            NPRPC_LOG_ERROR("[FileWatcher] Failed to regenerate host.json: {}", e.what());
-          }
-          extern void restart_ssr();
-          restart_ssr();
-        });
-#else
-    start_file_watcher(g_cfg.http_root_dir, {}, {});
-#endif
+    extern void start_file_watcher(const std::filesystem::path&);
+    start_file_watcher(g_cfg.http_root_dir);
   }
 #endif // NPRPC_HTTP_ENABLED || NPRPC_HTTP3_ENABLED
 
@@ -1162,9 +1130,6 @@ RpcImpl::RpcImpl()
 #ifdef NPRPC_HTTP3_ENABLED
   extern void init_http3_server(boost::asio::io_context & ioc);
   init_http3_server(ioc_);
-#endif
-#ifdef NPRPC_SSR_ENABLED
-  init_ssr(ioc_);
 #endif
 
   extern void start_certificate_watcher(boost::asio::io_context & ioc);
