@@ -139,7 +139,9 @@ struct alignas(64) RingBufferHeader {
   size_t   buffer_size;        // Payload ring size in bytes
   uint32_t max_message_size;   // Maximum single message size
 
-  // For blocking reads
+  // For blocking reads on platforms without futexes.  On Linux both are
+  // unused (see wake_seq) but stay, so that no field after them moves and a
+  // process built before the change still finds every field where it was.
   boost::interprocess::interprocess_mutex   mutex;
   boost::interprocess::interprocess_condition data_available;
   // Number of threads currently sleeping in read_with_timeout().
@@ -163,6 +165,17 @@ struct alignas(64) RingBufferHeader {
   // struct so that a reader built before it never looks at it; a ring made
   // by such a writer leaves it 0, which means "judge by pid alone".
   std::atomic<uint64_t> writer_pid_ns{0};
+
+  // Linux wake-up: producers bump it after publishing and FUTEX_WAKE when a
+  // reader is waiting; a reader FUTEX_WAITs on the value it saw.  It replaces
+  // mutex + data_available because a lock shared between processes is one a
+  // process can die holding.  A reader SIGKILLed on its way out of a wait
+  // — every 10 ms, for an idle HTTP/3 ingress thread — left the mutex locked
+  // for good, and the next producer to notify blocked on it: npquicrouter's
+  // event loop, and with it every site behind the router.  A futex word has
+  // no owner.  The worst a dead reader leaves behind is waiting_readers one
+  // too high, which costs producers a spare wake syscall.
+  std::atomic<uint32_t> wake_seq{0};
 
   RingBufferHeader(size_t buf_size, uint32_t max_msg_sz)
       : buffer_size(buf_size)
@@ -266,6 +279,10 @@ public:
   // pattern while remaining correct for cross-process signaling.
   void wait_for_readable(std::chrono::milliseconds timeout = std::chrono::milliseconds(10));
 
+  // Wake every reader sleeping in wait_for_readable / read_with_timeout, so it
+  // rechecks whatever it is waiting on (a channel shutting down, say).
+  void wake_readers();
+
   //--------------------------------------------------------------------------
   // Zero-copy API for direct buffer access
   //--------------------------------------------------------------------------
@@ -347,6 +364,13 @@ private:
 
   // Helper to calculate used payload bytes
   size_t used_payload_bytes() const;
+
+  // After a commit or abort: wake a reader sleeping for data, if any.
+  void notify_reader();
+
+  // Sleep until a producer notifies or `timeout` passes, unless the ring
+  // already has something.  The caller has registered in waiting_readers.
+  void sleep_until_notified(std::chrono::milliseconds timeout);
 
   std::string name_;
   boost::interprocess::managed_shared_memory shm_;

@@ -2,6 +2,9 @@
 #include <random>
 #include <thread>
 #include <vector>
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <cstring>
 
 #include <arpa/inet.h>
@@ -549,4 +552,83 @@ TEST(LockFreeRingBuffer, SegmentIdTracksRecreatedName)
   EXPECT_EQ(reader->segment_id(), *now);
   ASSERT_EQ(reader->try_read(buf, sizeof(buf)), sizeof(msg));
   EXPECT_STREQ(buf, msg);
+}
+
+// A reader killed while it sleeps must not take the ring down with it.
+//
+// The wake-up used to be a process-shared mutex + condvar in the header.  A
+// reader waking up retakes the mutex, and one SIGKILLed at that moment left
+// it locked for good: the next producer to notify blocked forever.  In
+// production that producer was npquicrouter's event loop, and a
+// `docker rm -f` of one backend stopped every site behind the router.  This
+// kills a reader at random points of its wait loop, many times, and after
+// each kill requires a write and a read to go through.  Against the mutex it
+// fails within a few rounds: Boost here notices the dead owner and throws
+// lock_exception from the producer; the router's build blocked instead.
+// Either way the producer was done for.
+namespace {
+extern "C" void wake_watchdog(int)
+{
+  static const char msg[] =
+      "KilledReaderDoesNotBlockProducers: producer blocked after a reader "
+      "was killed mid-wait (orphaned wake-up lock)\n";
+  (void)!::write(2, msg, sizeof(msg) - 1);
+  ::_exit(1);
+}
+} // namespace
+
+TEST(LockFreeRingBuffer, KilledReaderDoesNotBlockProducers)
+{
+  const std::string name = "test_killed_reader";
+  LockFreeRingBuffer::remove(name);
+  auto ring = LockFreeRingBuffer::create(name, 64 * 1024);
+
+  std::signal(SIGALRM, wake_watchdog);
+  std::mt19937 rng(12345);
+  std::uniform_int_distribution<int> delay_us(0, 3000);
+
+  constexpr int kRounds = 300;
+  for (int round = 0; round < kRounds; ++round) {
+    const pid_t child = ::fork();
+    ASSERT_NE(child, -1);
+    if (child == 0) {
+      // A reader with nothing to read: the idle HTTP/3 ingress thread, sped
+      // up.
+      // Never return into gtest from here: a child that unwound would run
+      // the rest of the suite as a second process.
+      //
+      // Zero timeouts keep it cycling through the wait machinery, so a kill
+      // lands inside it often rather than once in a few hundred tries.
+      try {
+        auto reader = LockFreeRingBuffer::open(name);
+        uint32_t sink = 0;
+        for (;;) {
+          reader->read_with_timeout(&sink, sizeof(sink),
+                                    std::chrono::milliseconds(0));
+          reader->wait_for_readable(std::chrono::milliseconds(0));
+        }
+      } catch (...) {
+      }
+      ::_exit(2);
+    }
+
+    ::usleep(static_cast<useconds_t>(delay_us(rng)));
+    ::kill(child, SIGKILL);
+    int status = 0;
+    ASSERT_EQ(::waitpid(child, &status, 0), child);
+
+    // With the reader gone mid-wait, a producer and a reader must still get
+    // through.  alarm() turns a deadlock into a failure instead of a hang.
+    ::alarm(5);
+    const uint32_t msg = static_cast<uint32_t>(round);
+    ASSERT_TRUE(ring->try_write(&msg, sizeof(msg)));
+    uint32_t got = 0;
+    ASSERT_EQ(ring->read_with_timeout(&got, sizeof(got),
+                                      std::chrono::milliseconds(1000)),
+              sizeof(got));
+    EXPECT_EQ(got, msg);
+    ring->wait_for_readable(std::chrono::milliseconds(1)); // must time out
+    ::alarm(0);
+  }
+  std::signal(SIGALRM, SIG_DFL);
 }

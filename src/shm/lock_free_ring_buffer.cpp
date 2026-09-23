@@ -5,6 +5,10 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#if defined(__linux__)
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#endif
 #include <unistd.h>
 
 #include <boost/date_time/posix_time/posix_time_types.hpp>
@@ -59,6 +63,32 @@ static size_t header_ring_bytes()
 // that died mid-write stalls the ring but no longer hangs the consumer
 // inside a try_ function.
 static constexpr int kCommitSpinYields = 1024;
+
+#if defined(__linux__)
+// A futex on the header's wake_seq.  Not FUTEX_PRIVATE: the word lives in
+// shared memory and the waiter and the waker are different processes.
+static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t) &&
+                  std::atomic<uint32_t>::is_always_lock_free,
+              "futex needs a plain 32-bit word");
+
+static void futex_wait(std::atomic<uint32_t>* word, uint32_t expected,
+                       std::chrono::milliseconds timeout)
+{
+  const auto ms = std::max<int64_t>(timeout.count(), 0);
+  timespec ts{static_cast<time_t>(ms / 1000),
+              static_cast<long>((ms % 1000) * 1'000'000)};
+  // EAGAIN (the word already moved), EINTR and ETIMEDOUT all mean "go and
+  // look": the caller rechecks the ring either way.
+  ::syscall(SYS_futex, reinterpret_cast<uint32_t*>(word), FUTEX_WAIT,
+            expected, &ts, nullptr, 0);
+}
+
+static void futex_wake_all(std::atomic<uint32_t>* word)
+{
+  ::syscall(SYS_futex, reinterpret_cast<uint32_t*>(word), FUTEX_WAKE,
+            INT32_MAX, nullptr, nullptr, 0);
+}
+#endif
 
 static ShmSegmentId segment_id_of_fd(int fd)
 {
@@ -408,11 +438,7 @@ bool LockFreeRingBuffer::try_write(const void* data, size_t size)
   // Commit: consumer's spin signal.
   sh.actual_size.store(static_cast<uint32_t>(size), std::memory_order_release);
 
-  if (header_->waiting_readers.load(std::memory_order_seq_cst) > 0) {
-    boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex>
-        lock(header_->mutex);
-    header_->data_available.notify_one();
-  }
+  notify_reader();
 
   return true;
 }
@@ -490,28 +516,18 @@ size_t LockFreeRingBuffer::read_with_timeout(void* buffer,
   if (bytes > 0)
     return bytes;
 
-  boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex>
-      lock(header_->mutex);
-
-  auto deadline = boost::posix_time::microsec_clock::universal_time() +
-                  boost::posix_time::milliseconds(timeout.count());
-
-  header_->waiting_readers.fetch_add(1, std::memory_order_seq_cst);
-  while (is_empty()) {
-    auto now = boost::posix_time::microsec_clock::universal_time();
-    if (now >= deadline) {
-      header_->waiting_readers.fetch_sub(1, std::memory_order_relaxed);
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  for (;;) {
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now());
+    if (left.count() <= 0)
       return 0;
-    }
-    if (!header_->data_available.timed_wait(lock, deadline)) {
-      header_->waiting_readers.fetch_sub(1, std::memory_order_relaxed);
-      return 0;
-    }
+    header_->waiting_readers.fetch_add(1, std::memory_order_seq_cst);
+    sleep_until_notified(left);
+    header_->waiting_readers.fetch_sub(1, std::memory_order_relaxed);
+    if ((bytes = try_read(buffer, buffer_size)) > 0)
+      return bytes;
   }
-  header_->waiting_readers.fetch_sub(1, std::memory_order_relaxed);
-
-  lock.unlock();
-  return try_read(buffer, buffer_size);
 }
 
 size_t LockFreeRingBuffer::available_bytes() const
@@ -593,11 +609,7 @@ void LockFreeRingBuffer::commit_write(const WriteReservation& reservation,
   sh.actual_size.store(static_cast<uint32_t>(actual_size),
                        std::memory_order_release);
 
-  if (header_->waiting_readers.load(std::memory_order_seq_cst) > 0) {
-    boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex>
-        lock(header_->mutex);
-    header_->data_available.notify_one();
-  }
+  notify_reader();
 }
 
 void LockFreeRingBuffer::abort_write(const WriteReservation& reservation)
@@ -611,11 +623,7 @@ void LockFreeRingBuffer::abort_write(const WriteReservation& reservation)
   sh.actual_size.store(kSlotSkipped, std::memory_order_release);
 
   // Wake a sleeping reader so it can release the slot promptly.
-  if (header_->waiting_readers.load(std::memory_order_seq_cst) > 0) {
-    boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex>
-        lock(header_->mutex);
-    header_->data_available.notify_one();
-  }
+  notify_reader();
 }
 
 LockFreeRingBuffer::ReadView LockFreeRingBuffer::try_read_view()
@@ -709,21 +717,65 @@ void LockFreeRingBuffer::wait_for_readable(std::chrono::milliseconds timeout)
   if (!is_empty())
     return;
 
-  // Sleep phase: fall back to condvar.
-  // seq_cst on fetch_add pairs with seq_cst on the producer's load:
-  // either the producer sees waiting_readers > 0 and signals us, or it
-  // advanced write_cursor (acq_rel CAS) before our is_empty() recheck and
-  // we see data without sleeping at all — no lost wakeup is possible.
+  header_->waiting_readers.fetch_add(1, std::memory_order_seq_cst);
+  sleep_until_notified(timeout);
+  header_->waiting_readers.fetch_sub(1, std::memory_order_relaxed);
+}
+
+void LockFreeRingBuffer::wake_readers()
+{
+#if defined(__linux__)
+  header_->wake_seq.fetch_add(1, std::memory_order_seq_cst);
+  futex_wake_all(&header_->wake_seq);
+#else
   boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex>
       lock(header_->mutex);
+  header_->data_available.notify_all();
+#endif
+}
 
-  header_->waiting_readers.fetch_add(1, std::memory_order_seq_cst);
+// Why no wake-up is lost, on Linux.  The producer publishes (commit), bumps
+// wake_seq, then reads waiting_readers; the reader bumps waiting_readers,
+// reads wake_seq, rechecks is_empty() and only then waits for wake_seq to move
+// off the value it read.  All four are seq_cst, so in their single total
+// order either the producer's read of waiting_readers comes after the
+// reader's increment — it sees a waiter and wakes it — or it comes before,
+// and then so does the producer's bump of wake_seq: the reader reads the
+// bumped value, and its is_empty() recheck, ordered after it, sees the data.
+// FUTEX_WAIT itself returns at once if wake_seq moved in between.
+void LockFreeRingBuffer::notify_reader()
+{
+#if defined(__linux__)
+  header_->wake_seq.fetch_add(1, std::memory_order_seq_cst);
+  if (header_->waiting_readers.load(std::memory_order_seq_cst) > 0)
+    futex_wake_all(&header_->wake_seq);
+#else
+  if (header_->waiting_readers.load(std::memory_order_seq_cst) > 0) {
+    boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex>
+        lock(header_->mutex);
+    header_->data_available.notify_one();
+  }
+#endif
+}
+
+void LockFreeRingBuffer::sleep_until_notified(std::chrono::milliseconds timeout)
+{
+#if defined(__linux__)
+  const uint32_t seen = header_->wake_seq.load(std::memory_order_seq_cst);
+  if (is_empty())
+    futex_wait(&header_->wake_seq, seen, timeout);
+#else
+  // Elsewhere, the process-shared condvar.  The same caveat that retired it
+  // on Linux applies: a process killed while holding the mutex blocks every
+  // later notify.
+  boost::interprocess::scoped_lock<boost::interprocess::interprocess_mutex>
+      lock(header_->mutex);
   if (is_empty()) {
-    auto deadline = boost::posix_time::microsec_clock::universal_time() +
-                    boost::posix_time::milliseconds(timeout.count());
+    const auto deadline = boost::posix_time::microsec_clock::universal_time() +
+                          boost::posix_time::milliseconds(timeout.count());
     header_->data_available.timed_wait(lock, deadline);
   }
-  header_->waiting_readers.fetch_sub(1, std::memory_order_relaxed);
+#endif
 }
 
 } // namespace nprpc::impl

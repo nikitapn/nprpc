@@ -121,12 +121,12 @@ bool SharedMemoryChannel::stop_reading()
     thread = std::move(read_thread_);
   }
 
-  // Nudge the reader in case it is asleep on the condvar.  Even if it misses
-  // the notification the wait times out after 100 ms and the loop rechecks
+  // Nudge the reader in case it is asleep waiting for data.  Even if it
+  // misses the wake-up the wait times out after 100 ms and the loop rechecks
   // running_, so the join below is bounded either way.
   if (recv_ring_) {
     try {
-      recv_ring_->header()->data_available.notify_all();
+      recv_ring_->wake_readers();
     } catch (...) {
       // Ignore errors - shared memory might already be destroyed
     }
