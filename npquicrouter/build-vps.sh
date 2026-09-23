@@ -47,7 +47,8 @@ User=www-data
 # which is /dev/shm for this service and is mounted as /dev/shm into a backend
 # container. A directory, not the ring files: a file bind mount pins the object
 # it saw, and the rings are recreated every time this service starts.
-ExecStartPre=+/usr/bin/install -d -o www-data -g www-data -m 0755 /dev/shm/npquicrouter
+# /etc/tmpfiles.d/npquicrouter.conf creates it at boot; it has to exist before
+# the unit starts, since the namespace is set up even for ExecStartPre=+.
 BindPaths=/dev/shm/npquicrouter:/dev/shm
 ExecStart=/usr/local/bin/npquicrouter /etc/npquicrouter/config.json
 Restart=on-failure
@@ -56,6 +57,9 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+
+  # The unit's shared-memory directory: made at every boot, and now.
+  ssh "$DEST" "echo 'd /dev/shm/npquicrouter 0755 www-data www-data -' | sudo tee /etc/tmpfiles.d/npquicrouter.conf >/dev/null && sudo systemd-tmpfiles --create /etc/tmpfiles.d/npquicrouter.conf"
 
   scp "$OUT" "$DEST:/tmp/npquicrouter"
   ssh "$DEST" "sudo mv /tmp/npquicrouter /usr/local/bin/ && sudo mv /tmp/npquicrouter.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable npquicrouter"
