@@ -133,6 +133,7 @@ public:
       auto builder = nprpc::RpcBuilder()
                 .set_log_level(log_level)
                 .with_hostname("localhost")
+                .shm_channel_sizes(16 * 1024 * 1024, 12 * 1024 * 1024)
                 .enable_ssl_client_self_signed_cert("/home/nikita/projects/nprpc/certs/out/localhost.crt")
                 .with_tcp(22222).with_epoll_if(use_epoll).with_uring_if(use_uring)
                 .with_quic(quic_port)
