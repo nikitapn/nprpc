@@ -77,6 +77,8 @@ struct RpcBuildConfig {
     size_t http_websocket_requests_per_session_per_second;
     size_t http_websocket_requests_burst;
     size_t http3_worker_count;
+    bool http3_compression_enabled;
+    size_t http3_compression_min_size;
     size_t http3_max_active_connections_per_ip;
     size_t http3_max_new_connections_per_ip_per_second;
     size_t http3_max_new_connections_burst;

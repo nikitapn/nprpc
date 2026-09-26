@@ -411,6 +411,7 @@ endif()
 
 if(NPRPC_ENABLE_HTTP OR NPRPC_ENABLE_HTTP3)
   target_sources(nprpc PRIVATE
+    src/http/http_compression.cpp
     src/http/http_utils.cpp
     src/http/http_rpc_session.cpp
     src/http/http_file_cache.cpp
@@ -450,6 +451,24 @@ if(NPRPC_ENABLE_HTTP3)
   target_sources(nprpc PRIVATE
     src/http/http3_server_nghttp3.cpp
   )
+endif()
+
+# zlib (gzip/deflate response compression for the file cache and HTTP/3),
+# built from the submodule as a static PIC library so it links into a shared
+# libnprpc without adding a runtime dependency.
+if(NPRPC_ENABLE_HTTP OR NPRPC_ENABLE_HTTP3)
+  set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+  set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
+  set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
+  add_subdirectory(third_party/zlib EXCLUDE_FROM_ALL)
+  set_target_properties(zlibstatic PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  # z_-prefixed symbols, so this copy never clashes with a system libz loaded
+  # in the same process. A compile definition rather than ZLIB_PREFIX: zlib.h
+  # includes "zconf.h" from its own directory, the unconfigured one, so only a
+  # definition reaches both zlib's sources and ours.
+  target_compile_definitions(zlibstatic PUBLIC Z_PREFIX)
+  target_link_libraries(nprpc PRIVATE zlibstatic)
 endif()
 
 # Add alias for namespaced target (modern CMake practice)
