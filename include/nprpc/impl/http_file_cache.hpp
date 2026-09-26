@@ -1,12 +1,19 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#pragma once
+
+#include <nprpc/impl/http_compression.hpp>
+
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <list>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
@@ -52,7 +59,30 @@ public:
   /// Computed once on load — zero cost to serve.
   std::string_view last_modified_str() const noexcept { return last_modified_str_; }
 
-  /// Memory usage for cache accounting
+  /// A content-coded copy of the file with its own validator.
+  struct EncodedVariant {
+    ContentEncoding encoding = ContentEncoding::Identity;
+    std::vector<uint8_t> data;
+    std::string etag; // the file's ETag tagged with the coding, e.g. "\"1a2b-gzip\""
+  };
+
+  /// Whether the file's media type is worth compressing (text, JS, JSON,
+  /// SVG, WASM, ...). Already-compressed formats never are.
+  bool compressible() const noexcept { return compressible_; }
+
+  /// The file compressed with @p encoding, built on the first call and kept
+  /// for the life of this entry. Thread-safe. Returns nullptr when the file
+  /// is not compressible, is larger than k_max_encoded_size, or when
+  /// compressing it does not make it smaller.
+  const EncodedVariant* encoded(ContentEncoding encoding) const;
+
+  /// Files above this size are always served as-is, so a first request never
+  /// stalls a worker compressing a huge asset.
+  static constexpr size_t k_max_encoded_size = 8 * 1024 * 1024;
+
+  /// Memory usage for cache accounting.
+  /// Covers the file itself only: compressed variants are built lazily after
+  /// the entry is accounted, and are never larger than the file.
   size_t memory_usage() const noexcept;
 
   /// Reference counting for safe eviction.
@@ -89,6 +119,16 @@ private:
   // For mmap'd large files
   void* mmap_addr_ = nullptr;
   size_t mmap_len_ = 0;
+
+  bool compressible_ = false;
+
+  // Lazily built compressed variants, one slot per coding. Held by pointer so
+  // CachedFile stays movable (std::once_flag is not).
+  struct EncodedVariants {
+    std::array<std::once_flag, k_compressed_encoding_count> once;
+    std::array<std::optional<EncodedVariant>, k_compressed_encoding_count> variants;
+  };
+  std::unique_ptr<EncodedVariants> encoded_ = std::make_unique<EncodedVariants>();
 
   // Active transfer count - prevents eviction while > 0
   mutable std::atomic<int32_t> active_refs_{0};

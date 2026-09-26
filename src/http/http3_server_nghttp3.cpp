@@ -7,6 +7,7 @@
 #if defined(NPRPC_HTTP3_ENABLED) && defined(NPRPC_HTTP3_BACKEND_NGHTTP3)
 
 #include <nprpc/impl/ssl.hpp>
+#include <nprpc/impl/http_compression.hpp>
 #include <nprpc/impl/http_file_cache.hpp>
 #include <nprpc/impl/http_request_throttler.hpp>
 #include <nprpc/impl/http_rpc_session.hpp>
@@ -397,6 +398,24 @@ std::string page_content_type(const nprpc::PageResponse& page)
   return "text/html; charset=utf-8";
 }
 
+constexpr uint8_t k_nv_no_copy =
+    NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE;
+
+// Append a header whose name and value outlive the submit (literals, or
+// strings owned by the stream / pinned cached file).
+void push_static_header(PreparedResponseHeaders& prepared,
+                        std::string_view name,
+                        std::string_view value)
+{
+  prepared.headers.push_back({
+      .name = reinterpret_cast<uint8_t*>(const_cast<char*>(name.data())),
+      .value = reinterpret_cast<uint8_t*>(const_cast<char*>(value.data())),
+      .namelen = name.size(),
+      .valuelen = value.size(),
+      .flags = k_nv_no_copy,
+  });
+}
+
 } // namespace
 
 struct PendingSendPacketPayload {
@@ -502,6 +521,30 @@ find_stream_header(
   for (const auto& [k, v] : hdrs)
     if (k == name) return &v;
   return nullptr;
+}
+
+// Whether a response of this media type varies by Accept-Encoding, i.e. we
+// would compress it for a client that asked.
+static bool response_varies_by_encoding(std::string_view content_type) noexcept
+{
+  return g_cfg.http3_compression_enabled &&
+         is_compressible_content_type(content_type);
+}
+
+// The coding to send a body of @p body_size bytes in, from the request's
+// Accept-Encoding. Identity unless compression is on and the body is big
+// enough to be worth it.
+static ContentEncoding choose_response_encoding(const Http3Stream* stream,
+                                                size_t body_size) noexcept
+{
+  if (!g_cfg.http3_compression_enabled ||
+      body_size < g_cfg.http3_compression_min_size) {
+    return ContentEncoding::Identity;
+  }
+  const auto* accept_encoding =
+      find_stream_header(stream->headers, "accept-encoding");
+  return accept_encoding ? negotiate_content_encoding(*accept_encoding)
+                         : ContentEncoding::Identity;
 }
 
 // Parse an HTTP-date (RFC 7231 preferred format) into a file_time_type.
@@ -706,9 +749,11 @@ private:
   // Response handling
   int start_response(Http3Stream* stream);
   // Zero-copy response using cached file
+  // A non-null @p variant sends that compressed copy instead of the file.
   int send_cached_response(Http3Stream* stream,
                            unsigned int status_code,
-                           CachedFileGuard cached_file);
+                           CachedFileGuard cached_file,
+                           const CachedFile::EncodedVariant* variant);
   // Zero-copy response for static content
   int send_static_response(Http3Stream* stream,
                            unsigned int status_code,
@@ -725,7 +770,9 @@ private:
                             std::string_view content_type,
                             flat_buffer&& body);
   int send_cors_preflight(Http3Stream* stream);
-  int send_not_modified(Http3Stream* stream, CachedFileGuard cached_file);
+  int send_not_modified(Http3Stream* stream,
+                        CachedFileGuard cached_file,
+                        const CachedFile::EncodedVariant* variant);
   int send_webtransport_connect_response(Http3Stream* stream);
 
   // In-process page rendering (nprpc/page_handler.hpp).  Returns nullopt when
@@ -2597,21 +2644,35 @@ int Http3Connection::start_response(Http3Stream* stream)
 
     NPRPC_HTTP3_TRACE("File size: {} (from cache)", cached_file->size());
 
+    // Pick the representation first: a compressed copy carries its own ETag,
+    // and a conditional request is answered for the one we would send.
+    // The copy is built once per cached file, then served zero-copy.
+    const CachedFile::EncodedVariant* variant = nullptr;
+    if (cached_file->compressible()) {
+      const auto encoding =
+          choose_response_encoding(stream, cached_file->size());
+      if (encoding != ContentEncoding::Identity) {
+        variant = cached_file->encoded(encoding);
+      }
+    }
+    const std::string_view etag =
+        variant ? std::string_view{variant->etag} : cached_file->etag();
+
     // Conditional GET: If-None-Match takes precedence over If-Modified-Since
     // (RFC 7232 §6). Both etag and last_modified_str are pre-computed in
     // CachedFile — zero per-request string allocation.
     {
       const auto* inm = find_stream_header(stream->headers, "if-none-match");
       if (inm) {
-        if (std::string_view{*inm} == cached_file->etag()) {
-          return send_not_modified(stream, std::move(cached_file));
+        if (std::string_view{*inm} == etag) {
+          return send_not_modified(stream, std::move(cached_file), variant);
         }
       } else {
         const auto* ims = find_stream_header(stream->headers, "if-modified-since");
         if (ims) {
           auto req_time = parse_http_date(*ims);
           if (req_time && cached_file->mtime() <= *req_time) {
-            return send_not_modified(stream, std::move(cached_file));
+            return send_not_modified(stream, std::move(cached_file), variant);
           }
         }
       }
@@ -2624,7 +2685,7 @@ int Http3Connection::start_response(Http3Stream* stream)
     }
 
     // Use zero-copy response
-    return send_cached_response(stream, 200, std::move(cached_file));
+    return send_cached_response(stream, 200, std::move(cached_file), variant);
   } else if (stream->method == "OPTIONS") {
     if (is_rpc_http_target(stream->path)) {
       return send_cors_preflight(stream);
@@ -2653,9 +2714,11 @@ int Http3Connection::start_response(Http3Stream* stream)
   }
 }
 
-int Http3Connection::send_cached_response(Http3Stream* stream,
-                                          unsigned int status_code,
-                                          CachedFileGuard cached_file)
+int Http3Connection::send_cached_response(
+    Http3Stream* stream,
+    unsigned int status_code,
+    CachedFileGuard cached_file,
+    const CachedFile::EncodedVariant* variant)
 {
   NPRPC_HTTP3_TRACE(
       "Sending cached response: {} Content-Type: {} Body length: {}",
@@ -2666,9 +2729,12 @@ int Http3Connection::send_cached_response(Http3Stream* stream,
   // will be called when the stream is destroyed after transfer completes
   stream->cached_file = std::move(cached_file);
 
-  // Zero-copy: point directly to cached file data
-  stream->response_data = stream->cached_file->data();
-  stream->response_len = stream->cached_file->size();
+  // Zero-copy: point directly to cached file data, or to its compressed
+  // copy, which the pinned CachedFile owns for as long as the guard lives.
+  stream->response_data =
+      variant ? variant->data.data() : stream->cached_file->data();
+  stream->response_len =
+      variant ? variant->data.size() : stream->cached_file->size();
   stream->response_offset = 0;
     auto& headers = make_response_headers(stream, status_code,
                       stream->cached_file->content_type(),
@@ -2683,16 +2749,25 @@ int Http3Connection::send_cached_response(Http3Stream* stream,
       .value   = reinterpret_cast<uint8_t*>(const_cast<char*>("public, max-age=3600")),
       .namelen  = 13, .valuelen = 20, .flags = ncnv,
   });
+  const std::string_view etag =
+      variant ? std::string_view{variant->etag} : stream->cached_file->etag();
   headers.headers.push_back({
       .name    = reinterpret_cast<uint8_t*>(const_cast<char*>("etag")),
-      .value   = reinterpret_cast<uint8_t*>(const_cast<char*>(stream->cached_file->etag().data())),
-      .namelen  = 4, .valuelen = stream->cached_file->etag().size(), .flags = ncnv,
+      .value   = reinterpret_cast<uint8_t*>(const_cast<char*>(etag.data())),
+      .namelen  = 4, .valuelen = etag.size(), .flags = ncnv,
   });
   headers.headers.push_back({
       .name    = reinterpret_cast<uint8_t*>(const_cast<char*>("last-modified")),
       .value   = reinterpret_cast<uint8_t*>(const_cast<char*>(stream->cached_file->last_modified_str().data())),
       .namelen  = 13, .valuelen = stream->cached_file->last_modified_str().size(), .flags = ncnv,
   });
+  if (variant) {
+    push_static_header(headers, "content-encoding",
+                       content_encoding_token(variant->encoding));
+  }
+  if (g_cfg.http3_compression_enabled && stream->cached_file->compressible()) {
+    push_static_header(headers, "vary", "accept-encoding");
+  }
 
   nghttp3_data_reader dr{
       .read_data = http_read_data_cb,
@@ -2810,9 +2885,11 @@ int Http3Connection::send_page_response(Http3Stream* stream,
                                         nprpc::PageResponse&& page)
 {
   std::vector<std::pair<std::string, std::string>> extra;
-  extra.reserve(page.headers.size());
+  extra.reserve(page.headers.size() + 2);
+  bool handler_set_encoding = false;
   for (auto& [key, value] : page.headers) {
     auto name = nprpc::impl::to_lower_copy(key);
+    if (name == "content-encoding") handler_set_encoding = true;
     // content-type rides its own parameter; content-length and
     // transfer-encoding are framing the server owns; pseudo-headers are
     // nghttp3's to emit.
@@ -2823,9 +2900,34 @@ int Http3Connection::send_page_response(Http3Stream* stream,
     extra.emplace_back(std::move(name), value);
   }
 
-  stream->pending_page_headers = std::move(extra);
   const auto status = page.status;
   auto content_type = page_content_type(page);
+
+  // Compress the rendered body unless the handler already encoded it
+  // itself, or the response has no body to speak of.
+  const bool compressible = !handler_set_encoding && status != 204 &&
+                            status != 304 && stream->method != "HEAD" &&
+                            response_varies_by_encoding(content_type);
+  if (compressible) {
+    extra.emplace_back("vary", "accept-encoding");
+    const auto encoding = choose_response_encoding(stream, page.body.size());
+    if (encoding != ContentEncoding::Identity) {
+      auto compressed = compress_body(
+          reinterpret_cast<const uint8_t*>(page.body.data()), page.body.size(),
+          encoding);
+      if (compressed && compressed->size() < page.body.size()) {
+        extra.emplace_back("content-encoding",
+                           std::string(content_encoding_token(encoding)));
+        stream->pending_page_headers = std::move(extra);
+        flat_buffer body(compressed->size());
+        append_bytes(body, compressed->data(), compressed->size());
+        return send_dynamic_response(stream, status, content_type,
+                                     std::move(body));
+      }
+    }
+  }
+
+  stream->pending_page_headers = std::move(extra);
   return send_dynamic_response(stream, status, content_type,
                                std::move(page.body));
 }
@@ -2943,8 +3045,10 @@ int Http3Connection::send_cors_preflight(Http3Stream* stream)
   return 0;
 }
 
-int Http3Connection::send_not_modified(Http3Stream* stream,
-                                       CachedFileGuard cached_file)
+int Http3Connection::send_not_modified(
+    Http3Stream* stream,
+    CachedFileGuard cached_file,
+    const CachedFile::EncodedVariant* variant)
 {
   // Pin the file in the stream so its pre-computed strings stay alive until
   // nghttp3 finishes draining the 304 headers (stream close).
@@ -2967,9 +3071,13 @@ int Http3Connection::send_not_modified(Http3Stream* stream,
   };
 
   add_sv(":status",       7,  prepared.status);
-  add_sv("etag",          4,  stream->cached_file->etag());
+  add_sv("etag",          4,  variant ? std::string_view{variant->etag}
+                                      : stream->cached_file->etag());
   add_sv("cache-control", 13, "public, max-age=3600");
   add_sv("last-modified", 13, stream->cached_file->last_modified_str());
+  if (g_cfg.http3_compression_enabled && stream->cached_file->compressible()) {
+    add_sv("vary", 4, "accept-encoding");
+  }
 
   log_http3_response_submit("not_modified", stream, 304, "", 0);
 

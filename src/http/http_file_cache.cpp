@@ -39,6 +39,8 @@ CachedFile::CachedFile(CachedFile&& other) noexcept
     , heap_data_(std::move(other.heap_data_))
     , mmap_addr_(other.mmap_addr_)
     , mmap_len_(other.mmap_len_)
+    , compressible_(other.compressible_)
+    , encoded_(std::move(other.encoded_))
     , active_refs_(other.active_refs_.load(std::memory_order_relaxed))
 {
   other.data_ = nullptr;
@@ -61,6 +63,8 @@ CachedFile& CachedFile::operator=(CachedFile&& other) noexcept
     heap_data_ = std::move(other.heap_data_);
     mmap_addr_ = other.mmap_addr_;
     mmap_len_ = other.mmap_len_;
+    compressible_ = other.compressible_;
+    encoded_ = std::move(other.encoded_);
     active_refs_.store(other.active_refs_.load(std::memory_order_relaxed),
                        std::memory_order_relaxed);
 
@@ -105,6 +109,10 @@ bool CachedFile::load(const std::filesystem::path& path, size_t mmap_threshold)
   }
 
   content_type_ = mime_type(path.string());
+  // .svgz is served as image/svg+xml but is already gzipped on disk.
+  compressible_ = is_compressible_content_type(content_type_) &&
+                  path.extension() != ".svgz";
+  encoded_ = std::make_unique<EncodedVariants>();
 
   // Pre-compute cache-validation strings once — zero per-request overhead.
   {
@@ -203,6 +211,37 @@ bool CachedFile::load(const std::filesystem::path& path, size_t mmap_threshold)
   }
 
   return true;
+}
+
+const CachedFile::EncodedVariant*
+CachedFile::encoded(ContentEncoding encoding) const
+{
+  if (encoding == ContentEncoding::Identity || !compressible_ || !encoded_ ||
+      size_ == 0 || size_ > k_max_encoded_size) {
+    return nullptr;
+  }
+
+  const auto index = content_encoding_index(encoding);
+  auto& slot = encoded_->variants[index];
+  std::call_once(encoded_->once[index], [&] {
+    auto body = compress_body(data_, size_, encoding);
+    if (!body || body->size() >= size_) return;
+
+    // A coded response is a different representation, so it needs its own
+    // strong validator (RFC 9110 §8.8.3.3): "abc" -> "abc-gzip".
+    std::string etag = etag_;
+    const auto token = content_encoding_token(encoding);
+    if (!etag.empty() && etag.back() == '"') {
+      etag.insert(etag.size() - 1, "-");
+      etag.insert(etag.size() - 1, token);
+    } else {
+      etag += "-";
+      etag += token;
+    }
+    slot.emplace(EncodedVariant{encoding, std::move(*body), std::move(etag)});
+  });
+
+  return slot ? &*slot : nullptr;
 }
 
 size_t CachedFile::memory_usage() const noexcept
