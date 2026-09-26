@@ -5,6 +5,42 @@
     and the IDL, generated from their <code>///</code> comments, plus the
     hand-written guides.
   </p>
+
+  <h2>Why NPRPC exists</h2>
+  <p>
+    In 2014 I was an industrial automation engineer at a marine oil terminal
+    run on Emerson's DeltaV DCS. Working with that system every day made me
+    want to build my own, smaller, for home automation — and a distributed
+    control system needs RPC of some sort.
+  </p>
+  <p>
+    The first version sat on DCOM, which was fine until I wanted it off
+    Windows. Then omniORB, which was buggy in the way that ruins a weekend:
+    its thread pool would simply stop spawning threads for new connections.
+    In 2020 I watched Bjarne Stroustrup's
+    <a href="https://www.youtube.com/watch?v=ERzENfQ51Ck">“The Beauty and
+    Power of ‘Primitive’ C++”</a> at CppCon, where he writes zero-copy
+    flat-buffer serialization, and it looked simple enough that writing my own
+    RPC stopped sounding crazy.
+  </p>
+  <p>
+    gRPC was the obvious alternative and I did not want it. HTTP/2 is a fine
+    protocol for services behind a load balancer, but that is not what I was
+    building: I wanted zero-copy messages rather than protobuf parsing, calls
+    that need no reply, and eventually a transport that never touches a
+    socket. gRPC has none of those, and it is a large dependency to take on
+    for their absence. So the first NPRPC was TCP with its own framing and
+    not much else. QUIC, an HTTP/3 server, WebSocket, shared memory,
+    TypeScript and Swift all came later.
+  </p>
+  <p>
+    Shared memory is the transport that turned out to matter most. It is what
+    the <a href="https://lavaui.nikitapn.com">Lava</a> compositor and its apps
+    talk over: a round trip takes about 7&nbsp;µs, and calls can be
+    fire-and-forget, with no reply to wait for. One IDL file generates both
+    the compositor's C++ servant and the apps' Swift client, so the two sides
+    cannot drift apart.
+  </p>
 </article>
 
 <section class="cards">
