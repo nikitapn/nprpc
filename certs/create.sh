@@ -6,6 +6,23 @@ cd "$SCRIPT_DIR"
 # IMPORTANT: ALWAYS USE SHORT-LIVED CERTIFICATE FOR TESTING PURPOSES (13 DAYS MAX)
 DAYS=13
 
+# --if-stale: keep the certificate unless it is missing or expires within
+# RENEW_BEFORE_DAYS. What run_all_tests.py calls, so a short-lived cert never
+# fails the WebTransport tests just because nobody remembered to recreate it.
+RENEW_BEFORE_DAYS=2
+
+mkdir -p out
+
+if [ "${1:-}" = "--if-stale" ]; then
+  if [ -f out/localhost.crt ] && [ -f out/localhost.key ] &&
+     openssl x509 -in out/localhost.crt -noout \
+       -checkend $((RENEW_BEFORE_DAYS * 86400)) >/dev/null 2>&1; then
+    echo "test certificate ok ($(openssl x509 -in out/localhost.crt -noout -enddate))"
+    exit 0
+  fi
+  QUIET=1
+fi
+
 openssl req \
   -x509 \
   -newkey ec \
@@ -30,4 +47,8 @@ DNS.3=calculator.lan
 EOF
 )
 
-openssl x509 -in out/localhost.crt -text -noout | sed -n '1,220p'
+if [ -n "${QUIET:-}" ]; then
+  echo "test certificate recreated ($(openssl x509 -in out/localhost.crt -noout -enddate))"
+else
+  openssl x509 -in out/localhost.crt -text -noout | sed -n '1,220p'
+fi

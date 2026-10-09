@@ -118,6 +118,27 @@ def ensure_nprpc_bpf_capabilities(binary: Path) -> None:
     subprocess.run(["sudo", setcap, "cap_net_admin,cap_bpf+ep", str(binary)], check=True)
 
 
+def ensure_test_certificate(root: Path) -> None:
+    """Recreate certs/out/localhost.{crt,key} if missing or about to expire.
+
+    The WebTransport tests need it, and it is deliberately short-lived (see
+    certs/create.sh), so it used to go stale every two weeks and fail the run
+    until somebody recreated it by hand.
+    """
+    script = root / "certs" / "create.sh"
+    if not script.is_file():
+        return
+    out = subprocess.run(
+        ["bash", str(script), "--if-stale"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if out.returncode != 0:
+        raise RuntimeError(f"certs/create.sh failed:\n{out.stdout}")
+    print(c(C.DIM, f"cert      : {out.stdout.strip().splitlines()[-1]}"))
+
+
 def find_swift_test_binaries(swift_dir: Path) -> list[Path]:
     """Locate NPRPCPackageTests.xctest products under nprpc_swift/.build."""
     build_root = swift_dir / ".build"
@@ -479,6 +500,8 @@ def main() -> int:
         print(c(C.DIM,  f"swift     : host (NPRPC_BUILD_DIR={build_dir})"))
     elif not args.skip_swift:
         print(c(C.DIM,  "swift     : docker"))
+
+    ensure_test_certificate(root)
 
     runner = Runner(root=root, build_dir=build_dir, verbose=args.verbose)
 
