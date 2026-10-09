@@ -340,6 +340,7 @@ add_library(nprpc
   ${nprpc_stub_GENERATED_SOURCES}
   # Shared Memory transport
   src/shm/lock_free_ring_buffer.cpp
+  src/shm/peer_watch.cpp
   src/shm/process_identity.cpp
   src/shm/shared_memory_channel.cpp
   src/shm/shared_memory_connection.cpp

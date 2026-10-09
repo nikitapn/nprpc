@@ -98,6 +98,14 @@ void SharedMemoryListener::stop()
   }
 
   running_ = false;
+  // The accept loop may be asleep with no timeout; see accept_loop for why
+  // this wake cannot be missed.
+  if (accept_ring_) {
+    try {
+      accept_ring_->wake_readers();
+    } catch (...) {
+    }
+  }
 
   if (accept_thread_ && accept_thread_->joinable()) {
     accept_thread_->join();
@@ -112,9 +120,21 @@ void SharedMemoryListener::accept_loop()
 
   while (running_) {
     try {
-      // Wait for connection request with timeout
-      size_t bytes_read = accept_ring_->read_with_timeout(
-          buffer, sizeof(buffer), std::chrono::milliseconds(100));
+      // Sleep until a client knocks — no clock.  A listener is in every
+      // process that serves anything, and waking it ten times a second to
+      // re-check a flag was a cost every idle client paid.  The token comes
+      // before the running_ check, so stop()'s wake cannot slip between the
+      // check and the sleep.  Elsewhere the condvar can lose that wake, so
+      // there it keeps a timeout.
+      const uint32_t token = accept_ring_->wake_token();
+      if (!running_)
+        break;
+#if defined(__linux__)
+      accept_ring_->wait_for_readable(LockFreeRingBuffer::kWaitForever, token);
+#else
+      accept_ring_->wait_for_readable(std::chrono::milliseconds(100), token);
+#endif
+      size_t bytes_read = accept_ring_->try_read(buffer, sizeof(buffer));
 
       if (bytes_read > 0) {
         // Validate handshake size

@@ -60,6 +60,16 @@ private:
   std::chrono::steady_clock::time_point last_poll_{};
   bool peer_lost_ = false;
 
+  // Whether on_periodic_poll still has something to do — requests with a
+  // deadline outstanding.  While it is false, and the peer is watched rather
+  // than polled, the read thread sleeps until something arrives.
+  std::atomic<bool> ticks_wanted_{false};
+
+  // Set by PeerWatch, from its own thread, when the peer process ends.
+  std::atomic<bool> peer_exited_{false};
+  // PeerWatch registration, 0 while the peer is polled instead.
+  std::atomic<uint64_t> peer_watch_{0};
+
   // The largest message these rings carry, taken from the ring header rather
   // than from this process' configuration: the server sizes the rings at
   // creation and stamps the number into them, so a client — which only ever
@@ -123,7 +133,7 @@ public:
    * Supplied by the connection handshake (SharedMemoryHandshake). Without it
    * peer_alive() can only see the graceful-close flag.
    */
-  void set_peer_process(const ProcessIdentity& id) { peer_process_ = id; }
+  void set_peer_process(const ProcessIdentity& id);
   const ProcessIdentity& peer_process() const noexcept { return peer_process_; }
 
   /**
@@ -148,13 +158,23 @@ public:
   /**
    * @brief Housekeeping tick from the read thread, at most every 500 ms.
    *
-   * The read loop is already awake on this cadence (its wait times out every
-   * 100 ms), so this costs a rate-limiting clock read per iteration and
-   * nothing else — which is what makes it a good home for work that would
-   * otherwise need a timer per operation, such as expiring requests whose
-   * reply never came.  Same threading rules as on_peer_lost.
+   * A home for work that would otherwise need a timer per operation, such as
+   * expiring requests whose reply never came.  Returns whether it still has
+   * anything to do: the tick runs only while it says so, or until
+   * need_ticks() starts it again — an idle channel's read thread sleeps
+   * until a message arrives rather than waking on a clock.  Same threading
+   * rules as on_peer_lost.
    */
-  std::function<void()> on_periodic_poll;
+  std::function<bool()> on_periodic_poll;
+
+  /**
+   * @brief Restart on_periodic_poll's tick.  Any thread.
+   *
+   * Call after creating work the tick has to look after (a request with a
+   * deadline).  Cheap when the tick is already running; otherwise one wake
+   * of the read thread.
+   */
+  void need_ticks();
 
   // Non-copyable, movable
   SharedMemoryChannel(const SharedMemoryChannel&) = delete;
@@ -264,9 +284,17 @@ private:
   // from the ring we consume, if it is already there.
   void exchange_identities();
 
-  // Read thread, once per loop iteration: rate-limits itself to
-  // kPollInterval, then runs on_periodic_poll and probes the peer.
+  // Read thread, once per loop iteration: acts on a peer that is known to be
+  // gone, then rate-limits itself to kPollInterval and runs on_periodic_poll
+  // and the liveness probe.
   void poll_periodic();
+
+  // How long the read thread may sleep: forever when nothing needs a tick.
+  std::chrono::milliseconds idle_timeout() const;
+
+  // Ask PeerWatch to report the peer's exit, if it can.
+  void watch_peer();
+  void unwatch_peer();
 };
 
 } // namespace nprpc::impl

@@ -50,7 +50,9 @@ class SharedMemoryConnection
   // periodic poll instead of a timer per request, which on this transport
   // cost about a fifth of the round-trip latency; the deadline itself is a
   // clock read at enqueue.  Granularity is the poll interval (500 ms).
-  void sweep_expired_requests();
+  // Returns whether any request still has a deadline to watch, which is what
+  // keeps the poll ticking; enqueue_ordered() starts it again.
+  bool sweep_expired_requests();
 
   // mutex_ held: drop a reply whose caller already timed out.  Returns true
   // if the reply was consumed and must not be delivered.

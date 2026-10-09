@@ -117,23 +117,31 @@ void SharedMemoryConnection::enqueue_ordered(std::shared_ptr<IOWork> w)
     it = wq_.end(); // push_back
   }
 
+  const bool expires = w->deadline != std::chrono::steady_clock::time_point{};
   wq_.insert(it, std::move(w));
-  // Nothing to arm: the deadline was stamped on the work before it got
-  // here, and sweep_expired_requests() enforces it off the hot path.
+  // The deadline was stamped on the work before it got here, and
+  // sweep_expired_requests() enforces it off the hot path — once the tick it
+  // runs on is going.  An idle channel's reader sleeps without one, so say
+  // so; after the insert, which is what the sweep will look for.
+  if (expires && channel_)
+    channel_->need_ticks();
 }
 
-void SharedMemoryConnection::sweep_expired_requests()
+bool SharedMemoryConnection::sweep_expired_requests()
 {
   const auto now = std::chrono::steady_clock::now();
   std::vector<std::shared_ptr<IOWork>> expired;
+  bool pending = false;
 
   {
     std::lock_guard lock(mutex_);
     for (auto& w : wq_) {
       if (w->abandoned || w->deadline == std::chrono::steady_clock::time_point{})
         continue;
-      if (now < w->deadline)
+      if (now < w->deadline) {
+        pending = true;
         continue;
+      }
       // Tombstone rather than remove: replies are matched to requests by
       // position in this queue, so dropping the entry would hand a late
       // reply to the wrong caller.
@@ -148,6 +156,7 @@ void SharedMemoryConnection::sweep_expired_requests()
                    channel_->channel_id());
     w->on_failed(boost::asio::error::timed_out);
   }
+  return pending;
 }
 
 bool SharedMemoryConnection::consume_reply_for_abandoned()
@@ -533,7 +542,7 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
 
   // Same tick expires requests whose reply never came — see
   // sweep_expired_requests() for why this is not a timer per request.
-  channel_->on_periodic_poll = [this]() { sweep_expired_requests(); };
+  channel_->on_periodic_poll = [this]() { return sweep_expired_requests(); };
 
   // All callbacks are wired — now it is safe to start the receive thread.
   channel_->start_reading();

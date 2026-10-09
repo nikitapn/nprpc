@@ -279,6 +279,23 @@ public:
   // pattern while remaining correct for cross-process signaling.
   void wait_for_readable(std::chrono::milliseconds timeout = std::chrono::milliseconds(10));
 
+  // A timeout that never expires: sleep until data or a wake_readers().
+  // Linux only — elsewhere the wait is a process-shared condvar, and a wake
+  // sent before the waiter takes its mutex is lost, so callers there keep a
+  // finite timeout to recheck what they are waiting on.
+  static constexpr std::chrono::milliseconds kWaitForever{-1};
+
+  // The ring's wake counter, for a reader that checks some flag of its own
+  // before sleeping.  Taken *before* the check and handed to
+  // wait_for_readable(timeout, token): a wake_readers() that lands anywhere
+  // after this point — between the check and the sleep included — then ends
+  // the sleep instead of being lost.  Without it, a reader that sleeps with
+  // no timeout can miss the one wake that was meant for it and sleep forever.
+  uint32_t wake_token() const noexcept;
+
+  // wait_for_readable, sleeping against a token from wake_token().
+  void wait_for_readable(std::chrono::milliseconds timeout, uint32_t token);
+
   // Wake every reader sleeping in wait_for_readable / read_with_timeout, so it
   // rechecks whatever it is waiting on (a channel shutting down, say).
   void wake_readers();
@@ -371,6 +388,7 @@ private:
   // Sleep until a producer notifies or `timeout` passes, unless the ring
   // already has something.  The caller has registered in waiting_readers.
   void sleep_until_notified(std::chrono::milliseconds timeout);
+  void sleep_until_notified(std::chrono::milliseconds timeout, uint32_t seen);
 
   std::string name_;
   boost::interprocess::managed_shared_memory shm_;

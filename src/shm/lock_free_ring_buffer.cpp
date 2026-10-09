@@ -74,13 +74,14 @@ static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t) &&
 static void futex_wait(std::atomic<uint32_t>* word, uint32_t expected,
                        std::chrono::milliseconds timeout)
 {
-  const auto ms = std::max<int64_t>(timeout.count(), 0);
+  // Negative is kWaitForever: no timespec, and the kernel waits for a wake.
+  const auto ms = timeout.count();
   timespec ts{static_cast<time_t>(ms / 1000),
               static_cast<long>((ms % 1000) * 1'000'000)};
   // EAGAIN (the word already moved), EINTR and ETIMEDOUT all mean "go and
   // look": the caller rechecks the ring either way.
   ::syscall(SYS_futex, reinterpret_cast<uint32_t*>(word), FUTEX_WAIT,
-            expected, &ts, nullptr, 0);
+            expected, ms < 0 ? nullptr : &ts, nullptr, 0);
 }
 
 static void futex_wake_all(std::atomic<uint32_t>* word)
@@ -722,6 +723,28 @@ void LockFreeRingBuffer::wait_for_readable(std::chrono::milliseconds timeout)
   header_->waiting_readers.fetch_sub(1, std::memory_order_relaxed);
 }
 
+uint32_t LockFreeRingBuffer::wake_token() const noexcept
+{
+  return header_->wake_seq.load(std::memory_order_seq_cst);
+}
+
+void LockFreeRingBuffer::wait_for_readable(std::chrono::milliseconds timeout,
+                                           uint32_t token)
+{
+  for (int i = 0; i < 500 && is_empty(); ++i)
+    std::this_thread::yield();
+
+  if (!is_empty())
+    return;
+
+  // A token older than the one sleep_until_notified would read only makes
+  // the futex more likely to return at once: anything that bumped wake_seq
+  // since — a producer, or a wake_readers() — is a reason to look again.
+  header_->waiting_readers.fetch_add(1, std::memory_order_seq_cst);
+  sleep_until_notified(timeout, token);
+  header_->waiting_readers.fetch_sub(1, std::memory_order_relaxed);
+}
+
 void LockFreeRingBuffer::wake_readers()
 {
 #if defined(__linux__)
@@ -760,8 +783,14 @@ void LockFreeRingBuffer::notify_reader()
 
 void LockFreeRingBuffer::sleep_until_notified(std::chrono::milliseconds timeout)
 {
+  sleep_until_notified(timeout,
+                       header_->wake_seq.load(std::memory_order_seq_cst));
+}
+
+void LockFreeRingBuffer::sleep_until_notified(std::chrono::milliseconds timeout,
+                                              [[maybe_unused]] uint32_t seen)
+{
 #if defined(__linux__)
-  const uint32_t seen = header_->wake_seq.load(std::memory_order_seq_cst);
   if (is_empty())
     futex_wait(&header_->wake_seq, seen, timeout);
 #else

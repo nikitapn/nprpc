@@ -14,7 +14,11 @@
 
 #include <boost/asio.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <set>
 #include <csignal>
 #include <ctime>
 #include <string>
@@ -293,6 +297,164 @@ TEST(SharedMemoryPeerLiveness, KilledServerProcessIsDetected)
 
   ::close(to_parent[0]);
 }
+
+#if defined(__linux__)
+
+namespace {
+
+std::set<std::string> thread_ids()
+{
+  std::set<std::string> ids;
+  for (const auto& e : std::filesystem::directory_iterator("/proc/self/task"))
+    ids.insert(e.path().filename().string());
+  return ids;
+}
+
+long voluntary_switches(const std::string& tid)
+{
+  std::ifstream in("/proc/self/task/" + tid + "/status");
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.rfind("voluntary_ctxt_switches:", 0) == 0)
+      return std::stol(line.substr(line.find(':') + 1));
+  }
+  return -1;
+}
+
+// Starts reading on `channel` and returns the read thread's tid.
+std::string start_and_find_reader(SharedMemoryChannel& channel)
+{
+  const auto before = thread_ids();
+  channel.start_reading();
+  for (int i = 0; i < 100; ++i) {
+    for (const auto& id : thread_ids())
+      if (!before.count(id))
+        return id;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return {};
+}
+
+} // namespace
+
+// A killed server is reported by the channel itself, promptly, without
+// anybody asking: the read thread sleeps with no timeout, and the peer's
+// exit is what wakes it.
+TEST(SharedMemoryPeerLiveness, KilledServerWakesTheReader)
+{
+  const auto listener_name = unique_listener_name("wake_dead_server");
+
+  int to_parent[2];
+  ASSERT_EQ(::pipe(to_parent), 0);
+
+  const pid_t server = ::fork();
+  ASSERT_NE(server, -1);
+  if (server == 0) {
+    ::close(to_parent[0]);
+    try {
+      boost::asio::io_context server_ioc;
+      std::unique_ptr<SharedMemoryChannel> accepted;
+      SharedMemoryListener listener(
+          server_ioc, listener_name,
+          [&](std::unique_ptr<SharedMemoryChannel> channel) {
+            accepted = std::move(channel);
+          });
+      listener.start();
+      const char ok = 'y';
+      write_all(to_parent[1], &ok, 1);
+      for (;;)
+        ::pause();
+    } catch (...) {
+      const char ok = 'n';
+      write_all(to_parent[1], &ok, 1);
+    }
+    ::_exit(1);
+  }
+
+  ::close(to_parent[1]);
+  char listening = 0;
+  ASSERT_TRUE(read_all(to_parent[0], &listening, 1)) << "server never started";
+  ASSERT_EQ(listening, 'y');
+
+  boost::asio::io_context ioc;
+  auto client = connect_to_shared_memory_listener(ioc, listener_name);
+  ASSERT_TRUE(client != nullptr);
+
+  std::atomic<bool> lost{false};
+  client->on_data_received_view = [](const LockFreeRingBuffer::ReadView&) {};
+  client->on_peer_lost = [&] { lost = true; };
+  const auto reader = start_and_find_reader(*client);
+  ASSERT_FALSE(reader.empty());
+
+  // Idle: the reader should be asleep, not ticking.  The old loop woke ten
+  // times a second here.
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  const long before = voluntary_switches(reader);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+  const long after = voluntary_switches(reader);
+  EXPECT_LE(after - before, 2) << "the idle read thread is still polling";
+
+  ASSERT_EQ(::kill(server, SIGKILL), 0);
+  int status = 0;
+  ASSERT_EQ(::waitpid(server, &status, 0), server);
+
+  // Well inside the 500 ms the probe would have taken.
+  EXPECT_TRUE(wait_until([&] { return lost.load(); },
+                         std::chrono::milliseconds(250)));
+
+  client.reset();
+  ::close(to_parent[0]);
+}
+
+// need_ticks() starts the periodic poll on an idle channel, and the poll
+// stops again once it says it has nothing left — which is how a request's
+// deadline is enforced without the reader ticking forever.
+TEST(SharedMemoryPeerLiveness, PeriodicPollRunsOnlyWhileWanted)
+{
+  boost::asio::io_context ioc;
+  const auto listener_name = unique_listener_name("ticks");
+
+  std::unique_ptr<SharedMemoryChannel> server_channel;
+  SharedMemoryListener listener(
+      ioc, listener_name, [&](std::unique_ptr<SharedMemoryChannel> channel) {
+        server_channel = std::move(channel);
+      });
+  listener.start();
+
+  auto client = connect_to_shared_memory_listener(ioc, listener_name);
+  ASSERT_TRUE(client != nullptr);
+
+  std::atomic<int> polls{0};
+  std::atomic<int> work{0};
+  client->on_data_received_view = [](const LockFreeRingBuffer::ReadView&) {};
+  client->on_periodic_poll = [&] {
+    ++polls;
+    return work.load() > 0 && --work > 0;
+  };
+  client->start_reading();
+
+  // Nothing wanted: the reader sleeps and the poll does not run.  One run at
+  // start-up is allowed — the first pass of the loop is always due.
+  std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+  const int idle = polls.load();
+  EXPECT_LE(idle, 1);
+
+  // Three ticks' worth of work.
+  work = 3;
+  client->need_ticks();
+  EXPECT_TRUE(wait_until([&] { return work.load() == 0; },
+                         std::chrono::seconds(3)));
+  const int done = polls.load();
+  EXPECT_GE(done - idle, 3);
+
+  // And quiet again.
+  std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+  EXPECT_EQ(polls.load(), done);
+
+  client.reset();
+}
+
+#endif
 
 int main(int argc, char** argv)
 {

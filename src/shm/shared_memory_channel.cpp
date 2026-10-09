@@ -4,6 +4,7 @@
 #include <iostream>
 #include <nprpc/common.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/peer_watch.hpp>
 #include <nprpc/impl/shared_memory_channel.hpp>
 
 #include "../logging.hpp"
@@ -110,6 +111,9 @@ void SharedMemoryChannel::start_reading()
 bool SharedMemoryChannel::stop_reading()
 {
   running_ = false;
+  // Before anything else: the watcher's callback wakes recv_ring_, which the
+  // destructor is about to let go of.
+  unwatch_peer();
 
   std::unique_ptr<std::thread> thread;
   {
@@ -121,9 +125,9 @@ bool SharedMemoryChannel::stop_reading()
     thread = std::move(read_thread_);
   }
 
-  // Nudge the reader in case it is asleep waiting for data.  Even if it
-  // misses the wake-up the wait times out after 100 ms and the loop rechecks
-  // running_, so the join below is bounded either way.
+  // Wake the reader, which may be asleep with no timeout at all.  It cannot
+  // miss this: it reads its wake token before it checks running_ (see
+  // read_loop), so a wake that lands after that check still ends the sleep.
   if (recv_ring_) {
     try {
       recv_ring_->wake_readers();
@@ -156,12 +160,74 @@ void SharedMemoryChannel::exchange_identities()
       peer_process_ = writer;
       NPRPC_LOG_INFO("SharedMemoryChannel {}: peer process is pid {}",
                      channel_id_, writer.pid);
+      watch_peer();
     }
   }
 }
 
+void SharedMemoryChannel::set_peer_process(const ProcessIdentity& id)
+{
+  peer_process_ = id;
+  watch_peer();
+}
+
+void SharedMemoryChannel::watch_peer()
+{
+  if (!peer_process_.valid() || peer_watch_.load() != 0)
+    return;
+  const uint64_t token = PeerWatch::watch(peer_process_, [this] {
+    peer_exited_.store(true, std::memory_order_seq_cst);
+    if (recv_ring_)
+      recv_ring_->wake_readers();
+  });
+  peer_watch_.store(token, std::memory_order_seq_cst);
+  // The reader may already be asleep with a timeout chosen for polling; it
+  // picks the longer one up on its next turn, which costs one more wake.
+}
+
+void SharedMemoryChannel::unwatch_peer()
+{
+  PeerWatch::unwatch(peer_watch_.exchange(0));
+}
+
+void SharedMemoryChannel::need_ticks()
+{
+  // Only the edge wakes anyone: while the tick is running this is one atomic
+  // exchange.  The reader reads its wake token before it looks at
+  // ticks_wanted_, so a wake sent after that look is not lost.
+  if (!ticks_wanted_.exchange(true, std::memory_order_seq_cst) && recv_ring_)
+    recv_ring_->wake_readers();
+}
+
+std::chrono::milliseconds SharedMemoryChannel::idle_timeout() const
+{
+#if defined(__linux__)
+  if (ticks_wanted_.load(std::memory_order_seq_cst))
+    return kPollInterval;
+  // A peer nobody is told about has to be asked about.
+  if (!peer_lost_ && on_peer_lost && peer_watch_.load() == 0)
+    return kPollInterval;
+  return LockFreeRingBuffer::kWaitForever;
+#else
+  // The condvar wait elsewhere can lose a wake sent before it sleeps, so it
+  // never sleeps for long without looking again.
+  return std::chrono::milliseconds(100);
+#endif
+}
+
 void SharedMemoryChannel::poll_periodic()
 {
+  // A peer that is known to be gone — its process ended, or it detached —
+  // is acted on at once, not on the next tick: nothing else may wake this
+  // thread again.  Two loads, so the busy path does not notice.
+  if (!peer_lost_ && on_peer_lost &&
+      (peer_exited_.load(std::memory_order_acquire) ||
+       (recv_ring_ && recv_ring_->header()->writer_detached.load(
+                          std::memory_order_acquire) != 0))) {
+    peer_lost_ = true;
+    on_peer_lost();
+  }
+
   // Runs once per read-loop iteration, so the gate is all the busy path
   // pays: one steady_clock read (vDSO, no syscall) per message.
   const auto now = std::chrono::steady_clock::now();
@@ -169,8 +235,15 @@ void SharedMemoryChannel::poll_periodic()
     return;
   last_poll_ = now;
 
-  if (on_periodic_poll)
-    on_periodic_poll();
+  if (on_periodic_poll) {
+    // Cleared before the poll and set again after it if there is still work:
+    // a need_ticks() racing with this either lands after the clear, and
+    // stands, or before it — and then its work was queued before the poll
+    // looked, so the poll says so.
+    ticks_wanted_.store(false, std::memory_order_seq_cst);
+    if (on_periodic_poll())
+      ticks_wanted_.store(true, std::memory_order_seq_cst);
+  }
 
   if (peer_lost_ || !on_peer_lost)
     return;
@@ -202,12 +275,16 @@ SharedMemoryChannel::~SharedMemoryChannel()
   if (send_ring_) {
     try {
       send_ring_->header()->writer_detached.store(1u, std::memory_order_release);
+      // And wake it: the peer's reader may be asleep with no timeout, and
+      // nothing else is going to arrive on this ring to rouse it.
+      send_ring_->wake_readers();
     } catch (...) {
       // Ignore - shared memory might already be gone
     }
   }
 
   stop_reading();
+  unwatch_peer(); // stop_reading() returns early on the reader's own thread
 
   cleanup_rings();
 }
@@ -280,14 +357,25 @@ void SharedMemoryChannel::read_loop()
   // << recv_ring_name_ << std::endl;
   while (running_) {
     try {
+      // First, before looking at anything a wake could be about: running_,
+      // the peer flags, ticks_wanted_.  Sleeping against this token, rather
+      // than whatever the counter says when the sleep begins, is what lets
+      // the sleep below have no timeout — a wake sent after any of those
+      // checks moved the counter past it, and the futex returns at once.
+      const uint32_t token = recv_ring_->wake_token();
+      if (!running_)
+        break;
+
       // Housekeeping (peer liveness, request expiry).  Rate-limited inside,
       // and deliberately not confined to the idle branches: a peer that
       // answers other requests while stuck on one still has to be noticed.
       poll_periodic();
 
+      const auto timeout = idle_timeout();
+
       // Try zero-copy read first if callback is set
       if (on_data_received_view) {
-        recv_ring_->wait_for_readable(std::chrono::milliseconds(100));
+        recv_ring_->wait_for_readable(timeout, token);
 
         auto view = recv_ring_->try_read_view();
         // std::cout << "Zero-copy read view attempt returned valid=" <<
@@ -312,10 +400,9 @@ void SharedMemoryChannel::read_loop()
       if (recv_buffer_.size() < recv_max)
         recv_buffer_.resize(recv_max);
 
-      // Blocking read with timeout (allows checking running_ flag)
-      size_t bytes_read = recv_ring_->read_with_timeout(
-          recv_buffer_.data(), recv_buffer_.size(),
-          std::chrono::milliseconds(100));
+      recv_ring_->wait_for_readable(timeout, token);
+      size_t bytes_read =
+          recv_ring_->try_read(recv_buffer_.data(), recv_buffer_.size());
 
       if (bytes_read > 0) {
         // Validate message size (security check)
