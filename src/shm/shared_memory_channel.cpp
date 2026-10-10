@@ -316,8 +316,6 @@ SharedMemoryChannel::reserve_write(size_t max_size)
   if (!send_ring_) {
     return LockFreeRingBuffer::WriteReservation{nullptr, 0, 0, false};
   }
-  // std::cout << "[nprpc][D] reserve_write on ring: " << send_ring_name_ <<
-  // std::endl;
   return send_ring_->try_reserve_write(max_size);
 }
 
@@ -325,8 +323,6 @@ void SharedMemoryChannel::commit_write(
     const LockFreeRingBuffer::WriteReservation& reservation, size_t actual_size)
 {
   if (send_ring_) {
-    // std::cout << "[nprpc][D] commit_write on ring: " << send_ring_name_
-    //           << " size=" << actual_size << std::endl;
     send_ring_->commit_write(reservation, actual_size);
   }
 }
@@ -342,19 +338,12 @@ void SharedMemoryChannel::abort_write(
 void SharedMemoryChannel::commit_read(const LockFreeRingBuffer::ReadView& view)
 {
   if (recv_ring_) {
-    // std::string side = is_server_ ? "SERVER" : "CLIENT";
-    // std::cout << "[nprpc][D] " << side << " commit_read on ring: " <<
-    // recv_ring_name_ << std::endl;
     recv_ring_->commit_read(view);
   }
 }
 
 void SharedMemoryChannel::read_loop()
 {
-  // std::string side = is_server_ ? "SERVER" : "CLIENT";
-  // std::cout << "[nprpc][D] " << side << " read_loop starting for recv_ring:
-  // "
-  // << recv_ring_name_ << std::endl;
   while (running_) {
     try {
       // First, before looking at anything a wake could be about: running_,
@@ -378,8 +367,6 @@ void SharedMemoryChannel::read_loop()
         recv_ring_->wait_for_readable(timeout, token);
 
         auto view = recv_ring_->try_read_view();
-        // std::cout << "Zero-copy read view attempt returned valid=" <<
-        // view.valid << std::endl;
         if (view) {
           // Callback copies the data; commit the read immediately so that
           // the next try_read_view() call sees fresh data, not this message
@@ -389,8 +376,6 @@ void SharedMemoryChannel::read_loop()
         }
         continue;
       }
-
-      // std::cout << "Falling back to copy-based read" << std::endl;
 
       // Fallback to copy-based read.  The bound is the ring we read from,
       // which the peer sized; allocated here rather than in the constructor
@@ -428,25 +413,20 @@ void SharedMemoryChannel::read_loop()
       break;
     }
   }
-
-  std::cout << "SharedMemoryChannel read thread exiting" << std::endl;
 }
 
 void SharedMemoryChannel::cleanup_rings()
 {
-  std::cout << "Cleaning up SharedMemoryChannel rings for channel: "
-            << channel_id_ << std::endl;
   send_ring_.reset();
   recv_ring_.reset();
 
   // Only the creator (server) should remove the shared memory
   if (is_server_) {
     try {
-      std::cout << "Cleaned up ring buffers: " << send_ring_name_ << ", "
-                << recv_ring_name_ << std::endl;
+      NPRPC_LOG_INFO("Cleaning up ring buffers: {} and {}", send_ring_name_, recv_ring_name_);
     } catch (const std::exception& e) {
       // Ignore cleanup errors
-      std::cout << "Cleanup error (ignored): " << e.what() << std::endl;
+      NPRPC_LOG_WARN("Cleanup error (ignored): {}", e.what());
     }
   }
 }

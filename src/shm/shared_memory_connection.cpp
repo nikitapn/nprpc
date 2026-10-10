@@ -39,7 +39,6 @@ deadline_from_now(uint32_t timeout_ms) noexcept
 void SharedMemoryConnection::timeout_action()
 {
   // For shared memory, timeout means the other side is unresponsive
-  // std::cerr << "SharedMemoryConnection timeout" << std::endl;
   // close();
 }
 
@@ -491,8 +490,7 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
   // Set up data receive handler (copy path — same demux rules)
   channel_->on_data_received = [this](std::vector<char>&& data) {
     if (data.size() < sizeof(impl::flat::Header)) {
-      std::cerr << "SharedMemoryConnection: Message too small: " << data.size()
-                << std::endl;
+      NPRPC_LOG_ERROR("SharedMemoryConnection: Message too small: {}", data.size());
       return;
     }
 
@@ -518,8 +516,7 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
 
     std::lock_guard lock(mutex_);
     if (wq_.empty()) {
-      std::cerr << "SharedMemoryConnection: Received unsolicited response"
-                << std::endl;
+      NPRPC_LOG_ERROR("SharedMemoryConnection: Received unsolicited response");
       return;
     }
 
