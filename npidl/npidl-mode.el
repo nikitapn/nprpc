@@ -43,16 +43,16 @@
 (defvar npidl-font-lock-keywords
   `(
     ;; Keywords
-    (,(regexp-opt '("module" "import" "interface" "struct" "exception" "enum"
+    (,(regexp-opt '("module" "import" "interface" "struct" "exception"
                     "const" "using" "async" "in" "out" "direct" "raises"
                     "flat" "trusted") 'words)
      . font-lock-keyword-face)
 
     ;; Types
-    (,(regexp-opt '("void" "boolean" "object"
-                    "i8" "u8" "i16" "u16" "i32" "u32"
-                    "i64" "u64" "f32" "f64"
-                    "string" "vector") 'words)
+    (,(regexp-opt '("void" "boolean" "object" "i8" "u8" "i16" "u16" "i32"
+                    "u32" "i64" "u64" "f32" "f64" "string" "vector" "alias"
+                    "enum" "stream" "server_stream" "client_stream"
+                    "bidi_stream" "fd") 'words)
      . font-lock-type-face)
 
     ;; Attributes
