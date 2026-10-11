@@ -1056,6 +1056,8 @@ void TSBuilder::finalize()
   }
 
   emit_arguments_structs([this](AstStructDecl* s) {
+    if (contains_fd(s))
+      return; // only used by methods skipped below
     emit_struct2(s, false);
     emit_marshal_function(s);
     out << '\n';
@@ -1295,6 +1297,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   // proxy object functions definitions
   out << '\n';
   for (auto& fn : ifs->fns) {
+    if (fn->uses_fd)
+      continue; // fd needs a same-machine transport; C++ only
     emit_block_doc(out, block_depth_.indent(),
                    function_doc(fn, ParamDocStyle::Doxygen));
     if (fn->is_stream) {
@@ -1623,6 +1627,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
 
   bool first_http_method = true;
   for (auto& fn : ifs->fns) {
+    if (fn->uses_fd)
+      continue; // fd needs a same-machine transport; C++ only
     if (fn->is_stream)
       continue; // skip stream functions for now
 
@@ -1900,6 +1906,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   }
   out << bb();
   for (auto fn : ifs->fns) {
+    if (fn->uses_fd)
+      continue; // fd needs a same-machine transport; C++ only
     emit_block_doc(out, block_depth_.indent(),
                    function_doc(fn, ParamDocStyle::Doxygen));
     out << bl() << fn->name;
@@ -2030,6 +2038,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
   out << bl() << "switch(function_idx) {\n" << bb(false);
 
   for (auto fn : ifs->fns) {
+    if (fn->uses_fd)
+      continue; // fd needs a same-machine transport; C++ only
     if (fn->is_stream)
       continue; // skip stream functions for now
 

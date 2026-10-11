@@ -723,6 +723,8 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
 
   // Emit method signatures
   for (auto& fn : ifs->fns) {
+    if (fn->uses_fd)
+      continue; // fd needs a same-machine transport; C++ only
     emit_line_doc(out, block_depth_.indent(),
                   function_doc(fn, ParamDocStyle::Swift, true));
     out << bl() << "func " << swift_method_name(fn->name) << "(";
@@ -860,6 +862,8 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
   // Implement protocol methods with marshalling
   for (auto& fn : ifs->fns) {
+    if (fn->uses_fd)
+      continue; // fd needs a same-machine transport; C++ only
     // Handle streaming methods separately
     if (fn->is_stream) {
       emit_client_stream_method(ifs, fn);
@@ -1238,6 +1242,8 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
 
   // Protocol method stubs (abstract methods to be implemented by subclass)
   for (auto& fn : ifs->fns) {
+    if (fn->uses_fd)
+      continue; // fd needs a same-machine transport; C++ only
     emit_line_doc(out, block_depth_.indent(),
                   function_doc(fn, ParamDocStyle::Swift, true));
     out << bl() << "open func " << swift_method_name(fn->name) << "(";
@@ -1376,6 +1382,8 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
   out << bl() << "switch functionIdx " << bb();
 
   for (auto& fn : ifs->fns) {
+    if (fn->uses_fd)
+      continue; // fd needs a same-machine transport; C++ only
     // Skip streaming methods - they're handled above in StreamInit path
     if (fn->is_stream) {
       continue;
@@ -1843,6 +1851,8 @@ void SwiftBuilder::emit_swift_trampolines(AstInterfaceDecl* ifs)
   out << "// These are called from C++ bridge (" << class_name << "_SwiftBridge)\n\n";
 
   for (auto& fn : ifs->fns) {
+    if (fn->uses_fd)
+      continue; // fd needs a same-machine transport; C++ only
     // Generate @_cdecl trampoline
     out << "@_cdecl(\"" << fn->name << "_swift_trampoline\")\n";
     out << "func " << fn->name << "_swift_trampoline(\n";
@@ -1962,6 +1972,8 @@ void SwiftBuilder::emit_interface(AstInterfaceDecl* ifs)
 {
   // Emit protocol and client/servant classes under the current namespace
   emit_arguments_structs([this](AstStructDecl* s) {
+    if (contains_fd(s))
+      return; // only used by methods skipped below
     auto [ _, inserted ] = emitted_marshal_structs_.insert(s);
     if (inserted) {
       emit_struct2(s, Target::FunctionArgument);
@@ -2471,6 +2483,8 @@ void SwiftBuilder::emit_safety_checks()
       continue;
 
     for (auto fn : ifs->fns) {
+      if (fn->uses_fd)
+        continue; // fd needs a same-machine transport; C++ only
       auto s = fn->in_s;
       if (!s)
         continue;

@@ -132,6 +132,14 @@ public:
   }
   SessionContext& ctx() noexcept { return ctx_; }
 
+  // Whether this connection can carry file descriptors (IDL `fd`) to the
+  // peer.  Only a same-machine transport can; the rest leave this false.
+  virtual bool supports_fd_passing() const noexcept { return false; }
+
+  // Called by generated proxies before sending a call that has an `fd`
+  // anywhere in its signature; throws if this connection cannot carry it.
+  NPRPC_API void require_fd_passing() const;
+
   // Must be called once by the creator, right after wrapping the concrete
   // session in a shared_ptr (e.g. `session->bind_self(session);`), and
   // before the session is exposed to any I/O. Cannot be done from within

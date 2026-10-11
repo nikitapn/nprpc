@@ -358,6 +358,7 @@ add_library(nprpc
   src/helper.hpp
   src/helper.cpp
   src/flat_buffer.cpp
+  src/unique_fd.cpp
   src/uuid.cpp
   src/thread_identity.cpp
   # Cookie helpers: no HTTP/Beast/OpenSSL dependency. Always linked so

@@ -136,6 +136,9 @@ void CppBuilder::emit_type(AstTypeDecl* type, std::ostream& os)
   case FieldType::Object:
     os << "::nprpc::ObjectId";
     break;
+  case FieldType::Fd:
+    os << "::nprpc::UniqueFd";
+    break;
   case FieldType::Alias:
     os << ns(calias(type)->nm) << calias(type)->name;
     break;
@@ -179,6 +182,9 @@ void CppBuilder::emit_flat_type(AstTypeDecl* type, std::ostream& os)
     break;
   case FieldType::Object:
     os << "::nprpc::detail::flat::ObjectId";
+    break;
+  case FieldType::Fd:
+    os << "::nprpc::flat::Fd";
     break;
   case FieldType::Alias: {
     emit_flat_type(calias(type)->get_real_type(), os);
@@ -247,6 +253,13 @@ void CppBuilder::emit_parameter_type_for_proxy_call_r(AstTypeDecl* type,
     else
       os << "Object*";
     break;
+  case FieldType::Fd:
+    // In: borrowed for the call, the runtime sends a duplicate.
+    if (input)
+      os << "int";
+    else
+      os << "::nprpc::UniqueFd";
+    break;
   case FieldType::Variant:
     os << ns(cvar(type)->nm) << cvar(type)->name;
     break;
@@ -259,12 +272,16 @@ void CppBuilder::emit_parameter_type_for_proxy_call(AstFunctionArgument* arg, st
 {
   const bool input = (arg->modifier == ArgumentModifier::In);
 
-  if (input && arg->type->id != FieldType::Fundamental && arg->type->id != FieldType::Vector)
+  const bool by_value = arg->type->id == FieldType::Fundamental ||
+                        arg->type->id == FieldType::Vector ||
+                        arg->type->id == FieldType::Fd;
+
+  if (input && !by_value)
     os << "const ";
 
   emit_parameter_type_for_proxy_call_r(arg->type, os, input);
 
-  if (!input || (arg->type->id != FieldType::Fundamental && arg->type->id != FieldType::Vector))
+  if (!input || !by_value)
     os << '&';
 }
 
@@ -372,6 +389,10 @@ void CppBuilder::emit_parameter_type_for_servant_callback_r(AstTypeDecl* type,
       os << "::nprpc::detail::flat::ObjectId_Direct";
     }
     break;
+  case FieldType::Fd:
+    // In: the servant owns it. Out: the servant fills it in.
+    os << "::nprpc::UniqueFd";
+    break;
   case FieldType::Enum:
     os << ns(cenum(type)->nm) << cenum(type)->name;
     break;
@@ -465,6 +486,10 @@ void CppBuilder::emit_direct_type(AstTypeDecl* type, std::ostream& os)
     os << ns(cflat(type)->nm) << "flat::" << cflat(type)->name << "_Direct";
     break;
 
+  case FieldType::Fd:
+    os << "::nprpc::flat::Fd_Direct";
+    break;
+
   case FieldType::Optional: {
     auto wt = cwt(type)->real_type();
     os << "::nprpc::flat::Optional_Direct<";
@@ -542,6 +567,11 @@ void CppBuilder::emit_accessors(const std::string& flat_name, AstFieldDecl* f, s
   case FieldType::Object:
     os << "  auto " << f->name
        << "() noexcept { return ::nprpc::detail::flat::ObjectId_Direct(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
+    break;
+
+  case FieldType::Fd:
+    os << "  auto " << f->name
+       << "() noexcept { return ::nprpc::flat::Fd_Direct(buffer_, offset_ + offsetof(" << flat_name << ", " << f->name << ")); }\n";
     break;
 
   case FieldType::Alias: {
@@ -710,6 +740,12 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
     os << bd << "}\n";
     break;
 
+  case FieldType::Fd:
+    // An int is duplicated, a UniqueFd moved in.
+    assert(top_type == false);
+    os << bd << op1 << "().set(std::move(" << op2 << "));\n";
+    break;
+
   case FieldType::Variant: {
     auto* v = cvar(type);
     const auto bd0 = bd;
@@ -780,6 +816,7 @@ void CppBuilder::measure_from_cpp_type(AstTypeDecl* type,
   case FieldType::Fundamental:
   case FieldType::Enum:
   case FieldType::Object:
+  case FieldType::Fd:
     break;
 
   case FieldType::Struct: {
@@ -1012,6 +1049,10 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type,
     } else {
       os << bd << op1 << ".assign_from_direct(" << op2 << "());\n";
     }
+    break;
+
+  case FieldType::Fd:
+    os << bd << op1 << " = " << op2 << "().take();\n";
     break;
 
   case FieldType::Variant: {
@@ -1408,7 +1449,7 @@ void CppBuilder::emit_safety_checks_r(
 
       if (ftr->id == FieldType::Vector || ftr->id == FieldType::Optional ||
           ftr->id == FieldType::Struct || ftr->id == FieldType::String ||
-          ftr->id == FieldType::Object)
+          ftr->id == FieldType::Object || ftr->id == FieldType::Fd)
       {
         os << bd << "{\n";
         auto str = op + "." + field->name +
@@ -1485,6 +1526,11 @@ void CppBuilder::emit_safety_checks_r(
     emit_safety_checks_r(ctx_->get_builtin_types_info().object_id_struct, op, os, false, false);
     break;
 
+  case FieldType::Fd:
+    // The index must name a descriptor that arrived with this message.
+    os << bd << "if(!" << op << ".valid()) goto check_failed;\n";
+    break;
+
   case FieldType::Array:
     break;
 
@@ -1550,7 +1596,8 @@ void CppBuilder::emit_helpers()
     bool has_non_fundamental = false;
     for (auto f : s->fields) {
       assert(f->function_argument);
-      if (is_fundamental(f->type) || f->type->id == FieldType::String || f->type->id == FieldType::Object)
+      if (is_fundamental(f->type) || f->type->id == FieldType::String || f->type->id == FieldType::Object ||
+          f->type->id == FieldType::Fd)
         continue;
       has_non_fundamental = true;
       break;
@@ -1575,7 +1622,7 @@ void CppBuilder::emit_helpers()
     for (auto f : s->fields) {
       assert(f->function_argument);
       if (is_fundamental(f->type) || f->type->id == FieldType::String ||
-          f->type->id == FieldType::Object)
+          f->type->id == FieldType::Object || f->type->id == FieldType::Fd)
         continue;
 
       if (f->input_function_argument) {
@@ -2578,8 +2625,10 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     // (true zero-copy into the ring buffer).
     auto emit_proxy_body = [&](bool /*is_async*/) {
       oc << "  auto session = "
-            "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n"
-            "  std::size_t __wire_size = "
+            "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n";
+      if (fn->uses_fd)
+        oc << "  session->require_fd_passing();\n";
+      oc << "  std::size_t __wire_size = "
          << fixed_size << ";\n";
       if (fn->in_s && !fn->in_s->flat) {
         bd = 1;
@@ -2991,6 +3040,9 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 
         if (!passed_as_direct(arg)) {
           ++out_ix;
+          // The servant fills in an fd; it is attached after the call.
+          if (arg->type->id == FieldType::Fd)
+            oc << bd << "::nprpc::UniqueFd _out_" << out_ix << ";\n";
           continue;
         }
 
@@ -3030,6 +3082,8 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
           // variable
           oc << "oa_" << ++out_temp_ix;
           ++out_ix;
+        } else if (arg->type->id == FieldType::Fd) {
+          oc << "_out_" << ++out_ix;
         } else {
           // Simple / Object out: buffer already prepared (pre_buffer_out)
           oc << "oa._" << ++out_ix << "()";
@@ -3038,6 +3092,8 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
         if (arg->type->id == FieldType::Object) {
           oc << "::nprpc::impl::create_object_from_flat(ia._" << ++in_ix
              << "(), ctx.remote_endpoint)";
+        } else if (arg->type->id == FieldType::Fd) {
+          oc << "ia._" << ++in_ix << "().take()";
         } else {
           oc << "ia._" << ++in_ix << "()";
         }
@@ -3187,6 +3243,16 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
         // Buffer already prepared (heap); serialize return value if any
         if (!fn->is_void()) {
           assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val", oc);
+        }
+        int ix = fn->is_void() ? 0 : 1;
+        for (auto out : fn->args) {
+          if (out->modifier == ArgumentModifier::In)
+            continue;
+          ++ix;
+          if (out->type->id == FieldType::Fd) {
+            auto n = std::to_string(ix);
+            assign_from_cpp_type(out->type, "oa._" + n, "_out_" + n, oc);
+          }
         }
       } else {
         // Measure-after path (return value only, no out-args): measure the

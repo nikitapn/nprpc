@@ -93,6 +93,11 @@ void calc_struct_size_align(AstStructDecl* s,
       s->align = 4;
     align_offset(4, offset, 8, elements_size);
     break;
+  case FieldType::Fd: // nprpc::flat::Fd, an index into the attached fds
+    if (s->align < 4)
+      s->align = 4;
+    align_offset(4, offset, 4, elements_size);
+    break;
   case FieldType::Object: // nprpc::detail::flat::ObjectId
     if (s->align < static_cast<int>(align_of_object))
       s->align = align_of_object;
@@ -145,6 +150,9 @@ std::tuple<int, int> get_type_size_align(AstTypeDecl* type)
 
   case FieldType::Object:
     return {size_of_object, align_of_object};
+
+  case FieldType::Fd:
+    return {4, 4};
 
   case FieldType::Variant:
     return {8, 4}; // discriminant (4) + arm_offset (4)
@@ -228,6 +236,9 @@ void get_type_id(const AstTypeDecl* type,
   case FieldType::Object:
     id += 'O';
     break;
+  case FieldType::Fd:
+    id += 'H';
+    break;
   case FieldType::Enum:
     id += 'E' + cenum(type)->name;
     break;
@@ -275,6 +286,7 @@ bool is_flat(AstTypeDecl* type)
   case FieldType::Object:
   case FieldType::Interface:
   case FieldType::Variant:
+  case FieldType::Fd:
     return false;
   default:
     assert(false);
@@ -315,6 +327,39 @@ bool contains_object(AstTypeDecl* type)
     return contains_object(cwt(type)->real_type());
   case FieldType::Alias:
     return contains_object(calias(type)->type);
+  default:
+    return false;
+  }
+}
+
+bool contains_fd(AstTypeDecl* type)
+{
+  switch (type->id) {
+  case FieldType::Fd:
+    return true;
+  case FieldType::Struct:
+    for (auto f : cflat(type)->fields) {
+      if (contains_fd(f->type))
+        return true;
+    }
+    return false;
+  case FieldType::Array:
+  case FieldType::Vector:
+  case FieldType::Optional:
+    return contains_fd(cwt(type)->type);
+  case FieldType::Alias:
+    return contains_fd(calias(type)->type);
+  case FieldType::Stream: {
+    auto* stream = static_cast<AstStreamDecl*>(type);
+    return contains_fd(stream->type) ||
+           (stream->input_type && contains_fd(stream->input_type));
+  }
+  case FieldType::Variant:
+    for (auto& arm : cvar(type)->arms) {
+      if (contains_fd(arm.type))
+        return true;
+    }
+    return false;
   default:
     return false;
   }
@@ -381,6 +426,8 @@ std::string idl_type_string(const AstTypeDecl* const_type)
     return "void";
   case FieldType::Object:
     return "object";
+  case FieldType::Fd:
+    return "fd";
   case FieldType::Array: {
     const auto* arr = car(type);
     return idl_type_string(arr->type) + "[" + std::to_string(arr->length) + "]";

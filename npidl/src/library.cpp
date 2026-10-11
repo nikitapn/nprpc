@@ -307,6 +307,7 @@ class Lexer : public ILexer
         {"bidi_stream"sv, TokenId::BidiStream},
         {"one"sv, TokenId::One},
         {"of"sv, TokenId::Of},
+        {"fd"sv, TokenId::Fd},
     };
 
     static constexpr Map<std::string_view, TokenId,
@@ -966,6 +967,10 @@ class Parser : public IParser
       flush();
       type = ast<AstObjectDecl>();
       return true;
+    case TokenId::Fd:
+      flush();
+      type = ast<AstFdDecl>();
+      return true;
     case TokenId::One: {
       flush(); // consume 'one'
       if (peek() != TokenId::Of)
@@ -1013,7 +1018,7 @@ class Parser : public IParser
     field_name = peek();
     std::vector<TypeRefSite> type_sites;
     if (!((field_name == TokenId::Identifier ||
-           field_name == TokenId::Message) &&
+           field_name == TokenId::Message || field_name == TokenId::Fd) &&
           maybe(optional, &Parser::one, TokenId::Optional) &&
           peek() == TokenId::Colon &&
           check(&Parser::type_decl_collect, std::ref(type),
@@ -1022,6 +1027,8 @@ class Parser : public IParser
 
     if (field_name == TokenId::Message)
       field_name.name = "message";
+    else if (field_name == TokenId::Fd)
+      field_name.name = "fd";
 
     field = ast<AstFieldDecl>();
     field->name = std::move(field_name.name);
@@ -1053,13 +1060,16 @@ class Parser : public IParser
     Token arg_name = peek();
     bool optional;
 
-    if (!((arg_name == TokenId::Identifier || arg_name == TokenId::Message) &&
+    if (!((arg_name == TokenId::Identifier || arg_name == TokenId::Message ||
+           arg_name == TokenId::Fd) &&
           maybe(optional, &Parser::one, TokenId::Optional) &&
           peek() == TokenId::Colon))
       return false;
 
     if (arg_name == TokenId::Message)
       arg_name.name = "message";
+    else if (arg_name == TokenId::Fd)
+      arg_name.name = "fd";
 
     // Save start token for position tracking
     start_token = arg_name;
@@ -1171,6 +1181,8 @@ class Parser : public IParser
     while (check(&Parser::struct_close_tag) == false) {
       AstFieldDecl* field;
       if (check(&Parser::field_decl, std::ref(field))) {
+        if (contains_fd(field->type))
+          throw_error("'fd' can only be a function parameter or return type, not a field of a message or exception");
         s->fields.push_back(field);
         // Variants are never flat — resolve through Optional wrapper too
         AstTypeDecl* ft = field->type;
@@ -1476,6 +1488,23 @@ class Parser : public IParser
       f->stream_arg = arg_ptr;
     }
 
+    // 'fd' travels beside the message rather than in it, so it can only be
+    // a whole argument or the whole return value — never inside another type.
+    auto check_fd = [&](AstTypeDecl* type, bool direct) {
+      if (!contains_fd(type))
+        return;
+      if (type->id != FieldType::Fd)
+        throw_error("'fd' cannot be optional or part of another type; use it as a parameter or return type on its own");
+      if (direct)
+        throw_error("'direct' is not supported for fd");
+      if (f->is_stream)
+        throw_error("'fd' is not supported in streaming methods");
+      f->uses_fd = true;
+    };
+    check_fd(ret_type, false);
+    for (auto* arg_ptr : f->args)
+      check_fd(arg_ptr->type, arg_ptr->direct);
+
     auto tok = peek();
 
     if (tok == TokenId::Semicolon) {
@@ -1744,6 +1773,8 @@ class Parser : public IParser
     if (!check(&Parser::type_decl, std::ref(right))) {
       throw_error("Expected a type declaration after 'alias'. Example: alias MyInt = u32;");
     }
+    if (contains_fd(right))
+      throw_error("'fd' can only be a function parameter or return type, not part of an alias");
 
     // If the RHS is a variant ('one of { ... }'), register it directly as a
     // named type rather than wrapping it in an AstAliasDecl.

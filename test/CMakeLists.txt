@@ -33,6 +33,7 @@ add_executable(nprpc_test
   src/basic.cpp
   src/streams.cpp
   src/concurrent.cpp
+  src/fd_passing.cpp
   ${nprpc_test_stub_GENERATED_SOURCES}
 )
 

@@ -114,6 +114,15 @@ Session::Session(boost::asio::any_io_executor executor)
       });
 }
 
+void Session::require_fd_passing() const
+{
+  if (!supports_fd_passing())
+    throw nprpc::Exception(
+        "File descriptors cannot be passed over " +
+        ctx_.remote_endpoint.to_string() +
+        ": only a shared-memory connection can carry them");
+}
+
 bool Session::handle_request(flat_buffer& rx_buffer, flat_buffer& tx_buffer)
 {
   // Sync entry point used by TCP/QUIC/epoll/uring today.  Keep as a thin
