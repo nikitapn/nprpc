@@ -252,6 +252,7 @@ private let globalServantDispatch: @convention(c) (UnsafeMutableRawPointer?, Uns
                 memcpy(dstData, srcData, requestSize)
             }
         }
+        nprpc_flatbuffer_move_fds(owned.handle, rxBuffer)
         buffer = owned
     } else {
         buffer = FlatBuffer(wrapping: rxBuffer)
@@ -285,6 +286,8 @@ private let globalServantDispatch: @convention(c) (UnsafeMutableRawPointer?, Uns
            let dstData = nprpc_flatbuffer_data(txBuffer) {
             memcpy(dstData, srcData, responseSize)
         }
+        // The reply's descriptors (IDL `fd` outputs) go with it.
+        nprpc_flatbuffer_move_fds(txBuffer, buffer.handle)
     }
 }
 

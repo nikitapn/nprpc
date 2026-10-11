@@ -254,6 +254,17 @@ void nprpc_flatbuffer_prepare(void* fb, size_t n);
 void nprpc_flatbuffer_commit(void* fb, size_t n);
 void nprpc_flatbuffer_consume(void* fb, size_t n);
 
+// File descriptors attached to a message (IDL `fd`).
+// Attaches `fd`, taking ownership; returns the index an fd field stores.
+uint32_t nprpc_flatbuffer_attach_fd(void* fb, int fd);
+// Takes the descriptor at `index` out of the message; -1 if there is none.
+int nprpc_flatbuffer_take_fd(void* fb, uint32_t index);
+// Moves every attached descriptor from `src` to `dst`, replacing dst's.
+void nprpc_flatbuffer_move_fds(void* dst, void* src);
+// A close-on-exec duplicate of `fd`, or -1 with errno set.
+int nprpc_fd_dup(int fd);
+void nprpc_fd_close(int fd);
+
 // Object operations
 void nprpc_object_release(void* obj);
 uint32_t nprpc_object_add_ref(void* obj);
@@ -335,6 +346,10 @@ int nprpc_object_send_async_receive(
 // Returns: 0 = sent (or best-effort handed to the transport), negative = failed
 //   -1 invalid args, -2 no endpoint, -3 transport error
 int nprpc_object_send_unreliable(void* obj_ptr, void* buffer_ptr);
+
+// Null if calls to `obj` can carry file descriptors, else why not (valid
+// until the next call on this thread).  Connects if not connected yet.
+const char* nprpc_object_check_fd_passing(void* obj_ptr);
 
 // Object string serialization (NPRPC IOR format)
 // Returns: newly allocated string that caller must free with nprpc_free_string()

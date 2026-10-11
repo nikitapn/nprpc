@@ -78,6 +78,33 @@ private final class ShmAsyncServant: AsyncTestServant, @unchecked Sendable {
     }
 }
 
+private final class ShmFdServant: TestFdServant, @unchecked Sendable {
+    override func readAll(fd: UniqueFD) -> String {
+        readToEnd(fd.rawValue)
+    }
+    override func makePipe(content: String) -> UniqueFD {
+        makePipeFD(content)
+    }
+    override func makePipeOut(content: String) -> (UInt32, UniqueFD) {
+        (UInt32(content.utf8.count), makePipeFD(content))
+    }
+}
+
+/// A pipe whose read end yields `content`, then end of file.
+private func makePipeFD(_ content: String) -> UniqueFD {
+    var fds: [Int32] = [-1, -1]
+    precondition(pipe(&fds) == 0, "pipe failed")
+    let bytes = Array(content.utf8)
+    _ = bytes.withUnsafeBytes { write(fds[1], $0.baseAddress, $0.count) }
+    close(fds[1])
+    return UniqueFD(adopting: fds[0])
+}
+
+private func readToEnd(_ fd: Int32) -> String {
+    let data = FileHandle(fileDescriptor: fd, closeOnDealloc: false).readDataToEndOfFile()
+    return String(decoding: data, as: UTF8.self)
+}
+
 // MARK: - Tests
 
 final class SharedMemoryIPCTests: XCTestCase {
@@ -271,5 +298,31 @@ final class SharedMemoryIPCTests: XCTestCase {
         let client = narrow(obj, to: TestBasic.self)!
         let value = try await client.returnU32()
         XCTAssertEqual(value, 0xDEAD_BEEF)
+    }
+
+    /// File descriptors (IDL `fd`) both ways over SHM.  In: a borrowed Int32,
+    /// as one handed over from C++ would be, which stays the caller's.
+    func testShmFileDescriptors() async throws {
+        let servant = ShmFdServant()
+        let (client, _) = try makeShmClient(servant, as: TestFd.self)
+
+        let pipe = makePipeFD("to the servant")
+        let text = try await client.readAll(fd: pipe.rawValue)
+        XCTAssertEqual(text, "to the servant")
+        XCTAssertNotEqual(fcntl(pipe.rawValue, F_GETFD), -1, "caller's fd must stay open")
+
+        let returned = try await client.makePipe(content: "from the servant")
+        XCTAssertEqual(readToEnd(returned.rawValue), "from the servant")
+        XCTAssertNotEqual(fcntl(returned.rawValue, F_GETFD) & FD_CLOEXEC, 0)
+
+        let (length, out) = try await client.makePipeOut(content: "out param")
+        XCTAssertEqual(length, 9)
+        XCTAssertEqual(readToEnd(out.rawValue), "out param")
+
+        // Handing a received descriptor on (to C++, say) leaves it open.
+        let raw = out.release()
+        XCTAssertFalse(out.isValid)
+        XCTAssertNotEqual(fcntl(raw, F_GETFD), -1)
+        close(raw)
     }
 }

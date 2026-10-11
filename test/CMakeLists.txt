@@ -489,3 +489,31 @@ if(TARGET nprpc_test)
   endif()
   add_dependencies(nprpc_test ${_nprpc_test_aux_deps})
 endif()
+
+# File descriptors between two processes over shared memory (forks; no
+# nameserver needed)
+add_executable(test_fd_passing_ipc
+  src/test_fd_passing_ipc.cpp
+  ${nprpc_test_stub_GENERATED_SOURCES}
+)
+
+add_dependencies(test_fd_passing_ipc nprpc_test_gen)
+
+target_include_directories(test_fd_passing_ipc
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${nprpc_test_stub_INCLUDE_DIR}
+)
+
+target_link_libraries(test_fd_passing_ipc
+  PRIVATE
+    nprpc::nprpc
+    GTest::gtest_main
+)
+
+gtest_discover_tests(test_fd_passing_ipc
+  PROPERTIES
+    TIMEOUT 60
+  DISCOVERY_TIMEOUT 15
+  DISCOVERY_MODE PRE_TEST
+)
