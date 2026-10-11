@@ -6,17 +6,21 @@
 #include <nprpc/export.hpp>
 #include <nprpc/impl/lock_free_ring_buffer.hpp>
 #include <nprpc/impl/process_identity.hpp>
+#include <nprpc/unique_fd.hpp>
 
 #include <atomic>
 #include <boost/asio.hpp>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 namespace nprpc::impl {
 
 class SharedMemoryChannel;
+class ShmFdLink;
 
 /**
  * @brief Handshake message for establishing shared memory connections
@@ -110,6 +114,16 @@ private:
 
   AcceptHandler accept_handler_;
 
+  // Descriptor side channels (ShmFdLink): a Unix socket beside the accept
+  // ring, and a thread that binds each connection to its channel.  Absent
+  // where the socket cannot be made; channels then carry no descriptors.
+  UniqueFd fd_listen_socket_;
+  std::string fd_socket_path_;
+  std::unique_ptr<std::thread> fd_accept_thread_;
+  // Channels accepted but not yet joined by their side channel.
+  std::mutex fd_links_mut_;
+  std::unordered_map<std::string, std::weak_ptr<ShmFdLink>> fd_links_;
+
 public:
   /**
    * @brief Construct a new Shared Memory Listener
@@ -154,6 +168,11 @@ public:
 private:
   void accept_loop();
   void handle_connection_request(const SharedMemoryHandshake& handshake);
+
+  void open_fd_socket();
+  void close_fd_socket();
+  void fd_accept_loop();
+  void handle_fd_connection(UniqueFd connection);
 };
 
 /**

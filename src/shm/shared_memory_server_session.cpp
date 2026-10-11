@@ -148,14 +148,15 @@ class SharedMemoryServerSession
       reservation.max_size = tx_buffer.max_size();
       reservation.slot_idx = tx_buffer.reservation_write_idx();
       reservation.valid = true;
-      channel_->commit_write(reservation, tx_buffer.size());
+      channel_->commit_write(reservation, tx_buffer.size(), tx_buffer.fds());
       tx_buffer.release_write_view();
     } else {
       auto new_reservation = channel_->reserve_write(tx_buffer.size());
       if (new_reservation) {
         std::memcpy(new_reservation.data, tx_buffer.data_ptr(),
                     tx_buffer.size());
-        channel_->commit_write(new_reservation, tx_buffer.size());
+        channel_->commit_write(new_reservation, tx_buffer.size(),
+                               tx_buffer.fds());
       } else {
         NPRPC_LOG_ERROR(
             "SharedMemoryServerSession: Failed to allocate response buffer");
@@ -355,6 +356,11 @@ public:
     return true;
   }
 
+  bool supports_fd_passing() const noexcept override
+  {
+    return channel_ && channel_->supports_fd_passing();
+  }
+
   void on_message_received(const LockFreeRingBuffer::ReadView& read_view)
   {
     // Always copy out of the ring into an owned buffer (alignment, growth,
@@ -365,6 +371,7 @@ public:
       std::memcpy(mb.data(), read_view.data, read_view.size);
       rx_buffer.commit(read_view.size);
     }
+    rx_buffer.fds() = channel_->take_received_fds();
 
     // Prefer ring-thread dispatch for cheap servants (default POA).  Must
     // not interleave with an in-flight offload drain — client matches FIFO.

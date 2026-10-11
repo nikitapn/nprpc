@@ -1,14 +1,18 @@
 // Copyright (c) 2021-2026, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
-// File descriptor passing (IDL `fd`).  No transport carries descriptors yet,
-// so the generated servant code is driven directly with hand-built requests,
-// and the proxies are checked to refuse the call over every transport.
+// File descriptor passing (IDL `fd`).  The generated servant code is driven
+// directly with hand-built requests; end to end, descriptors go over shared
+// memory and every other transport refuses the call before sending it.
 
+#include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <filesystem>
 #include <string>
+#include <thread>
+#include <vector>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
@@ -53,6 +57,14 @@ UniqueFd make_pipe(std::string_view content)
 }
 
 bool is_open(int fd) { return ::fcntl(fd, F_GETFD) != -1; }
+
+size_t open_fd_count()
+{
+  size_t n = 0;
+  for ([[maybe_unused]] auto& e : std::filesystem::directory_iterator("/proc/self/fd"))
+    ++n;
+  return n;
+}
 
 class TestFdImpl : public nprpc::test::ITestFd_Servant
 {
@@ -227,27 +239,79 @@ TEST(FdPassingDispatch, OutArgument)
   EXPECT_EQ(read_all(fd.get()), "out param");
 }
 
-// Until a transport carries descriptors, every proxy call with an fd must
-// fail before anything is sent, and leave the caller's descriptor alone.
+// Every transport but shared memory must refuse the call before sending it,
+// and leave the caller's descriptor alone.
 TEST_F(NprpcTest, FdPassingRefusedByTransport)
 {
   TestFdImpl servant;
-  auto exec_test = [this, &servant](nprpc::ObjectActivationFlags flags) {
-    auto obj = bind_and_resolve<nprpc::test::TestFd>(servant, flags);
-    auto pipe = make_pipe("unused");
+  auto obj =
+      bind_and_resolve<nprpc::test::TestFd>(servant, nprpc::ObjectActivationFlags::tcp);
+  auto pipe = make_pipe("unused");
 
-    EXPECT_THROW(obj->ReadAll(pipe.get()), nprpc::Exception);
-    EXPECT_THROW(obj->MakePipe("x"), nprpc::Exception);
-    uint32_t length;
-    UniqueFd out;
-    EXPECT_THROW(obj->MakePipeOut("x", length, out), nprpc::Exception);
+  EXPECT_THROW(obj->ReadAll(pipe.get()), nprpc::Exception);
+  EXPECT_THROW(obj->MakePipe("x"), nprpc::Exception);
+  uint32_t length;
+  UniqueFd out;
+  EXPECT_THROW(obj->MakePipeOut("x", length, out), nprpc::Exception);
 
-    EXPECT_TRUE(is_open(pipe.get()));
-    EXPECT_EQ(servant.calls, 0);
-  };
+  EXPECT_TRUE(is_open(pipe.get()));
+  EXPECT_EQ(servant.calls, 0);
+}
 
-  exec_test(nprpc::ObjectActivationFlags::tcp);
-  exec_test(nprpc::ObjectActivationFlags::shm);
+TEST_F(NprpcTest, FdPassingOverSharedMemory)
+{
+  TestFdImpl servant;
+  auto obj =
+      bind_and_resolve<nprpc::test::TestFd>(servant, nprpc::ObjectActivationFlags::shm);
+
+  // In: the caller keeps its own descriptor; the servant reads a duplicate.
+  auto pipe = make_pipe("to the server");
+  EXPECT_EQ(obj->ReadAll(pipe.get()), "to the server");
+  EXPECT_TRUE(is_open(pipe.get()));
+
+  // Return value and out parameter.
+  auto returned = obj->MakePipe("from the server");
+  ASSERT_TRUE(returned);
+  EXPECT_EQ(read_all(returned.get()), "from the server");
+
+  uint32_t length = 0;
+  UniqueFd out;
+  obj->MakePipeOut("out param", length, out);
+  EXPECT_EQ(length, 9u);
+  ASSERT_TRUE(out);
+  EXPECT_EQ(read_all(out.get()), "out param");
+
+  // Close-on-exec on the receiving side, like everything the runtime opens.
+  EXPECT_NE(::fcntl(out.get(), F_GETFD) & FD_CLOEXEC, 0);
+
+  // Enough calls from several threads that records interleave and the
+  // 16-bit slot tags wrap (more than 65536 messages each way), and nothing
+  // may be left open afterwards.
+  returned.reset();
+  out.reset();
+  const size_t fds_before = open_fd_count();
+  std::vector<std::thread> threads;
+  std::atomic<int> failures{0};
+  for (int t = 0; t < 4; ++t) {
+    threads.emplace_back([&, t] {
+      for (int i = 0; i < 8500; ++i) {
+        const auto text = std::to_string(t) + ":" + std::to_string(i);
+        auto p = make_pipe(text);
+        if (obj->ReadAll(p.get()) != text)
+          ++failures;
+        if (read_all(obj->MakePipe(text).get()) != text)
+          ++failures;
+      }
+    });
+  }
+  for (auto& th : threads)
+    th.join();
+  EXPECT_EQ(failures.load(), 0);
+  EXPECT_EQ(open_fd_count(), fds_before);
+
+  // Coroutine proxy: the reply's descriptor comes back the same way.
+  auto async_fd = obj->MakePipeAsync("async").get();
+  EXPECT_EQ(read_all(async_fd.get()), "async");
 }
 
 } // namespace nprpctest

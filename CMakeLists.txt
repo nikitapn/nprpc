@@ -348,6 +348,7 @@ add_library(nprpc
   src/shm/shared_memory_reaper.cpp
   src/shm/shared_memory_server_session.cpp
   src/shm/shared_memory_init.cpp
+  src/shm/shm_fd_link.cpp
   # Core framework files
   src/nprpc.cpp
   src/logging.cpp
