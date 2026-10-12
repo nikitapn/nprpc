@@ -18,6 +18,8 @@ std::tuple<int, int> get_type_size_align(AstTypeDecl* type);
 bool is_flat(AstTypeDecl* type);
 bool is_fundamental(AstTypeDecl* type);
 bool contains_object(AstTypeDecl* type);
+// Whether an fd appears anywhere in the type.
+bool contains_fd(AstTypeDecl* type);
 
 // The type as it is spelled in IDL source (`vector<Post>`, `u32?`, ...).
 std::string idl_type_string(const AstTypeDecl* type);

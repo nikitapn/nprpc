@@ -100,6 +100,9 @@ struct FlatBufferTlsPool {
       return;
     }
 
+    // Descriptors nobody took are closed now, not when the shell is reused.
+    p->fds().clear();
+
     // After std::move into async send the caller's shell is capacity 0.
     // Pooling those LIFO-buries high-capacity response shells.
     if (p->capacity() == 0) {
@@ -697,6 +700,35 @@ void nprpc_flatbuffer_consume(void* fb, size_t n) {
     static_cast<nprpc::flat_buffer*>(fb)->consume(n);
 }
 
+uint32_t nprpc_flatbuffer_attach_fd(void* fb, int fd) {
+    return static_cast<nprpc::flat_buffer*>(fb)->attach_fd(nprpc::UniqueFd(fd));
+}
+
+int nprpc_flatbuffer_take_fd(void* fb, uint32_t index) {
+    return static_cast<nprpc::flat_buffer*>(fb)->take_fd(index).release();
+}
+
+void nprpc_flatbuffer_move_fds(void* dst, void* src) {
+    if (dst == src)
+        return;
+    static_cast<nprpc::flat_buffer*>(dst)->fds() =
+        std::move(static_cast<nprpc::flat_buffer*>(src)->fds());
+    static_cast<nprpc::flat_buffer*>(src)->fds().clear();
+}
+
+int nprpc_fd_dup(int fd) {
+    try {
+        return nprpc::UniqueFd::dup(fd).release();
+    } catch (const std::system_error& e) {
+        errno = e.code().value();
+        return -1;
+    }
+}
+
+void nprpc_fd_close(int fd) {
+    nprpc::UniqueFd closing(fd);
+}
+
 // Object operations
 void nprpc_object_release(void* obj) {
     if (!obj) return;
@@ -890,6 +922,26 @@ int nprpc_object_send_async(
     } catch (const std::exception& e) {
         NPRPC_LOG_ERROR("[SWB] nprpc_object_send_async exception: {}", e.what());
         return -3;  // Failed to start
+    }
+}
+
+const char* nprpc_object_check_fd_passing(void* obj_ptr) {
+    thread_local std::string error;
+    if (!obj_ptr) {
+        error = "null object";
+        return error.c_str();
+    }
+    auto* obj = static_cast<nprpc::Object*>(obj_ptr);
+    try {
+        if (obj->get_endpoint().empty() && !obj->select_endpoint()) {
+            error = "no endpoint to connect to";
+            return error.c_str();
+        }
+        nprpc::impl::g_rpc->get_session(obj->get_endpoint())->require_fd_passing();
+        return nullptr;
+    } catch (const std::exception& e) {
+        error = e.what();
+        return error.c_str();
     }
 }
 

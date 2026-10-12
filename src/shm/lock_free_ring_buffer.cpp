@@ -174,10 +174,11 @@ LockFreeRingBuffer::create(const std::string& name, size_t buffer_size, size_t m
     // actually reserve.  0 asks for exactly that cap.
     if (max_message_size == 0 || max_message_size >= buffer_size)
       max_message_size = buffer_size - 1;
-    // The header stores it in 32 bits; a ring bigger than 4 GiB would
-    // otherwise wrap it round to something small and confusing.
-    if (max_message_size > 0xFFFFFFFFull)
-      max_message_size = 0xFFFFFFFFull;
+    // The slot header stores it in 31 bits (the top one is kSlotHasFds); a
+    // ring bigger than 2 GiB would otherwise wrap it round to something small
+    // and confusing.
+    if (max_message_size > kMaxRingMessageSize)
+      max_message_size = kMaxRingMessageSize;
 
     size_t page_size   = get_page_size();
     size_t hdr_ring_sz = header_ring_bytes();
@@ -485,6 +486,10 @@ size_t LockFreeRingBuffer::try_read(void* buffer, size_t buffer_size)
       continue;
     }
 
+    // The copy path has no way to hand descriptors on; a reader that can
+    // takes try_read_view.
+    actual_size &= ~kSlotHasFds;
+
     if (actual_size > claimed_size) {
       NPRPC_LOG_ERROR("Corrupt actual_size {} > claimed_size {}",
                       actual_size, claimed_size);
@@ -584,7 +589,8 @@ LockFreeRingBuffer::try_reserve_write(size_t min_size)
 }
 
 void LockFreeRingBuffer::commit_write(const WriteReservation& reservation,
-                                      size_t actual_size)
+                                      size_t actual_size,
+                                      bool has_fds)
 {
   if (!reservation.valid) {
     NPRPC_LOG_ERROR("commit_write: invalid reservation");
@@ -607,7 +613,8 @@ void LockFreeRingBuffer::commit_write(const WriteReservation& reservation,
   }
 
   SlotHeader& sh = slot_headers_[reservation.slot_idx % kRingSlots];
-  sh.actual_size.store(static_cast<uint32_t>(actual_size),
+  sh.actual_size.store(static_cast<uint32_t>(actual_size) |
+                           (has_fds ? kSlotHasFds : 0u),
                        std::memory_order_release);
 
   notify_reader();
@@ -669,6 +676,9 @@ LockFreeRingBuffer::ReadView LockFreeRingBuffer::try_read_view()
       continue;
     }
 
+    const bool has_fds = (actual_size & kSlotHasFds) != 0;
+    actual_size &= ~kSlotHasFds;
+
     if (actual_size > claimed_size) {
       NPRPC_LOG_ERROR("actual_size {} > claimed_size {} in read_view",
                       actual_size, claimed_size);
@@ -680,6 +690,7 @@ LockFreeRingBuffer::ReadView LockFreeRingBuffer::try_read_view()
     result.size     = actual_size;
     result.slot_idx = cursor_slot(rd);
     result.valid    = true;
+    result.has_fds  = has_fds;
     return result;
   }
 }

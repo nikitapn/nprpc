@@ -17,6 +17,11 @@
 
 #include <nprpc/flat_buffer.hpp>
 
+namespace nprpc::impl {
+/// Throws ExceptionBadInput, which this header cannot name.
+[[noreturn]] NPRPC_API void throw_bad_fd_index();
+} // namespace nprpc::impl
+
 /// Zero-copy views of NPRPC's wire format.
 ///
 /// Generated code hands servants their arguments as views into the receive
@@ -505,6 +510,56 @@ public:
   String_Direct1(flat_buffer& buffer, std::uint32_t offset)
       : Vector_Direct1<char>(buffer, offset)
   {
+  }
+};
+
+/// In-buffer layout of an `fd`: an index into the message's attached
+/// descriptors (`flat_buffer::fds()`), not the descriptor itself.
+using Fd = std::uint32_t;
+
+/// Accessor for an `fd` field of a message in a buffer.
+class Fd_Direct
+{
+  flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  Fd& base() noexcept
+  {
+    return *reinterpret_cast<Fd*>(
+        reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_);
+  }
+  const Fd& base() const noexcept
+  {
+    return *reinterpret_cast<const Fd*>(
+        reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_);
+  }
+
+public:
+  /// The field at `offset` in `buffer`; created by generated code.
+  Fd_Direct(flat_buffer& buffer, std::uint32_t offset)
+      : buffer_(buffer)
+      , offset_(offset)
+  {
+  }
+
+  std::uint32_t offset() const noexcept { return offset_; }
+
+  /// Attaches `fd` to the message and points the field at it.
+  void set(UniqueFd&& fd) { base() = buffer_.attach_fd(std::move(fd)); }
+  /// Attaches a duplicate of `fd`, which stays the caller's.
+  void set(int fd) { set(UniqueFd::dup(fd)); }
+
+  /// Whether the field names a descriptor that arrived with the message.
+  bool valid() const noexcept { return buffer_.has_fd(base()); }
+
+  /// Takes the descriptor out of the message; throws ExceptionBadInput if
+  /// the field names none.
+  UniqueFd take()
+  {
+    auto fd = buffer_.take_fd(base());
+    if (!fd)
+      impl::throw_bad_fd_index();
+    return fd;
   }
 };
 

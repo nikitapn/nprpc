@@ -348,6 +348,7 @@ add_library(nprpc
   src/shm/shared_memory_reaper.cpp
   src/shm/shared_memory_server_session.cpp
   src/shm/shared_memory_init.cpp
+  src/shm/shm_fd_link.cpp
   # Core framework files
   src/nprpc.cpp
   src/logging.cpp
@@ -358,6 +359,7 @@ add_library(nprpc
   src/helper.hpp
   src/helper.cpp
   src/flat_buffer.cpp
+  src/unique_fd.cpp
   src/uuid.cpp
   src/thread_identity.cpp
   # Cookie helpers: no HTTP/Beast/OpenSSL dependency. Always linked so

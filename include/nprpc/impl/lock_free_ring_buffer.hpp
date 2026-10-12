@@ -69,7 +69,8 @@ namespace nprpc::impl {
 //      before use (they live in shared memory a peer can scribble on).
 //   3. actual_size == kSlotSkipped → aborted write: release the slot and
 //      its payload bytes, continue with the next slot.
-//   4. Return ReadView pointing into payload ring.
+//   4. Return ReadView pointing into payload ring; the kSlotHasFds bit of
+//      actual_size becomes ReadView::has_fds.
 //   5. commit_read() zeros actual_size (release), then release-stores
 //      read_cursor = {slot+1, (payload_off + claimed_size) % buffer_size}.
 //
@@ -89,6 +90,13 @@ static constexpr uint32_t kRingSlots = 1024;
 // and its claimed payload bytes without delivering anything.  Cannot collide
 // with a real size: max_message_size is far below 2^32 - 1.
 static constexpr uint32_t kSlotSkipped = 0xFFFFFFFFu;
+
+// actual_size flag: file descriptors were sent for this message over the
+// channel's side socket (ShmFdLink), tagged with its slot.  Leaves 31 bits
+// for the size; max_message_size stays below kSlotSkipped & ~kSlotHasFds so
+// a flagged size can never read as the skip marker.
+static constexpr uint32_t kSlotHasFds = 0x80000000u;
+static constexpr uint32_t kMaxRingMessageSize = 0x7FFFFFFEu;
 
 // The slot counter lives in 16 bits and wraps mod 2^16; slot(counter) %
 // kRingSlots is only stable across that wrap if kRingSlots divides 2^16.
@@ -318,6 +326,7 @@ public:
     size_t         size;     // Message size in bytes
     uint64_t       slot_idx; // Internal: slot counter from read_cursor
     bool           valid;    // true if read succeeded
+    bool           has_fds = false; // descriptors were sent for this slot
 
     explicit operator bool() const { return valid; }
   };
@@ -333,7 +342,10 @@ public:
   // Must be called after try_reserve_write() with the actual bytes written.
   // actual_size == 0 is treated as abort_write() (the consumer would
   // otherwise wait forever for the commit signal).
-  void commit_write(const WriteReservation& reservation, size_t actual_size);
+  // has_fds marks the message as having descriptors on the side socket.
+  void commit_write(const WriteReservation& reservation,
+                    size_t actual_size,
+                    bool has_fds = false);
 
   // Abort a reserved write: commits a skip marker so the consumer releases
   // the slot and its payload bytes without delivering anything.  Call on

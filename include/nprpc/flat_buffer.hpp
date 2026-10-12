@@ -7,11 +7,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include <boost/asio/buffer.hpp>
 
 #include <nprpc/bump_arena.hpp>
 #include <nprpc/export.hpp>
+#include <nprpc/unique_fd.hpp>
 
 namespace nprpc {
 
@@ -114,6 +116,11 @@ private:
   // (never owned) so the arena outlives the buffer naturally (TLS lifetime).
   impl::BumpArena* arena_    = nullptr;
   bool             arena_backed_ = false; // true when buffer_ points into the arena slab
+
+  // Descriptors that travel with the message, in the order its `fd` fields
+  // index them.  They belong to the message, not to the bytes: dropped
+  // (closed) whenever the buffer is emptied for the next one.
+  std::vector<UniqueFd> fds_;
 
   static constexpr std::size_t default_growth_factor = 2;
   static constexpr std::size_t min_allocation = 512;
@@ -298,6 +305,7 @@ public:
       , reservation_channel_(other.reservation_channel_)
       , arena_(other.arena_)
       , arena_backed_(other.arena_backed_)
+      , fds_(std::move(other.fds_))
   {
     other.buffer_ = nullptr;
     other.in_ = 0;
@@ -333,6 +341,7 @@ public:
       reservation_channel_ = other.reservation_channel_;
       arena_ = other.arena_;
       arena_backed_ = other.arena_backed_;
+      fds_ = std::move(other.fds_);
 
       other.buffer_ = nullptr;
       other.in_ = 0;
@@ -351,7 +360,8 @@ public:
     return *this;
   }
 
-  /// Copy constructor (deep copy, always creates owned buffer)
+  /// Copy constructor (deep copy, always creates owned buffer).  Attached
+  /// descriptors are not copied.
   flat_buffer(const flat_buffer& other)
       : buffer_(other.size() > 0 ? new std::uint8_t[other.size()] : nullptr)
       , in_(0)
@@ -476,6 +486,7 @@ public:
       // This is used to "reset" the buffer
       if (n >= view_size_) {
         view_size_ = 0;
+        fds_.clear();
       } else {
         // Note: for simplicity, we don't shift view_base_
         // This matches how it's typically used (consume all before
@@ -490,6 +501,7 @@ public:
         // Buffer empty, reset positions
         in_ = 0;
         out_ = 0;
+        fds_.clear();
       }
     }
   }
@@ -497,6 +509,7 @@ public:
   /// Clear all data
   void clear() noexcept
   {
+    fds_.clear();
     if (is_view()) {
       view_size_ = 0;
     } else {
@@ -504,6 +517,38 @@ public:
       out_ = 0;
     }
   }
+
+  //--------------------------------------------------------------------------
+  // Attached file descriptors
+  //--------------------------------------------------------------------------
+
+  /// Attaches `fd` to the message and returns the index an `fd` field
+  /// stores to name it.
+  std::uint32_t attach_fd(UniqueFd fd)
+  {
+    fds_.push_back(std::move(fd));
+    return static_cast<std::uint32_t>(fds_.size() - 1);
+  }
+
+  /// Takes the descriptor at `index` out of the message.  Empty if there is
+  /// none there, or it was taken already.
+  UniqueFd take_fd(std::uint32_t index) noexcept
+  {
+    if (index >= fds_.size())
+      return {};
+    return std::move(fds_[index]);
+  }
+
+  /// Whether `index` names a descriptor that is still attached.
+  bool has_fd(std::uint32_t index) const noexcept
+  {
+    return index < fds_.size() && fds_[index].valid();
+  }
+
+  /// The attached descriptors, for the transport: it sends these alongside
+  /// the bytes and fills them in on the receiving side.
+  std::vector<UniqueFd>& fds() noexcept { return fds_; }
+  const std::vector<UniqueFd>& fds() const noexcept { return fds_; }
 
   //--------------------------------------------------------------------------
   // View mode specific methods
@@ -700,6 +745,7 @@ public:
     swap(a.ring_buffer_, b.ring_buffer_);
     swap(a.read_view_slot_idx_, b.read_view_slot_idx_);
     swap(a.has_read_view_, b.has_read_view_);
+    swap(a.fds_, b.fds_);
   }
 
   /// Capacity an owned buffer starts with: 1 KiB.

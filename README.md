@@ -13,6 +13,7 @@ NPRPC is a high-performance, multi-transport RPC framework for distributed syste
 - **Cookie auth** — httpOnly cookie-based auth for HTTP/WebSocket (see [docs/HTTP_AUTH.md](docs/HTTP_AUTH.md))
 - **POA** — Portable Object Adapter for lifecycle, transports, and dispatch placement (see [docs/POA.md](docs/POA.md))
 - **Nameserver** — service discovery and named object binding
+- **File descriptor passing** — `fd` in IDL hands an open file (pipe, memfd, DMA-BUF) to the peer over shared memory, from C++ and Swift (see [docs/FILE_DESCRIPTORS.md](docs/FILE_DESCRIPTORS.md))
 
 ## Transport Overview
 
@@ -348,6 +349,29 @@ start time, so a recycled pid cannot condemn a live channel — and no other
 end of the same channel is still alive. Anything unreadable, or not yet
 claimed by a writer, is left where it is.
 
+#### Passing file descriptors
+
+Shared memory is also the only transport that can pass an open file (a pipe,
+a socket, a `memfd`, a DMA-BUF) to the other process. Declare it as `fd`:
+
+```npidl
+interface Frames {
+  void Submit(frame: fd, width: u32, height: u32);
+  fd Acquire(id: u64);
+}
+```
+
+```cpp
+frames->Submit(dmabuf_fd, 1920, 1080);              // sends a duplicate; ours stays open
+nprpc::UniqueFd frame = frames->Acquire(7);         // ours now, closed with `frame`
+```
+
+The servant receives an `nprpc::UniqueFd` it owns, and returns one. The
+descriptors travel over a Unix socket next to the rings in `/dev/shm`, so they
+cross into containers wherever the rings do. Over any other transport the
+call throws before it is sent. Linux only. See
+[docs/FILE_DESCRIPTORS.md](docs/FILE_DESCRIPTORS.md).
+
 ### Session-Scoped Activation
 
 Pass the current session context to restrict an object to the caller's connection:
@@ -438,6 +462,7 @@ nprpc::http::set_cookie("session", new_token, {
 | Floats   | `f32` `f64` |
 | String   | `string` |
 | Object ref | `object` |
+| File descriptor | `fd`, only as a whole parameter or return value; shared memory only ([guide](docs/FILE_DESCRIPTORS.md)) |
 | Dynamic array | `T[]` or `vector<T>` |
 | Fixed array | `T[N]` |
 | Alias | `alias Foo = vector<Bar>` |
@@ -652,6 +677,21 @@ for try await item in try feed.watch(limit: 10) {
 ```
 
 See [docs/STREAMS.md](docs/STREAMS.md) for client and bidi streams.
+
+### File descriptors (Swift)
+
+`fd` methods work over shared memory as in C++. A proxy takes a plain `Int32`,
+which can be a descriptor handed over from C++ through interop; the runtime
+sends a duplicate. A received descriptor is a `UniqueFD`, and `release()`
+hands it on without closing it:
+
+```swift
+try await frames.submit(frame: cxxFrame.fd(), width: 1920, height: 1080)
+let frame = try await frames.acquire(id: 7)
+cxxRenderer.adopt(frame.release())
+```
+
+See [docs/FILE_DESCRIPTORS.md](docs/FILE_DESCRIPTORS.md).
 
 See [nprpc_swift/README.md](nprpc_swift/README.md) and [nprpc_swift/EXAMPLES.md](nprpc_swift/EXAMPLES.md) for more.
 

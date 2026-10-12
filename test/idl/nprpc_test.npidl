@@ -317,3 +317,13 @@ interface TestVariantRpc {
   // value to the out-param.
   void Echo(value: TestVariant, result: out TestVariant) raises (AssertionFailed);
 }
+// File descriptor passing. Only a same-machine transport can carry an fd;
+// every other transport refuses the call before sending it.
+interface TestFd {
+  // Reads `fd` to the end and returns what it read.
+  string ReadAll(fd: fd);
+  // A pipe whose read end yields `content`, then end of file.
+  fd MakePipe(content: string);
+  // As MakePipe, through an out parameter alongside a plain one.
+  void MakePipeOut(content: string, length: out u32, fd: out fd);
+}

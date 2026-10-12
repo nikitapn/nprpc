@@ -86,10 +86,18 @@ size_t reap_stale_shm_segments()
     return 0;
   }
 
+  // Descriptor side-channel sockets (ShmFdLink), "nprpc_<listener>_fd".
+  std::vector<std::string> fd_sockets;
+
   for (const auto& entry : dir) {
     const std::string name = entry.path().filename().string();
     if (name.compare(0, kPrefix.size(), kPrefix) != 0)
       continue;
+
+    if (name.ends_with("_fd") && entry.is_socket(ec)) {
+      fd_sockets.push_back(name);
+      continue;
+    }
 
     const auto group_id = group_of(name);
     if (!group_id)
@@ -136,6 +144,20 @@ size_t reap_stale_shm_segments()
       } else {
         NPRPC_LOG_WARN("Could not remove stale segment '{}'", shm_name);
       }
+    }
+  }
+
+  // A listener's socket outlives it the same way its accept ring does, and
+  // is no use without the ring: it is made after the ring and removed
+  // before it, so one without the other is a leftover.
+  for (const auto& socket : fd_sockets) {
+    const std::string base = socket.substr(0, socket.size() - 3);
+    const auto ring = std::filesystem::path(kShmDir) / (base + "_accept");
+    if (std::filesystem::exists(ring, ec) || ec)
+      continue;
+    if (std::filesystem::remove(std::filesystem::path(kShmDir) / socket, ec)) {
+      ++removed;
+      NPRPC_LOG_INFO("Removed stale socket '{}/{}'", kShmDir, socket);
     }
   }
 

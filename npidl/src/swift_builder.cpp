@@ -174,9 +174,25 @@ void SwiftBuilder::emit_type(AstTypeDecl* type, std::ostream& os)
   case FieldType::Variant:
     os << swift_type_name(cvar(type)->name);
     break;
+  case FieldType::Fd:
+    // In the generated argument structs: the index into the message's
+    // descriptors.  The API types are emit_api_type's.
+    os << "UInt32";
+    break;
   default:
     assert(false && "Unknown type");
   }
+}
+
+void SwiftBuilder::emit_api_type(AstTypeDecl* type, std::ostream& os, bool proxy_in)
+{
+  if (type->id == FieldType::Fd) {
+    // A proxy borrows the caller's descriptor (one from C++ included) and
+    // sends a duplicate; everywhere else it changes hands.
+    os << (proxy_in ? "Int32" : "UniqueFD");
+    return;
+  }
+  emit_type(type, os);
 }
 
 void SwiftBuilder::emit_stream_reader_type(AstTypeDecl* type, std::ostream& os)
@@ -494,6 +510,9 @@ void SwiftBuilder::emit_struct2(AstStructDecl* s, Target target)
     case FieldType::Object:
       out << " = NPRPCObject()";
       break;
+    case FieldType::Fd:
+      out << " = 0";
+      break;
     case FieldType::Enum:
       // Use first enum value as default
       out << " = ." << cenum(actual_type)->items.begin()->first;
@@ -738,7 +757,7 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
         if (fn->is_stream && arg->type->id == FieldType::Stream) {
           emit_stream_reader_type(fn->stream_decl->stream_in_type(), out);
         } else {
-          emit_type(arg->type, out);
+          emit_api_type(arg->type, out, false);
         }
       }
     }
@@ -795,21 +814,21 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
         out << "(";
         bool first_ret = true;
         if (has_return) {
-          emit_type(fn->ret_value, out);
+          emit_api_type(fn->ret_value, out, false);
           first_ret = false;
         }
         for (auto& out_param : out_params) {
           if (!first_ret) out << ", ";
           first_ret = false;
-          emit_type(out_param->type, out);
+          emit_api_type(out_param->type, out, false);
         }
         out << ")";
       } else {
         // Single return value
         if (has_return) {
-          emit_type(fn->ret_value, out);
+          emit_api_type(fn->ret_value, out, false);
         } else {
-          emit_type(out_params[0]->type, out);
+          emit_api_type(out_params[0]->type, out, false);
         }
       }
     } else {
@@ -877,7 +896,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
         if (!first) out << ", ";
         first = false;
         out << arg->name << ": ";
-        emit_type(arg->type, out);
+        emit_api_type(arg->type, out, true);
       }
     }
 
@@ -906,20 +925,20 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
         out << "(";
         bool first_ret = true;
         if (has_return) {
-          emit_type(fn->ret_value, out);
+          emit_api_type(fn->ret_value, out, false);
           first_ret = false;
         }
         for (auto& out_param : out_params) {
           if (!first_ret) out << ", ";
           first_ret = false;
-          emit_type(out_param->type, out);
+          emit_api_type(out_param->type, out, false);
         }
         out << ")";
       } else {
         if (has_return) {
-          emit_type(fn->ret_value, out);
+          emit_api_type(fn->ret_value, out, false);
         } else {
-          emit_type(out_params[0]->type, out);
+          emit_api_type(out_params[0]->type, out, false);
         }
       }
     }
@@ -933,6 +952,15 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
     // Calculate buffer size
     const auto fixed_size = get_arguments_offset() + (fn->in_s ? fn->in_s->size : 0);
     const auto capacity = fixed_size + (fn->in_s ? (fn->in_s->flat ? 0 : 128) : 0);
+
+    if (fn->uses_fd) {
+      // Refused up front, like the C++ proxy: only a transport that can carry
+      // descriptors may send this call.
+      if (can_throw)
+        out << bl() << "try requireFdPassing()\n";
+      else
+        out << bl() << "guard (try? requireFdPassing()) != nil else { return }\n";
+    }
 
     out << bl() << "// Prepare buffer\n";
     out << bl() << "let buffer = FlatBuffer()\n";
@@ -970,7 +998,15 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
       for (auto arg : fn->args) {
         if (arg->modifier == ArgumentModifier::Out) continue;
         ++ix;
-        out << bl() << "inArgs._" << ix << " = " << arg->name << "\n";
+        if (arg->type->id == FieldType::Fd) {
+          // The message gets a duplicate; the caller's descriptor stays open.
+          if (can_throw)
+            out << bl() << "inArgs._" << ix << " = try buffer.attachFD(duplicating: " << arg->name << ")\n";
+          else
+            out << bl() << "inArgs._" << ix << " = (try? buffer.attachFD(duplicating: " << arg->name << ")) ?? UInt32.max\n";
+        } else {
+          out << bl() << "inArgs._" << ix << " = " << arg->name << "\n";
+        }
       }
 
       out << bl() << ns(fn->in_s->nm) << "marshal_" << fn->in_s->name << "(buffer: buffer, offset: " << get_arguments_offset() << ", data: inArgs)\n\n";
@@ -1025,6 +1061,19 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
           out << bl() << "let out = " << ns(fn->out_s->nm) << "unmarshal_" << fn->out_s->name << "(buffer: responseData, offset: " << size_of_header << ")\n";
         }
 
+        // Descriptors travel beside the reply; the fields hold their indices.
+        auto out_value = [&](int ix) {
+          if (fn->out_s->fields[ix - 1]->type->id == FieldType::Fd)
+            return "__fd_" + std::to_string(ix);
+          return "out._" + std::to_string(ix);
+        };
+        for (size_t i = 0; i < fn->out_s->fields.size(); ++i) {
+          if (fn->out_s->fields[i]->type->id != FieldType::Fd)
+            continue;
+          out << bl() << "guard let __fd_" << i + 1 << " = responseBuffer.takeFD(out._" << i + 1
+              << ") else { throw ExceptionBadInput() }\n";
+        }
+
         // Return output values
         if ((has_return ? 1 : 0) + out_params.size() > 1) {
           // Multiple return values - use tuple
@@ -1032,7 +1081,7 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
           bool first_ret = true;
           int ix = 0;
           if (has_return) {
-            out << "out._1";
+            out << out_value(1);
             first_ret = false;
             ix = 1;
           }
@@ -1041,14 +1090,12 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
             ++ix;
             if (!first_ret) out << ", ";
             first_ret = false;
-            out << "out._" << ix;
+            out << out_value(ix);
           }
           out << ")\n";
-        } else if (has_return) {
-          out << bl() << "return out._1\n";
         } else {
-          // Single out parameter
-          out << bl() << "return out._1\n";
+          // Single return value or out parameter
+          out << bl() << "return " << out_value(1) << "\n";
         }
       }
     }
@@ -1252,7 +1299,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
         if (fn->is_stream && arg->type->id == FieldType::Stream) {
           emit_stream_reader_type(fn->stream_decl->stream_in_type(), out);
         } else {
-          emit_type(arg->type, out);
+          emit_api_type(arg->type, out, false);
         }
       }
     }
@@ -1304,20 +1351,20 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
         out << "(";
         bool first_ret = true;
         if (has_return) {
-          emit_type(fn->ret_value, out);
+          emit_api_type(fn->ret_value, out, false);
           first_ret = false;
         }
         for (auto& out_param : out_params) {
           if (!first_ret) out << ", ";
           first_ret = false;
-          emit_type(out_param->type, out);
+          emit_api_type(out_param->type, out, false);
         }
         out << ")";
       } else {
         if (has_return) {
-          emit_type(fn->ret_value, out);
+          emit_api_type(fn->ret_value, out, false);
         } else {
-          emit_type(out_params[0]->type, out);
+          emit_api_type(out_params[0]->type, out, false);
         }
       }
     }
@@ -1417,6 +1464,19 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       }
     }
 
+    // Descriptors: taken out of the message now, before the reply below
+    // reuses the buffer and drops whatever is still attached.
+    if (fn->in_s) {
+      for (size_t i = 0; i < fn->in_s->fields.size(); ++i) {
+        if (fn->in_s->fields[i]->type->id != FieldType::Fd)
+          continue;
+        out << bl() << "guard let __fd_" << i + 1 << " = buffer.takeFD(ia._" << i + 1 << ") else " << bb();
+        out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)\n";
+        out << bl() << "return\n";
+        out << eb() << "\n";
+      }
+    }
+
     // Prepare output buffer if needed
     if (fn->out_s && !fn->out_s->flat) {
       const auto offset = size_of_header;
@@ -1476,7 +1536,8 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
     for (auto arg : fn->args) {
       if (arg->modifier == ArgumentModifier::In) {
         if (idx > 0) out << ", ";
-        out << arg->name << ": ia._" << ++in_ix;
+        ++in_ix;
+        out << arg->name << ": " << (arg->type->id == FieldType::Fd ? "__fd_" : "ia._") << in_ix;
         ++idx;
       }
     }
@@ -1504,13 +1565,17 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       out << bl() << "var out_data = " << fn->out_s->name << "()\n";
 
       int ix = 0;
+      // An fd output is attached to the reply; its field holds the index.
+      auto out_value = [](AstTypeDecl* type, const std::string& name) {
+        return type->id == FieldType::Fd ? "buffer.attachFD(" + name + ")" : name;
+      };
       if (!fn->is_void()) {
-        out << bl() << "out_data._1 = __ret_val\n";
+        out << bl() << "out_data._1 = " << out_value(fn->ret_value, "__ret_val") << "\n";
         ix = 1;
       }
       for (auto out_arg : out_params) {
         ++ix;
-        out << bl() << "out_data._" << ix << " = _out_" << out_arg->name << "\n";
+        out << bl() << "out_data._" << ix << " = " << out_value(out_arg->type, "_out_" + out_arg->name) << "\n";
       }
       out << "\n";
 
@@ -1843,6 +1908,8 @@ void SwiftBuilder::emit_swift_trampolines(AstInterfaceDecl* ifs)
   out << "// These are called from C++ bridge (" << class_name << "_SwiftBridge)\n\n";
 
   for (auto& fn : ifs->fns) {
+    if (fn->uses_fd)
+      continue; // no fd support in this (unused) path
     // Generate @_cdecl trampoline
     out << "@_cdecl(\"" << fn->name << "_swift_trampoline\")\n";
     out << "func " << fn->name << "_swift_trampoline(\n";
@@ -2007,6 +2074,12 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
     auto nested = cflat(f->type);
     const int field_offset = align_offset(nested->align, offset, nested->size);
     out << bl() << "marshal_" << nested->name << "(buffer: buffer, offset: offset + " << field_offset << ", data: " << field_access << ")\n";
+    break;
+  }
+  case FieldType::Fd: {
+    // The index of a descriptor the proxy or dispatch attached.
+    const int field_offset = align_offset(4, offset, 4);
+    out << bl() << "buffer.storeBytes(of: " << field_access << ", toByteOffset: offset + " << field_offset << ", as: UInt32.self)\n";
     break;
   }
   case FieldType::Object: {
@@ -2195,6 +2268,11 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
     } else {
       out << bl() << field_name << " = unmarshal_" << nested->name << "(buffer: buffer, offset: offset + " << field_offset << ")\n";
     }
+    break;
+  }
+  case FieldType::Fd: {
+    const int field_offset = align_offset(4, offset, 4);
+    out << bl() << field_name << " = buffer.load(fromByteOffset: offset + " << field_offset << ", as: UInt32.self)\n";
     break;
   }
   case FieldType::Object: {

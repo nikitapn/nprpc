@@ -6,6 +6,7 @@
 #include <nprpc/export.hpp>
 #include <nprpc/impl/lock_free_ring_buffer.hpp>
 #include <nprpc/impl/process_identity.hpp>
+#include <nprpc/impl/shm_fd_link.hpp>
 
 #include <boost/asio.hpp>
 #include <boost/uuid/uuid.hpp>
@@ -76,6 +77,14 @@ private:
   // opens rings somebody else made — is told rather than configured, and two
   // differently-configured builds cannot disagree about the same ring.
   size_t max_message_size_ = 0;
+
+  // Descriptor side channel; null when the peer offers none.  Set before
+  // the channel is shared and never replaced.
+  std::shared_ptr<ShmFdLink> fd_link_;
+
+  // Read thread only: the descriptors of the message being delivered, for
+  // the on_data_received_view handler to take.
+  std::vector<UniqueFd> received_fds_;
 
   // Buffer for receiving messages, on the copy path only.  Grown on first
   // use: a channel whose consumer set on_data_received_view never takes that
@@ -208,6 +217,43 @@ public:
    */
   void commit_write(const LockFreeRingBuffer::WriteReservation& reservation,
                     size_t actual_size);
+
+  /**
+   * @brief Commit a write whose message carries file descriptors.
+   *
+   * Sends `fds` over the side channel, tagged with the reservation's slot,
+   * then commits the message marked as having them.  `fds` ends up empty
+   * either way.  If they cannot be sent the message still goes, unmarked,
+   * and its fd fields find nothing on the other side.
+   */
+  void commit_write(const LockFreeRingBuffer::WriteReservation& reservation,
+                    size_t actual_size,
+                    std::vector<UniqueFd>& fds);
+
+  //--------------------------------------------------------------------------
+  // File descriptors
+  //--------------------------------------------------------------------------
+
+  /// Gives the channel its descriptor side channel.  Before start_reading().
+  void set_fd_link(std::shared_ptr<ShmFdLink> link) { fd_link_ = std::move(link); }
+  const std::shared_ptr<ShmFdLink>& fd_link() const noexcept { return fd_link_; }
+
+  /// Whether messages on this channel can carry descriptors.
+  bool supports_fd_passing() const noexcept
+  {
+    return fd_link_ && fd_link_->attached();
+  }
+
+  /**
+   * @brief The descriptors of the message being delivered.
+   *
+   * For the on_data_received_view handler, on the read thread: whatever it
+   * does not take is closed once it returns.
+   */
+  std::vector<UniqueFd> take_received_fds() noexcept
+  {
+    return std::move(received_fds_);
+  }
 
   /**
    * @brief Abort a zero-copy write reservation

@@ -115,6 +115,11 @@ public:
    */
   SharedMemoryChannel* channel() { return channel_.get(); }
 
+  bool supports_fd_passing() const noexcept override
+  {
+    return channel_ && channel_->supports_fd_passing();
+  }
+
   SharedMemoryConnection(const EndPoint& endpoint,
                          boost::asio::io_context& ioc);
   ~SharedMemoryConnection();

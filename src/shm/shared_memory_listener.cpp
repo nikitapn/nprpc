@@ -6,9 +6,19 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/shared_memory_channel.hpp>
 #include <nprpc/impl/shared_memory_listener.hpp>
+#include <nprpc/impl/shm_fd_link.hpp>
 
 #include <boost/interprocess/mapped_region.hpp>
 #include <boost/interprocess/shared_memory_object.hpp>
+
+#if defined(__linux__)
+# include <cerrno>
+# include <poll.h>
+# include <sys/socket.h>
+# include <sys/stat.h>
+# include <sys/un.h>
+# include <unistd.h>
+#endif
 
 namespace nprpc::impl {
 
@@ -61,11 +71,16 @@ SharedMemoryListener::SharedMemoryListener(boost::asio::io_context& ioc,
     throw std::runtime_error(
         std::string("SharedMemoryListener creation failed: ") + e.what());
   }
+
+  // After the accept ring: the reaper takes a socket whose ring is gone for
+  // the leftover of a dead listener.
+  open_fd_socket();
 }
 
 SharedMemoryListener::~SharedMemoryListener()
 {
   stop();
+  close_fd_socket();
 
   // Clean up accept ring
   accept_ring_.reset();
@@ -87,6 +102,10 @@ void SharedMemoryListener::start()
 
   running_ = true;
   accept_thread_ = std::make_unique<std::thread>([this]() { accept_loop(); });
+  if (fd_listen_socket_) {
+    fd_accept_thread_ =
+        std::make_unique<std::thread>([this]() { fd_accept_loop(); });
+  }
 
   // NPRPC_LOG_INFO("SharedMemoryListener started: {}", listener_name_);
 }
@@ -110,6 +129,8 @@ void SharedMemoryListener::stop()
   if (accept_thread_ && accept_thread_->joinable()) {
     accept_thread_->join();
   }
+
+  close_fd_socket();
 
   NPRPC_LOG_INFO("SharedMemoryListener stopped: {}", listener_name_);
 }
@@ -190,6 +211,18 @@ void SharedMemoryListener::handle_connection_request(
     // reap itself if that process dies without closing the channel.
     channel->set_peer_process(handshake.client_process());
 
+    // Its descriptor side channel, empty until the client connects to the
+    // socket and names this channel — which it does only after the ready
+    // flag below, so the entry is always here first.
+    if (fd_listen_socket_) {
+      auto link = std::make_shared<ShmFdLink>();
+      channel->set_fd_link(link);
+      std::lock_guard lk(fd_links_mut_);
+      std::erase_if(fd_links_,
+                    [](const auto& entry) { return entry.second.expired(); });
+      fd_links_[channel_id] = link;
+    }
+
     // Wire up on_data_received BEFORE signaling the client.
     // The channel's read_thread starts inside the ctor, so once the client
     // is unblocked it can immediately send data — the handler must already
@@ -219,6 +252,139 @@ void SharedMemoryListener::handle_connection_request(
                     e.what());
   }
 }
+
+#if defined(__linux__)
+
+void SharedMemoryListener::open_fd_socket()
+{
+  const auto path = ShmFdLink::socket_path(listener_name_);
+  sockaddr_un addr{};
+  if (path.size() >= sizeof(addr.sun_path)) {
+    NPRPC_LOG_WARN("SharedMemoryListener: socket path too long, no file "
+                   "descriptor passing: {}",
+                   path);
+    return;
+  }
+  addr.sun_family = AF_UNIX;
+  std::memcpy(addr.sun_path, path.c_str(), path.size() + 1);
+
+  UniqueFd sock(::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0));
+  ::unlink(path.c_str());
+  if (!sock ||
+      ::bind(sock.get(), reinterpret_cast<const sockaddr*>(&addr),
+             sizeof(addr)) != 0) {
+    NPRPC_LOG_WARN("SharedMemoryListener: cannot create {}, no file "
+                   "descriptor passing: {}",
+                   path, std::strerror(errno));
+    return;
+  }
+
+  // Whoever may open the accept ring may connect here, and nobody else:
+  // the same mode, which the directory's setup decided.
+  struct stat ring{};
+  const auto ring_path = "/dev/shm" + make_shm_name(listener_name_, "accept");
+  if (::stat(ring_path.c_str(), &ring) == 0)
+    ::chmod(path.c_str(), ring.st_mode & 0777);
+
+  if (::listen(sock.get(), SOMAXCONN) != 0) {
+    NPRPC_LOG_WARN("SharedMemoryListener: listen on {} failed: {}", path,
+                   std::strerror(errno));
+    ::unlink(path.c_str());
+    return;
+  }
+
+  fd_listen_socket_ = std::move(sock);
+  fd_socket_path_ = path;
+}
+
+void SharedMemoryListener::close_fd_socket()
+{
+  if (!fd_listen_socket_)
+    return;
+  // Wakes the accept() below with an error; running_ is already false.
+  ::shutdown(fd_listen_socket_.get(), SHUT_RDWR);
+  if (fd_accept_thread_ && fd_accept_thread_->joinable())
+    fd_accept_thread_->join();
+  fd_accept_thread_.reset();
+  ::unlink(fd_socket_path_.c_str());
+  fd_listen_socket_.reset();
+}
+
+void SharedMemoryListener::fd_accept_loop()
+{
+  while (running_) {
+    UniqueFd connection(
+        ::accept4(fd_listen_socket_.get(), nullptr, nullptr, SOCK_CLOEXEC));
+    if (connection) {
+      handle_fd_connection(std::move(connection));
+      continue;
+    }
+    if (!running_)
+      break;
+    if (errno == EINTR || errno == ECONNABORTED)
+      continue;
+    if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS ||
+        errno == ENOMEM) {
+      // Out of descriptors for now: the connection waits in the backlog.
+      NPRPC_LOG_WARN("SharedMemoryListener: accept on {}: {}",
+                     fd_socket_path_, std::strerror(errno));
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      continue;
+    }
+    NPRPC_LOG_ERROR("SharedMemoryListener: accept on {} failed: {}",
+                    fd_socket_path_, std::strerror(errno));
+    break;
+  }
+}
+
+void SharedMemoryListener::handle_fd_connection(UniqueFd connection)
+{
+  // The client sends its hello right after connecting; one that does not
+  // is not worth holding up everybody else for.
+  pollfd pfd{connection.get(), POLLIN, 0};
+  if (::poll(&pfd, 1, 1000) != 1)
+    return;
+
+  ShmFdHello hello;
+  if (::recv(connection.get(), &hello, sizeof(hello), 0) !=
+          static_cast<ssize_t>(sizeof(hello)) ||
+      hello.magic != ShmFdHello::MAGIC ||
+      hello.version != ShmFdHello::VERSION)
+    return;
+  hello.channel_id[sizeof(hello.channel_id) - 1] = '\0';
+
+  // Each channel takes one connection: the first to name it.  Its id is in
+  // the ring names, so it is no secret from anyone who can list the
+  // directory — but they could open the rings themselves too.
+  std::shared_ptr<ShmFdLink> link;
+  {
+    std::lock_guard lk(fd_links_mut_);
+    if (auto it = fd_links_.find(hello.channel_id); it != fd_links_.end()) {
+      link = it->second.lock();
+      fd_links_.erase(it);
+    }
+  }
+
+  const int raw = connection.get();
+  // Attached before the answer goes out: from the moment the client has it
+  // a message with descriptors may arrive, and the reader must find them.
+  if (link && link->attach(std::move(connection))) {
+    const uint32_t accepted = ShmFdHello::kAccepted;
+    ::send(raw, &accepted, sizeof(accepted), MSG_NOSIGNAL);
+  } else if (connection) {
+    const uint32_t refused = 0;
+    ::send(connection.get(), &refused, sizeof(refused), MSG_NOSIGNAL);
+  }
+}
+
+#else // !__linux__
+
+void SharedMemoryListener::open_fd_socket() {}
+void SharedMemoryListener::close_fd_socket() {}
+void SharedMemoryListener::fd_accept_loop() {}
+void SharedMemoryListener::handle_fd_connection(UniqueFd) {}
+
+#endif
 
 // Client-side connection establishment
 std::unique_ptr<SharedMemoryChannel>
@@ -309,6 +475,8 @@ connect_to_shared_memory_listener(boost::asio::io_context& ioc,
     auto channel = std::make_unique<SharedMemoryChannel>(ioc, channel_id,
                                                          /*is_server=*/false,
                                                          /*create_rings=*/false);
+    // Descriptor side channel, if the server offers one.
+    channel->set_fd_link(ShmFdLink::connect(listener_name, channel_id));
     // Caller sets on_data_received[_view] and then calls start_reading().
     // We don't start it here because the callback isn't wired yet.
     cleanup_ready();

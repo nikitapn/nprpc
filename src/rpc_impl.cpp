@@ -661,6 +661,12 @@ void RpcImpl::destroy()
   ioc_.restart();
   ioc_.poll();
 
+  // Again: the restart above also restarts any worker that was still inside
+  // a handler when the first stop() came, and then join() waits for it
+  // forever — which is what a session torn down after its peer process died
+  // tends to cause.
+  ioc_.stop();
+
   if (pool_) {
     pool_->join();
   }

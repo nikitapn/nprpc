@@ -29,6 +29,9 @@ private:
 
   // Helper methods for type emission
   void emit_type(AstTypeDecl* type, std::ostream& os);
+  // As emit_type, but an fd is the type the API hands out (UniqueFD), or
+  // for a proxy's in-parameter the borrowed Int32.
+  void emit_api_type(AstTypeDecl* type, std::ostream& os, bool proxy_in);
   void emit_fundamental_type(TokenId id, std::ostream& os);
   void emit_parameter_type(AstFunctionArgument* arg, std::ostream& os);
   void emit_stream_reader_type(AstTypeDecl* type, std::ostream& os);

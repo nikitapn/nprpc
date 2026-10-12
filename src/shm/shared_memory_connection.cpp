@@ -296,9 +296,9 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
   // Commit after enqueue: the ring consumer may now see this slot, but
   // our work is already positioned so the response is matched correctly.
   if (zero_copy) {
-    channel_->commit_write(pending_zc_rsv, pending_zc_size);
+    channel_->commit_write(pending_zc_rsv, pending_zc_size, buffer.fds());
   } else {
-    channel_->commit_write(pending_copy_rsv, buffer.size());
+    channel_->commit_write(pending_copy_rsv, buffer.size(), buffer.fds());
   }
 
   auto ec = w->wait();
@@ -391,7 +391,7 @@ void SharedMemoryConnection::send_receive_async(
     enqueue_ordered(w);
   }
 
-  channel_->commit_write(rsv, w->buf.size());
+  channel_->commit_write(rsv, w->buf.size(), w->buf.fds());
 }
 
 SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
@@ -482,6 +482,7 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
         auto mb = current_buffer.prepare(read_view.size);
         std::memcpy(mb.data(), read_view.data, read_view.size);
         current_buffer.commit(read_view.size);
+        current_buffer.fds() = channel_->take_received_fds();
 
         (*wq_.front()).on_executed();
         pop_and_execute_next_task();
@@ -587,7 +588,7 @@ bool SharedMemoryConnection::send_datagram(flat_buffer&& buffer)
     return false;
   }
   std::memcpy(rsv.data, buffer.data().data(), buffer.size());
-  channel_->commit_write(rsv, buffer.size());
+  channel_->commit_write(rsv, buffer.size(), buffer.fds());
   return true;
 }
 

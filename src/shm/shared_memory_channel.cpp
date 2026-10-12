@@ -327,6 +327,31 @@ void SharedMemoryChannel::commit_write(
   }
 }
 
+void SharedMemoryChannel::commit_write(
+    const LockFreeRingBuffer::WriteReservation& reservation,
+    size_t actual_size,
+    std::vector<UniqueFd>& fds)
+{
+  if (fds.empty()) {
+    commit_write(reservation, actual_size);
+    return;
+  }
+
+  // The record goes first: once the message is visible the reader expects
+  // its descriptors to be waiting.
+  const bool sent =
+      fd_link_ &&
+      fd_link_->send(static_cast<uint16_t>(reservation.slot_idx), fds);
+  if (!sent) {
+    NPRPC_LOG_ERROR("SharedMemoryChannel {}: could not send file descriptors",
+                    channel_id_);
+    fds.clear();
+  }
+
+  if (send_ring_)
+    send_ring_->commit_write(reservation, actual_size, sent);
+}
+
 void SharedMemoryChannel::abort_write(
     const LockFreeRingBuffer::WriteReservation& reservation)
 {
@@ -368,10 +393,14 @@ void SharedMemoryChannel::read_loop()
 
         auto view = recv_ring_->try_read_view();
         if (view) {
+          if (view.has_fds && fd_link_)
+            received_fds_ =
+                fd_link_->receive(static_cast<uint16_t>(view.slot_idx));
           // Callback copies the data; commit the read immediately so that
           // the next try_read_view() call sees fresh data, not this message
           // again.
           on_data_received_view(view);
+          received_fds_.clear();
           this->commit_read(view);
         }
         continue;

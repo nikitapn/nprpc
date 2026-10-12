@@ -89,7 +89,8 @@ enum class TokenId {
   ClientStream,
   BidiStream,
   One,
-  Of
+  Of,
+  Fd
 };
 
 struct AstStructDecl;
@@ -286,7 +287,8 @@ enum class FieldType {
   Alias,
   Enum,
   Stream,
-  Variant
+  Variant,
+  Fd
 };
 
 inline bool operator==(std::int64_t x, const AstNumber& n)
@@ -341,6 +343,11 @@ struct TypeRefSite {
 
 struct AstObjectDecl : AstTypeDecl {
   AstObjectDecl() { id = FieldType::Object; }
+};
+
+// A file descriptor. Only allowed as a function argument or return value.
+struct AstFdDecl : AstTypeDecl {
+  AstFdDecl() { id = FieldType::Fd; }
 };
 
 struct AstVoidDecl : AstTypeDecl {
@@ -681,6 +688,9 @@ struct AstFunctionDecl : AstNodeWithPosition {
   StreamKind stream_kind = StreamKind::None;
   AstStreamDecl* stream_decl = nullptr;
   AstFunctionArgument* stream_arg = nullptr;
+  // An fd among the arguments or as the return value: only a transport that
+  // can pass descriptors can carry the call.
+  bool uses_fd = false;
 
   bool is_void() const noexcept { return ret_value->id == FieldType::Void; }
   bool is_throwing() const noexcept { return !exceptions.empty(); }
