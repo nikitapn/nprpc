@@ -83,6 +83,10 @@ std::string_view mime_type(std::string_view path)
     return "image/jpeg";
   if (iequals(ext, ".gif"))
     return "image/gif";
+  if (iequals(ext, ".webp"))
+    return "image/webp";
+  if (iequals(ext, ".avif"))
+    return "image/avif";
   if (iequals(ext, ".bmp"))
     return "image/bmp";
   if (iequals(ext, ".ico"))
