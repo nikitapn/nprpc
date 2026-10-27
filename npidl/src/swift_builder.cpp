@@ -2128,6 +2128,12 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
       out << bl() << "NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + " << field_offset << ", vector: " << field_access << ", elementSize: " << ut_size << ", elementAlignment: " << ut_align << ") { buf, off, elem in\n";
       out << bl() << "  marshal_" << type_name << "(buffer: buf, offset: off, data: elem)\n";
       out << bl() << "}\n";
+    } else if (wt->id == FieldType::Variant) {
+      // Each element is the variant's 8-byte slot (discriminant + arm offset),
+      // so the struct vector's layout and the variant's own marshal do it.
+      out << bl() << "NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + " << field_offset << ", vector: " << field_access << ", elementSize: " << ut_size << ", elementAlignment: " << ut_align << ") { buf, off, elem in\n";
+      out << bl() << "  marshal_" << cvar(wt)->name << "(buffer: buf, offset: off, data: elem)\n";
+      out << bl() << "}\n";
     } else if (wt->id == FieldType::String) {
       out << bl() << "NPRPC.marshal_string_vector(buffer: buffer, offset: offset + " << field_offset << ", vector: " << field_access << ")\n";
     } else {
@@ -2312,10 +2318,17 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
       out << bl() << field_name << " = NPRPC.unmarshal_fundamental_vector(buffer: buffer, offset: offset + " << field_offset << ")\n";
     } else if (wt->id == FieldType::String) {
       out << bl() << field_name << " = NPRPC.unmarshal_string_vector(buffer: buffer, offset: offset + " << field_offset << ")\n";
-    } else {
+    } else if (wt->id == FieldType::Struct || wt->id == FieldType::Variant) {
+      const std::string& element = wt->id == FieldType::Variant
+                                       ? cvar(wt)->name
+                                       : cflat(wt)->name;
       out << bl() << field_name << " = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + " << field_offset << ", elementSize: " << ut_size << ") { buf, off in\n";
-      out << bl() << "  unmarshal_" << cflat(wt)->name << "(buffer: buf, offset: off)\n";
+      out << bl() << "  unmarshal_" << element << "(buffer: buf, offset: off)\n";
       out << bl() << "}\n";
+    } else {
+      // Was the fall-through for everything, and `cflat` asserts on anything
+      // that is not a struct — a vector of vectors, say.
+      throw std::runtime_error("Not yet supported vector element type for unmarshalling: " + std::to_string(static_cast<int>(wt->id)));
     }
     break;
   }

@@ -311,11 +311,51 @@ message VariantContainer {
   payload: TestVariant;
 }
 
+// A variant nested two containers deep: a vector of them inside a message,
+// itself in a vector — the shape of a list of plates, each with a list of
+// effects that stack on it. Arms of different sizes, one with a string, so
+// out-of-line data inside a nested arm is exercised too.
+[force_helpers=1]
+message EffectBlur {
+  radius: f32;
+}
+
+[force_helpers=1]
+message EffectGlass {
+  refraction: f32;
+  rim: f32;
+  magnification: f32;
+}
+
+[force_helpers=1]
+message EffectTexture {
+  strength: f32;
+  name: string;
+}
+
+alias PlateEffect = one of {
+  blur: EffectBlur;
+  glass: EffectGlass;
+  texture: EffectTexture;
+};
+
+[force_helpers=1]
+message EffectPlate {
+  x: f32;
+  y: f32;
+  w: f32;
+  h: f32;
+  effects: vector<PlateEffect>;
+}
+
 // Interface for RPC round-trip tests of the variant type.
 interface TestVariantRpc {
   // Echo back a TestVariant: server reads the in-param and writes the same
   // value to the out-param.
   void Echo(value: TestVariant, result: out TestVariant) raises (AssertionFailed);
+  // The same for the nested shape above.
+  void EchoPlates(plates: in vector<EffectPlate>, result: out vector<EffectPlate>)
+      raises (AssertionFailed);
 }
 // File descriptor passing. Only a same-machine transport can carry an fd;
 // every other transport refuses the call before sending it.

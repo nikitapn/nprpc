@@ -2683,9 +2683,15 @@ void TSBuilder::emit_field_marshal(AstFieldDecl* f,
     } else if (wt->id == FieldType::String) {
       out << bl() << "NPRPC.marshal_string_array(buf, offset + " << field_offset
           << ", " << field_access << ");\n";
-    } else if (wt->id == FieldType::Struct) {
+    } else if (wt->id == FieldType::Struct || wt->id == FieldType::Variant) {
+      // A variant element is its 8-byte slot (discriminant + arm offset), laid
+      // out as a struct of that size would be and marshalled by its own
+      // function.
+      const std::string& element = wt->id == FieldType::Variant
+                                       ? cvar(wt)->name
+                                       : cflat(wt)->name;
       out << bl() << "NPRPC.marshal_struct_array(buf, offset + " << field_offset
-          << ", " << field_access << ", marshal_" << cflat(wt)->name << ", "
+          << ", " << field_access << ", marshal_" << element << ", "
           << ut_size << ", " << ut_align << ");\n";
     } else {
       throw std::runtime_error("Unsupported vector element type for marshalling");
@@ -3005,10 +3011,13 @@ void TSBuilder::emit_field_unmarshal(AstFieldDecl* f,
       out << bl() << field_name
           << " = NPRPC.unmarshal_string_array(buf, offset + " << field_offset
           << ");\n";
-    } else if (wt->id == FieldType::Struct) {
+    } else if (wt->id == FieldType::Struct || wt->id == FieldType::Variant) {
+      const std::string& element = wt->id == FieldType::Variant
+                                       ? cvar(wt)->name
+                                       : cflat(wt)->name;
       out << bl() << field_name
           << " = NPRPC.unmarshal_struct_array(buf, offset + " << field_offset
-          << ", unmarshal_" << cflat(wt)->name << ", " << ut_size << ");\n";
+          << ", unmarshal_" << element << ", " << ut_size << ");\n";
      } else {
       // TODO: Support vectors of other types (e.g., vectors of vectors, etc.)
       throw std::runtime_error("Unsupported vector element type for unmarshalling");

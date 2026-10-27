@@ -490,6 +490,12 @@ void CppBuilder::emit_direct_type(AstTypeDecl* type, std::ostream& os)
     os << "::nprpc::flat::Fd_Direct";
     break;
 
+  case FieldType::Variant:
+    // A vector's element accessor; without it `Vector_Direct2<V,>` was
+    // emitted, with the second argument empty.
+    os << ns(cvar(type)->nm) << "flat::" << cvar(type)->name << "_Direct";
+    break;
+
   case FieldType::Optional: {
     auto wt = cwt(type)->real_type();
     os << "::nprpc::flat::Optional_Direct<";
@@ -539,7 +545,8 @@ void CppBuilder::emit_accessors(const std::string& flat_name, AstFieldDecl* f, s
       os << "  const auto " << f->name << "() const noexcept { return (::nprpc::flat::Span<const ";
       emit_flat_type(wt, os);
       os << ">)base()." << f->name << "; }\n";
-    } else if (wt->id == FieldType::Struct || wt->id == FieldType::String) {
+    } else if (wt->id == FieldType::Struct || wt->id == FieldType::String ||
+               wt->id == FieldType::Variant) {
       os << "  auto " << f->name << "() noexcept { return ::nprpc::flat::Span_ref<";
       emit_flat_type(wt, os);
       os << ", ";
@@ -674,9 +681,16 @@ void CppBuilder::assign_from_cpp_type(AstTypeDecl* type,
          << bd << "auto it = " << op2 << ".begin();\n"
          << bd << "for (auto e : span) {\n";
 
-      os << (bd += 1) << "auto __ptr = ::nprpc::make_wrapper1(*it);\n";
+      if (cwt(type)->real_type()->id == FieldType::Variant) {
+        // A variant element: `e` is already its Direct accessor and `*it`
+        // the value — the wrapper below would hide `.kind` and `.value`.
+        os << (bd += 1);
+        assign_from_cpp_type(cwt(type)->real_type(), "e", "(*it)", os, false, true);
+      } else {
+        os << (bd += 1) << "auto __ptr = ::nprpc::make_wrapper1(*it);\n";
 
-      assign_from_cpp_type(wt, "  e", "__ptr", os, true);
+        assign_from_cpp_type(wt, "  e", "__ptr", os, true);
+      }
 
       os << bd << "++it;\n" << (bd -= 1) << "}\n" << (bd -= 1) << "}\n";
     }
@@ -1059,7 +1073,9 @@ void CppBuilder::assign_from_flat_type(AstTypeDecl* type,
     auto* v = cvar(type);
     const auto bd0 = bd;
     os << bd0 << "{\n";
-    os << bd + 1 << "auto vd = " << op2 << "();\n";
+    // A vector element arrives as its Direct accessor already (`e`); a field
+    // is reached through a call to its accessor.
+    os << bd + 1 << "auto vd = " << op2 << (from_iterator ? ";\n" : "();\n");
     os << bd + 1 << "switch (static_cast<" << ns(v->nm) << v->name << "::Kind>(vd.kind())) {\n";
     for (size_t i = 0; i < v->arms.size(); ++i) {
       auto& arm = v->arms[i];

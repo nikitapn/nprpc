@@ -28,4 +28,23 @@ public:
     }
     }
   }
+
+  // Through the generated helpers, both ways, so a call exercises from_flat
+  // and to_flat on a variant nested in a vector inside a message in a vector.
+  // Copied out first: the reply is written while arms are allocated, which
+  // grows the buffer under any view into it.
+  void EchoPlates(
+      ::nprpc::flat::Span_ref<nprpc::test::flat::EffectPlate,
+                              nprpc::test::flat::EffectPlate_Direct> plates,
+      ::nprpc::flat::Vector_Direct2<nprpc::test::flat::EffectPlate,
+                                    nprpc::test::flat::EffectPlate_Direct> result) override
+  {
+    std::vector<nprpc::test::EffectPlate> copy;
+    for (auto plate : plates)
+      copy.push_back(nprpc::test::helpers::EffectPlate::from_flat(plate));
+    result.length(static_cast<std::uint32_t>(copy.size()));
+    auto it = copy.begin();
+    for (auto plate : result())
+      nprpc::test::helpers::EffectPlate::to_flat(plate, *it++);
+  }
 };

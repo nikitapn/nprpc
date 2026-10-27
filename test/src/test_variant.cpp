@@ -232,3 +232,154 @@ TEST(VariantTest, SerializeRoundTrip_EmptyString)
   auto result = helpers::VariantContainer::from_flat(dest);
   EXPECT_EQ(std::get<VariantPayloadA>(result.payload.value).label, "");
 }
+
+// ─── A variant nested in a vector inside a message ───────────────────────────
+//
+// `EffectPlate.effects` is `vector<PlateEffect>`: each element is the
+// variant's 8-byte slot, its arm allocated out of line. The shape a list of
+// plates with stacking effects takes.
+
+static void expect_same(const EffectPlate& a, const EffectPlate& b)
+{
+  EXPECT_EQ(a.x, b.x);
+  EXPECT_EQ(a.y, b.y);
+  EXPECT_EQ(a.w, b.w);
+  EXPECT_EQ(a.h, b.h);
+  ASSERT_EQ(a.effects.size(), b.effects.size());
+  for (size_t i = 0; i < a.effects.size(); ++i) {
+    SCOPED_TRACE("effect " + std::to_string(i));
+    const auto& ea = a.effects[i];
+    const auto& eb = b.effects[i];
+    ASSERT_EQ(ea.kind, eb.kind);
+    switch (ea.kind) {
+    case PlateEffect::Kind::blur:
+      EXPECT_EQ(std::get<EffectBlur>(ea.value).radius,
+                std::get<EffectBlur>(eb.value).radius);
+      break;
+    case PlateEffect::Kind::glass: {
+      const auto& ga = std::get<EffectGlass>(ea.value);
+      const auto& gb = std::get<EffectGlass>(eb.value);
+      EXPECT_EQ(ga.refraction, gb.refraction);
+      EXPECT_EQ(ga.rim, gb.rim);
+      EXPECT_EQ(ga.magnification, gb.magnification);
+      break;
+    }
+    case PlateEffect::Kind::texture: {
+      const auto& ta = std::get<EffectTexture>(ea.value);
+      const auto& tb = std::get<EffectTexture>(eb.value);
+      EXPECT_EQ(ta.strength, tb.strength);
+      EXPECT_EQ(ta.name, tb.name);
+      break;
+    }
+    }
+  }
+}
+
+// The value the cross-language fixtures below encode. Keep in step with
+// `samplePlate()` in nprpc_swift's MarshallingHelpersTests.
+static EffectPlate sample_plate()
+{
+  EffectPlate p;
+  p.x = 1.5f;
+  p.y = 2.0f;
+  p.w = 300.0f;
+  p.h = 40.0f;
+  p.effects = {
+    {PlateEffect::Kind::blur, EffectBlur{12.0f}},
+    {PlateEffect::Kind::glass, EffectGlass{10.0f, 0.8f, 1.35f}},
+    {PlateEffect::Kind::texture, EffectTexture{0.5f, "grain"}},
+    {PlateEffect::Kind::texture, EffectTexture{0.0f, ""}},
+  };
+  return p;
+}
+
+static EffectPlate round_trip(const EffectPlate& src)
+{
+  auto buf = make_flat_buf<flat::EffectPlate>();
+  flat::EffectPlate_Direct dest(buf, 0);
+  helpers::EffectPlate::to_flat(dest, src);
+  return helpers::EffectPlate::from_flat(dest);
+}
+
+TEST(VariantTest, NestedVectorOfVariants)
+{
+  const auto src = sample_plate();
+  expect_same(round_trip(src), src);
+}
+
+TEST(VariantTest, NestedVectorOfVariants_Empty)
+{
+  EffectPlate src{};
+  src.w = 10.0f;
+  const auto out = round_trip(src);
+  EXPECT_EQ(out.w, 10.0f);
+  EXPECT_TRUE(out.effects.empty());
+}
+
+// Arms allocated while the element slots are being walked grow the buffer
+// under that walk — enough of them, with strings, to force several
+// reallocations.
+TEST(VariantTest, NestedVectorOfVariants_GrowsBuffer)
+{
+  EffectPlate src{};
+  for (int i = 0; i < 40; ++i) {
+    switch (i % 3) {
+    case 0:
+      src.effects.push_back({PlateEffect::Kind::blur, EffectBlur{float(i)}});
+      break;
+    case 1:
+      src.effects.push_back(
+          {PlateEffect::Kind::glass, EffectGlass{float(i), 0.5f, 1.0f + i}});
+      break;
+    default:
+      src.effects.push_back({PlateEffect::Kind::texture,
+                             EffectTexture{float(i), std::string(200 + i, 'a' + i % 26)}});
+      break;
+    }
+  }
+  expect_same(round_trip(src), src);
+}
+// ─── Across languages ────────────────────────────────────────────────────────
+//
+// What nprpc_swift's generated marshal writes for `sample_plate()`. It is not
+// the same bytes as this side's — Swift allocates every variant arm a fixed
+// 128 bytes (`marshal_optional_struct`), C++ exactly sizeof — so equality of
+// encodings proves nothing; what has to hold is that each side reads the
+// other's. The mirror of this test is in MarshallingHelpersTests.swift.
+//
+// Regenerate from `MarshallingHelpersTests.encode(samplePlate())` if the
+// encoding changes on purpose.
+static const char kSwiftSamplePlateHex[] =
+  "0000c03f0000004000009643000020420800000004000000000000001c000000"
+  "0100000094000000020000000c010000020000008c0100000000404100000000"
+  "0000000000000000000000000000000000000000000000000000000000000000"
+  "0000000000000000000000000000000000000000000000000000000000000000"
+  "0000000000000000000000000000000000000000000000000000000000000000"
+  "00000000000000000000000000000000000000000000000000002041cdcc4c3f"
+  "cdccac3f00000000000000000000000000000000000000000000000000000000"
+  "0000000000000000000000000000000000000000000000000000000000000000"
+  "0000000000000000000000000000000000000000000000000000000000000000"
+  "0000000000000000000000000000000000000000000000000000003f7c000000"
+  "0500000000000000000000000000000000000000000000000000000000000000"
+  "0000000000000000000000000000000000000000000000000000000000000000"
+  "0000000000000000000000000000000000000000000000000000000000000000"
+  "000000000000000000000000000000000000000000000000677261696e000000"
+  "0000000000000000000000000000000000000000000000000000000000000000"
+  "0000000000000000000000000000000000000000000000000000000000000000"
+  "3c00000000000000000000000000000000000000000000000000000000000000"
+  "0000000000000000000000000000000000000000000000000000000000000000";
+
+TEST(VariantTest, NestedVectorOfVariants_DecodesSwiftEncoding)
+{
+  const std::string hex = kSwiftSamplePlateHex;
+  ASSERT_EQ(hex.size() % 2, 0u);
+  nprpc::flat_buffer buf;
+  auto mb = buf.prepare(hex.size() / 2);
+  auto* out = static_cast<unsigned char*>(mb.data());
+  for (size_t i = 0; i < hex.size() / 2; ++i)
+    out[i] = static_cast<unsigned char>(std::stoul(hex.substr(i * 2, 2), nullptr, 16));
+  buf.commit(hex.size() / 2);
+
+  flat::EffectPlate_Direct src(buf, 0);
+  expect_same(helpers::EffectPlate::from_flat(src), sample_plate());
+}

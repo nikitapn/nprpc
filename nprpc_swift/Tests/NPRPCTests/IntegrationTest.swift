@@ -1981,6 +1981,9 @@ final class IntegrationTests: XCTestCase {
             override func echo(value: TestVariant) throws -> TestVariant {
                 return value
             }
+            override func echoPlates(plates: [EffectPlate]) throws -> [EffectPlate] {
+                return plates
+            }
         }
 
         let servant = TestVariantRpcServantImpl()
@@ -2019,6 +2022,24 @@ final class IntegrationTests: XCTestCase {
             XCTAssertEqual(val.label, "")
         } else {
             XCTFail("Expected payloadA, got \(resultEmpty)")
+        }
+
+        // A variant nested in a vector inside a message, in a vector: as an
+        // argument and as a result. The second plate has enough arms, with
+        // strings, to grow the buffer while they are written.
+        var big = EffectPlate(x: 0, y: 0, w: 1, h: 1, effects: [])
+        for i in 0..<40 {
+            switch i % 3 {
+            case 0: big.effects.append(.blur(EffectBlur(radius: Float(i))))
+            case 1: big.effects.append(.glass(EffectGlass(refraction: Float(i), rim: 0.5, magnification: 1 + Float(i))))
+            default: big.effects.append(.texture(EffectTexture(strength: Float(i), name: String(repeating: "a", count: 200 + i))))
+            }
+        }
+        let plates = [MarshallingHelpersTests.samplePlate(), big, EffectPlate(x: 0, y: 0, w: 0, h: 0, effects: [])]
+        let echoed = try await client.echoPlates(plates: plates)
+        XCTAssertEqual(echoed.count, plates.count)
+        for (a, b) in zip(echoed, plates) {
+            MarshallingHelpersTests.assertSame(a, b)
         }
     }
 }
