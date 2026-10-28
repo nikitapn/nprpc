@@ -921,17 +921,24 @@ void CppBuilder::measure_from_cpp_type(AstTypeDecl* type,
       // alloc_arm grows by arm_size with arm_align (always, even if empty arm)
       os << bd << cursor << " = ::nprpc::flat::detail::grow_size(" << cursor << ", " << al
          << ", " << sz << ");\n";
-      // Nested variable data from the active arm value
-      os << bd << "{\n";
+      // Flat arms are fully accounted for by the allocation above. Only
+      // fetch the active value when measuring it emits additional tail data.
+      std::ostringstream tail;
       bd = bd0 + 2;
-      os << bd << "auto const& __m_arm = std::get<";
-      if (atype->id == FieldType::Struct)
-        os << "struct ";
-      emit_type(atype, os);
-      os << ">(" << expr << ".value);\n";
-      measure_from_cpp_type(atype, cursor, "__m_arm", os, false, true);
+      measure_from_cpp_type(atype, cursor, "__m_arm", tail, false, true);
       bd = bd0 + 1;
-      os << bd << "}\n";
+      if (!tail.str().empty()) {
+        os << bd << "{\n";
+        bd = bd0 + 2;
+        os << bd << "auto const& __m_arm = std::get<";
+        if (atype->id == FieldType::Struct)
+          os << "struct ";
+        emit_type(atype, os);
+        os << ">(" << expr << ".value);\n";
+        os << tail.str();
+        bd = bd0 + 1;
+        os << bd << "}\n";
+      }
       os << bd << "break;\n";
       bd = bd0;
       os << bd << "}\n";
