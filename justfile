@@ -159,6 +159,7 @@ docs-api:
     #!/usr/bin/env bash
     set -euo pipefail
     out="$PWD/{{build_dir}}/docs"
+    export NPRPC_BUILD_DIR="{{build_dir}}"
     # Swift has no standalone extractor that copes with C++ interop; the
     # compiler writes the symbol graph during an ordinary build instead.
     modules=(NPRPC NPRPCWeb)

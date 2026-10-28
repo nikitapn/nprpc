@@ -7,7 +7,7 @@ it first. Use it for building; run applications on the
 
 ## What's Included
 
-- **Swift 6.3.3** toolchain (the image is based on `swift:6.3.3`)
+- **Swift 6.4.1** toolchain (the image is based on `swift:6.4.1`)
 - **NPRPC C++ library** (`libnprpc.so`), headers and CMake config
 - **npidl** (IDL compiler) and **npnameserver**
 - **Swift package** `nprpc_swift`, pre-built: the `NPRPC` library, and
@@ -203,7 +203,7 @@ Libraries are in `LD_LIBRARY_PATH`, but if running executables outside the image
 
 Run inside the container:
 ```bash
-swift --version        # Swift 6.3.3
+swift --version        # Swift 6.4.1
 npidl --version        # NPRPC IDL compiler
 cmake --version        # CMake
 ```

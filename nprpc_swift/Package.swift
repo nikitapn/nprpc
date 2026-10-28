@@ -43,7 +43,22 @@ let nprpcRoot: String? = {
 }()
 
 /// CMake build directory name or absolute path (only used when nprpcRoot != nil).
-let nprpcBuildDir = env["NPRPC_BUILD_DIR"] ?? ".build_relwith_debinfo"
+///
+/// Without NPRPC_BUILD_DIR, `.build_lava_shm` wins when it exists: it is the
+/// shared-memory-only build LavaUI's scripts/build-nprpc.sh makes, and LavaUI
+/// reaches this package through the same checkout, with no way to say so from
+/// its own manifest. Its compositor (meson) already prefers that directory, so
+/// otherwise the two halves of one desktop linked different libnprpc builds.
+/// Anything here that needs the transports — the integration tests, the
+/// benchmarks, docs-api's NPRPCWeb — sets NPRPC_BUILD_DIR explicitly.
+let nprpcBuildDir: String = {
+    if let dir = env["NPRPC_BUILD_DIR"], !dir.isEmpty {
+        return dir
+    }
+    guard let root = nprpcRoot else { return ".build_relwith_debinfo" }
+    let shm = (root as NSString).appendingPathComponent(".build_lava_shm/libnprpc.so")
+    return FileManager.default.fileExists(atPath: shm) ? ".build_lava_shm" : ".build_relwith_debinfo"
+}()
 
 let buildPath: String? = {
     guard let root = nprpcRoot else { return nil }

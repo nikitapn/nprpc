@@ -28,7 +28,7 @@ RUN set -e \
  && find /out -type f -name '*.so*' -exec strip --strip-debug {} + \
  && chmod -R a+rX /out
 
-FROM swift:6.3.3-slim
+FROM swift:6.4.1-slim
 
 ARG NPRPC_VERSION=unknown
 ARG NPRPC_REVISION=unknown
@@ -38,7 +38,7 @@ ARG NPRPC_REVISION=unknown
 # its configuration. Deploy scripts compare this label with their builder.
 ARG NPRPC_LIB_SHA256=unknown
 LABEL org.opencontainers.image.title="NPRPC Runtime Image"
-LABEL org.opencontainers.image.description="Swift 6.3.3 runtime with libnprpc, for NPRPC applications"
+LABEL org.opencontainers.image.description="Swift 6.4.1 runtime with libnprpc, for NPRPC applications"
 LABEL org.opencontainers.image.version="${NPRPC_VERSION}"
 LABEL org.opencontainers.image.revision="${NPRPC_REVISION}"
 LABEL io.nprpc.libnprpc.sha256="${NPRPC_LIB_SHA256}"

@@ -4,12 +4,12 @@
 production. It holds what a built application needs at run time and nothing
 else:
 
-- the Swift 6.3.3 runtime (it is based on `swift:6.3.3-slim`)
+- the Swift 6.4.1 runtime (it is based on `swift:6.4.1-slim`)
 - `libnprpc` and `libmsquic`, without debug info
 - the Boost shared libraries
 - `liburing2`, `libatomic1`, `ca-certificates` and `tzdata`
 
-The image is about 320 MB, roughly 30 MB more than `swift:6.3.3-slim`.
+The image is about 320 MB, roughly 30 MB more than `swift:6.4.1-slim`.
 Applications are compiled in the [development image](DOCKER_DEV_IMAGE.md),
 and their production images are built `FROM nprpc-runtime`.
 

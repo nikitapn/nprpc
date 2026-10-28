@@ -55,7 +55,9 @@ simply `-lnprpc` on the default search path.
 
 When this package lives next to the nprpc CMake tree (`../include/nprpc/...`),
 `Package.swift` **auto-detects** the monorepo root and adds include/lib/rpath
-flags for the in-tree build (defaults to `.build_relwith_debinfo`).
+flags for the in-tree build. That is `.build_lava_shm` when it exists (the
+shared-memory-only build LavaUI makes) and `.build_relwith_debinfo` otherwise;
+the tests and benchmarks need the transports, so they set `NPRPC_BUILD_DIR`.
 
 Override explicitly:
 
