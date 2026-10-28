@@ -2466,7 +2466,8 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
       int aligned_offset = align_offset(f_align, field_offset, f_size);
       if (ftr->id == FieldType::Vector || ftr->id == FieldType::Array ||
           ftr->id == FieldType::String || ftr->id == FieldType::Optional ||
-          ftr->id == FieldType::Struct || ftr->id == FieldType::Object)
+          ftr->id == FieldType::Struct || ftr->id == FieldType::Object ||
+          ftr->id == FieldType::Variant)
       {
         std::string field_op = op + " + " + std::to_string(aligned_offset);
         emit_safety_checks_r(ftr, field_op, aligned_offset, ftr->id != FieldType::Struct);
@@ -2493,6 +2494,7 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
     out << bl() << "let relOffset = Int(buffer.load(fromByteOffset: " << op << ", as: UInt32.self))\n";
     out << bl() << "let count = Int(buffer.load(fromByteOffset: " << op << " + 4, as: UInt32.self))\n";
     out << bl() << "let dataOffset = " << op << " + relOffset\n";
+    out << bl() << "guard count == 0 || dataOffset % " << elem_align << " == 0 else { return false }\n";
     out << bl() << "for i in 0..<count {\n" << bb(false);
     out << bl() << "let elemOffset = dataOffset + i * " << elem_size << "\n";
     emit_safety_checks_r(wt, "elemOffset", 0, true);
@@ -2533,6 +2535,30 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
     out << bl() << "for i in 0..<" << arr->length << " {\n" << bb(false);
     out << bl() << "let elemOffset = " << op << " + i * " << elem_size << "\n";
     emit_safety_checks_r(wt, "elemOffset", 0, true);
+    out << eb(false) << bl() << "}\n";
+    break;
+  }
+
+  case FieldType::Variant: {
+    auto* v = cvar(type);
+    out << bl() << "guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: " << op << ", structSize: 8), (" << op << ") % 4 == 0 else { return false }\n";
+    out << bl() << "do {\n" << bb(false);
+    out << bl() << "let kind = buffer.load(fromByteOffset: " << op << ", as: UInt32.self)\n";
+    out << bl() << "let relOffset = Int(buffer.load(fromByteOffset: " << op << " + 4, as: UInt32.self))\n";
+    // Unlike an optional, a variant must always have an arm payload.
+    out << bl() << "guard relOffset != 0 else { return false }\n";
+    out << bl() << "let armOffset = " << op << " + 4 + relOffset\n";
+    out << bl() << "switch kind {\n" << bb(false);
+    for (size_t i = 0; i < v->arms.size(); ++i) {
+      auto* arm_type = v->arms[i].type;
+      auto [arm_size, arm_align] = get_type_size_align(arm_type);
+      out << bl() << "case " << i << ":\n" << bb(false);
+      out << bl() << "guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: armOffset, structSize: " << arm_size << "), armOffset % " << arm_align << " == 0 else { return false }\n";
+      emit_safety_checks_r(arm_type, "armOffset", 0, false);
+      out << eb(false);
+    }
+    out << bl() << "default: return false\n";
+    out << eb(false) << bl() << "}\n";
     out << eb(false) << bl() << "}\n";
     break;
   }

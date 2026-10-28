@@ -377,8 +377,15 @@ public:
 
   bool check_size_align(void* base_ptr, uint32_t max_buffer_size) const noexcept
   {
-    const auto [a, b] = range<false>(base_ptr);
-    return (a % alignof(T) == 0 && b <= max_buffer_size);
+    // Keep the extent wide: truncating range() to uint32_t can make a
+    // malicious offset/count wrap back into the buffer.
+    const auto field = static_cast<std::uint64_t>(
+        reinterpret_cast<const std::byte*>(this) -
+        static_cast<const std::byte*>(base_ptr));
+    const auto start = field + offset_;
+    const auto bytes = std::uint64_t(size_) * sizeof(T);
+    return start % alignof(T) == 0 && start <= max_buffer_size &&
+           bytes <= max_buffer_size - start;
   }
 
   Vector() = default;

@@ -1465,7 +1465,8 @@ void CppBuilder::emit_safety_checks_r(
 
       if (ftr->id == FieldType::Vector || ftr->id == FieldType::Optional ||
           ftr->id == FieldType::Struct || ftr->id == FieldType::String ||
-          ftr->id == FieldType::Object || ftr->id == FieldType::Fd)
+          ftr->id == FieldType::Object || ftr->id == FieldType::Fd ||
+          ftr->id == FieldType::Variant)
       {
         os << bd << "{\n";
         auto str = op + "." + field->name +
@@ -1541,6 +1542,23 @@ void CppBuilder::emit_safety_checks_r(
   case FieldType::Object:
     emit_safety_checks_r(ctx_->get_builtin_types_info().object_id_struct, op, os, false, false);
     break;
+
+  case FieldType::Variant: {
+    auto* v = cvar(type);
+    os << bd << "if (!" << op << "._check_size_align(buf.size())) goto check_failed;\n";
+    os << bd << "switch (" << op << ".kind()) {\n";
+    for (size_t i = 0; i < v->arms.size(); ++i) {
+      os << bd << "case " << i << ": {\n";
+      bd += 1;
+      os << bd << "[[maybe_unused]] auto arm = " << op << ".value_" << v->arms[i].name << "();\n";
+      emit_safety_checks_r(v->arms[i].type, "arm", os, true, false);
+      os << bd << "break;\n";
+      bd -= 1;
+      os << bd << "}\n";
+    }
+    os << bd << "default: goto check_failed;\n" << bd << "}\n";
+    break;
+  }
 
   case FieldType::Fd:
     // The index must name a descriptor that arrived with this message.
@@ -3385,6 +3403,24 @@ void CppBuilder::emit_variant(AstVariantDecl* v)
   oh << "  void set_kind(std::uint32_t k) noexcept { base().kind = k; }\n";
   oh << "  std::uint32_t arm_offset() const noexcept { return base().arm_offset; }\n";
   oh << "  void set_arm_offset(std::uint32_t v) noexcept { base().arm_offset = v; }\n";
+
+  // Validate before reading the slot or constructing any arm accessor. Widen
+  // the relative-offset addition so malicious offsets cannot wrap uint32_t.
+  oh << "  bool _check_size_align(std::size_t size) const noexcept {\n"
+        "    if (offset_ > size || size - offset_ < 8 || offset_ % 4 != 0) return false;\n"
+        "    const auto relative = arm_offset();\n"
+        "    if (relative == 0) return false;\n"
+        "    const auto arm = std::uint64_t(offset_) + 4 + relative;\n"
+        "    if (arm > size || arm > UINT32_MAX) return false;\n"
+        "    switch (kind()) {\n";
+  for (size_t i = 0; i < v->arms.size(); ++i) {
+    auto [size, align] = get_type_size_align(v->arms[i].type);
+    oh << "    case " << i << ": return arm % " << align
+       << " == 0 && " << size << " <= size - arm;\n";
+  }
+  oh << "    default: return false;\n"
+        "    }\n"
+        "  }\n";
 
   // alloc_arm: grows the flat buffer to hold one arm struct, zero-inits it,
   // and stores the relative offset from the arm_offset field (offset_+4).

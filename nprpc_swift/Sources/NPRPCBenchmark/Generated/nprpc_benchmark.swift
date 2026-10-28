@@ -687,6 +687,7 @@ fileprivate func check_1Employee_1(buffer: UnsafeRawPointer, bufferSize: Int, of
     let relOffset = Int(buffer.load(fromByteOffset: offset + 0 + 64, as: UInt32.self))
     let count = Int(buffer.load(fromByteOffset: offset + 0 + 64 + 4, as: UInt32.self))
     let dataOffset = offset + 0 + 64 + relOffset
+    guard count == 0 || dataOffset % 4 == 0 else { return false }
     for i in 0..<count {
       let elemOffset = dataOffset + i * 8
       guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: elemOffset) else { return false }

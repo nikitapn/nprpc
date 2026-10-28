@@ -173,12 +173,14 @@ add_test(NAME LockFreeRingBuffer COMMAND test_lock_free_ring_buffer)
 # Test executable for variant / one-of feature (pure type tests, no nameserver needed)
 add_executable(test_variant
   src/test_variant.cpp
+  src/test_variant_validation.cpp
 )
 
 add_dependencies(test_variant nprpc_test_gen)
 
 target_include_directories(test_variant
   PRIVATE
+    ${CMAKE_BINARY_DIR}/nprpc_test_stub/src/gen
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${nprpc_test_stub_INCLUDE_DIR}
 )
