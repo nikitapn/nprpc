@@ -133,14 +133,14 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
                     continue
                 prefix = [*private_hosts, str(hosts)] if hosts else []
                 relay_port, stop_relay = start_rebinding_relay(1.0) if live == 'rebinding' else (0, None)
-                result = subprocess.run([*prefix, fixture, {'alt': 'client-alt', 'ip': 'client-ip', 'cap': 'client-cap', 'stats': 'client-stats', 'abandon': 'client-abandon', 'no-pool': 'client-no-pool', 'on-ioc': 'client-on-ioc', 'black-hole': 'client-black-hole', 'frozen': 'client-frozen-server', 'named': 'client-named', 'named-hole': 'client-named-black-hole', 'unresolvable': 'client-unresolvable', 'secondary-v4': 'client-named-direct', 'secondary-v6': 'client-named-direct', 'rebinding': 'client-rebinding'}.get(live, 'client-live' if live else 'client'), reference,
+                result = subprocess.run([*prefix, fixture, {'alt': 'client-alt', 'ip': 'client-ip', 'cap': 'client-cap', 'stats': 'client-stats', 'abandon': 'client-abandon', 'no-pool': 'client-no-pool', 'on-ioc': 'client-on-ioc', 'black-hole': 'client-black-hole', 'frozen': 'client-frozen-server', 'named': 'client-named', 'named-hole': 'client-named-black-hole', 'unresolvable': 'client-unresolvable', 'secondary-v4': 'client-named-direct', 'secondary-v6': 'client-named-direct', 'rebinding': 'client-rebinding', 'dead-reader': 'client-reader-on-dead-connection', 'keepalive': 'client-keepalive'}.get(live, 'client-live' if live else 'client'), reference,
                                          path(trusted_server), path(client_cert), path(client_cert, '.key')],
                                         capture_output=True, text=True, timeout=10,
                                         env={**os.environ, 'QUIC_TLS_SERVER_PID': str(server.pid),
                                              'QUIC_TLS_RELAY_PORT': str(relay_port)})
                 if stop_relay:
                     stop_relay.set()
-                if live == 'frozen':
+                if live in ('frozen', 'dead-reader'):
                     os.kill(server.pid, signal.SIGCONT)
                 if live == 'alt' and result.returncode == 77:
                     print('SKIP: TCP transport not compiled', flush=True)
@@ -173,6 +173,8 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
         ('connecting to nothing times out', 'ca', None, True, 'black-hole'),
         ('a frozen server times out', 'ca', None, True, 'frozen'),
         ('a stream survives a NAT rebinding', 'ca', None, True, 'rebinding'),
+        ('a stream reader fails when its connection dies, and the session reconnects', 'ca', None, True, 'dead-reader'),
+        ('a quiet connection stays up', 'ca', None, True, 'keepalive'),
         ('a hostname decides where packets go', 'ca', None, True, 'named-hole'),
         ('an unresolvable hostname fails', 'ca', None, True, 'unresolvable'),
         ('wrong server CA fails', 'rogue', None, False, False),

@@ -40,8 +40,14 @@ struct QuicTransportStats {
   std::atomic<uint64_t> data_stream_fallbacks{0};
   std::atomic<uint64_t> datagrams_sent{0};
   std::atomic<uint64_t> datagrams_received{0};
+  // Client connections that completed a handshake.
+  std::atomic<uint64_t> connections_established{0};
 };
 NPRPC_API const QuicTransportStats& quic_transport_stats() noexcept;
+
+// For new client connections; keepalive follows at a third of it.  Noticing a
+// dead peer takes this long, which is more than a test wants to wait.
+NPRPC_API void set_quic_client_idle_timeout(uint32_t timeout_ms) noexcept;
 
 // Create a client-side QUIC session for the given endpoint.
 NPRPC_API std::shared_ptr<Session>

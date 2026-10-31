@@ -137,6 +137,7 @@ static constexpr size_t kMaxQueuedDatagrams = 1024;
 static constexpr uint64_t kMaxDataStreams = 100;
 
 static QuicTransportStats g_quic_stats;
+static std::atomic<uint32_t> g_quic_client_idle_timeout_ms{30000};
 static constexpr uint32_t kDefaultClientTimeoutMs = 30000;
 static constexpr size_t kMaxWriteVecs = 32;
 
@@ -1885,6 +1886,12 @@ public:
     request_dispatch_ = std::move(fn);
   }
 
+  // Called once, if an established connection ends.
+  void set_on_connection_lost(std::function<void()> fn)
+  {
+    on_connection_lost_ = std::move(fn);
+  }
+
 private:
   void do_connect(boost::asio::ip::udp::endpoint      remote_ep,
                   std::move_only_function<void(bool)> on_done);
@@ -1976,6 +1983,7 @@ private:
 
   // Dispatch hook for server-initiated Request frames (e.g. stream chunks)
   std::function<void(flat_buffer&)> request_dispatch_;
+  std::function<void()> on_connection_lost_;
 
   // Packets/sends queued before handshake completes
   struct PreConnectSend {
@@ -2158,7 +2166,8 @@ void QuicNgtcp2ClientConn::do_connect(boost::asio::ip::udp::endpoint   remote_ep
   params.max_ack_delay                       = 1 * NGTCP2_MILLISECONDS;
   params.initial_max_streams_bidi            = 0; // server doesn't open streams
   params.initial_max_streams_uni             = kMaxDataStreams;
-  params.max_idle_timeout                    = 30 * NGTCP2_SECONDS;
+  const uint64_t idle_timeout = g_quic_client_idle_timeout_ms.load(std::memory_order_relaxed) * NGTCP2_MILLISECONDS;
+  params.max_idle_timeout                    = idle_timeout;
   params.active_connection_id_limit          = 7;
   params.max_datagram_frame_size             = kMaxDatagramFrameSize;
 
@@ -2172,6 +2181,9 @@ void QuicNgtcp2ClientConn::do_connect(boost::asio::ip::udp::endpoint   remote_ep
     NPRPC_QUIC_ERROR("ngtcp2_conn_client_new: {}", ngtcp2_strerror(rv));
     on_done(false); return;
   }
+  // Keeps a quiet connection alive, and makes a dead peer show up: unanswered,
+  // these end the connection at the idle timeout.
+  ngtcp2_conn_set_keep_alive_timeout(conn_, idle_timeout / 3);
 
 #if defined(OPENSSL_IS_BORINGSSL)
   SSL_set_app_data(ssl_, &conn_ref_);
@@ -2407,6 +2419,9 @@ void QuicNgtcp2ClientConn::handle_error()
 {
   if (closed_) return;
   closed_ = true;
+  // Ahead of clearing connected_: the session replaces this connection once
+  // that is clear, and what happens here must not reach the new one's streams.
+  if (connected_.load(std::memory_order_acquire) && on_connection_lost_) on_connection_lost_();
   connected_.store(false, std::memory_order_release);
   timer_.cancel();
   request_timer_.cancel();
@@ -2553,6 +2568,7 @@ void QuicNgtcp2ClientConn::on_handshake_complete()
 
   connected_.store(true, std::memory_order_release);
   datagrams_.on_handshake_completed(conn_);
+  g_quic_stats.connections_established.fetch_add(1, std::memory_order_relaxed);
 
   if (connect_callback_) {
     auto cb = std::move(connect_callback_);
@@ -2895,6 +2911,11 @@ private:
         session->handle_request(frame, tx);
       }
     });
+    // Nothing else tells a stream reader: a quiet stream and a dead one look
+    // the same from there, and it has no timeout of its own to find out.
+    conn->set_on_connection_lost([cell = self_cell_] {
+      if (auto session = cell->lock()) session->ctx().stream_manager->cancel_all();
+    });
     return conn;
   }
 
@@ -3022,6 +3043,11 @@ NPRPC_API void stop_quic_listener()
 NPRPC_API const QuicTransportStats& quic_transport_stats() noexcept
 {
   return g_quic_stats;
+}
+
+NPRPC_API void set_quic_client_idle_timeout(uint32_t timeout_ms) noexcept
+{
+  g_quic_client_idle_timeout_ms.store(timeout_ms, std::memory_order_relaxed);
 }
 
 NPRPC_API void stop_quic_client()

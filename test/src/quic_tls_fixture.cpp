@@ -1,5 +1,6 @@
 #include <nprpc/nprpc.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/quic_transport.hpp>
 #include <boost/asio/ip/udp.hpp>
 #include <boost/asio/post.hpp>
 #include <csignal>
@@ -38,6 +39,8 @@ int main(int argc, char** argv) {
     struct Cleanup { nprpc::Rpc* rpc; ~Cleanup() { rpc->destroy(); } } cleanup{rpc};
     if (live) rpc->configure_quic_client_tls(tls);
     const std::string mode = argv[1];
+    if (mode == "client-reader-on-dead-connection" || mode == "client-keepalive")
+      nprpc::impl::set_quic_client_idle_timeout(1500);
     // A caller that blocks must never be what the transport is waiting for.
     if (mode != "client-no-pool" && mode != "client-on-ioc") rpc->start_thread_pool(2);
     auto* raw = nprpc::Object::from_string(argv[2]);
@@ -101,6 +104,30 @@ int main(int argc, char** argv) {
       });
       finished.get();
       return 0;
+    }
+    const auto& stats = nprpc::impl::quic_transport_stats();
+    if (mode == "client-reader-on-dead-connection") {
+      auto stream = object->Watch(250);
+      if (!stream.read_next()) return 5;
+      const pid_t server = std::stoi(std::getenv("QUIC_TLS_SERVER_PID"));
+      ::kill(server, SIGSTOP);
+      // Draining what was already on its way, then the failure.
+      bool failed = false;
+      try {
+        while (stream.read_next()) {}
+      } catch (const std::exception&) {
+        failed = true;
+      }
+      ::kill(server, SIGCONT);
+      if (!failed) return 8; // A lost connection must not look like a finished stream.
+      watch_once(); // And the session gets a new one.
+      return stats.connections_established.load() == 2 ? 0 : 9;
+    }
+    if (mode == "client-keepalive") {
+      watch_once();
+      std::this_thread::sleep_for(std::chrono::milliseconds(3000)); // Twice the idle timeout.
+      watch_once();
+      return stats.connections_established.load() == 1 ? 0 : 8;
     }
     const auto expect_timeout = [&](int limit_ms) {
       object->set_timeout(500);
