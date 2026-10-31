@@ -13,6 +13,7 @@ final class RpcErrorTests: XCTestCase {
             (NPRPC_BRIDGE_CONNECTION_FAILURE, .connectionFailure),
             (NPRPC_BRIDGE_OUT_OF_MEMORY, .outOfMemory),
             (NPRPC_BRIDGE_INTERNAL_ERROR, .internalError),
+            (NPRPC_BRIDGE_UNSUPPORTED_TRANSPORT, .unsupportedTransport),
         ]
         for (bridgeKind, swiftKind) in mappings {
             var bridge = NprpcBridgeError()

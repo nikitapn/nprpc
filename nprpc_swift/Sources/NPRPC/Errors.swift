@@ -23,6 +23,7 @@ public struct RpcError: NPRPCError, Sendable {
         case connectionFailure = 6
         case outOfMemory       = 7
         case internalError     = 8
+        case unsupportedTransport = 9
     }
 
     public let kind: Kind

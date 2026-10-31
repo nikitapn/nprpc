@@ -334,6 +334,7 @@ enum NprpcBridgeErrorKind : int32_t {
     NPRPC_BRIDGE_CONNECTION_FAILURE = 6,
     NPRPC_BRIDGE_OUT_OF_MEMORY      = 7,
     NPRPC_BRIDGE_INTERNAL_ERROR     = 8,
+    NPRPC_BRIDGE_UNSUPPORTED_TRANSPORT = 9,
 };
 
 struct NprpcBridgeError {

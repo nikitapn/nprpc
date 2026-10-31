@@ -33,6 +33,7 @@
 #include <nprpc/impl/session.hpp>
 #include <nprpc/config_default.hpp>
 #include <nprpc/nprpc.hpp>
+#include <nprpc/result.hpp>
 
 namespace nprpc::impl {
 
@@ -313,6 +314,11 @@ public:
   }
 
   bool has_session(const EndPoint& endpoint) const noexcept;
+  /// Acquire/cache a session, returning routine failures without throwing.
+  /// Unmigrated constructor exceptions are translated at this boundary.
+  [[nodiscard]] NPRPC_API Result<std::shared_ptr<Session>>
+  get_session_result(const EndPoint& endpoint) noexcept;
+  /// Compatibility API: routine acquisition failures throw ExceptionCommFailure.
   NPRPC_API std::shared_ptr<Session> get_session(const EndPoint& endpoint);
   NPRPC_API void call(const EndPoint& endpoint,
                       flat_buffer& buffer,
@@ -408,6 +414,10 @@ public:
   explicit RpcImpl();
 
 protected:
+  // Shared implementation keeps exceptional legacy constructor behavior intact
+  // for get_session(), while get_session_result() contains those exceptions.
+  Result<std::shared_ptr<Session>> get_session_impl(const EndPoint& endpoint);
+
   Poa* create_poa_impl(
       uint32_t max_objects,
       PoaPolicy::Lifespan lifespan,

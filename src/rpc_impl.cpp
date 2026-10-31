@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/result.hpp>
 #include <nprpc/impl/telemetry.hpp>
 #include <nprpc/impl/shared_memory_channel.hpp>
 #include <nprpc/impl/shared_memory_connection.hpp>
@@ -831,6 +832,20 @@ std::string RpcImpl::produce_host_json(std::string_view output_path)
 NPRPC_API std::shared_ptr<Session>
 RpcImpl::get_session(const EndPoint& endpoint)
 {
+  auto session = get_session_impl(endpoint);
+  if (!session) throw nprpc::ExceptionCommFailure(session.error().message.data());
+  return std::move(*session);
+}
+
+NPRPC_API Result<std::shared_ptr<Session>>
+RpcImpl::get_session_result(const EndPoint& endpoint) noexcept
+{
+  return capture_result([&] { return get_session_impl(endpoint); }, ErrorCode::connection_failure);
+}
+
+Result<std::shared_ptr<Session>>
+RpcImpl::get_session_impl(const EndPoint& endpoint)
+{
   {
     // Fast path: check if session already exists for this endpoint
     std::shared_lock lk(connections_mut_);
@@ -860,8 +875,8 @@ RpcImpl::get_session(const EndPoint& endpoint)
   std::shared_ptr<Session> con;
   switch (endpoint.type()) {
   case EndPointType::TcpPrivate:
-    throw nprpc::ExceptionCommFailure(
-        "nprpc::impl::RpcImpl::get_session: Cannot create Ephemeral TCP connection");
+    return std::unexpected(Error(ErrorCode::connection_failure,
+        "nprpc::impl::RpcImpl::get_session: Cannot create Ephemeral TCP connection"));
   case EndPointType::Tcp:
 #ifdef NPRPC_TCP_ENABLED
 #if defined(__linux__)
@@ -880,24 +895,24 @@ RpcImpl::get_session(const EndPoint& endpoint)
     }
     break;
 #else
-    throw nprpc::ExceptionCommFailure(
-        "nprpc::impl::RpcImpl::get_session: TCP transport was not compiled in");
+    return std::unexpected(Error(ErrorCode::unsupported_transport,
+        "nprpc::impl::RpcImpl::get_session: TCP transport was not compiled in"));
 #endif
   case EndPointType::WebSocket:
 #ifdef NPRPC_WEBSOCKET_ENABLED
     con = make_client_plain_websocket_session(endpoint, ioc_);
     break;
 #else
-    throw nprpc::ExceptionCommFailure(
-        "nprpc::impl::RpcImpl::get_session: WebSocket transport was not compiled in");
+    return std::unexpected(Error(ErrorCode::unsupported_transport,
+        "nprpc::impl::RpcImpl::get_session: WebSocket transport was not compiled in"));
 #endif
   case EndPointType::SecuredWebSocket:
 #if defined(NPRPC_WEBSOCKET_ENABLED) && defined(NPRPC_SSL_ENABLED)
     con = make_client_ssl_websocket_session(endpoint, ioc_);
     break;
 #else
-    throw nprpc::ExceptionCommFailure(
-        "nprpc::impl::RpcImpl::get_session: WSS was not compiled in");
+    return std::unexpected(Error(ErrorCode::unsupported_transport,
+        "nprpc::impl::RpcImpl::get_session: WSS was not compiled in"));
 #endif
   case EndPointType::SharedMemory:
     {
@@ -906,15 +921,21 @@ RpcImpl::get_session(const EndPoint& endpoint)
       con = std::move(smc);
     }
     break;
-#ifdef NPRPC_QUIC_ENABLED
    case EndPointType::Quic:
+#ifdef NPRPC_QUIC_ENABLED
     con = make_quic_client_session(endpoint, ioc_);
     break;
+#else
+    return std::unexpected(Error(ErrorCode::unsupported_transport,
+        "nprpc::impl::RpcImpl::get_session: QUIC transport was not compiled in"));
 #endif
-   default:
-     throw nprpc::ExceptionCommFailure(
-         "nprpc::impl::RpcImpl::get_session: Unknown endpoint " "type: " +
-         std::to_string(static_cast<int>(endpoint.type())));
+   default: {
+     char message[128];
+     std::snprintf(message, sizeof(message),
+         "nprpc::impl::RpcImpl::get_session: Unknown endpoint type: %d",
+         static_cast<int>(endpoint.type()));
+     return std::unexpected(Error(ErrorCode::unsupported_transport, message));
+   }
   }
 
   add_connection(con);
