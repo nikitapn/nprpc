@@ -10,6 +10,8 @@ import select
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 try:
     from cryptography import x509
@@ -85,6 +87,35 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
     private_hosts_work = subprocess.run(
         [*private_hosts, str(hosts_files['named']), 'true'], capture_output=True).returncode == 0
 
+    def start_rebinding_relay(rebind_after):
+        """Forwards to the server, moving to a new source port as a NAT rebinding would."""
+        downstream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        downstream.bind(('127.0.0.1', 0))
+        stop = threading.Event()
+
+        def run():
+            upstream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            client = None
+            rebind_at = time.monotonic() + rebind_after
+            while not stop.is_set():
+                if rebind_at and time.monotonic() >= rebind_at:
+                    upstream.close()
+                    upstream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    rebind_at = None
+                for ready in select.select([downstream, upstream], [], [], 0.05)[0]:
+                    data, sender = ready.recvfrom(65535)
+                    if ready is downstream:
+                        client = sender
+                        upstream.sendto(data, ('127.0.0.1', 28444))
+                    elif client:
+                        downstream.sendto(data, client)
+            upstream.close()
+            downstream.close()
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return downstream.getsockname()[1], stop
+
     def group(server_cert, trusted_clients, cases):
         server = subprocess.Popen([fixture, 'server', path(server_cert), path(server_cert, '.key'),
                                    path(trusted_clients)], stdout=subprocess.PIPE,
@@ -101,10 +132,14 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
                     print('SKIP:', label, '(needs unprivileged user namespaces)', flush=True)
                     continue
                 prefix = [*private_hosts, str(hosts)] if hosts else []
-                result = subprocess.run([*prefix, fixture, {'alt': 'client-alt', 'ip': 'client-ip', 'cap': 'client-cap', 'stats': 'client-stats', 'abandon': 'client-abandon', 'no-pool': 'client-no-pool', 'on-ioc': 'client-on-ioc', 'black-hole': 'client-black-hole', 'frozen': 'client-frozen-server', 'named': 'client-named', 'named-hole': 'client-named-black-hole', 'unresolvable': 'client-unresolvable', 'secondary-v4': 'client-named-direct', 'secondary-v6': 'client-named-direct'}.get(live, 'client-live' if live else 'client'), reference,
+                relay_port, stop_relay = start_rebinding_relay(1.0) if live == 'rebinding' else (0, None)
+                result = subprocess.run([*prefix, fixture, {'alt': 'client-alt', 'ip': 'client-ip', 'cap': 'client-cap', 'stats': 'client-stats', 'abandon': 'client-abandon', 'no-pool': 'client-no-pool', 'on-ioc': 'client-on-ioc', 'black-hole': 'client-black-hole', 'frozen': 'client-frozen-server', 'named': 'client-named', 'named-hole': 'client-named-black-hole', 'unresolvable': 'client-unresolvable', 'secondary-v4': 'client-named-direct', 'secondary-v6': 'client-named-direct', 'rebinding': 'client-rebinding'}.get(live, 'client-live' if live else 'client'), reference,
                                          path(trusted_server), path(client_cert), path(client_cert, '.key')],
                                         capture_output=True, text=True, timeout=10,
-                                        env={**os.environ, 'QUIC_TLS_SERVER_PID': str(server.pid)})
+                                        env={**os.environ, 'QUIC_TLS_SERVER_PID': str(server.pid),
+                                             'QUIC_TLS_RELAY_PORT': str(relay_port)})
+                if stop_relay:
+                    stop_relay.set()
                 if live == 'frozen':
                     os.kill(server.pid, signal.SIGCONT)
                 if live == 'alt' and result.returncode == 77:
@@ -137,6 +172,7 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
         ('a call can block the only io_context thread', 'ca', None, True, 'on-ioc'),
         ('connecting to nothing times out', 'ca', None, True, 'black-hole'),
         ('a frozen server times out', 'ca', None, True, 'frozen'),
+        ('a stream survives a NAT rebinding', 'ca', None, True, 'rebinding'),
         ('a hostname decides where packets go', 'ca', None, True, 'named-hole'),
         ('an unresolvable hostname fails', 'ca', None, True, 'unresolvable'),
         ('wrong server CA fails', 'rogue', None, False, False),

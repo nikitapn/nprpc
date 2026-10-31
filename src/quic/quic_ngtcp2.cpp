@@ -238,6 +238,16 @@ static ngtcp2_path make_path(const boost::asio::ip::udp::endpoint& local,
 // does the actual segmentation (true GSO, 1 syscall per do_write()).
 // Falls back to a plain sendmsg on kernels without UDP_SEGMENT.
 // ---------------------------------------------------------------------------
+// Where ngtcp2 wants a packet sent.  It moves to a client's new address once it
+// has validated it, which only works if this is what actually gets used.
+static boost::asio::ip::udp::endpoint path_remote(const ngtcp2_path& path)
+{
+  boost::asio::ip::udp::endpoint remote;
+  remote.resize(path.remote.addrlen);
+  std::memcpy(remote.data(), path.remote.addr, path.remote.addrlen);
+  return remote;
+}
+
 // The address a packet arrived on.  A server's wildcard socket would otherwise
 // reply from whichever address the kernel prefers, which a client that dialled
 // a different one of the server's addresses does not accept as its peer.
@@ -488,7 +498,8 @@ public:
   void close();
 
   // Thread-safe: post a received UDP packet to the strand
-  void enqueue_packet(flat_buffer pkt, ngtcp2_pkt_info pi);
+  void enqueue_packet(flat_buffer pkt, ngtcp2_pkt_info pi,
+                      const boost::asio::ip::udp::endpoint& from);
   void schedule_write();
   bool write_pending_ = false; // On strand_.
 
@@ -508,7 +519,8 @@ public:
 
 private:
   // All run on strand_
-  void do_read(const uint8_t* data, size_t len, const ngtcp2_pkt_info* pi);
+  void do_read(const uint8_t* data, size_t len, const ngtcp2_pkt_info* pi,
+               const boost::asio::ip::udp::endpoint& from);
   void do_write();
   void schedule_timer();
   void handle_expiry();
@@ -889,13 +901,14 @@ bool QuicNgtcp2ServerConn::init()
   return true;
 }
 
-void QuicNgtcp2ServerConn::enqueue_packet(flat_buffer pkt, ngtcp2_pkt_info pi)
+void QuicNgtcp2ServerConn::enqueue_packet(flat_buffer pkt, ngtcp2_pkt_info pi,
+                                          const boost::asio::ip::udp::endpoint& from)
 {
   boost::asio::post(
       strand_,
-      [self = shared_from_this(), p = std::move(pkt), pi]() mutable {
+      [self = shared_from_this(), p = std::move(pkt), pi, from]() mutable {
         if (self->closed_) return;
-        self->do_read(p.data_ptr(), p.size(), &pi);
+        self->do_read(p.data_ptr(), p.size(), &pi, from);
         self->schedule_write();
       });
 }
@@ -1049,7 +1062,8 @@ void QuicNgtcp2ServerConn::on_datagram(const uint8_t* data, size_t len)
 }
 
 void QuicNgtcp2ServerConn::do_read(const uint8_t* data, size_t len,
-                                    const ngtcp2_pkt_info* pi)
+                                    const ngtcp2_pkt_info* pi,
+                                    const boost::asio::ip::udp::endpoint& from)
 {
   if (closed_) return;
   if (ngtcp2_conn_in_closing_period(conn_) ||
@@ -1057,7 +1071,9 @@ void QuicNgtcp2ServerConn::do_read(const uint8_t* data, size_t len,
     return;
 
   sockaddr_storage lss, rss;
-  auto path = make_path(local_ep_, remote_ep_, lss, rss);
+  // The real sender, not the address the connection started with: a different
+  // one is how ngtcp2 learns that the client moved.
+  auto path = make_path(local_ep_, from, lss, rss);
 
   int rv = ngtcp2_conn_read_pkt(conn_, &path, pi, data, len, timestamp_ns());
   if (rv != 0) {
@@ -1187,7 +1203,7 @@ void QuicNgtcp2ServerConn::do_write()
 
   if (nwrite == 0) return;
 
-  send_gso(socket_.native_handle(), remote_ep_,
+  send_gso(socket_.native_handle(), path_remote(ps.path),
            txbuf_.data(), static_cast<size_t>(nwrite), gso_size, reply_source_);
 }
 
@@ -1248,7 +1264,7 @@ void QuicNgtcp2ServerConn::handle_error()
       &last_error_, timestamp_ns());
   if (n > 0) {
     conn_close_buf_.resize(static_cast<size_t>(n));
-    send_gso(socket_.native_handle(), remote_ep_, conn_close_buf_.data(),
+    send_gso(socket_.native_handle(), path_remote(ps.path), conn_close_buf_.data(),
              conn_close_buf_.size(), conn_close_buf_.size(), reply_source_);
   }
   closed_ = true;
@@ -1737,7 +1753,7 @@ void QuicNgtcp2Listener::handle_packet(
     auto mb = pkt.prepare(len);
     std::memcpy(mb.data(), data, len);
     pkt.commit(len);
-    conn->enqueue_packet(std::move(pkt), pi);
+    conn->enqueue_packet(std::move(pkt), pi, from);
     return;
   }
 
@@ -1784,7 +1800,7 @@ int QuicNgtcp2Listener::handle_new_connection(
   auto mb = pkt.prepare(len);
   std::memcpy(mb.data(), data, len);
   pkt.commit(len);
-  conn->enqueue_packet(std::move(pkt), pi);
+  conn->enqueue_packet(std::move(pkt), pi, from);
 
   NPRPC_QUIC_TRACE("accepted connection from {}", from.address().to_string());
   return 0;
@@ -1911,6 +1927,8 @@ private:
   EndPoint                 endpoint_;
   boost::asio::ip::udp::socket socket_;
   boost::asio::ip::udp::endpoint remote_ep_;
+  // Who sent the last datagram, which is anyone at all until ngtcp2 says otherwise.
+  boost::asio::ip::udp::endpoint sender_ep_;
   boost::asio::strand<boost::asio::io_context::executor_type> strand_;
   boost::asio::steady_timer timer_;
   uint64_t last_scheduled_expiry_ = UINT64_MAX;
@@ -2183,7 +2201,7 @@ void QuicNgtcp2ClientConn::do_receive()
 {
   if (closed_) return;
   socket_.async_receive_from(
-      boost::asio::buffer(recv_buf_), remote_ep_,
+      boost::asio::buffer(recv_buf_), sender_ep_,
       boost::asio::bind_executor(
           strand_,
           [self = shared_from_this()](boost::system::error_code ec, size_t n) {
@@ -2202,7 +2220,7 @@ void QuicNgtcp2ClientConn::do_receive()
             for (int i = 1; ok && i < kMaxRecvBatch; ++i) {
               boost::system::error_code drain_ec;
               const size_t more = self->socket_.receive_from(
-                  boost::asio::buffer(self->recv_buf_), self->remote_ep_, 0, drain_ec);
+                  boost::asio::buffer(self->recv_buf_), self->sender_ep_, 0, drain_ec);
               if (drain_ec) break;
               ok = self->read_udp_packet(self->recv_buf_.data(), more);
             }
@@ -2218,7 +2236,7 @@ bool QuicNgtcp2ClientConn::read_udp_packet(const uint8_t* data, size_t len)
   if (closed_ || !conn_) return false;
 
   sockaddr_storage lss, rss;
-  auto path = make_path(local_ep_, remote_ep_, lss, rss);
+  auto path = make_path(local_ep_, sender_ep_, lss, rss);
   ngtcp2_pkt_info pi{};
 
   int rv = ngtcp2_conn_read_pkt(conn_, &path, &pi, data, len, timestamp_ns());
@@ -2343,7 +2361,7 @@ void QuicNgtcp2ClientConn::do_write()
 
   if (nwrite == 0) return;
 
-  send_gso(socket_.native_handle(), remote_ep_,
+  send_gso(socket_.native_handle(), path_remote(ps.path),
            txbuf_.data(), static_cast<size_t>(nwrite), gso_size);
 }
 
@@ -2617,7 +2635,7 @@ void QuicNgtcp2ClientConn::close()
       ngtcp2_ccerr error{};
       const auto n = ngtcp2_conn_write_connection_close(
           self->conn_, &ps.path, &pi, packet.data(), packet.size(), &error, timestamp_ns());
-      if (n > 0) send_gso(self->socket_.native_handle(), self->remote_ep_, packet.data(), n, n);
+      if (n > 0) send_gso(self->socket_.native_handle(), path_remote(ps.path), packet.data(), n, n);
     }
     self->handle_error();
   });

@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
       if (no_ipv6) return 77;
       raw->get_data().urls = "quic://quic-test.invalid:28444;";
     }
+    if (mode == "client-rebinding") raw->get_data().urls = std::string("quic://localhost:") + std::getenv("QUIC_TLS_RELAY_PORT") + ";";
     if (mode == "client-named-direct") raw->get_data().urls = "quic://quic-test.invalid:28444;";
     if (mode == "client-unresolvable") raw->get_data().urls = "quic://no-such-host.invalid:28444;";
     if (std::string(argv[1]) == "client-ip") {
@@ -122,6 +123,15 @@ int main(int argc, char** argv) {
       watch_once();
       // Connected without trying the dead address means nothing was shown.
       return black_hole->available() > 0 ? 0 : 9;
+    }
+    if (mode == "client-rebinding") {
+      // The relay changes the source port about a second in, as a NAT would.
+      auto stream = object->Watch(250);
+      for (int i = 0; i < 12; ++i)
+        if (!stream.read_next()) return 5;
+      stream.cancel();
+      watch_once();
+      return 0;
     }
     if (mode == "client-named-direct") {
       watch_once();
