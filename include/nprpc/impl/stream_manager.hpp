@@ -65,8 +65,17 @@ public:
   // Callback type for sending datagrams (unreliable stream data)
   using SendDatagramCallback = std::function<bool(flat_buffer&&)>;
 
-  // Generate unique stream ID (client-side)
-  static uint64_t generate_stream_id();
+  // Generate unique stream ID (client-side).  The top byte says how the stream
+  // is delivered, so sending a chunk needs no lookup.  It is a whole byte because
+  // older clients generate 64 random bits: one in 256 of their IDs looks tagged,
+  // and register_stream() refuses those on a reliable method.
+  static constexpr uint64_t kUnreliableStreamTag = 0xA5;
+  static constexpr int kStreamTagShift = 56;
+  static uint64_t generate_stream_id(bool unreliable = false);
+  static constexpr bool is_unreliable_stream_id(uint64_t stream_id) noexcept
+  {
+    return (stream_id >> kStreamTagShift) == kUnreliableStreamTag;
+  }
 
   StreamManager(SessionContext& session,
                std::shared_ptr<std::weak_ptr<Session>> self_cell,
@@ -82,7 +91,9 @@ public:
   // Set the callback for sending datagrams (unreliable stream data)
   void set_send_datagram_callback(SendDatagramCallback callback) { send_datagram_callback_ = std::move(callback); }
 
-  // Server-side: register outgoing stream (with optional unreliable flag).
+  // Server-side: register outgoing stream.  `unreliable` is what the IDL says;
+  // throws if the stream ID asks for datagrams on a reliable method.  An
+  // untagged ID on an unreliable method is simply delivered reliably.
   // initial_credits is the consumer's window from StreamInit.initial_credits;
   // 0 means the peer didn't advertise one — fall back to kInitialWindowSize.
   void register_stream(uint64_t stream_id,
@@ -185,7 +196,6 @@ private:
   // Active outgoing streams (server-side)
   struct StreamInfo {
     std::unique_ptr<StreamWriterBase> writer;  // null for external (Swift) writers
-    bool unreliable = false;
     int32_t credits = kInitialWindowSize;
     // A coroutine in start_stream() owns the writer now; `writer` above is null.
     bool pumped = false;
@@ -224,8 +234,6 @@ private:
   // Mutex for thread-safe access
   std::mutex mutex_;
 
-  // Internal helper to determine if a stream is unreliable
-  bool is_stream_unreliable(uint64_t stream_id) const;
   bool is_stream_started(uint64_t stream_id) const;
   // Returns false without dispatching if the owning session has died, and
   // false after dispatching if the transport refused the message.

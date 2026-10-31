@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <random>
+#include <stdexcept>
 
 #define NPRPC_ENABLE_STREAM_MANAGER_TRACE 0
 
@@ -24,7 +25,7 @@
 
 namespace nprpc::impl {
 
-uint64_t StreamManager::generate_stream_id()
+uint64_t StreamManager::generate_stream_id(bool unreliable)
 {
   static std::atomic<uint64_t> counter{0};
   static const uint64_t random_base = []() {
@@ -32,7 +33,8 @@ uint64_t StreamManager::generate_stream_id()
     return (static_cast<uint64_t>(rd()) << 32) | rd();
   }();
 
-  return random_base ^ (++counter);
+  const uint64_t id = (random_base ^ (++counter)) & ((uint64_t{1} << kStreamTagShift) - 1);
+  return unreliable ? id | (kUnreliableStreamTag << kStreamTagShift) : id;
 }
 
 StreamManager::StreamManager(SessionContext& session,
@@ -110,12 +112,12 @@ bool StreamManager::dispatch_buffer(uint64_t stream_id, flat_buffer&& fb)
   NPRPC_STREAM_MANAGER_LOG_TRACE("Dispatching buffer to stream: stream_id={} buffer_size={}", stream_id, fb.data().size());
   auto* header = reinterpret_cast<flat::Header*>(fb.data().data());
   if (header->msg_id == MessageId::StreamDataChunk) {
-    const bool unreliable = is_stream_unreliable(stream_id);
-    if (unreliable && send_datagram_callback_) {
+    if (is_unreliable_stream_id(stream_id) && send_datagram_callback_) {
       if (!send_datagram_callback_(std::move(fb))) {
         NPRPC_LOG_WARN("StreamManager::send_chunk: datagram send failed (may be too large)");
         return false;
       }
+      return true;
     } else if (send_native_stream_callback_) {
       return report_send(stream_id, send_native_stream_callback_(std::move(fb)));
     } else if (send_callback_) {
@@ -382,26 +384,19 @@ void StreamManager::register_stream(uint64_t stream_id,
                                     bool unreliable,
                                     uint32_t initial_credits)
 {
+  if (is_unreliable_stream_id(stream_id) && !unreliable)
+    throw std::invalid_argument("Stream ID asks for datagrams on a reliable stream");
+
   const int32_t credits = initial_credits > 0
       ? static_cast<int32_t>(initial_credits)
       : kInitialWindowSize;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    writers_[stream_id] = StreamInfo{std::move(writer), unreliable, credits};
+    writers_[stream_id] = StreamInfo{std::move(writer), credits};
   }
 
   NPRPC_STREAM_MANAGER_LOG_TRACE("Stream registered: {} (unreliable={}, credits={})",
                                  stream_id, unreliable, credits);
-}
-
-bool StreamManager::is_stream_unreliable(uint64_t stream_id) const
-{
-  // Note: mutex should be held by caller or this should be called from a safe context
-  auto it = writers_.find(stream_id);
-  if (it != writers_.end()) {
-    return it->second.unreliable;
-  }
-  return false;
 }
 
 void StreamManager::register_reader(uint64_t stream_id,
@@ -621,15 +616,8 @@ bool StreamManager::send_chunk(uint64_t stream_id,
                                std::span<const uint8_t> data,
                                uint64_t sequence)
 {
-  // Check if this is an unreliable stream
-  bool unreliable = false;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    unreliable = is_stream_unreliable(stream_id);
-  }
-
-  NPRPC_STREAM_MANAGER_LOG_TRACE("send_chunk called: stream_id={}, data.size()={}, sequence={}, unreliable={}",
-                  stream_id, data.size(), sequence, unreliable);
+  NPRPC_STREAM_MANAGER_LOG_TRACE("send_chunk called: stream_id={}, data.size()={}, sequence={}",
+                  stream_id, data.size(), sequence);
 
   // TODO: Shared Memory Optimization - write directly to shared ring buffer
 

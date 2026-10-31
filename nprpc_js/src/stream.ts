@@ -316,7 +316,8 @@ export class StreamManager {
   }
 
   generate_stream_id(): bigint {
-    return StreamManager.random_base ^ (++this.id_counter);
+    // The server reads the top byte as the delivery tag; zero means reliable.
+    return BigInt.asUintN(56, StreamManager.random_base ^ (++this.id_counter));
   }
 
   register_reader(stream_id: bigint, reader: StreamReaderBase): void {

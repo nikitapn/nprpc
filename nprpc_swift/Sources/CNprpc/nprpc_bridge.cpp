@@ -1362,6 +1362,10 @@ uint64_t nprpc_generate_stream_id() {
     return nprpc::impl::StreamManager::generate_stream_id();
 }
 
+uint64_t nprpc_generate_unreliable_stream_id() {
+    return nprpc::impl::StreamManager::generate_stream_id(true);
+}
+
 void* nprpc_object_get_stream_manager(void* object_ptr) {
     auto* obj = static_cast<nprpc::Object*>(object_ptr);
     if (!obj) {

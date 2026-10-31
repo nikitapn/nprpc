@@ -2034,7 +2034,8 @@ void CppBuilder::proxy_stream_call(AstFunctionDecl* fn)
   auto* sd = fn->stream_decl;
   oc << "  auto session = "
         "::nprpc::impl::g_rpc->get_session(this->get_endpoint());\n";
-  oc << "  auto stream_id = ::nprpc::impl::StreamManager::generate_stream_id();\n";
+  oc << "  auto stream_id = ::nprpc::impl::StreamManager::generate_stream_id("
+     << (fn->is_reliable ? "" : "true") << ");\n";
 
   // Create StreamReader BEFORE sending StreamInit to avoid race condition
   // where chunks arrive before the reader is registered

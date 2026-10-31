@@ -1131,7 +1131,10 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
   out << " " << bb();
 
   // Generate unique stream ID
-  out << bl() << "let streamId = nprpc_generate_stream_id()\n\n";
+  out << bl() << "let streamId = "
+      << (fn->stream_kind == StreamKind::Server && !fn->is_reliable
+            ? "nprpc_generate_unreliable_stream_id()" : "nprpc_generate_stream_id()")
+      << "\n\n";
 
   // Calculate buffer sizes for StreamInit
   const auto args_offset = get_stream_init_arguments_offset();

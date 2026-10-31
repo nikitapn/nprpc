@@ -482,6 +482,7 @@ void* nprpc_poa_activate_swift_servant_with_id(
 
 // Generate a unique stream ID
 uint64_t nprpc_generate_stream_id();
+uint64_t nprpc_generate_unreliable_stream_id();
 
 // Get stream_manager pointer for a client-side object.
 // The returned pointer is valid for the lifetime of the underlying session.

@@ -6,6 +6,7 @@
 #include <boost/asio/thread_pool.hpp>
 #include <atomic>
 #include <cassert>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 using namespace std::chrono_literals;
@@ -99,6 +100,39 @@ int main() {
     parked.reset();
     run_until(parked_io, [&] { return weak_parked.expired(); });
     assert(live_producers == 0);
+  }
+
+  // Delivery follows the stream ID's tag.
+  {
+    using Manager = nprpc::impl::StreamManager;
+    boost::asio::io_context tag_io;
+    nprpc::SessionContext tag_context;
+    Manager tagged(tag_context, nullptr, tag_io.get_executor());
+    int reliable_sends = 0, datagram_sends = 0;
+    tagged.set_send_callback([&](nprpc::flat_buffer&&) { ++reliable_sends; return true; });
+    tagged.set_send_datagram_callback([&](nprpc::flat_buffer&&) { ++datagram_sends; return true; });
+    const auto reliable_id = Manager::generate_stream_id();
+    const auto unreliable_id = Manager::generate_stream_id(true);
+    assert(!Manager::is_unreliable_stream_id(reliable_id));
+    assert(Manager::is_unreliable_stream_id(unreliable_id));
+    assert(Manager::generate_stream_id() != reliable_id);
+
+    tagged.defer_stream_start(reliable_id);
+    tagged.defer_stream_start(unreliable_id);
+    tagged.on_reply_sent();
+    tag_io.run();
+    const uint8_t byte = 1;
+    assert(tagged.send_chunk(reliable_id, {&byte, 1}, 0));
+    assert(reliable_sends == 1 && datagram_sends == 0);
+    assert(tagged.send_chunk(unreliable_id, {&byte, 1}, 0));
+    assert(reliable_sends == 1 && datagram_sends == 1);
+
+    // An older client's random ID can look tagged; a reliable method refuses it.
+    bool rejected = false;
+    auto writer = std::make_unique<nprpc::StreamWriter<uint8_t>>(values());
+    try { tagged.register_stream(unreliable_id, std::move(writer), false); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    assert(rejected);
   }
 
   // Cancellation arrives on a transport thread while the pump runs on a pool.
