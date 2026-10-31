@@ -125,6 +125,48 @@ int main() {
     assert(streams == 0);
   }
 
+  // A reader being destroyed waits for a delivery already inside it.
+  {
+    struct SlowReader : nprpc::StreamReaderBase {
+      nprpc::impl::StreamManager& manager;
+      std::atomic<bool>& entered;
+      std::atomic<bool>& unregistered;
+      std::atomic<bool>& delivered_too_late;
+      SlowReader(nprpc::impl::StreamManager& m, std::atomic<bool>& e, std::atomic<bool>& u, std::atomic<bool>& l)
+        : manager(m), entered(e), unregistered(u), delivered_too_late(l) {}
+      ~SlowReader() override {
+        manager.unregister_reader(45, this);
+        unregistered = true;
+      }
+      void on_chunk_received(nprpc::flat_buffer) override {
+        entered = true;
+        std::this_thread::sleep_for(100ms);
+        if (unregistered) delivered_too_late = true;
+      }
+      void on_complete() override {}
+      void on_error(uint32_t, nprpc::flat_buffer) override {}
+    };
+    boost::asio::io_context delivery_io;
+    nprpc::SessionContext delivery_context;
+    nprpc::impl::StreamManager delivering(delivery_context, nullptr, delivery_io.get_executor());
+    nprpc::flat_buffer chunk;
+    delivering.set_send_callback([&](nprpc::flat_buffer&& fb) { chunk = std::move(fb); return true; });
+    delivering.defer_stream_start(45);
+    delivering.on_reply_sent();
+    delivery_io.run();
+    const uint8_t byte = 1;
+    assert(delivering.send_chunk(45, {&byte, 1}, 0));
+
+    std::atomic<bool> entered{false}, unregistered{false}, delivered_too_late{false};
+    auto reader = std::make_unique<SlowReader>(delivering, entered, unregistered, delivered_too_late);
+    delivering.register_reader(45, reader.get());
+    std::thread transport([&] { delivering.on_chunk_received(std::move(chunk)); });
+    while (!entered) std::this_thread::yield();
+    reader.reset();
+    transport.join();
+    assert(!delivered_too_late);
+  }
+
   // Delivery follows the stream ID's tag.
   {
     using Manager = nprpc::impl::StreamManager;

@@ -262,6 +262,13 @@ private:
   // Mutex for thread-safe access
   std::mutex mutex_;
 
+  // Held while calling into a reader, and by unregister_reader(), so a reader
+  // being destroyed on another thread waits for a delivery already inside it.
+  // Finding no entry proves nothing: the last chunk erases the entry before it
+  // is delivered.  Recursive because a delivery can end up destroying a reader.
+  // Taken before mutex_, never while holding it.
+  std::recursive_mutex reader_delivery_mutex_;
+
   bool is_stream_started(uint64_t stream_id) const;
   // Returns false without dispatching if the owning session has died, and
   // false after dispatching if the transport refused the message.

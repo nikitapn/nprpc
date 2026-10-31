@@ -425,6 +425,7 @@ void StreamManager::unregister_reader(uint64_t stream_id,
                                       StreamReaderBase* reader)
 {
   NPRPC_STREAM_MANAGER_LOG_TRACE("Unregistering reader: stream_id={}", stream_id);
+  std::lock_guard delivery(reader_delivery_mutex_);
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = readers_.find(stream_id);
   if (it != readers_.end() && it->second.reader == reader) {
@@ -448,6 +449,7 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
   NPRPC_STREAM_MANAGER_LOG_TRACE("on_chunk_received called: stream_id={} chunk_size={} sequence={}",
                                  stream_id, fb.data().size(), sequence);
 
+  std::lock_guard delivery(reader_delivery_mutex_);
   StreamReaderBase* reader = nullptr;
   std::unique_ptr<StreamReaderBase> completed_reader;
   bool should_complete = false;
@@ -494,6 +496,7 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
 void StreamManager::on_stream_complete(uint64_t stream_id, uint64_t final_sequence)
 {
   NPRPC_STREAM_MANAGER_LOG_TRACE("on_stream_complete called: stream_id={} final_sequence={}", stream_id, final_sequence);
+  std::lock_guard delivery(reader_delivery_mutex_);
   StreamReaderBase* reader = nullptr;
   std::unique_ptr<StreamReaderBase> owned_reader;
 
@@ -527,6 +530,7 @@ void StreamManager::on_stream_complete(uint64_t stream_id, uint64_t final_sequen
 void StreamManager::on_stream_error(uint64_t stream_id, uint32_t error_code, flat_buffer&& error_data)
 {
   NPRPC_STREAM_MANAGER_LOG_TRACE("on_stream_error called: stream_id={}, error_code={}", stream_id, error_code);
+  std::lock_guard delivery(reader_delivery_mutex_);
   StreamReaderBase* reader = nullptr;
   std::unique_ptr<StreamReaderBase> owned_reader;
 
@@ -567,8 +571,6 @@ StreamManager::take_parked_callbacks(uint64_t stream_id)
 void StreamManager::on_stream_cancel(uint64_t stream_id)
 {
   NPRPC_STREAM_MANAGER_LOG_TRACE("on_stream_cancel called: stream_id={}", stream_id);
-  StreamReaderBase* reader = nullptr;
-  std::unique_ptr<StreamReaderBase> owned_reader;
   std::unique_ptr<StreamWriterBase> writer;
   std::shared_ptr<boost::asio::steady_timer> pacing_timer;
   std::shared_ptr<boost::asio::steady_timer> credit_timer;
@@ -576,13 +578,6 @@ void StreamManager::on_stream_cancel(uint64_t stream_id)
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto reader_it = readers_.find(stream_id);
-    if (reader_it != readers_.end()) {
-      reader = reader_it->second.reader;
-      owned_reader = std::move(reader_it->second.owned_reader);
-      readers_.erase(reader_it);
-    }
-
     parked = take_parked_callbacks(stream_id);
 
     auto writer_it = writers_.find(stream_id);
@@ -605,8 +600,22 @@ void StreamManager::on_stream_cancel(uint64_t stream_id)
   for (auto& cb : parked)
     cb(false);
 
-  if (reader) {
-    reader->on_complete();
+  {
+    std::lock_guard delivery(reader_delivery_mutex_);
+    StreamReaderBase* reader = nullptr;
+    std::unique_ptr<StreamReaderBase> owned_reader;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto reader_it = readers_.find(stream_id);
+      if (reader_it != readers_.end()) {
+        reader = reader_it->second.reader;
+        owned_reader = std::move(reader_it->second.owned_reader);
+        readers_.erase(reader_it);
+      }
+    }
+    if (reader) {
+      reader->on_complete();
+    }
   }
 
   if (writer) {
@@ -964,7 +973,6 @@ void StreamManager::cancel_all()
   // writes again.  All of them take mutex_, which this function would still
   // be holding — so the work happens after the lock is released, on copies
   // taken while it was held.
-  std::vector<std::pair<StreamReaderBase*, std::unique_ptr<StreamReaderBase>>> readers;
   std::vector<std::function<void(bool)>> parked;
   std::vector<std::unique_ptr<StreamWriterBase>> writers;
   std::vector<std::shared_ptr<boost::asio::steady_timer>> pacing_timers;
@@ -998,14 +1006,6 @@ void StreamManager::cancel_all()
     pending_messages_.clear();
     pending_stream_starts_.clear();
     started_streams_.clear();
-
-    readers.reserve(readers_.size());
-    for (auto& [id, state] : readers_) {
-      if (state.reader) {
-        readers.emplace_back(state.reader, std::move(state.owned_reader));
-      }
-    }
-    readers_.clear();
   }
 
   for (auto& timer : pacing_timers)
@@ -1030,9 +1030,24 @@ void StreamManager::cancel_all()
   for (auto& [id, handler] : handlers)
     handler.set_completion_handler({});
 
-  for (auto& [reader, _] : readers) {
-    flat_buffer empty_fb;
-    reader->on_error(0, std::move(empty_fb));
+  {
+    // Collected only now, because the callbacks above can destroy a reader.
+    std::lock_guard delivery(reader_delivery_mutex_);
+    std::vector<std::pair<StreamReaderBase*, std::unique_ptr<StreamReaderBase>>> readers;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      readers.reserve(readers_.size());
+      for (auto& [id, state] : readers_) {
+        if (state.reader) {
+          readers.emplace_back(state.reader, std::move(state.owned_reader));
+        }
+      }
+      readers_.clear();
+    }
+    for (auto& [reader, _] : readers) {
+      flat_buffer empty_fb;
+      reader->on_error(0, std::move(empty_fb));
+    }
   }
 
   if (handlers.empty())
