@@ -56,6 +56,23 @@ int main(int argc, char** argv) {
       black_hole.emplace(black_hole_io, boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::loopback(), 0));
       raw->get_data().urls = "quic://127.0.0.1:" + std::to_string(black_hole->local_endpoint().port()) + ";";
     }
+    // These names come from the private /etc/hosts quic_tls_test.py runs them with.
+    if (mode == "client-named-black-hole") {
+      black_hole.emplace(black_hole_io, boost::asio::ip::udp::endpoint(boost::asio::ip::make_address("127.0.0.2"), 0));
+      raw->get_data().urls = "quic://quic-test.invalid:" + std::to_string(black_hole->local_endpoint().port()) + ";";
+    }
+    if (mode == "client-named") {
+      // More specific than the server's wildcard socket on this port, so this
+      // address never answers while the next one reaches the server.
+      black_hole.emplace(black_hole_io);
+      black_hole->open(boost::asio::ip::udp::v6());
+      black_hole->set_option(boost::asio::socket_base::reuse_address(true));
+      boost::system::error_code no_ipv6;
+      black_hole->bind({boost::asio::ip::make_address("::1"), 28444}, no_ipv6);
+      if (no_ipv6) return 77;
+      raw->get_data().urls = "quic://quic-test.invalid:28444;";
+    }
+    if (mode == "client-unresolvable") raw->get_data().urls = "quic://no-such-host.invalid:28444;";
     if (std::string(argv[1]) == "client-ip") {
       raw->get_data().urls = "quic://127.0.0.1:28444;";
     }
@@ -95,6 +112,25 @@ int main(int argc, char** argv) {
       return elapsed < std::chrono::milliseconds(limit_ms) ? 0 : 7;
     };
     if (mode == "client-black-hole") return expect_timeout(3000);
+    if (mode == "client-named-black-hole") {
+      const int result = expect_timeout(3000);
+      // Anything else means the name did not decide where the packets went.
+      return result != 0 ? result : black_hole->available() > 0 ? 0 : 9;
+    }
+    if (mode == "client-named") {
+      watch_once();
+      // Connected without trying the dead address means nothing was shown.
+      return black_hole->available() > 0 ? 0 : 9;
+    }
+    if (mode == "client-unresolvable") {
+      object->set_timeout(2000);
+      try {
+        object->Watch(250);
+        return 6;
+      } catch (const nprpc::Exception&) {
+        return 0;
+      }
+    }
     if (mode == "client-frozen-server") {
       watch_once();
       ::kill(std::stoi(std::getenv("QUIC_TLS_SERVER_PID")), SIGSTOP);

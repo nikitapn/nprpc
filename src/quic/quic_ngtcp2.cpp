@@ -1750,8 +1750,9 @@ public:
   ~QuicNgtcp2ClientConn();
 
   // Blocks the caller until the handshake ends or timeout_ms passes.
-  // A connection gets one attempt: a closed one is replaced, not reused.
-  ConnectResult connect(uint32_t timeout_ms);
+  // A connection gets one attempt: it is replaced afterwards, not reused.
+  ConnectResult connect(const boost::asio::ip::udp::endpoint& remote, uint32_t timeout_ms);
+  bool connect_attempted() const noexcept { return connect_attempted_; }
   void close();
   bool is_connected() const { return connected_.load(); }
   bool is_closed() const { return closed_.load(); }
@@ -1931,7 +1932,8 @@ bool QuicNgtcp2ClientConn::setup_ssl_ctx()
   return true;
 }
 
-QuicNgtcp2ClientConn::ConnectResult QuicNgtcp2ClientConn::connect(uint32_t timeout_ms)
+QuicNgtcp2ClientConn::ConnectResult QuicNgtcp2ClientConn::connect(
+    const boost::asio::ip::udp::endpoint& remote, uint32_t timeout_ms)
 {
   if (connect_attempted_ || io_->stopped()) return ConnectResult::Failed;
   connect_attempted_ = true;
@@ -1941,15 +1943,7 @@ QuicNgtcp2ClientConn::ConnectResult QuicNgtcp2ClientConn::connect(uint32_t timeo
     return ConnectResult::Failed;
   }
 
-  // Resolve endpoint address
-  boost::asio::ip::address addr;
-  boost::system::error_code ec;
-  addr = boost::asio::ip::make_address(std::string(endpoint_.hostname()), ec);
-  if (ec) {
-    // Simple loopback fallback; production code should do async resolve
-    addr = boost::asio::ip::address_v4::loopback();
-  }
-  remote_ep_ = {addr, static_cast<unsigned short>(endpoint_.port())};
+  remote_ep_ = remote;
 
   std::promise<bool> promise;
   auto future = promise.get_future();
@@ -2800,13 +2794,61 @@ private:
     std::lock_guard lock(conn_mutex_);
     if (conn_->is_connected()) return conn_;
     if (io_->on_this_thread()) throw nprpc::ExceptionCommFailure();
-    if (conn_->is_closed()) conn_ = make_conn();
-    switch (conn_->connect(effective_timeout(timeout_ms))) {
-    case QuicNgtcp2ClientConn::ConnectResult::Connected: return conn_;
-    case QuicNgtcp2ClientConn::ConnectResult::TimedOut: throw nprpc::ExceptionTimeout();
-    case QuicNgtcp2ClientConn::ConnectResult::Failed: break;
+
+    using Clock = std::chrono::steady_clock;
+    const auto deadline = Clock::now() + std::chrono::milliseconds(effective_timeout(timeout_ms));
+    const auto remaining_ms = [&] {
+      return std::max<int64_t>(0, std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - Clock::now()).count());
+    };
+
+    const auto addresses = resolve(static_cast<uint32_t>(remaining_ms()));
+
+    // UDP reports nothing about an address that does not answer, so each one
+    // gets a fair share of the time left rather than all of it.
+    bool timed_out = false;
+    for (size_t i = 0; i < addresses.size(); ++i) {
+      if (conn_->connect_attempted() || conn_->is_closed()) conn_ = make_conn();
+      const auto share = remaining_ms() / static_cast<int64_t>(addresses.size() - i);
+      switch (conn_->connect(addresses[i], static_cast<uint32_t>(share))) {
+      case QuicNgtcp2ClientConn::ConnectResult::Connected: return conn_;
+      case QuicNgtcp2ClientConn::ConnectResult::TimedOut: timed_out = true; break;
+      case QuicNgtcp2ClientConn::ConnectResult::Failed: break;
+      }
     }
+    if (timed_out) throw nprpc::ExceptionTimeout();
     throw nprpc::ExceptionCommFailure();
+  }
+
+  // Runs on the client thread, because getaddrinfo itself takes no timeout.
+  std::vector<boost::asio::ip::udp::endpoint> resolve(uint32_t timeout_ms)
+  {
+    using Resolver = boost::asio::ip::udp::resolver;
+    using Addresses = std::vector<boost::asio::ip::udp::endpoint>;
+    auto resolver = std::make_shared<Resolver>(io_->ioc);
+    std::promise<Addresses> promise;
+    auto future = promise.get_future();
+    resolver->async_resolve(
+        std::string(endpoint_.hostname()), std::to_string(endpoint_.port()),
+        Resolver::flags{},
+        [resolver, p = std::move(promise)](const boost::system::error_code& ec,
+                                           Resolver::results_type results) mutable {
+          Addresses addresses;
+          if (ec) {
+            NPRPC_QUIC_ERROR("cannot resolve QUIC host: {}", ec.message());
+          } else {
+            for (const auto& entry : results) addresses.push_back(entry.endpoint());
+          }
+          p.set_value(std::move(addresses));
+        });
+
+    if (future.wait_for(std::chrono::milliseconds(timeout_ms)) != std::future_status::ready) {
+      boost::asio::post(io_->ioc, [resolver] { resolver->cancel(); });
+      throw nprpc::ExceptionTimeout();
+    }
+    auto addresses = future.get();
+    if (addresses.empty()) throw nprpc::ExceptionCommFailure();
+    return addresses;
   }
 
   std::shared_ptr<QuicClientIo>         io_;
