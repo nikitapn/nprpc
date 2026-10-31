@@ -119,6 +119,7 @@ static constexpr size_t kMaxUdpPayload = 1350;
 
 // Maximum packets to batch per do_write() call
 static constexpr size_t kMaxBurst = 64;
+static constexpr int kMaxRecvBatch = 64;
 static constexpr size_t kMaxWriteVecs = 32;
 
 // Hard limit of the buffer passed to the kernel for UDP GSO:
@@ -348,6 +349,8 @@ public:
 
   // Thread-safe: post a received UDP packet to the strand
   void enqueue_packet(flat_buffer pkt, ngtcp2_pkt_info pi);
+  void schedule_write();
+  bool write_pending_ = false; // On strand_.
 
   // Thread-safe: post a write to the RPC stream
   void enqueue_response(flat_buffer buf);
@@ -391,6 +394,7 @@ private:
   boost::asio::ip::udp::endpoint                        remote_ep_;
   boost::asio::strand<boost::asio::io_context::executor_type> strand_;
   boost::asio::steady_timer                             timer_;
+  uint64_t last_scheduled_expiry_ = UINT64_MAX;
 
   ngtcp2_conn*            conn_      = nullptr;
   ngtcp2_crypto_conn_ref  conn_ref_{};
@@ -689,8 +693,20 @@ void QuicNgtcp2ServerConn::enqueue_packet(flat_buffer pkt, ngtcp2_pkt_info pi)
       [self = shared_from_this(), p = std::move(pkt), pi]() mutable {
         if (self->closed_) return;
         self->do_read(p.data_ptr(), p.size(), &pi);
-        self->do_write();
+        self->schedule_write();
       });
+}
+
+void QuicNgtcp2ServerConn::schedule_write()
+{
+  // Datagrams drained together share one write, and through it one timer
+  // re-arm, instead of each paying for their own.
+  if (write_pending_) return;
+  write_pending_ = true;
+  boost::asio::post(strand_, [self = shared_from_this()]() {
+    self->write_pending_ = false;
+    if (!self->closed_) self->do_write();
+  });
 }
 
 void QuicNgtcp2ServerConn::enqueue_response(flat_buffer buf)
@@ -731,7 +747,6 @@ void QuicNgtcp2ServerConn::do_read(const uint8_t* data, size_t len,
       return;
     }
   }
-  schedule_timer();
 }
 
 void QuicNgtcp2ServerConn::do_write()
@@ -791,15 +806,13 @@ void QuicNgtcp2ServerConn::do_write()
   ngtcp2_pkt_info pi{};
   size_t gso_size = 0;
 
-  const size_t buflen = std::min(txbuf_.size(),
-                                  ngtcp2_conn_get_send_quantum2(conn_));
-
-  auto nwrite = ngtcp2_conn_write_aggregate_pkt2(
+  // The high-level form clamps to one pacing burst and updates the pacer
+  // itself, with a single timestamp.  See Http3Connection::on_write().
+  auto nwrite = ngtcp2_conn_write_aggregate_pkt(
       conn_, &ps.path, &pi,
-      txbuf_.data(), buflen, &gso_size,
-      write_pkt_cb, kMaxBurst, timestamp_ns());
+      txbuf_.data(), txbuf_.size(), &gso_size,
+      write_pkt_cb, timestamp_ns());
 
-  ngtcp2_conn_update_pkt_tx_time(conn_, timestamp_ns());
   schedule_timer();
 
   if (!write_queue_.empty() && (nwrite == 0 || (nwrite > 0 && gso_size < 256))) {
@@ -856,17 +869,24 @@ void QuicNgtcp2ServerConn::schedule_timer()
   if (expiry == UINT64_MAX) return;
 
   if (expiry <= now) {
+    last_scheduled_expiry_ = UINT64_MAX;
     boost::asio::post(strand_, [self = shared_from_this()]() {
       if (!self->closed_) { self->handle_expiry(); self->do_write(); }
     });
     return;
   }
 
+  // Re-arming a timer is a syscall; called per write, most leave it unchanged.
+  if (expiry == last_scheduled_expiry_) return;
+  last_scheduled_expiry_ = expiry;
+
   timer_.expires_after(std::chrono::nanoseconds(expiry - now));
   timer_.async_wait(boost::asio::bind_executor(
       strand_,
       [self = shared_from_this()](boost::system::error_code ec) {
-        if (ec || self->closed_) return;
+        if (ec) return;
+        self->last_scheduled_expiry_ = UINT64_MAX;
+        if (self->closed_) return;
         self->handle_expiry();
         self->do_write();
       }));
@@ -1221,6 +1241,7 @@ bool QuicNgtcp2Listener::start()
       boost::asio::socket_base::receive_buffer_size(2 * 1024 * 1024), ec);
   socket_.set_option(
       boost::asio::socket_base::send_buffer_size(2 * 1024 * 1024), ec);
+  socket_.non_blocking(true, ec);
   socket_.bind(
       boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v6(), port_), ec);
   if (ec) { NPRPC_QUIC_ERROR("bind: {}", ec.message()); return false; }
@@ -1254,6 +1275,13 @@ void QuicNgtcp2Listener::do_receive()
           return;
         }
         handle_packet(sender_ep_, recv_buf_.data(), bytes);
+        for (int i = 1; i < kMaxRecvBatch; ++i) {
+          boost::system::error_code drain_ec;
+          const size_t more = socket_.receive_from(
+              boost::asio::buffer(recv_buf_), sender_ep_, 0, drain_ec);
+          if (drain_ec) break;
+          handle_packet(sender_ep_, recv_buf_.data(), more);
+        }
         do_receive();
       });
 }
@@ -1395,7 +1423,8 @@ private:
   void do_connect(boost::asio::ip::udp::endpoint      remote_ep,
                   std::move_only_function<void(bool)> on_done);
   void do_receive();
-  void on_udp_recv(const uint8_t* data, size_t len);
+  bool read_udp_packet(const uint8_t* data, size_t len);
+  boost::asio::ip::udp::endpoint local_ep_;
   void do_write();
   void schedule_timer();
   void handle_expiry();
@@ -1430,6 +1459,7 @@ private:
   boost::asio::ip::udp::endpoint remote_ep_;
   boost::asio::strand<boost::asio::io_context::executor_type> strand_;
   boost::asio::steady_timer timer_;
+  uint64_t last_scheduled_expiry_ = UINT64_MAX;
 
   SSL_CTX*            ssl_ctx_  = nullptr;
   ngtcp2_conn*        conn_     = nullptr;
@@ -1585,7 +1615,9 @@ void QuicNgtcp2ClientConn::do_connect(boost::asio::ip::udp::endpoint   remote_ep
   socket_.bind(boost::asio::ip::udp::endpoint(proto, 0), ec);
   if (ec) { NPRPC_QUIC_ERROR("socket bind: {}", ec.message()); on_done(false); return; }
 
-  auto local_ep = socket_.local_endpoint();
+  socket_.non_blocking(true, ec);
+  local_ep_ = socket_.local_endpoint();
+  auto local_ep = local_ep_;
 
   generate_cid(&scid_, kScidLen);
   generate_cid(&dcid_, kScidLen); // random server destination CID
@@ -1693,18 +1725,30 @@ void QuicNgtcp2ClientConn::do_receive()
           strand_,
           [self = shared_from_this()](boost::system::error_code ec, size_t n) {
             if (ec || self->closed_) return;
-            self->on_udp_recv(self->recv_buf_.data(), n);
+            // Drain what is queued before writing: one wake-up per datagram
+            // cannot keep up with a sender, and neither can an ACK attempt
+            // per datagram.
+            bool ok = self->read_udp_packet(self->recv_buf_.data(), n);
+            for (int i = 1; ok && i < kMaxRecvBatch; ++i) {
+              boost::system::error_code drain_ec;
+              const size_t more = self->socket_.receive_from(
+                  boost::asio::buffer(self->recv_buf_), self->remote_ep_, 0, drain_ec);
+              if (drain_ec) break;
+              ok = self->read_udp_packet(self->recv_buf_.data(), more);
+            }
+            if (!ok || self->closed_) return;
+            self->schedule_timer();
+            self->do_write();
             self->do_receive();
           }));
 }
 
-void QuicNgtcp2ClientConn::on_udp_recv(const uint8_t* data, size_t len)
+bool QuicNgtcp2ClientConn::read_udp_packet(const uint8_t* data, size_t len)
 {
-  if (closed_ || !conn_) return;
+  if (closed_ || !conn_) return false;
 
   sockaddr_storage lss, rss;
-  auto local_ep = socket_.local_endpoint();
-  auto path = make_path(local_ep, remote_ep_, lss, rss);
+  auto path = make_path(local_ep_, remote_ep_, lss, rss);
   ngtcp2_pkt_info pi{};
 
   int rv = ngtcp2_conn_read_pkt(conn_, &path, &pi, data, len, timestamp_ns());
@@ -1713,17 +1757,16 @@ void QuicNgtcp2ClientConn::on_udp_recv(const uint8_t* data, size_t len)
     case NGTCP2_ERR_DRAINING:
     case NGTCP2_ERR_DROP_CONN:
       handle_error();
-      return;
+      return false;
     default:
       NPRPC_QUIC_ERROR("client read_pkt: {}", ngtcp2_strerror(rv));
       if (!last_error_.error_code)
         ngtcp2_ccerr_set_liberr(&last_error_, rv, nullptr, 0);
       handle_error();
-      return;
+      return false;
     }
   }
-  schedule_timer();
-  do_write();
+  return true;
 }
 
 void QuicNgtcp2ClientConn::do_write()
@@ -1779,15 +1822,13 @@ void QuicNgtcp2ClientConn::do_write()
   ngtcp2_pkt_info pi{};
   size_t gso_size = 0;
 
-  const size_t buflen = std::min(txbuf_.size(),
-                                  ngtcp2_conn_get_send_quantum2(conn_));
-
-  auto nwrite = ngtcp2_conn_write_aggregate_pkt2(
+  // The high-level form clamps to one pacing burst and updates the pacer
+  // itself, with a single timestamp.  See Http3Connection::on_write().
+  auto nwrite = ngtcp2_conn_write_aggregate_pkt(
       conn_, &ps.path, &pi,
-      txbuf_.data(), buflen, &gso_size,
-      write_pkt_cb, kMaxBurst, timestamp_ns());
+      txbuf_.data(), txbuf_.size(), &gso_size,
+      write_pkt_cb, timestamp_ns());
 
-  ngtcp2_conn_update_pkt_tx_time(conn_, timestamp_ns());
   schedule_timer();
 
   if (!write_queue_.empty() && (nwrite == 0 || (nwrite > 0 && gso_size < 256))) {
@@ -1840,16 +1881,23 @@ void QuicNgtcp2ClientConn::schedule_timer()
   auto now    = timestamp_ns();
   if (expiry == UINT64_MAX) return;
   if (expiry <= now) {
+    last_scheduled_expiry_ = UINT64_MAX;
     boost::asio::post(strand_, [self = shared_from_this()]() {
       if (!self->closed_) { self->handle_expiry(); self->do_write(); }
     });
     return;
   }
+  // Re-arming a timer is a syscall; called per write, most leave it unchanged.
+  if (expiry == last_scheduled_expiry_) return;
+  last_scheduled_expiry_ = expiry;
+
   timer_.expires_after(std::chrono::nanoseconds(expiry - now));
   timer_.async_wait(boost::asio::bind_executor(
       strand_,
       [self = shared_from_this()](boost::system::error_code ec) {
-        if (ec || self->closed_) return;
+        if (ec) return;
+        self->last_scheduled_expiry_ = UINT64_MAX;
+        if (self->closed_) return;
         self->handle_expiry();
         self->do_write();
       }));
