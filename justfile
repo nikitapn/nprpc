@@ -90,7 +90,7 @@ run-cpp-tests *args: (bt "nprpc_test") (bt "nprpc_server_test") (bt "test_http_u
     just _ensure-bpf "{{build_dir}}/test/nprpc_test"
     just _kill-test-procs
     set +e
-    timeout 60 ctest --test-dir "{{build_dir}}/test" --output-on-failure {{args}}
+    timeout 120 ctest --test-dir "{{build_dir}}/test" --output-on-failure {{args}}
     code=$?
     echo "Tests exited with code $code"
     exit $code

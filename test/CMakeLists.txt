@@ -553,3 +553,18 @@ if(NPRPC_ENABLE_QUIC)
     set_tests_properties(QuicTLS PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
   endif()
 endif()
+
+if(NPRPC_ENABLE_HTTP3 AND NPRPC_BUILD_ROUTER)
+  add_executable(http3_rebinding_fixture src/http3_rebinding_fixture.cpp)
+  target_link_libraries(http3_rebinding_fixture PRIVATE nprpc::nprpc)
+  # The test runs these, and the usual test targets are what gets built before it.
+  add_dependencies(nprpc_test http3_rebinding_fixture npquicrouter)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME Http3RouterRebinding COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/http3_router_rebinding_test.py
+      $<TARGET_FILE:http3_rebinding_fixture> $<TARGET_FILE:npquicrouter>
+      ${CMAKE_SOURCE_DIR}/certs/out/localhost.crt ${CMAKE_SOURCE_DIR}/certs/out/localhost.key)
+    set_tests_properties(Http3RouterRebinding PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+  endif()
+endif()

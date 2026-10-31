@@ -22,6 +22,9 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <string_view>
+#include <optional>
+#include <mutex>
 #include <vector>
 
 #include <boost/asio.hpp>
@@ -703,6 +706,59 @@ private:
 // UDP router — QUIC SNI routing via per-session ephemeral sockets
 //==============================================================================
 
+// Server connection IDs seen on SHM routes, so a client that shows up from a new
+// address can still be routed: the ID stays the same when a NAT rebinds it, and
+// it is all a short header carries.  Shared because the new address may land on
+// another worker.  Nothing here is trusted: the backend gets the real sender and
+// validates the new path before replying to it.
+class ShmCidRoutes {
+public:
+    struct Route {
+        ShmIngressWriter* writer;
+        udp::endpoint backend_ep;
+    };
+
+    void learn(std::string_view cid, const Route& route) {
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard lock(mutex_);
+        if (routes_.size() < kMaxEntries || routes_.contains(std::string(cid)))
+            routes_[std::string(cid)] = Entry{route, now};
+    }
+
+    std::optional<Route> find(std::string_view cid) {
+        std::lock_guard lock(mutex_);
+        auto it = routes_.find(std::string(cid));
+        if (it == routes_.end()) return std::nullopt;
+        return it->second.route;
+    }
+
+    void expire(std::chrono::seconds timeout) {
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard lock(mutex_);
+        for (auto it = routes_.begin(); it != routes_.end(); ) {
+            if (now - it->second.last_seen > timeout) it = routes_.erase(it);
+            else ++it;
+        }
+    }
+
+private:
+    static constexpr size_t kMaxEntries = 1u << 20;
+    struct Entry {
+        Route route;
+        std::chrono::steady_clock::time_point last_seen;
+    };
+    std::mutex mutex_;
+    std::unordered_map<std::string, Entry> routes_;
+};
+
+static ShmCidRoutes g_shm_cid_routes;
+
+// The destination connection ID of a short-header packet, if this is one.
+static std::optional<std::string_view> short_header_cid(std::span<const uint8_t> datagram) {
+    if (datagram.size() < 1 + kQuicServerScidLen || (datagram[0] & 0x80u)) return std::nullopt;
+    return std::string_view(reinterpret_cast<const char*>(datagram.data() + 1), kQuicServerScidLen);
+}
+
 // Pending QUIC connection: buffer CRYPTO fragments until SNI is extractable.
 struct PendingQuicSession {
     udp::endpoint        client_ep;     // who to route back to once SNI is known
@@ -767,6 +823,10 @@ struct UdpSession {
     std::array<uint8_t, 65536> back_buf{};
     // SHM mode only — non-owning pointer into UdpRouter::shm_ingress_map_.
     ShmIngressWriter* shm_ingress = nullptr;
+    // The connection ID last published to g_shm_cid_routes, and when.  Comparing
+    // first keeps the shared table's lock off the per-packet path.
+    std::string learned_cid;
+    std::chrono::steady_clock::time_point learned_at{};
 
     // SHM mode: only client/backend endpoints are tracked.
     UdpSession(udp::endpoint cep, udp::endpoint bep)
@@ -1045,6 +1105,7 @@ private:
             // Existing session — forward to backend.
             it->second->last_seen = std::chrono::steady_clock::now();
             if (it->second->shm_ingress) {
+                learn_connection_id(*it->second, datagram);
                 // SHM mode: write to this session's ingress ring.
                 const auto ep_data = sender.data();
                 it->second->shm_ingress->write_packet(
@@ -1058,6 +1119,8 @@ private:
             }
             return;
         }
+
+        if (route_moved_client(datagram, sender)) return;
 
         // Walk all coalesced QUIC Initial packets in this UDP datagram.
         // RFC 9000 §12.2: multiple QUIC packets may be concatenated in one UDP datagram.
@@ -1169,6 +1232,38 @@ private:
         }
     }
 
+    void learn_connection_id(UdpSession& sess, std::span<const uint8_t> datagram) {
+        const auto cid = short_header_cid(datagram);
+        if (!cid) return;
+        const auto now = std::chrono::steady_clock::now();
+        // Republished well inside the timeout, or an active ID would expire.
+        const auto refresh = std::chrono::seconds(timeout_sec_) / 4;
+        if (sess.learned_cid == *cid && now - sess.learned_at < refresh) return;
+        sess.learned_cid = *cid;
+        sess.learned_at  = now;
+        g_shm_cid_routes.learn(*cid, {sess.shm_ingress, sess.backend_ep});
+    }
+
+    // A known connection ID from an unknown address is a client that moved.
+    bool route_moved_client(std::span<const uint8_t> datagram, const udp::endpoint& sender) {
+        const auto cid = short_header_cid(datagram);
+        if (!cid) return false;
+        const auto route = g_shm_cid_routes.find(*cid);
+        if (!route) return false;
+
+        auto sess = std::make_shared<UdpSession>(sender, route->backend_ep);
+        sess->shm_ingress = route->writer;
+        sessions_.emplace(sender, sess);
+        std::clog << "[UDP] Client moved to " << sender << "\n";
+        learn_connection_id(*sess, datagram);
+        const auto ep_data = sender.data();
+        route->writer->write_packet(
+            static_cast<const sockaddr*>(static_cast<const void*>(ep_data)),
+            static_cast<socklen_t>(sender.size()),
+            datagram.data(), datagram.size());
+        return true;
+    }
+
     void recv_from_backend(std::shared_ptr<UdpSession> sess) {
         sess->backend_sock->async_receive(
             asio::buffer(sess->back_buf),
@@ -1195,6 +1290,7 @@ private:
                 else
                     ++it;
             }
+            g_shm_cid_routes.expire(timeout);
             // Evict stale pending reassembly entries (typically < 5 s old)
             for (auto it = pending_.begin(); it != pending_.end(); ) {
                 if (now - it->second.created_at > kPendingTimeout)
