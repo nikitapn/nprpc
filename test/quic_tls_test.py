@@ -4,6 +4,7 @@ import datetime
 import ipaddress
 import os
 import signal
+import socket
 import pathlib
 import select
 import subprocess
@@ -73,6 +74,10 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
         # address can reach the server.
         'named': '::1 quic-test.invalid\n127.0.0.1 quic-test.invalid\n',
         'named-hole': '127.0.0.2 quic-test.invalid\n',
+        # Not the address the kernel would pick to reply from on its own, so
+        # these only work if the server replies from where it was reached.
+        'secondary-v4': '127.0.0.3 quic-test.invalid\n',
+        'secondary-v6': '::1 quic-test.invalid\n',
     }
     for name, content in list(hosts_files.items()):
         hosts_files[name] = root / (name + '.hosts')
@@ -96,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
                     print('SKIP:', label, '(needs unprivileged user namespaces)', flush=True)
                     continue
                 prefix = [*private_hosts, str(hosts)] if hosts else []
-                result = subprocess.run([*prefix, fixture, {'alt': 'client-alt', 'ip': 'client-ip', 'cap': 'client-cap', 'stats': 'client-stats', 'abandon': 'client-abandon', 'no-pool': 'client-no-pool', 'on-ioc': 'client-on-ioc', 'black-hole': 'client-black-hole', 'frozen': 'client-frozen-server', 'named': 'client-named', 'named-hole': 'client-named-black-hole', 'unresolvable': 'client-unresolvable'}.get(live, 'client-live' if live else 'client'), reference,
+                result = subprocess.run([*prefix, fixture, {'alt': 'client-alt', 'ip': 'client-ip', 'cap': 'client-cap', 'stats': 'client-stats', 'abandon': 'client-abandon', 'no-pool': 'client-no-pool', 'on-ioc': 'client-on-ioc', 'black-hole': 'client-black-hole', 'frozen': 'client-frozen-server', 'named': 'client-named', 'named-hole': 'client-named-black-hole', 'unresolvable': 'client-unresolvable', 'secondary-v4': 'client-named-direct', 'secondary-v6': 'client-named-direct'}.get(live, 'client-live' if live else 'client'), reference,
                                          path(trusted_server), path(client_cert), path(client_cert, '.key')],
                                         capture_output=True, text=True, timeout=10,
                                         env={**os.environ, 'QUIC_TLS_SERVER_PID': str(server.pid)})
@@ -104,6 +109,8 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
                     os.kill(server.pid, signal.SIGCONT)
                 if live == 'alt' and result.returncode == 77:
                     print('SKIP: TCP transport not compiled', flush=True)
+                    continue
+                if live == 'secondary-v6' and not socket.has_ipv6:
                     continue
                 if live == 'named' and result.returncode == 77:
                     print('SKIP:', label, '(no IPv6 loopback)', flush=True)
@@ -137,7 +144,11 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
         ('missing trust bundle fails', 'missing', None, False, False),
         ('mismatched identity key fails', 'ca', 'mismatch', False, False),
     ])
-    group('named-server', None, [('a hostname reaches its server, past a dead address', 'ca', None, True, 'named')])
+    group('named-server', None, [
+        ('a hostname reaches its server, past a dead address', 'ca', None, True, 'named'),
+        ('a server replies from the IPv4 address it was reached on', 'ca', None, True, 'secondary-v4'),
+        ('a server replies from the IPv6 address it was reached on', 'ca', None, True, 'secondary-v6'),
+    ])
     group('ip-server', None, [('IP SAN succeeds for IP endpoint', 'ca', None, True, 'ip')])
     group('wrong-host', None, [('hostname mismatch fails', 'ca', None, False, False)])
     group('expired-server', None, [('expired server fails', 'ca', None, False, False)])

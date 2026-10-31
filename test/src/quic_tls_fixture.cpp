@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
       if (no_ipv6) return 77;
       raw->get_data().urls = "quic://quic-test.invalid:28444;";
     }
+    if (mode == "client-named-direct") raw->get_data().urls = "quic://quic-test.invalid:28444;";
     if (mode == "client-unresolvable") raw->get_data().urls = "quic://no-such-host.invalid:28444;";
     if (std::string(argv[1]) == "client-ip") {
       raw->get_data().urls = "quic://127.0.0.1:28444;";
@@ -121,6 +122,10 @@ int main(int argc, char** argv) {
       watch_once();
       // Connected without trying the dead address means nothing was shown.
       return black_hole->available() > 0 ? 0 : 9;
+    }
+    if (mode == "client-named-direct") {
+      watch_once();
+      return 0;
     }
     if (mode == "client-unresolvable") {
       object->set_timeout(2000);

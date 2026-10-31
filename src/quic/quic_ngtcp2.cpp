@@ -238,32 +238,76 @@ static ngtcp2_path make_path(const boost::asio::ip::udp::endpoint& local,
 // does the actual segmentation (true GSO, 1 syscall per do_write()).
 // Falls back to a plain sendmsg on kernels without UDP_SEGMENT.
 // ---------------------------------------------------------------------------
+// The address a packet arrived on.  A server's wildcard socket would otherwise
+// reply from whichever address the kernel prefers, which a client that dialled
+// a different one of the server's addresses does not accept as its peer.
+struct PacketSource {
+  std::optional<boost::asio::ip::address> address;
+  int interface_index = 0;
+};
+
 static void send_gso(int fd,
                      const boost::asio::ip::udp::endpoint& remote,
-                     const uint8_t* data, size_t len, size_t gso_size)
+                     const uint8_t* data, size_t len, size_t gso_size,
+                     const PacketSource& source = {})
 {
   iovec iov{ const_cast<uint8_t*>(data), len };
 
-  uint8_t ctrl[CMSG_SPACE(sizeof(uint16_t))]{};
+  alignas(cmsghdr) uint8_t ctrl[CMSG_SPACE(sizeof(uint16_t)) +
+                                CMSG_SPACE(std::max(sizeof(in_pktinfo), sizeof(in6_pktinfo)))]{};
   msghdr msg{};
   msg.msg_name    = const_cast<sockaddr*>(remote.data());
   msg.msg_namelen = static_cast<socklen_t>(remote.size());
   msg.msg_iov     = &iov;
   msg.msg_iovlen  = 1;
+  msg.msg_control = ctrl;
+  msg.msg_controllen = sizeof(ctrl);
+
+  size_t ctrl_used = 0;
+  auto* cm = CMSG_FIRSTHDR(&msg);
 
 #if defined(UDP_SEGMENT)
   if (len > gso_size) {
-    msg.msg_control    = ctrl;
-    msg.msg_controllen = sizeof(ctrl);
-    auto* cm           = CMSG_FIRSTHDR(&msg);
     cm->cmsg_level     = SOL_UDP;
     cm->cmsg_type      = UDP_SEGMENT;
     cm->cmsg_len       = CMSG_LEN(sizeof(uint16_t));
     uint16_t seg       = static_cast<uint16_t>(gso_size);
     std::memcpy(CMSG_DATA(cm), &seg, sizeof(seg));
-    msg.msg_controllen = CMSG_SPACE(sizeof(uint16_t));
+    ctrl_used += CMSG_SPACE(sizeof(uint16_t));
+    cm = reinterpret_cast<cmsghdr*>(ctrl + ctrl_used);
   }
 #endif
+
+  if (source.address) {
+    // An IPv4 peer on a dual-stack socket takes the IPv4 message: the IPv6 one
+    // is ignored on that path.
+    const auto& address = *source.address;
+    const bool v6_mapped = address.is_v6() && address.to_v6().is_v4_mapped();
+    if (address.is_v4() || v6_mapped) {
+      const auto v4 = address.is_v4() ? address.to_v4()
+          : boost::asio::ip::make_address_v4(boost::asio::ip::v4_mapped, address.to_v6());
+      in_pktinfo info{};
+      info.ipi_spec_dst.s_addr = htonl(v4.to_uint());
+      cm->cmsg_level = IPPROTO_IP;
+      cm->cmsg_type  = IP_PKTINFO;
+      cm->cmsg_len   = CMSG_LEN(sizeof(info));
+      std::memcpy(CMSG_DATA(cm), &info, sizeof(info));
+      ctrl_used += CMSG_SPACE(sizeof(info));
+    } else {
+      const auto bytes = address.to_v6().to_bytes();
+      in6_pktinfo info{};
+      std::memcpy(&info.ipi6_addr, bytes.data(), bytes.size());
+      info.ipi6_ifindex = static_cast<unsigned>(source.interface_index);
+      cm->cmsg_level = IPPROTO_IPV6;
+      cm->cmsg_type  = IPV6_PKTINFO;
+      cm->cmsg_len   = CMSG_LEN(sizeof(info));
+      std::memcpy(CMSG_DATA(cm), &info, sizeof(info));
+      ctrl_used += CMSG_SPACE(sizeof(info));
+    }
+  }
+
+  msg.msg_controllen = ctrl_used;
+  if (ctrl_used == 0) msg.msg_control = nullptr;
 
   ssize_t nw;
   do { nw = ::sendmsg(fd, &msg, 0); } while (nw < 0 && errno == EINTR);
@@ -433,6 +477,7 @@ public:
                        boost::asio::ip::udp::socket&             socket,
                        const boost::asio::ip::udp::endpoint&     local_ep,
                        const boost::asio::ip::udp::endpoint&     remote_ep,
+                       const PacketSource&                       reply_source,
                        const ngtcp2_cid*                         client_scid,
                        const ngtcp2_cid*                         client_dcid,
                        uint32_t                                  version,
@@ -498,6 +543,7 @@ private:
   boost::asio::ip::udp::socket&                         socket_;
   boost::asio::ip::udp::endpoint                        local_ep_;
   boost::asio::ip::udp::endpoint                        remote_ep_;
+  PacketSource                                          reply_source_;
   boost::asio::strand<boost::asio::io_context::executor_type> strand_;
   boost::asio::steady_timer                             timer_;
   uint64_t last_scheduled_expiry_ = UINT64_MAX;
@@ -670,13 +716,6 @@ public:
   void dissociate_cid(const ngtcp2_cid* cid);
   void remove_connection(std::shared_ptr<QuicNgtcp2ServerConn> conn);
 
-  void send_to(const boost::asio::ip::udp::endpoint& ep,
-               const uint8_t* data, size_t len)
-  {
-    boost::system::error_code ec;
-    socket_.send_to(boost::asio::buffer(data, len), ep, 0, ec);
-    if (ec) NPRPC_QUIC_ERROR("send_to: {}", ec.message());
-  }
 
   boost::asio::io_context&          io_context()  { return ioc_; }
   boost::asio::ip::udp::socket&     socket()       { return socket_; }
@@ -684,9 +723,13 @@ public:
 
 private:
   void do_receive();
+  // One datagram into recv_buf_ and sender_ep_; nullopt once there are none left.
+  std::optional<size_t> receive_packet(PacketSource& source);
   void handle_packet(const boost::asio::ip::udp::endpoint& from,
+                     const PacketSource& source,
                      const uint8_t* data, size_t len);
   int  handle_new_connection(const boost::asio::ip::udp::endpoint& from,
+                             const PacketSource& source,
                               const uint8_t* data, size_t len,
                               const ngtcp2_version_cid& vc);
   bool setup_ssl_ctx();
@@ -718,6 +761,7 @@ QuicNgtcp2ServerConn::QuicNgtcp2ServerConn(
     boost::asio::ip::udp::socket&         socket,
     const boost::asio::ip::udp::endpoint& local_ep,
     const boost::asio::ip::udp::endpoint& remote_ep,
+    const PacketSource&                   reply_source,
     const ngtcp2_cid*                     client_scid,
     const ngtcp2_cid*                     client_dcid,
     uint32_t                              version,
@@ -726,6 +770,7 @@ QuicNgtcp2ServerConn::QuicNgtcp2ServerConn(
     , socket_(socket)
     , local_ep_(local_ep)
     , remote_ep_(remote_ep)
+    , reply_source_(reply_source)
     , strand_(boost::asio::make_strand(listener->io_context()))
     , timer_(listener->io_context())
     , ssl_ctx_(std::move(ssl_ctx))
@@ -1143,7 +1188,7 @@ void QuicNgtcp2ServerConn::do_write()
   if (nwrite == 0) return;
 
   send_gso(socket_.native_handle(), remote_ep_,
-           txbuf_.data(), static_cast<size_t>(nwrite), gso_size);
+           txbuf_.data(), static_cast<size_t>(nwrite), gso_size, reply_source_);
 }
 
 void QuicNgtcp2ServerConn::schedule_timer()
@@ -1203,7 +1248,8 @@ void QuicNgtcp2ServerConn::handle_error()
       &last_error_, timestamp_ns());
   if (n > 0) {
     conn_close_buf_.resize(static_cast<size_t>(n));
-    listener_->send_to(remote_ep_, conn_close_buf_.data(), conn_close_buf_.size());
+    send_gso(socket_.native_handle(), remote_ep_, conn_close_buf_.data(),
+             conn_close_buf_.size(), conn_close_buf_.size(), reply_source_);
   }
   closed_ = true;
   remove_self();
@@ -1537,6 +1583,12 @@ bool QuicNgtcp2Listener::start()
 
   socket_.set_option(boost::asio::ip::v6_only(false), ec);
   socket_.set_option(boost::asio::socket_base::reuse_address(true), ec);
+  // Without these, replies come from whichever address the kernel prefers.
+  const int enabled = 1;
+  if (::setsockopt(socket_.native_handle(), IPPROTO_IP, IP_PKTINFO, &enabled, sizeof(enabled)) != 0 ||
+      ::setsockopt(socket_.native_handle(), IPPROTO_IPV6, IPV6_RECVPKTINFO, &enabled, sizeof(enabled)) != 0) {
+    NPRPC_QUIC_ERROR("cannot read packet destinations, errno={}", errno);
+  }
   socket_.set_option(
       boost::asio::socket_base::receive_buffer_size(2 * 1024 * 1024), ec);
   socket_.set_option(
@@ -1567,20 +1619,18 @@ void QuicNgtcp2Listener::stop()
 void QuicNgtcp2Listener::do_receive()
 {
   if (!running_.load(std::memory_order_acquire)) return;
-  socket_.async_receive_from(
-      boost::asio::buffer(recv_buf_), sender_ep_,
-      [this, self = shared_from_this()](boost::system::error_code ec, size_t bytes) {
+  socket_.async_wait(
+      boost::asio::ip::udp::socket::wait_read,
+      [this, self = shared_from_this()](boost::system::error_code ec) {
         if (ec) {
           if (running_.load()) NPRPC_QUIC_ERROR("recv: {}", ec.message());
           return;
         }
-        handle_packet(sender_ep_, recv_buf_.data(), bytes);
-        for (int i = 1; i < kMaxRecvBatch; ++i) {
-          boost::system::error_code drain_ec;
-          const size_t more = socket_.receive_from(
-              boost::asio::buffer(recv_buf_), sender_ep_, 0, drain_ec);
-          if (drain_ec) break;
-          handle_packet(sender_ep_, recv_buf_.data(), more);
+        for (int i = 0; i < kMaxRecvBatch; ++i) {
+          PacketSource source;
+          const auto bytes = receive_packet(source);
+          if (!bytes) break;
+          handle_packet(sender_ep_, source, recv_buf_.data(), *bytes);
         }
         do_receive();
       });
@@ -1617,8 +1667,56 @@ void QuicNgtcp2Listener::remove_connection(
   }
 }
 
+std::optional<size_t> QuicNgtcp2Listener::receive_packet(PacketSource& source)
+{
+  sockaddr_storage from{};
+  iovec iov{recv_buf_.data(), recv_buf_.size()};
+  alignas(cmsghdr) uint8_t control[CMSG_SPACE(sizeof(in_pktinfo)) + CMSG_SPACE(sizeof(in6_pktinfo))];
+  msghdr msg{};
+  msg.msg_name = &from;
+  msg.msg_namelen = sizeof(from);
+  msg.msg_iov = &iov;
+  msg.msg_iovlen = 1;
+  msg.msg_control = control;
+  msg.msg_controllen = sizeof(control);
+
+  ssize_t received;
+  do {
+    received = ::recvmsg(socket_.native_handle(), &msg, 0);
+  } while (received < 0 && errno == EINTR);
+  if (received < 0) {
+    if (errno != EAGAIN && errno != EWOULDBLOCK && running_.load())
+      NPRPC_QUIC_ERROR("recvmsg errno={}", errno);
+    return std::nullopt;
+  }
+
+  sender_ep_.resize(msg.msg_namelen);
+  std::memcpy(sender_ep_.data(), &from, msg.msg_namelen);
+
+  for (auto* cm = CMSG_FIRSTHDR(&msg); cm; cm = CMSG_NXTHDR(&msg, cm)) {
+    if (cm->cmsg_level == IPPROTO_IP && cm->cmsg_type == IP_PKTINFO) {
+      in_pktinfo info;
+      std::memcpy(&info, CMSG_DATA(cm), sizeof(info));
+      source.address = boost::asio::ip::address_v4(ntohl(info.ipi_addr.s_addr));
+    } else if (cm->cmsg_level == IPPROTO_IPV6 && cm->cmsg_type == IPV6_PKTINFO) {
+      in6_pktinfo info;
+      std::memcpy(&info, CMSG_DATA(cm), sizeof(info));
+      boost::asio::ip::address_v6::bytes_type bytes;
+      std::memcpy(bytes.data(), &info.ipi6_addr, bytes.size());
+      // A mapped address here means an IPv4 packet, which IP_PKTINFO reports too.
+      const boost::asio::ip::address_v6 address(bytes);
+      if (!address.is_v4_mapped()) {
+        source.address = address;
+        source.interface_index = static_cast<int>(info.ipi6_ifindex);
+      }
+    }
+  }
+  return static_cast<size_t>(received);
+}
+
 void QuicNgtcp2Listener::handle_packet(
     const boost::asio::ip::udp::endpoint& from,
+    const PacketSource& source,
     const uint8_t* data, size_t len)
 {
   ngtcp2_version_cid vc;
@@ -1644,11 +1742,12 @@ void QuicNgtcp2Listener::handle_packet(
   }
 
   if (rv == NGTCP2_ERR_VERSION_NEGOTIATION) return; // ignore
-  handle_new_connection(from, data, len, vc);
+  handle_new_connection(from, source, data, len, vc);
 }
 
 int QuicNgtcp2Listener::handle_new_connection(
     const boost::asio::ip::udp::endpoint& from,
+    const PacketSource& source,
     const uint8_t* data, size_t len,
     const ngtcp2_version_cid& /*vc*/)
 {
@@ -1664,7 +1763,7 @@ int QuicNgtcp2Listener::handle_new_connection(
   }
 
   auto conn = std::make_shared<QuicNgtcp2ServerConn>(
-      this, socket_, local_ep_, from,
+      this, socket_, local_ep_, from, source,
       &hd.scid, &hd.dcid, hd.version, ssl_ctx_.load());
 
   if (!conn->init()) {
