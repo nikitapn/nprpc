@@ -711,6 +711,9 @@ public:
   // Called by server during graceful shutdown — sends HTTP/3 GOAWAY notice
   // then initiates a QUIC closing period. Must be called on the strand.
   void initiate_shutdown();
+  // Every way a connection ends comes through here, once: it also gives back
+  // the connection's per-IP slot in the throttler.
+  void close_and_remove();
 
   auto get_executor() { return socket_.get_executor(); }
   void queue_raw_stream_write(int64_t stream_id, flat_buffer&& data);
@@ -810,6 +813,7 @@ private:
 
   // Error handling
   int handle_error();
+  bool removed_ = false;
   void start_draining_period();
   int start_closing_period();
 
@@ -1039,7 +1043,7 @@ public:
                              int64_t session_stream_id,
                              const boost::asio::ip::udp::endpoint& remote_ep)
       : Session(connection.get_executor())
-      , connection_(connection)
+      , connection_(connection.weak_from_this())
       , session_stream_id_(session_stream_id)
       , throttle_session_key_(http_request_throttler().allocate_session_key())
       , rx_buffer_(4 * 1024 * 1024)
@@ -1333,12 +1337,15 @@ private:
 
   void queue_buffer(int64_t transport_stream_id, flat_buffer&& buffer)
   {
-    connection_.queue_raw_stream_write(transport_stream_id, std::move(buffer));
+    if (auto connection = connection_.lock()) {
+      connection->queue_raw_stream_write(transport_stream_id, std::move(buffer));
+    }
   }
 
   void timeout_action() override {}
 
-  Http3Connection& connection_;
+  // A stream thread sending on this session can outlast the connection.
+  std::weak_ptr<Http3Connection> connection_;
   int64_t session_stream_id_;
   int64_t control_stream_id_{-1};
   uint64_t throttle_session_key_;
@@ -1887,7 +1894,7 @@ int Http3Connection::on_read(const uint8_t* data,
     case NGTCP2_ERR_DROP_CONN:
       // Silently drop connection (e.g., stateless reset)
       NPRPC_HTTP3_TRACE("Dropping connection");
-      closed_ = true;
+      close_and_remove();
       return -1;
     case NGTCP2_ERR_CRYPTO:
       NPRPC_LOG_ERROR("[HTTP/3][E] ngtcp2_conn_read_pkt: {}",
@@ -3445,13 +3452,12 @@ int Http3Connection::send_dynamic_response(Http3Stream* stream,
 int Http3Connection::handle_error()
 {
   if (last_error_.type == NGTCP2_CCERR_TYPE_IDLE_CLOSE) {
-    closed_ = true;
-    server_->remove_connection(shared_from_this());
+    close_and_remove();
     return -1;
   }
 
   if (start_closing_period() != 0) {
-    closed_ = true;
+    close_and_remove();
     return -1;
   }
 
@@ -3468,6 +3474,18 @@ int Http3Connection::handle_error()
   return 0;
 }
 
+void Http3Connection::close_and_remove()
+{
+  if (removed_) {
+    return;
+  }
+  removed_ = true;
+  closed_ = true;
+  // A pending wait holds a reference, and would keep this alive until it fired.
+  timer_.cancel();
+  server_->remove_connection(shared_from_this());
+}
+
 void Http3Connection::start_draining_period()
 {
   auto timeout_ns = ngtcp2_conn_get_pto(conn_) * 3;
@@ -3476,8 +3494,7 @@ void Http3Connection::start_draining_period()
   timer_.expires_after(timeout);
   timer_.async_wait([self = shared_from_this()](boost::system::error_code ec) {
     if (!ec) {
-      self->closed_ = true;
-      self->server_->remove_connection(self);
+      self->close_and_remove();
     }
   });
 }
@@ -3506,7 +3523,9 @@ int Http3Connection::start_closing_period()
   }
 
   if (n == 0) {
+    // Nothing to resend, so no closing period and no timer to end one.
     conn_close_buf_.clear();
+    close_and_remove();
     return 0;
   }
 
@@ -3519,8 +3538,7 @@ int Http3Connection::start_closing_period()
   timer_.expires_after(timeout);
   timer_.async_wait([self = shared_from_this()](boost::system::error_code ec) {
     if (!ec) {
-      self->closed_ = true;
-      self->server_->remove_connection(self);
+      self->close_and_remove();
     }
   });
 
@@ -4614,7 +4632,14 @@ void Http3Server::stop()
   socket_.close(ec);
 
   run_on_io_and_wait([this]() {
-    connections_.clear();
+    // By value: removing a connection erases from the map being walked.
+    std::vector<std::shared_ptr<Http3Connection>> remaining;
+    for (auto& [key, conn] : connections_) {
+      remaining.push_back(conn);
+    }
+    for (auto& conn : remaining) {
+      conn->close_and_remove();
+    }
     send_inbox_head_ = nullptr;
     send_in_progress_ = false;
   });
