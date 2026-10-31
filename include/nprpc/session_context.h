@@ -51,6 +51,9 @@ public:
 struct SessionContext {
   /// The client's address and transport.
   EndPoint remote_endpoint;
+  /// True only for an inbound native QUIC session whose client certificate
+  /// passed the listener's trust policy. Transport code sets this, not RPC input.
+  bool quic_client_authenticated = false;
   /// Servants this client holds references to.
   ReferenceList ref_list;
   /// For server-side shared memory sessions, points to the channel for

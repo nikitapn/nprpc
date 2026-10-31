@@ -139,6 +139,9 @@ public:
                 .set_log_level(nprpc::LogLevel::trace)
                 .with_hostname("localhost")
                 .enable_ssl_client_self_signed_cert(NPRPC_TEST_CERT)
+#if defined(NPRPC_HAS_QUIC) || defined(NPRPC_QUIC_ENABLED)
+                .quic_client_tls(NPRPC_TEST_CERT)
+#endif
                 // TestLargeMessage and TestNested send megabytes in one call,
                 // which the default ring is deliberately too small for — see
                 // config_default.hpp.  Raised here alongside the WebSocket and

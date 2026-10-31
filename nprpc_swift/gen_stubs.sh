@@ -32,4 +32,8 @@ fi
   benchmark/idl/nprpc_benchmark.npidl \
   --output-dir nprpc_swift/Sources/NPRPCBenchmark/Generated
 
+"$NPIDL" --swift \
+  idl/nprpc_monitor.npidl \
+  --output-dir nprpc_monitor/Sources/MonitorAPI
+
 echo "Generated Swift stubs for NPRPC"

@@ -13,6 +13,7 @@
 #include <functional>
 #include <optional>
 #include <stop_token>
+#include <stdexcept>
 #include <string_view>
 #include <string>
 #include <vector>
@@ -588,9 +589,21 @@ protected:
 ///                                 nprpc::ObjectActivationFlags::tcp);
 /// rpc->run();
 /// ```
+struct QuicClientTlsConfig {
+  // Empty uses system trust. A nonempty bundle restricts trust to this file.
+  std::string ca_file;
+  std::string certificate_file;
+  std::string private_key_file;
+};
+
 class NPRPC_API Rpc
 {
 public:
+  /// Configure TLS for NEW outbound QUIC connections; existing sessions retain
+  /// their identity. Safe to call on a runtime borrowed from another component.
+  virtual void configure_quic_client_tls(const QuicClientTlsConfig& config) = 0;
+  /// Telemetry management reference, empty unless enabled by the builder.
+  virtual std::string telemetry_reference() const = 0;
   /// Starts configuring a new POA.
   PoaBuilder create_poa() { return PoaBuilder(this); }
   /// Removes a POA created by `PoaBuilder::build()`.
@@ -621,6 +634,9 @@ public:
 
 namespace impl {
 struct BuildConfig {
+  bool telemetry_enabled = false;
+  uint32_t telemetry_min_interval_ms = 250;
+  bool telemetry_allow_anonymous = false;
   LogLevel log_level = static_cast<LogLevel>(NPRPC_DEFAULT_LOG_LEVEL_U32);
   uuid_t uuid;
 
@@ -670,6 +686,8 @@ struct BuildConfig {
   uint16_t quic_port = 0;
   std::string quic_cert_file;
   std::string quic_key_file;
+  QuicClientTlsConfig quic_client_tls;
+  std::string quic_client_ca_file;
   std::string ssl_client_self_signed_cert_path;
 
   // SHM channels for npquicrouter integration.
@@ -725,6 +743,30 @@ protected:
       : cfg_(std::move(cfg)) {};
 
 public:
+  /// Activate the built-in QUIC telemetry service. Requires with_quic().
+  /// Watch intervals are clamped to min_interval_ms through 10 seconds.
+  RpcBuilderBase& enable_telemetry(bool enabled = true, uint32_t min_interval_ms = 250) noexcept
+  {
+    cfg_->telemetry_enabled = enabled;
+    cfg_->telemetry_min_interval_ms = min_interval_ms;
+    return *this;
+  }
+  /// Let any QUIC peer holding the reference read telemetry. Without this,
+  /// enable_telemetry() requires require_client_certificates().
+  RpcBuilderBase& allow_anonymous_telemetry(bool allowed = true) noexcept
+  {
+    cfg_->telemetry_allow_anonymous = allowed;
+    return *this;
+  }
+  /// Verify outbound QUIC servers using system trust (empty ca_file) or the
+  /// supplied PEM trust bundle. Optional certificate/key enable client mTLS.
+  RpcBuilderBase& quic_client_tls(std::string_view ca_file,
+      std::string_view certificate_file = {}, std::string_view private_key_file = {})
+  {
+    cfg_->quic_client_tls = {std::string(ca_file), std::string(certificate_file), std::string(private_key_file)};
+    return *this;
+  }
+
   /// Runtime log verbosity. Default: set at build time
   /// (`NPRPC_DEFAULT_LOG_LEVEL`).
   RpcBuilderBase& set_log_level(::nprpc::LogLevel level) noexcept
@@ -1127,6 +1169,15 @@ public:
   explicit RpcBuilderQuic(std::shared_ptr<impl::BuildConfig> cfg)
       : RpcBuilderBase(std::move(cfg))
   {
+  }
+
+  /// Require client certificates chaining to this PEM trust bundle.
+  /// May contain a private CA or explicitly trusted self-signed certificates.
+  RpcBuilderQuic& require_client_certificates(std::string_view ca_file)
+  {
+    if (ca_file.empty()) throw std::invalid_argument("Client certificate trust bundle must not be empty");
+    cfg_->quic_client_ca_file = ca_file;
+    return *this;
   }
 
   /// Certificate chain and key (PEM) for the QUIC handshake; required.

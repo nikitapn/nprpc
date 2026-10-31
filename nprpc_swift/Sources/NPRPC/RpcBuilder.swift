@@ -8,6 +8,9 @@ import CxxStdlib
 
 /// Internal configuration state shared across all builders
 class BuildConfig {
+    var telemetryEnabled = false
+    var telemetryMinIntervalMs: UInt32 = 250
+    var telemetryAllowAnonymous = false
     var logLevel: LogLevel = .warn
     var hostname: String = ""
 
@@ -56,6 +59,10 @@ class BuildConfig {
     var quicPort: UInt16 = 0
     var quicCertFile: String = ""
     var quicKeyFile: String = ""
+    var quicClientCAFile = ""
+    var quicTrustedServerCAFile = ""
+    var quicClientCertFile = ""
+    var quicClientKeyFile = ""
 
     // SSL client settings
     var sslClientSelfSignedCertPath: String = ""
@@ -64,6 +71,18 @@ class BuildConfig {
 
 /// Base protocol for all RPC builders providing common configuration
 public protocol RpcBuilderProtocol {
+    /// Enable the built-in QUIC telemetry service (requires withQuic).
+    @discardableResult
+    func enableTelemetry(_ enabled: Bool, minIntervalMs: UInt32) -> Self
+    /// Let any QUIC peer holding the reference read telemetry. Without this,
+    /// enableTelemetry requires requireClientCertificates.
+    @discardableResult
+    func allowAnonymousTelemetry(_ allowed: Bool) -> Self
+
+    /// TLS trust and optional identity for outbound QUIC connections.
+    @discardableResult
+    func quicClientTls(caFile: String, certFile: String, keyFile: String) -> Self
+
     /// Set log level (uses LogLevel from Generated/nprpc.swift)
     @discardableResult
     func setLogLevel(_ level: LogLevel) -> Self
@@ -93,6 +112,28 @@ public protocol RpcBuilderProtocol {
     func build() throws -> Rpc
 }
 
+extension RpcBuilderProtocol {
+    @discardableResult
+    public func quicClientTls(caFile: String) -> Self {
+        quicClientTls(caFile: caFile, certFile: "", keyFile: "")
+    }
+
+    @discardableResult
+    public func enableTelemetry(minIntervalMs: UInt32 = 250) -> Self {
+        enableTelemetry(true, minIntervalMs: minIntervalMs)
+    }
+
+    @discardableResult
+    public func allowAnonymousTelemetry() -> Self {
+        allowAnonymousTelemetry(true)
+    }
+
+    @discardableResult
+    public func enableTelemetry(_ enabled: Bool) -> Self {
+        enableTelemetry(enabled, minIntervalMs: 250)
+    }
+}
+
 /// Internal protocol for accessing configuration (not exposed publicly)
 protocol RpcBuilderInternal: RpcBuilderProtocol {
     var config: BuildConfig { get }
@@ -100,6 +141,27 @@ protocol RpcBuilderInternal: RpcBuilderProtocol {
 
 /// Extension providing default implementations for protocol
 extension RpcBuilderInternal {
+    @discardableResult
+    public func quicClientTls(caFile: String, certFile: String, keyFile: String) -> Self {
+        config.quicTrustedServerCAFile = caFile
+        config.quicClientCertFile = certFile
+        config.quicClientKeyFile = keyFile
+        return self
+    }
+
+    @discardableResult
+    public func enableTelemetry(_ enabled: Bool, minIntervalMs: UInt32) -> Self {
+        config.telemetryEnabled = enabled
+        config.telemetryMinIntervalMs = minIntervalMs
+        return self
+    }
+
+    @discardableResult
+    public func allowAnonymousTelemetry(_ allowed: Bool) -> Self {
+        config.telemetryAllowAnonymous = allowed
+        return self
+    }
+
     @discardableResult
     public func setLogLevel(_ level: LogLevel) -> Self {
         config.logLevel = level
@@ -145,6 +207,9 @@ extension RpcBuilderInternal {
 
         // Log level - convert Swift enum to uint32_t matching nprpc::LogLevel order
         // nprpc::LogLevel: off=0, critical=1, error=2, warn=3, info=4, debug=5, trace=6
+        cxxConfig.telemetry_enabled = config.telemetryEnabled
+        cxxConfig.telemetry_min_interval_ms = config.telemetryMinIntervalMs
+        cxxConfig.telemetry_allow_anonymous = config.telemetryAllowAnonymous
         cxxConfig.log_level = UInt32(config.logLevel.rawValue)
 
         // Hostname
@@ -204,6 +269,10 @@ extension RpcBuilderInternal {
         // QUIC settings
         cxxConfig.quic_cert_file = std.string(config.quicCertFile)
         cxxConfig.quic_key_file = std.string(config.quicKeyFile)
+        cxxConfig.quic_client_ca_file = std.string(config.quicClientCAFile)
+        cxxConfig.quic_trusted_server_ca_file = std.string(config.quicTrustedServerCAFile)
+        cxxConfig.quic_client_cert_file = std.string(config.quicClientCertFile)
+        cxxConfig.quic_client_key_file = std.string(config.quicClientKeyFile)
 
         // SSL client settings
         cxxConfig.ssl_client_self_signed_cert_path = std.string(config.sslClientSelfSignedCertPath)
@@ -459,6 +528,14 @@ public final class RpcBuilderQuic: RpcBuilderInternal {
 
     init(config: BuildConfig) {
         self.config = config
+    }
+
+    /// Require client certificates chaining to this PEM trust bundle.
+    @discardableResult
+    public func requireClientCertificates(caFile: String) throws -> RpcBuilderQuic {
+        guard !caFile.isEmpty else { throw RuntimeError(message: "Client certificate trust bundle must not be empty") }
+        config.quicClientCAFile = caFile
+        return self
     }
 
     /// Set QUIC port (alternative to withQuic)

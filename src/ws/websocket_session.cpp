@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/telemetry.hpp>
 #include <nprpc/impl/http_request_throttler.hpp>
 #include <nprpc/impl/websocket_session.hpp>
 #include "../logging.hpp"
@@ -94,7 +95,8 @@ void WebSocketSession<Derived>::on_read(
     // Pre-size tx_buffer based on the last response we sent — after warm-up
     // this eliminates repeated doubling realloc/memcpy for large responses.
     flat_buffer tx_buffer{last_tx_size_};
-    bool needs_reply = handle_request(rx_buffer_, tx_buffer);
+    bool needs_reply = measured_dispatch(monitor::Transport::WebSocket, rx_buffer_, tx_buffer,
+        [&] { return handle_request(rx_buffer_, tx_buffer); });
 
     if (needs_reply) {
       // Track size for next call before the buffer is moved out.

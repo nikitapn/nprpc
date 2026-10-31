@@ -519,3 +519,29 @@ gtest_discover_tests(test_fd_passing_ipc
   DISCOVERY_TIMEOUT 15
   DISCOVERY_MODE PRE_TEST
 )
+
+# Periodic stream pacing must preserve credit flow control and cancellation.
+add_executable(test_stream_pacing src/test_stream_pacing.cpp)
+target_link_libraries(test_stream_pacing PRIVATE nprpc::nprpc)
+add_test(NAME stream_pacing COMMAND test_stream_pacing)
+
+add_executable(test_telemetry_counters ${CMAKE_CURRENT_SOURCE_DIR}/../nprpc_monitor/tests/counters.cpp)
+target_link_libraries(test_telemetry_counters PRIVATE nprpc::nprpc)
+add_test(NAME telemetry_counters COMMAND test_telemetry_counters)
+
+if(NPRPC_ENABLE_QUIC)
+  add_executable(test_telemetry_builder src/test_telemetry_builder.cpp)
+  target_link_libraries(test_telemetry_builder PRIVATE nprpc::nprpc)
+  add_test(NAME telemetry_builder COMMAND test_telemetry_builder)
+endif()
+
+if(NPRPC_ENABLE_QUIC)
+  add_executable(quic_tls_fixture src/quic_tls_fixture.cpp)
+  target_link_libraries(quic_tls_fixture PRIVATE nprpc::nprpc)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME QuicTLS COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/quic_tls_test.py $<TARGET_FILE:quic_tls_fixture>)
+    set_tests_properties(QuicTLS PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+  endif()
+endif()

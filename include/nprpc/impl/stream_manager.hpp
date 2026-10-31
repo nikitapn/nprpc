@@ -143,6 +143,10 @@ public:
 
   // Cleanup
   void cancel_all();
+  // Ends every writer coroutine, and nothing else.  They hold a share of this
+  // manager, so a session has to do this for its own share to ever be the last
+  // one.  Handlers and readers are left to cancel_all() or the destructor.
+  void stop_pumps();
 
   // External (non-C++-owner) shared ownership, for holders reachable only
   // through the opaque `void*` handle crossing the C bridge (the Swift
@@ -165,6 +169,7 @@ public:
   }
 
 private:
+  // Dangles once the session is gone; a writer coroutine can outlive it.
   SessionContext& session_;
   // Independent of session_'s own lifetime — kept alive by our own copy of
   // the shared_ptr, always safe to lock() even after the owning Session (and
@@ -182,10 +187,13 @@ private:
     std::unique_ptr<StreamWriterBase> writer;  // null for external (Swift) writers
     bool unreliable = false;
     int32_t credits = kInitialWindowSize;
+    // A coroutine in start_stream() owns the writer now; `writer` above is null.
+    bool pumped = false;
     // Timer used to put the coroutine to sleep when credits are exhausted.
-    // Owned by the coroutine stack; we store only a non-owning pointer here.
+    // Shared with the coroutine so queued cancellation cannot outlive it.
     // Guarded by mutex_.
-    boost::asio::steady_timer* credit_timer = nullptr;
+    std::shared_ptr<boost::asio::steady_timer> credit_timer;
+    std::shared_ptr<boost::asio::steady_timer> pacing_timer;
     // Queue for external (non-coroutine) writers.  When credits reach 0,
     // write requests are parked here and drained by on_window_update().
     struct PendingWrite {

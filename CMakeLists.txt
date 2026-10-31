@@ -54,7 +54,7 @@ if(NPRPC_ENABLE_WEBSOCKET AND NOT NPRPC_ENABLE_HTTP)
 endif()
 
 set(NPRPC_NEED_OPENSSL OFF)
-if(NPRPC_ENABLE_SSL OR NPRPC_ENABLE_HTTP3)
+if(NPRPC_ENABLE_SSL OR NPRPC_ENABLE_HTTP3 OR NPRPC_ENABLE_QUIC)
   set(NPRPC_NEED_OPENSSL ON)
 endif()
 
@@ -311,6 +311,7 @@ include(cmake/npidl.cmake)
 set(nprpc_stub_GENERATED_SOURCES "")
 set(IDL_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/idl/nprpc_base.npidl
+  ${CMAKE_CURRENT_SOURCE_DIR}/idl/nprpc_monitor.npidl
   ${CMAKE_CURRENT_SOURCE_DIR}/idl/nprpc_nameserver.npidl
 )
 
@@ -351,6 +352,8 @@ add_library(nprpc
   src/shm/shm_fd_link.cpp
   # Core framework files
   src/nprpc.cpp
+  src/telemetry_service.cpp
+  src/telemetry.cpp
   src/logging.cpp
   src/rpc_impl.cpp
   src/session_context.cpp
@@ -560,6 +563,7 @@ if(NPRPC_ENABLE_QUIC)
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/msquic/src/inc
   )
   target_compile_definitions(nprpc PUBLIC NPRPC_QUIC_ENABLED NPRPC_ENABLE_QUIC)
+  target_link_libraries(nprpc PRIVATE OpenSSL::Crypto)
 endif()
 
 # HTTP/3 linking

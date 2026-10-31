@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <nprpc/impl/http3_server.hpp>
+#include <nprpc/impl/telemetry.hpp>
 
 // This file implements HTTP/3 and WebTransport using ngtcp2 + nghttp3 backend
 #if defined(NPRPC_HTTP3_ENABLED) && defined(NPRPC_HTTP3_BACKEND_NGHTTP3)
@@ -482,6 +483,10 @@ struct Http3Stream {
   WebTransportChildBinding webtransport_child_binding =
       WebTransportChildBinding::Unbound;
   bool response_started = false;
+  bool telemetry_recorded = false;
+  std::chrono::steady_clock::time_point telemetry_start;
+  // Separate from request_body, which RPC moves out and rejection clears.
+  uint64_t telemetry_received_bytes = 0;
   int64_t webtransport_session_id = -1;
   uint64_t webtransport_native_stream_id = 0;
   flat_buffer webtransport_probe_buffer;
@@ -1122,7 +1127,8 @@ public:
 
       const auto request_id = extract_request_id(rx_buffer_);
       flat_buffer tx_buffer{std::max(last_tx_size_, flat_buffer::default_initial_size())};
-      const bool needs_reply = handle_request(rx_buffer_, tx_buffer);
+      const bool needs_reply = measured_dispatch(monitor::Transport::WebTransport, rx_buffer_, tx_buffer,
+          [&] { return handle_request(rx_buffer_, tx_buffer); });
 
       if (needs_reply) {
         last_tx_size_ = std::max(tx_buffer.size(), flat_buffer::default_initial_size());
@@ -2307,10 +2313,25 @@ Http3Stream* Http3Connection::find_stream(int64_t stream_id)
   return it != streams_.end() ? it->second.get() : nullptr;
 }
 
+// CONNECT is excluded so WebTransport sessions do not count as page requests.
+static void finish_http_telemetry(Http3Stream* stream, uint64_t sent, bool error)
+{
+  if (!telemetry_enabled() || stream->telemetry_recorded || stream->method == "CONNECT")
+    return;
+  stream->telemetry_recorded = true;
+  // A stream opened just before telemetry started has no start time.
+  const auto elapsed = stream->telemetry_start == std::chrono::steady_clock::time_point{}
+    ? std::chrono::nanoseconds{0} : std::chrono::steady_clock::now() - stream->telemetry_start;
+  record_telemetry(monitor::Transport::Http3, stream->telemetry_received_bytes, sent,
+    std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count(), error);
+}
+
 Http3Stream* Http3Connection::create_stream(int64_t stream_id)
 {
   auto stream = std::make_unique<Http3Stream>();
   stream->stream_id = stream_id;
+  if (telemetry_enabled())
+    stream->telemetry_start = std::chrono::steady_clock::now();
   auto* ptr = stream.get();
   streams_[stream_id] = std::move(stream);
   return ptr;
@@ -2940,6 +2961,7 @@ Http3Connection::make_response_headers(Http3Stream* stream,
                                        bool include_cors,
                                        bool preflight)
 {
+  finish_http_telemetry(stream, stream->method == "HEAD" ? 0 : content_length, status_code >= 500);
   auto& prepared = stream->response_headers;
   prepared.headers.clear();
   prepared.status = std::to_string(status_code);
@@ -3054,6 +3076,7 @@ int Http3Connection::send_not_modified(
   // nghttp3 finishes draining the 304 headers (stream close).
   stream->cached_file = std::move(cached_file);
 
+  finish_http_telemetry(stream, 0, false);
   auto& prepared = stream->response_headers;
   prepared.headers.clear();
   prepared.status = "304";
@@ -3725,6 +3748,7 @@ int Http3Connection::http_recv_data_cb(nghttp3_conn* conn,
   auto stream = static_cast<Http3Stream*>(stream_user_data);
 
   if (stream) {
+    stream->telemetry_received_bytes += datalen;
     const auto current_size = stream->request_body.size();
     if (current_size > g_cfg.http_max_request_body_size ||
         datalen > g_cfg.http_max_request_body_size - current_size) {

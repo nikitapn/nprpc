@@ -14,6 +14,7 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/session.hpp>
 #include <nprpc/impl/stream_manager.hpp>
+#include "quic_peer_validation.hpp"
 
 #define NPRPC_ENABLE_QUIC_TRACE 0
 
@@ -35,6 +36,22 @@ static const QUIC_BUFFER alpn_buffer = {sizeof("nprpc") - 1, (uint8_t*)"nprpc"};
 
 // Global QUIC listener instance
 static std::shared_ptr<QuicListener> g_quic_listener;
+static std::atomic<std::shared_ptr<const QuicClientTlsConfig>> client_tls_config{
+    std::make_shared<const QuicClientTlsConfig>()};
+
+void set_quic_client_tls(const QuicClientTlsConfig& config)
+{
+  if (config.certificate_file.empty() != config.private_key_file.empty())
+    throw std::invalid_argument("QUIC client certificate and key must be supplied together");
+  auto next = std::make_shared<const QuicClientTlsConfig>(config);
+  if (!config.ca_file.empty() || !config.certificate_file.empty()) {
+    auto& quic = QuicApi::instance();
+    HQUIC checked = quic.create_configuration("nprpc", false, nullptr, nullptr, next.get());
+    if (!checked) throw std::invalid_argument("Invalid QUIC client TLS credentials or trust bundle");
+    quic.api()->ConfigurationClose(checked);
+  }
+  client_tls_config.store(std::move(next), std::memory_order_release);
+}
 
 //==============================================================================
 // QuicApi - Singleton for MsQuic initialization
@@ -81,7 +98,8 @@ QuicApi::~QuicApi()
 HQUIC QuicApi::create_configuration(const char* alpn,
                                     bool is_server,
                                     const char* cert_file,
-                                    const char* key_file)
+                                    const char* key_file,
+                                    const QuicClientTlsConfig* client_tls)
 {
   QUIC_BUFFER alpn_buf = {(uint32_t)strlen(alpn), (uint8_t*)alpn};
 
@@ -110,26 +128,34 @@ HQUIC QuicApi::create_configuration(const char* alpn,
   // Configure credentials
   QUIC_CREDENTIAL_CONFIG cred_config = {};
 
-  if (is_server && cert_file && key_file) {
-    // Server with certificate
-    QUIC_CERTIFICATE_FILE cert = {};
+  auto defaults = client_tls_config.load(std::memory_order_acquire);
+  if (!client_tls) client_tls = defaults.get();
+  QUIC_CERTIFICATE_FILE cert = {};
+  cred_config.Flags = QUIC_CREDENTIAL_FLAG_INDICATE_CERTIFICATE_RECEIVED |
+                      QUIC_CREDENTIAL_FLAG_USE_PORTABLE_CERTIFICATES;
+  if (!is_server) cred_config.Flags |= QUIC_CREDENTIAL_FLAG_CLIENT;
+  const std::string& ca_file = is_server ? g_cfg.quic_client_ca_file : client_tls->ca_file;
+  // Load now, so the first handshake does not do it on an MsQuic worker.
+  if (!is_server || !ca_file.empty()) quic_trust_store(ca_file);
+  if (!ca_file.empty()) {
+    cred_config.Flags |= QUIC_CREDENTIAL_FLAG_SET_CA_CERTIFICATE_FILE;
+    cred_config.CaCertificateFile = ca_file.c_str();
+  }
+  if (is_server && !ca_file.empty())
+    cred_config.Flags |= QUIC_CREDENTIAL_FLAG_REQUIRE_CLIENT_AUTHENTICATION;
+  if (!is_server && !client_tls->certificate_file.empty()) {
+    cert_file = client_tls->certificate_file.c_str();
+    key_file = client_tls->private_key_file.c_str();
+  }
+  if (cert_file && key_file) {
     cert.CertificateFile = cert_file;
     cert.PrivateKeyFile = key_file;
-
     cred_config.Type = QUIC_CREDENTIAL_TYPE_CERTIFICATE_FILE;
     cred_config.CertificateFile = &cert;
-
-    status = api_->ConfigurationLoadCredential(configuration, &cred_config);
-  } else if (!is_server) {
-    // Client - no certificate validation for now (development)
+  } else {
     cred_config.Type = QUIC_CREDENTIAL_TYPE_NONE;
-    cred_config.Flags = QUIC_CREDENTIAL_FLAG_CLIENT;
-    cred_config.Flags |=
-        QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION; // TODO: remove in
-                                                        // production
-
-    status = api_->ConfigurationLoadCredential(configuration, &cred_config);
   }
+  status = api_->ConfigurationLoadCredential(configuration, &cred_config);
 
   if (QUIC_FAILED(status)) {
     NPRPC_QUIC_ERROR("ConfigurationLoadCredential failed: {}", status);
@@ -158,7 +184,9 @@ void QuicConnection::async_connect(const std::string& host,
   auto& quic = QuicApi::instance();
 
   // Create client configuration
-  configuration_ = quic.create_configuration("nprpc", false);
+  tls_ = client_tls_config.load(std::memory_order_acquire);
+  server_name_ = host;
+  configuration_ = quic.create_configuration("nprpc", false, nullptr, nullptr, tls_.get());
   if (!configuration_) {
     NPRPC_QUIC_TRACE("create_configuration failed");
     callback(false);
@@ -237,6 +265,11 @@ void QuicConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
   if (!cv_.wait_until(lock, deadline, [this] { return receive_complete_; })) {
     throw nprpc::ExceptionTimeout();
   }
+
+  // A TLS/peer shutdown also wakes this wait, but supplies no RPC reply.
+  // Never hand an empty buffer to generated response-header decoding.
+  if (pending_receive_.empty())
+    throw nprpc::ExceptionCommFailure("QUIC connection closed before an RPC reply");
 
   // Copy response to buffer
   buffer.consume(buffer.size());
@@ -473,8 +506,31 @@ QUIC_STATUS QUIC_API QuicConnection::connection_callback(
   NPRPC_QUIC_TRACE(
       std::format("connection_callback event type: {}", event->Type));
   auto* self = static_cast<QuicConnection*>(context);
+  if (event->Type == QUIC_CONNECTION_EVENT_PEER_CERTIFICATE_RECEIVED) {
+    if (!self->tls_ || !verify_quic_peer(*event, self->tls_->ca_file, self->server_name_)) {
+      NPRPC_QUIC_ERROR("Server certificate verification failed for '{}'", self->server_name_);
+      return QUIC_STATUS_BAD_CERTIFICATE;
+    }
+    return QUIC_STATUS_SUCCESS;
+  }
   self->handle_connection_event(event);
   return QUIC_STATUS_SUCCESS;
+}
+
+void QuicConnection::fail_pending()
+{
+  connected_ = false;
+  {
+    std::lock_guard lock(mutex_);
+    receive_complete_ = true;
+    cv_.notify_all();
+  }
+  // TLS rejection can happen before CONNECTED. Complete the pending connect
+  // as a failure so callers do not wait forever for its success callback.
+  if (connect_callback_) {
+    auto cb = std::move(connect_callback_);
+    cb(false);
+  }
 }
 
 void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
@@ -508,22 +564,12 @@ void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
   case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
     NPRPC_QUIC_TRACE("Connection shutdown by transport: {}",
                    event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status);
-    connected_ = false;
-    {
-      std::lock_guard lock(mutex_);
-      receive_complete_ = true;
-      cv_.notify_all();
-    }
+    fail_pending();
     break;
 
   case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
     NPRPC_QUIC_TRACE("Connection shutdown by peer");
-    connected_ = false;
-    {
-      std::lock_guard lock(mutex_);
-      receive_complete_ = true;
-      cv_.notify_all();
-    }
+    fail_pending();
     break;
 
   case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
@@ -1089,6 +1135,16 @@ QUIC_STATUS QUIC_API QuicServerConnection::connection_callback(
     HQUIC connection, void* context, QUIC_CONNECTION_EVENT* event)
 {
   auto* self = static_cast<QuicServerConnection*>(context);
+  if (event->Type == QUIC_CONNECTION_EVENT_PEER_CERTIFICATE_RECEIVED) {
+    if (!g_cfg.quic_client_ca_file.empty()) {
+      if (!verify_quic_peer(*event, g_cfg.quic_client_ca_file, {})) {
+        NPRPC_QUIC_ERROR("Client certificate verification failed");
+        return QUIC_STATUS_BAD_CERTIFICATE;
+      }
+      self->client_authenticated_.store(true, std::memory_order_release);
+    }
+    return QUIC_STATUS_SUCCESS;
+  }
   self->handle_connection_event(event);
   return QUIC_STATUS_SUCCESS;
 }
@@ -1453,6 +1509,17 @@ class QuicServerSession : public Session,
 {
   std::shared_ptr<QuicServerConnection> connection_;
 
+  bool auth_context_initialized_ = false;
+  void initialize_authentication_context()
+  {
+    // MsQuic serializes callbacks for a connection. Publish metadata before
+    // dispatching its first call and leave it immutable for async servants.
+    if (!auth_context_initialized_) {
+      ctx_.quic_client_authenticated = connection_->client_authenticated();
+      auth_context_initialized_ = true;
+    }
+  }
+
   flat_buffer rx_buffer_{flat_buffer::default_initial_size()};
   flat_buffer tx_buffer_{flat_buffer::default_initial_size()};
 
@@ -1573,6 +1640,7 @@ public:
 
       // Dispatch the RPC request
       NPRPC_QUIC_TRACE("calling handle_request");
+      initialize_authentication_context();
       bool needs_reply = handle_request(rx_buffer_, tx_buffer_);
       NPRPC_QUIC_TRACE("handle_request returned, needs_reply={}", needs_reply);
 
@@ -1607,6 +1675,7 @@ public:
       rx_buffer_.commit(data.size());
 
       // Dispatch the RPC request (fire-and-forget, no response)
+      initialize_authentication_context();
       handle_request(rx_buffer_, tx_buffer_);
 
       // No response sent for datagram messages

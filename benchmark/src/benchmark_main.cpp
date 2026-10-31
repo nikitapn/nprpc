@@ -257,6 +257,7 @@ int main(int argc, char** argv)
   const bool use_uring_client = ::getenv("NPRPC_URING") != nullptr;
   g_rpc = nprpc::RpcBuilder()
     .set_log_level(nprpc::LogLevel::error)
+    .quic_client_tls("/home/nikita/projects/nprpc/certs/out/localhost.crt")
     .with_tcp(0).with_uring_if(use_uring_client)
     .with_http(0).max_websocket_message_size(12 * 1024 * 1024)
     .build();

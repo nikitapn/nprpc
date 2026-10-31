@@ -49,6 +49,9 @@ inline const char* string_to_cstr(const std::string& str) {
 // ============================================================================
 
 struct RpcBuildConfig {
+    bool telemetry_enabled = false;
+    uint32_t telemetry_min_interval_ms = 250;
+    bool telemetry_allow_anonymous = false;
     uint32_t log_level;
     uint8_t uuid[16];
 
@@ -101,6 +104,11 @@ struct RpcBuildConfig {
     uint16_t quic_port;
     std::string quic_cert_file;
     std::string quic_key_file;
+    std::string quic_client_ca_file;
+    std::string quic_trusted_server_ca_file;
+    std::string quic_client_cert_file;
+    std::string quic_client_key_file;
+
     std::string ssl_client_self_signed_cert_path;
 
     std::string shm_egress_channel;
@@ -152,6 +160,8 @@ public:
 
     /// Get debug info
     std::string get_debug_info() const;
+    std::string telemetry_reference() const;
+    bool configure_quic_client_tls(const std::string& ca, const std::string& cert, const std::string& key) noexcept;
 
     /// Create a POA
     /// @param max_objects Maximum number of objects (0 = default)

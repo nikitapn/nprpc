@@ -229,7 +229,8 @@ void StreamManager::on_reply_sent()
 void StreamManager::start_stream(uint64_t stream_id)
 {
   NPRPC_STREAM_MANAGER_LOG_TRACE("Starting stream: stream_id={}", stream_id);
-  StreamWriterBase* raw_writer = nullptr;
+  std::unique_ptr<StreamWriterBase> writer;
+  std::chrono::milliseconds interval{0};
   std::vector<flat_buffer> pending;
   bool has_task = false;
   bool task_done = false;
@@ -246,7 +247,14 @@ void StreamManager::start_stream(uint64_t stream_id)
     }
 
     if (auto writer_it = writers_.find(stream_id); writer_it != writers_.end()) {
-      raw_writer = writer_it->second.writer.get();
+      // The pump below becomes the writer's only owner, so resume() can never
+      // race a cancellation arriving on a transport thread: cancelling erases
+      // the entry and wakes the pump, and the pump does the rest.
+      writer = std::move(writer_it->second.writer);
+      if (writer) {
+        interval = writer->interval();
+        writer_it->second.pumped = true;
+      }
     }
 
     if (auto task_it = active_tasks_.find(stream_id); task_it != active_tasks_.end()) {
@@ -259,22 +267,52 @@ void StreamManager::start_stream(uint64_t stream_id)
     dispatch_buffer(stream_id, std::move(fb));
   }
 
-  if (raw_writer) {
-    boost::asio::co_spawn(stream_executor_,
-      [this, stream_id, raw_writer]() -> boost::asio::awaitable<void> {
+  if (writer) {
+    // Timers are not thread-safe and stream_executor_ is a thread pool.  On a
+    // strand a wake-up cannot land between arming a timer and waiting on it.
+    auto strand = boost::asio::make_strand(stream_executor_);
+    boost::asio::co_spawn(strand,
+      [this, keep_alive = weak_from_this().lock(), stream_id, writer = std::move(writer), interval, strand]() mutable -> boost::asio::awaitable<void> {
         // Per-chunk credit-based flow control.
         // The coroutine parks itself on a steady_timer when credits run out.
         // on_window_update() cancels the timer to wake it back up.
-        boost::asio::steady_timer credit_timer(stream_executor_,
+        auto credit_timer = std::make_shared<boost::asio::steady_timer>(strand,
             boost::asio::steady_timer::time_point::max());
 
+        auto pacing_timer = interval.count() > 0
+          ? std::make_shared<boost::asio::steady_timer>(strand) : nullptr;
+        auto next_sample = std::chrono::steady_clock::now();
+        bool cancelled = false;
         while (true) {
+          // Periodic streams park an Asio timer rather than blocking a worker.
+          // Recheck ownership after the wait: cancellation may destroy the writer.
+          if (interval.count() > 0) {
+            {
+              std::lock_guard lock(mutex_);
+              if (writers_.find(stream_id) == writers_.end()) { cancelled = true; break; }
+            }
+            if (std::chrono::steady_clock::now() < next_sample) {
+              {
+                std::lock_guard lock(mutex_);
+                auto it = writers_.find(stream_id);
+                if (it == writers_.end()) { cancelled = true; break; }
+                pacing_timer->expires_at(next_sample);
+                it->second.pacing_timer = pacing_timer;
+              }
+              try {
+                co_await pacing_timer->async_wait(boost::asio::use_awaitable);
+              } catch (const boost::system::system_error&) {
+                // Cancellation wakes the timer; ownership is checked above.
+              }
+              continue;
+            }
+          }
           // Grab one credit or register the timer to wait for one.
           bool need_wait = false;
           {
             std::lock_guard lock(mutex_);
             auto it = writers_.find(stream_id);
-            if (it == writers_.end()) break; // writer was cancelled
+            if (it == writers_.end()) { cancelled = true; break; }
 
             if (it->second.credits > 0) {
               --it->second.credits;
@@ -282,16 +320,16 @@ void StreamManager::start_stream(uint64_t stream_id)
               // Arm the timer and register the pointer while holding the lock.
               // This eliminates the race where on_window_update() arrives and
               // cancels the timer before we co_await it.
-              credit_timer.expires_at(
+              credit_timer->expires_at(
                   boost::asio::steady_timer::time_point::max());
-              it->second.credit_timer = &credit_timer;
+              it->second.credit_timer = credit_timer;
               need_wait = true;
             }
           }
 
           if (need_wait) {
             try {
-              co_await credit_timer.async_wait(boost::asio::use_awaitable);
+              co_await credit_timer->async_wait(boost::asio::use_awaitable);
             } catch (const boost::system::system_error&) {
               // operation_aborted: on_window_update() cancelled the timer.
             }
@@ -300,12 +338,17 @@ void StreamManager::start_stream(uint64_t stream_id)
             continue;
           }
 
-          if (raw_writer->is_done()) break;
-          raw_writer->resume();
-          if (raw_writer->is_done()) break;
+          if (writer->is_done()) break;
+          writer->resume();
+          next_sample = std::chrono::steady_clock::now() + interval;
+          if (writer->is_done()) break;
 
-          co_await boost::asio::post(stream_executor_, boost::asio::use_awaitable);
+          co_await boost::asio::post(strand, boost::asio::use_awaitable);
         }
+
+        // While keep_alive still holds the manager the writer's frame points at.
+        if (cancelled) writer->cancel();
+        writer.reset();
 
         // Tear down: remove timer pointer and erase the writer entry
         std::vector<std::function<void(bool)>> parked;
@@ -530,6 +573,8 @@ void StreamManager::on_stream_cancel(uint64_t stream_id)
   StreamReaderBase* reader = nullptr;
   std::unique_ptr<StreamReaderBase> owned_reader;
   std::unique_ptr<StreamWriterBase> writer;
+  std::shared_ptr<boost::asio::steady_timer> pacing_timer;
+  std::shared_ptr<boost::asio::steady_timer> credit_timer;
   std::vector<std::function<void(bool)>> parked;
 
   {
@@ -545,10 +590,17 @@ void StreamManager::on_stream_cancel(uint64_t stream_id)
 
     auto writer_it = writers_.find(stream_id);
     if (writer_it != writers_.end()) {
+      credit_timer = std::move(writer_it->second.credit_timer);
+      pacing_timer = std::move(writer_it->second.pacing_timer);
       writer = std::move(writer_it->second.writer);
       writers_.erase(writer_it);
     }
   }
+
+  if (credit_timer)
+    boost::asio::dispatch(credit_timer->get_executor(), [credit_timer] { credit_timer->cancel(); });
+  if (pacing_timer)
+    boost::asio::dispatch(pacing_timer->get_executor(), [pacing_timer] { pacing_timer->cancel(); });
 
   // Before the reader/writer teardown: whoever is suspended on one of these
   // is waiting on a write to a stream that no longer exists, and nothing
@@ -580,10 +632,6 @@ bool StreamManager::send_chunk(uint64_t stream_id,
                   stream_id, data.size(), sequence, unreliable);
 
   // TODO: Shared Memory Optimization - write directly to shared ring buffer
-  if (session_.shm_channel) {
-    // For now, fall through to regular transport
-    // Future: use zero-copy path via shared memory channel
-  }
 
   // Build the message - start with fixed-size header and fields
   flat_buffer fb;
@@ -773,7 +821,7 @@ void StreamManager::on_window_update(uint64_t stream_id, uint32_t credits)
 {
   NPRPC_STREAM_MANAGER_LOG_TRACE("on_window_update stream_id={} credits={}", stream_id, credits);
 
-  boost::asio::steady_timer* timer = nullptr;
+  std::shared_ptr<boost::asio::steady_timer> timer;
   std::vector<std::pair<flat_buffer, std::function<void(bool)>>> to_dispatch;
 
   {
@@ -895,6 +943,26 @@ void StreamManager::write_chunk_or_queue(uint64_t stream_id,
   }
 }
 
+void StreamManager::stop_pumps()
+{
+  std::vector<std::shared_ptr<boost::asio::steady_timer>> timers;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto it = writers_.begin(); it != writers_.end();) {
+      if (!it->second.pumped) {
+        ++it;
+        continue;
+      }
+      if (it->second.credit_timer) timers.push_back(std::move(it->second.credit_timer));
+      if (it->second.pacing_timer) timers.push_back(std::move(it->second.pacing_timer));
+      it = writers_.erase(it);
+    }
+  }
+
+  for (auto& timer : timers)
+    boost::asio::dispatch(timer->get_executor(), [timer] { timer->cancel(); });
+}
+
 void StreamManager::cancel_all()
 {
   // Nothing below the lock may touch a stream object, only move it out.
@@ -908,11 +976,14 @@ void StreamManager::cancel_all()
   std::vector<std::pair<StreamReaderBase*, std::unique_ptr<StreamReaderBase>>> readers;
   std::vector<std::function<void(bool)>> parked;
   std::vector<std::unique_ptr<StreamWriterBase>> writers;
+  std::vector<std::shared_ptr<boost::asio::steady_timer>> pacing_timers;
   std::unordered_map<uint64_t, ::nprpc::Task<>> handlers;
   {
     std::lock_guard<std::mutex> lock(mutex_);
 
     for (auto& [id, info] : writers_) {
+      if (info.credit_timer) pacing_timers.push_back(std::move(info.credit_timer));
+      if (info.pacing_timer) pacing_timers.push_back(std::move(info.pacing_timer));
       // Every write still waiting for credits belongs to a caller that is
       // suspended on its callback.  The session is going away, so the
       // window update that would have released them is never coming.
@@ -945,6 +1016,9 @@ void StreamManager::cancel_all()
     }
     readers_.clear();
   }
+
+  for (auto& timer : pacing_timers)
+    boost::asio::dispatch(timer->get_executor(), [timer] { timer->cancel(); });
 
   for (auto& cb : parked)
     cb(false);

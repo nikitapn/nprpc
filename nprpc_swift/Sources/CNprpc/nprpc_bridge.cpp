@@ -302,6 +302,9 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
 
         // Convert RpcBuildConfig to nprpc::impl::BuildConfig
         nprpc::impl::BuildConfig cxxConfig;
+        cxxConfig.telemetry_enabled = config->telemetry_enabled;
+        cxxConfig.telemetry_min_interval_ms = config->telemetry_min_interval_ms;
+        cxxConfig.telemetry_allow_anonymous = config->telemetry_allow_anonymous;
         cxxConfig.log_level = static_cast<nprpc::LogLevel>(config->log_level);
         std::memcpy(&cxxConfig.uuid, config->uuid, 16);
         cxxConfig.tcp_port = config->tcp_port;
@@ -365,6 +368,9 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.quic_port = config->quic_port;
         cxxConfig.quic_cert_file = config->quic_cert_file;
         cxxConfig.quic_key_file = config->quic_key_file;
+        cxxConfig.quic_client_ca_file = config->quic_client_ca_file;
+        cxxConfig.quic_client_tls = {config->quic_trusted_server_ca_file,
+            config->quic_client_cert_file, config->quic_client_key_file};
         cxxConfig.ssl_client_self_signed_cert_path = config->ssl_client_self_signed_cert_path;
         cxxConfig.shm_egress_channel  = config->shm_egress_channel;
         cxxConfig.shm_ingress_channel = config->shm_ingress_channel;
@@ -440,6 +446,23 @@ bool RpcHandle::reload_certificates() noexcept {
         NPRPC_LOG_ERROR("[SWB] RpcHandle::reload_certificates failed: {}", e.what());
         return false;
     }
+}
+
+bool RpcHandle::configure_quic_client_tls(const std::string& ca, const std::string& cert, const std::string& key) noexcept {
+    if (!initialized_ || !impl_) return false;
+    try {
+        static_cast<RpcHandleImpl*>(impl_)->rpc_instance->configure_quic_client_tls({ca, cert, key});
+        return true;
+    } catch (const std::exception& e) {
+        NPRPC_LOG_ERROR("[SWB] QUIC client TLS configuration failed: {}", e.what());
+        return false;
+    }
+}
+
+std::string RpcHandle::telemetry_reference() const {
+    if (!initialized_ || !impl_) return {};
+    auto* impl = static_cast<RpcHandleImpl*>(impl_);
+    return impl->rpc_instance ? impl->rpc_instance->telemetry_reference() : std::string{};
 }
 
 std::string RpcHandle::get_debug_info() const {

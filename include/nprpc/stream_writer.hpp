@@ -100,7 +100,8 @@ public:
 
   /// Takes over `other`'s stream.
   StreamWriter(StreamWriter&& other) noexcept
-      : coro_(std::exchange(other.coro_, {}))
+      : StreamWriterBase(std::move(other))
+      , coro_(std::exchange(other.coro_, {}))
       , client_manager_(std::exchange(other.client_manager_, nullptr))
       , client_stream_id_(std::exchange(other.client_stream_id_, 0))
       , sequence_(std::exchange(other.sequence_, 0))

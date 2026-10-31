@@ -110,6 +110,7 @@ final class IntegrationTests: XCTestCase {
         super.setUp()
         do {
             rpc = try RpcBuilder()
+                .quicClientTls(caFile: "\(nprpcRepoRoot)/certs/out/localhost.crt")
                 .setLogLevel(.warn)
                 .withHostname("localhost")
                 .withTcp(16000)

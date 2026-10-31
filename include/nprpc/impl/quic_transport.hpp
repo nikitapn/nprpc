@@ -20,13 +20,17 @@
 #include <unordered_map>
 #include <vector>
 
+namespace nprpc { struct QuicClientTlsConfig; }
+
 namespace nprpc::impl {
+void set_quic_client_tls(const QuicClientTlsConfig& config);
 
 // Forward declarations
 class QuicConnection;
 class QuicServerConnection;
 class QuicListener;
 class Session;
+
 
 /**
  * MsQuic API wrapper - manages the QUIC API handle
@@ -46,7 +50,8 @@ public:
   HQUIC create_configuration(const char* alpn,
                              bool is_server,
                              const char* cert_file = nullptr,
-                             const char* key_file = nullptr);
+                             const char* key_file = nullptr,
+                             const QuicClientTlsConfig* client_tls = nullptr);
 
   ~QuicApi();
 
@@ -183,6 +188,9 @@ private:
   HQUIC connection_ = nullptr;
   HQUIC configuration_ = nullptr;
   HQUIC stream_ = nullptr; // Main bidirectional stream for RPC
+  void fail_pending();
+  std::shared_ptr<const QuicClientTlsConfig> tls_;
+  std::string server_name_;
 
   // Server-opened data streams for streaming (QUIC stream -> receive buffer + stream_id)
   struct DataStreamInfo {
@@ -227,6 +235,7 @@ class NPRPC_API QuicServerConnection
     : public std::enable_shared_from_this<QuicServerConnection>
 {
 public:
+  bool client_authenticated() const { return client_authenticated_.load(std::memory_order_acquire); }
   using MessageCallback = std::function<void(std::vector<uint8_t>&&)>;
   using DatagramCallback = std::function<void(std::vector<uint8_t>&&)>;
 
@@ -267,6 +276,7 @@ public:
   void close();
 
 private:
+  std::atomic<bool> client_authenticated_{false};
   static QUIC_STATUS QUIC_API connection_callback(HQUIC connection,
                                                   void* context,
                                                   QUIC_CONNECTION_EVENT* event);

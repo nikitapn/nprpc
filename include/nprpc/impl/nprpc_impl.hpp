@@ -54,6 +54,7 @@ struct Config {
   uint32_t cert_watch_interval_sec = 0; // 0 = no certificate file polling
   std::string quic_cert_file;
   std::string quic_key_file;
+  std::string quic_client_ca_file;
   std::string http_root_dir;
   std::vector<std::string> http_allowed_origins;
   size_t http_max_request_body_size = NPRPC_DEFAULT_HTTP_MAX_REQUEST_BODY_SIZE;
@@ -286,6 +287,7 @@ class RpcImpl : public Rpc
   boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard_;
   std::unique_ptr<boost::asio::thread_pool> pool_;
   std::unique_ptr<boost::asio::thread_pool> stream_pool_;
+  std::string telemetry_reference_;
   std::mutex poas_mut_;
   std::array<std::shared_ptr<PoaImpl>, max_poa_objects> poas_;
   std::array<bool, max_poa_objects> poas_created_;
@@ -296,6 +298,9 @@ class RpcImpl : public Rpc
   std::vector<std::pair<std::string, ObjectId>> host_json_objects_;
 
 public:
+  std::string telemetry_reference() const override { return telemetry_reference_; }
+  void start_telemetry(uint32_t min_interval_ms);
+  void configure_quic_client_tls(const QuicClientTlsConfig& config) override;
   uint16_t port() const noexcept { return g_cfg.listen_tcp_port; }
   uint16_t websocket_port() const noexcept { return g_cfg.listen_http_port; }
 

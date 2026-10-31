@@ -199,7 +199,7 @@ public:
 
   Session(boost::asio::any_io_executor executor);
 
-  virtual ~Session() = default;
+  virtual ~Session();
 };
 
 } // namespace nprpc::impl

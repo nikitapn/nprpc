@@ -1,0 +1,25 @@
+module nprpc.monitor;
+
+enum Transport : u32 {
+  Http3,
+  WebSocket,
+  WebTransport
+}
+
+message TransportSample {
+  transport: Transport;
+  completed: u64;
+  errors: u64;
+  received_bytes: u64;
+  sent_bytes: u64;
+  dispatch_ns: u64;
+}
+
+message Snapshot {
+  uptime_ms: u64;
+  transports: TransportSample[];
+}
+
+interface Monitor {
+  server_stream<Snapshot> Watch(interval_ms: u32);
+}

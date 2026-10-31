@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/telemetry.hpp>
 #include <nprpc/impl/shared_memory_channel.hpp>
 #include <nprpc/impl/shared_memory_connection.hpp>
 #include <nprpc/serialization/oarchive.h>
@@ -236,6 +237,16 @@ NPRPC_API Rpc* RpcBuilderBase::build()
     throw Exception("HTTP/3 was not compiled in (NPRPC_ENABLE_HTTP3=OFF)");
 #endif
 
+  if (cfg_->telemetry_enabled && cfg_->quic_port == 0)
+    throw Exception("Telemetry requires a QUIC listener (with_quic)");
+  if (cfg_->telemetry_enabled && (cfg_->telemetry_min_interval_ms < 250 || cfg_->telemetry_min_interval_ms > 10000))
+    throw Exception("Telemetry minimum interval must be between 250 and 10000 ms");
+  if (cfg_->telemetry_enabled && cfg_->quic_client_ca_file.empty() && !cfg_->telemetry_allow_anonymous)
+    throw Exception("Telemetry requires client certificates or allow_anonymous_telemetry()");
+
+  if (!cfg_->quic_client_ca_file.empty() && cfg_->quic_port == 0)
+    throw Exception("Required QUIC client certificates need a QUIC listener");
+
   // First check if the configuration is valid
   if (cfg_->http_ssl_enabled) {
     if (cfg_->http_cert_file.empty() || cfg_->http_key_file.empty()) {
@@ -379,18 +390,51 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   g_cfg.page_handler = cfg_->page_handler;
   g_cfg.quic_cert_file = cfg_->quic_cert_file;
   g_cfg.quic_key_file = cfg_->quic_key_file;
+  g_cfg.quic_client_ca_file = cfg_->quic_client_ca_file;
+#ifdef NPRPC_QUIC_ENABLED
+  // A certificate trusted for outbound TLS is trusted for outbound QUIC too.
+  if (cfg_->quic_client_tls.ca_file.empty())
+    cfg_->quic_client_tls.ca_file = cfg_->ssl_client_self_signed_cert_path;
+  set_quic_client_tls(cfg_->quic_client_tls);
+  if (cfg_->quic_port != 0) {
+    auto& quic = QuicApi::instance();
+    auto checked = quic.create_configuration("nprpc", true,
+        cfg_->quic_cert_file.c_str(), cfg_->quic_key_file.c_str());
+    if (!checked) throw Exception("Invalid QUIC server credentials or client trust bundle");
+    quic.api()->ConfigurationClose(checked);
+  }
+#else
+  if (!cfg_->quic_client_tls.ca_file.empty() || !cfg_->quic_client_tls.certificate_file.empty() || !cfg_->quic_client_tls.private_key_file.empty() || !cfg_->quic_client_ca_file.empty())
+    throw Exception("QUIC TLS configuration requires QUIC support");
+#endif
   g_cfg.shm_egress_channel  = cfg_->shm_egress_channel;
   g_cfg.shm_ingress_channel = cfg_->shm_ingress_channel;
   g_cfg.shm_ring_buffer_size = cfg_->shm_ring_buffer_size;
   g_cfg.shm_max_message_size = cfg_->shm_max_message_size;
 
   impl::g_rpc = new impl::RpcImpl();
+  try {
+    if (cfg_->telemetry_enabled)
+      static_cast<impl::RpcImpl*>(impl::g_rpc)->start_telemetry(cfg_->telemetry_min_interval_ms);
+  } catch (...) {
+    impl::g_rpc->destroy();
+    throw;
+  }
   return impl::g_rpc;
 }
 
 } // namespace nprpc
 
 namespace nprpc::impl {
+
+void RpcImpl::configure_quic_client_tls(const QuicClientTlsConfig& config)
+{
+#ifdef NPRPC_QUIC_ENABLED
+  set_quic_client_tls(config);
+#else
+  throw Exception("QUIC TLS configuration requires QUIC support");
+#endif
+}
 
 Poa* RpcImpl::create_poa_impl(uint32_t objects_max,
                               PoaPolicy::Lifespan lifespan,
@@ -675,6 +719,7 @@ void RpcImpl::destroy()
     stream_pool_->join();
   }
 
+  g_telemetry_enabled.store(false, std::memory_order_relaxed);
   delete this;
   g_rpc = nullptr;
 }

@@ -114,6 +114,13 @@ Session::Session(boost::asio::any_io_executor executor)
       });
 }
 
+Session::~Session()
+{
+  // A peer that vanished never sends StreamCancel, and its writers would wait
+  // on credits forever while holding the manager.
+  stream_manager_owner_->stop_pumps();
+}
+
 void Session::require_fd_passing() const
 {
   if (!supports_fd_passing())

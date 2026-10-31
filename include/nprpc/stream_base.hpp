@@ -4,6 +4,7 @@
 #pragma once
 
 #include <limits>
+#include <chrono>
 
 #include <nprpc/export.hpp>
 #include <nprpc/flat_buffer.hpp>
@@ -22,7 +23,11 @@ inline constexpr uint64_t stream_final_sequence_for_sent_chunks(uint64_t sent_ch
 /// Type-erased `StreamWriter`, as the runtime stores it.
 class NPRPC_API StreamWriterBase
 {
+  std::chrono::milliseconds interval_{0};
 public:
+  /// Minimum time between generated chunks; zero keeps credit-driven pacing.
+  void set_interval(std::chrono::milliseconds interval) { interval_ = interval; }
+  std::chrono::milliseconds interval() const { return interval_; }
   virtual ~StreamWriterBase() = default;
   /// Runs the producer until it next waits for credits or finishes.
   virtual void resume() = 0;

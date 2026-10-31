@@ -214,6 +214,21 @@ public final class Rpc {
         return handle.pointee.reload_certificates()
     }
 
+    /// Configure TLS for NEW QUIC connections, including on a borrowed runtime.
+    /// Empty caFile uses system trust. Established sessions retain their identity.
+    public func configureQuicClientTls(caFile: String = "", certFile: String = "", keyFile: String = "") throws {
+        guard let handle, handle.pointee.configure_quic_client_tls(std.string(caFile), std.string(certFile), std.string(keyFile)) else {
+            throw RuntimeError(message: "Invalid QUIC client TLS configuration")
+        }
+    }
+
+    /// The built-in telemetry service's QUIC reference, or nil when disabled.
+    public var telemetryReference: String? {
+        guard let handle else { return nil }
+        let value = String(handle.pointee.telemetry_reference())
+        return value.isEmpty ? nil : value
+    }
+
     /// Stop the io_context event loop
     public func stop() {
         guard let handle = handle else { return }
