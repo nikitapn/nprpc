@@ -129,7 +129,10 @@ trusted CA authorizes the valid client certificates it issues; explicitly truste
 self-signed leaf certificates provide a per-device allowlist. Certificates must be
 valid for their role (`serverAuth` / `clientAuth`) and within their validity
 period; the server certificate must match the hostname/IP in the reference.
-This implementation targets the MsQuic OpenSSL backend used on Linux.
+Native QUIC uses ngtcp2 with the TLS backend selected at build time:
+bundled BoringSSL (`NPRPC_USE_BORINGSSL=ON`) or system OpenSSL 3.5+.
+It shares these dependencies with HTTP/3 while using a separate listener
+for binary NPRPC RPCs. See the [build guide](../docs/BUILD.md#quic-and-http3).
 
 Configure the client before opening a remote QUIC connection:
 

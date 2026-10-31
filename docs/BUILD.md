@@ -9,8 +9,10 @@
 - **CMake 3.15+**, and **pkg-config**.
 - **Boost** (headers; Boost.ProgramOptions for the tools).
 - **liburing**, when TCP is enabled.
-- **OpenSSL**, for HTTPS/WSS. Not needed with `NPRPC_USE_BORINGSSL=ON`, which
-  builds BoringSSL from the bundled submodule, or when TLS is off.
+- **OpenSSL**, for HTTPS/WSS, native QUIC and HTTP/3. Native QUIC and HTTP/3
+  require OpenSSL 3.5+ for the ngtcp2 OpenSSL backend. Alternatively, use
+  `NPRPC_USE_BORINGSSL=ON` to build BoringSSL from the bundled submodule.
+  Neither library is needed when HTTPS/WSS, QUIC and HTTP/3 are all disabled.
 - Optional: **GoogleTest** for the tests, **Node.js** for the TypeScript
   package, **Swift 6.3** for the Swift package, **libclang** and **md4c** for
   the API docs tool.
@@ -45,8 +47,8 @@ everything, including QUIC, HTTP/3, BoringSSL, tests and examples.
 | `NPRPC_ENABLE_TCP` | ON | Native TCP transport (Linux, needs liburing) |
 | `NPRPC_ENABLE_HTTP` | ON | HTTP/1.1 server: static files, RPC over HTTP, WebSocket upgrades |
 | `NPRPC_ENABLE_WEBSOCKET` | ON | WebSocket transport (WS/WSS) |
-| `NPRPC_ENABLE_SSL` | ON | TLS for HTTPS and WSS. HTTP/3 and QUIC bring their own TLS. |
-| `NPRPC_ENABLE_QUIC` | OFF | Native QUIC transport (builds MsQuic) |
+| `NPRPC_ENABLE_SSL` | ON | TLS for HTTPS and WSS. QUIC and HTTP/3 configure TLS separately. |
+| `NPRPC_ENABLE_QUIC` | OFF | Native QUIC RPC transport using ngtcp2 |
 | `NPRPC_ENABLE_HTTP3` | OFF | HTTP/3 and WebTransport (nghttp3/ngtcp2) |
 | `NPRPC_USE_BORINGSSL` | OFF | Use the bundled BoringSSL instead of system OpenSSL |
 | `BUILD_SHARED_LIBS` | ON | Shared rather than static library |
@@ -73,6 +75,29 @@ cmake -S . -B build \
 Each enabled transport defines `NPRPC_ENABLE_<NAME>` for code that uses the
 library, so you can compile features conditionally. Asking `RpcBuilder` for a
 transport that was compiled out throws from `build()`.
+
+### QUIC and HTTP/3
+
+Native QUIC and HTTP/3 share the bundled ngtcp2 library. HTTP/3 also uses
+nghttp3 for HTTP framing; native QUIC carries binary NPRPC frames directly.
+They use separate listeners and ports: `.with_quic(...)` enables native RPC,
+while `.enable_http3()` enables HTTP/3 on the HTTP port.
+
+Both use the TLS backend selected by `NPRPC_USE_BORINGSSL`. For a system
+OpenSSL older than 3.5, select the bundled BoringSSL backend:
+
+```bash
+cmake -G Ninja -S . -B build \
+  -DNPRPC_ENABLE_QUIC=ON -DNPRPC_ENABLE_HTTP3=ON \
+  -DNPRPC_USE_BORINGSSL=ON
+cmake --build build
+```
+
+Enabling either transport builds ngtcp2 and links it statically into
+`libnprpc`. `NPRPC_ENABLE_SSL=OFF` only disables HTTPS/WSS; QUIC and HTTP/3
+still require their TLS backend. See the monitor's
+[QUIC authentication guide](../nprpc_monitor/README.md#quic-authentication)
+for server trust, client certificates and mTLS configuration.
 
 ## Using NPRPC in your project
 
@@ -121,6 +146,8 @@ removes what was installed.
 
 - **OpenSSL not found:** `-DOPENSSL_ROOT_DIR=/path/to/openssl`, or use
   `-DNPRPC_USE_BORINGSSL=ON`.
+- **ngtcp2 OpenSSL backend lacks QUIC support:** use OpenSSL 3.5+ or configure
+  with `-DNPRPC_USE_BORINGSSL=ON`.
 - **Boost not found:** `-DBOOST_ROOT=/path/to/boost`.
 - **GTest not found:** install it, pass `-DGTest_DIR=...`, or disable tests
   with `-DNPRPC_BUILD_TESTS=OFF`.

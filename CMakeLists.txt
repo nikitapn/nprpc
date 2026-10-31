@@ -24,10 +24,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_definitions(BOOST_ASIO_NO_DEPRECATED)
 
 # Options
-# For systems with OpenSSL < 3.5, can use system libcrypto (faster builds)
-# For OpenSSL 3.5+, must build from source due to ossl_time_now being internal
-# Set NPRPC_QUIC_USE_SYSTEM_LIBCRYPTO=ON when building on Debian-based systems with OpenSSL < 3.5
-option(NPRPC_QUIC_USE_SYSTEM_LIBCRYPTO "Use system libcrypto for QUIC (requires OpenSSL < 3.5)" OFF)
 option(NPRPC_BUILD_TOOLS "Build npidl tool and nameserver" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_BUILD_TESTS "Build tests" ${NPRPC_IS_TOPLEVEL_PROJECT})
 option(NPRPC_BUILD_JS "Build JavaScript bindings" ${NPRPC_IS_TOPLEVEL_PROJECT})

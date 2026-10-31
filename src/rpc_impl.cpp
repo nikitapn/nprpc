@@ -288,10 +288,11 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   }
 
   // Configure SSL client settings based on RpcBuilder options.
-  // This Boost.Asio context is only used for outbound WSS/HTTPS. MsQuic and
-  // HTTP/3 have their own TLS stacks. Skip verify-path setup when nothing
-  // in the builder asks for HTTP/TLS — set_default_verify_paths SIGSEGVs on
-  // Ubuntu 24.04 + Boost.Asio (a SHM-only compositor dies immediately after
+  // This Boost.Asio context is only used for outbound WSS/HTTPS. Native QUIC
+  // and HTTP/3 configure their own TLS contexts for ngtcp2. Skip verify-path
+  // setup when nothing in the builder asks for HTTP/TLS —
+  // set_default_verify_paths SIGSEGVs on Ubuntu 24.04 + Boost.Asio
+  // (a SHM-only compositor dies immediately after
   // "SSL client verification paths set").
   const bool need_ssl_client =
       cfg_->http_ssl_enabled || cfg_->http_port != 0 ||

@@ -70,7 +70,7 @@ This covers every listener that terminates TLS with those files:
 |---|---|
 | HTTP/1.1 + WebSocket | builds a new `ssl::context` and publishes it; the next accepted connection picks it up |
 | HTTP/3 | each worker reloads its own `SSL_CTX` on its own io_context thread |
-| QUIC RPC (`with_quic`) | builds a new MsQuic configuration for connections accepted from now on |
+| QUIC RPC (`with_quic`) | builds and publishes a new `SSL_CTX` for the ngtcp2 listener; new connections use it with the configured client-certificate policy |
 
 Connections already established keep the certificate they handshook with —
 reload is not a disconnect. A subsystem whose files fail to parse keeps its

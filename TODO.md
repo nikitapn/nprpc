@@ -79,7 +79,7 @@
 │                              NPRPC                                  │
 ├─────────────┬─────────────┬──────────────────────┬──────────────────┤
 │  Shared Mem │ TCP/WS/HTTP |  HTTP3/WebTransport  │   Native QUIC    │
-│  (IPC)      │ (boost)     │  (ngtcp2/nghttp3)    │     (MsQuic)     │
+│  (IPC)      │ (boost)     │  (ngtcp2/nghttp3)    │     (ngtcp2)     │
 ├─────────────┴─────────────┴──────────────────────┴──────────────────┤
 │                      Transport Selection                            │
 │  shm://       tcp://                                   quic://      │

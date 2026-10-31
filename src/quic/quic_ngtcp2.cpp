@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 //
 // Raw QUIC transport using ngtcp2 + boringssl/openssl.
-// Replaces the MsQuic-based implementation.
+// Shares the QUIC and TLS dependencies with the HTTP/3 server.
 // Protocol: raw binary NPRPC frames over a single persistent bidi QUIC stream.
 // Wire format identical to the TCP/WebSocket transport (4-byte LE total length).
 
