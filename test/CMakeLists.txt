@@ -566,5 +566,10 @@ if(NPRPC_ENABLE_HTTP3 AND NPRPC_BUILD_ROUTER)
       $<TARGET_FILE:http3_rebinding_fixture> $<TARGET_FILE:npquicrouter>
       ${CMAKE_SOURCE_DIR}/certs/out/localhost.crt ${CMAKE_SOURCE_DIR}/certs/out/localhost.key)
     set_tests_properties(Http3RouterRebinding PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+    add_test(NAME RouterLimits COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/router_limits_test.py
+      $<TARGET_FILE:http3_rebinding_fixture> $<TARGET_FILE:npquicrouter>
+      ${CMAKE_SOURCE_DIR}/certs/out/localhost.crt ${CMAKE_SOURCE_DIR}/certs/out/localhost.key)
+    set_tests_properties(RouterLimits PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
   endif()
 endif()

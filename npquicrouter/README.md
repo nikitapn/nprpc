@@ -76,6 +76,13 @@ All settings live in a single JSON file passed as the sole command-line argument
 | `default_tcp_backend` | string | `""` | Fallback TCP backend (`host:port`) when no route matches the SNI. If empty, unmatched connections are dropped. |
 | `default_udp_backend` | string | `""` | Fallback UDP backend (`host:port`). Same rules as `default_tcp_backend`. |
 | `udp_session_timeout_sec` | int | `120` | Idle timeout for UDP sessions. Sessions idle longer than this are garbage-collected. |
+| `udp_handshake_timeout_sec` | int | `10` | Idle timeout for UDP sessions that haven't finished a handshake. A session is created from a single Initial, which is easy to spoof. |
+| `udp_max_sessions`, `udp_max_sessions_per_ip` | uint32 | `100000`, `2000` | Caps on UDP sessions. New clients over a cap are dropped. |
+| `udp_max_pending`, `udp_max_pending_per_ip` | uint32 | `20000`, `256` | Caps on connections still waiting for a complete SNI. |
+| `udp_new_initials_per_second`, `udp_new_initials_per_ip_per_second` | uint32 | `100000`, `500` | Rates of packets from unknown clients, checked before decrypting them. Bursts of twice the rate are allowed. |
+| `tcp_max_connections`, `tcp_max_connections_per_ip` | uint32 | `50000`, `2000` | Caps on TCP connections. |
+| `tcp_peek_timeout_sec` | int | `10` | How long a TCP connection may take to send its ClientHello. |
+| `stats_interval_sec` | int | `60` | Period of the `[stats]` log line. |
 | `shm_egress_channel` | string | `""` | Shared-memory channel name for the egress (server→client) ring. See [SHM Fast Path](#shm-fast-path). Empty disables SHM egress. Used by every SHM route that does not name its own. |
 | `shm_egress_ring_kib` | uint32 | `0` | Size of that ring in KiB. `0` = 32 MiB. |
 | `num_workers` | int | `1` | Number of UDP worker threads. Values > 1 require `SO_REUSEPORT` support (Linux 3.9+). With eBPF enabled, each worker gets its own socket and the BPF program routes packets deterministically. |
@@ -103,6 +110,11 @@ restarting anyway. Sizes can be small. A site that answers GETs runs fine on
 512 KiB in and 1 MiB out: QUIC's congestion window, not the ring, bounds what
 is in flight. A 5 MB download over 512 KiB rings, on loopback where the
 backend outpaces any real client, arrives intact.
+
+
+For every limit, `0` means unlimited. "Per IP" means per IPv4 address or per IPv6 /64. The per-IP defaults are high because a carrier NAT can put many real clients behind one address, so lower them if your clients don't sit behind one.
+
+The `[stats]` line reports current `sessions`, `pending` and `tcp`, then running totals of drops and timeouts by reason, and packets, bytes and full-ring drops per backend.
 
 ## ACME HTTP-01
 
