@@ -59,7 +59,9 @@
 #include <stop_token>
 #include <thread>
 #include <string>
+#include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -125,6 +127,16 @@ static constexpr size_t kMaxUdpPayload = 1350;
 // Maximum packets to batch per do_write() call
 static constexpr size_t kMaxBurst = 64;
 static constexpr int kMaxRecvBatch = 64;
+// Room for the short header, the AEAD tag and the DATAGRAM frame in one packet.
+static constexpr size_t kMaxDatagramSize = kMaxUdpPayload - 64;
+static constexpr size_t kDatagramFrameOverhead = 9;
+static constexpr uint64_t kMaxDatagramFrameSize = 65535;
+static constexpr size_t kMaxQueuedDatagrams = 1024;
+// Server-opened data streams a client allows at once.  One more than this
+// open at the same time goes over the main stream instead.
+static constexpr uint64_t kMaxDataStreams = 100;
+
+static QuicTransportStats g_quic_stats;
 static constexpr uint32_t kDefaultClientTimeoutMs = 30000;
 static constexpr size_t kMaxWriteVecs = 32;
 
@@ -316,6 +328,83 @@ static void release_acked_prefix(std::deque<flat_buffer>& queue,
   }
 }
 
+// What it takes to carry frames as QUIC DATAGRAMs, on either side of a connection.
+class DatagramQueue
+{
+public:
+  // Called from any thread.  False means the datagram did not go out: too large
+  // for one packet, unsupported by the peer, or too many already waiting.
+  bool can_accept(size_t size) noexcept
+  {
+    if (size > max_size_.load(std::memory_order_acquire)) return false;
+    if (queued_.fetch_add(1, std::memory_order_relaxed) >= kMaxQueuedDatagrams) {
+      queued_.fetch_sub(1, std::memory_order_relaxed);
+      return false;
+    }
+    return true;
+  }
+
+  // From here on, on the connection's strand.
+  void push(flat_buffer&& frame) { frames_.push_back(std::move(frame)); }
+  bool empty() const noexcept { return frames_.empty(); }
+
+  void on_handshake_completed(ngtcp2_conn* conn) noexcept
+  {
+    const auto* params = ngtcp2_conn_get_remote_transport_params(conn);
+    const uint64_t limit = params ? params->max_datagram_frame_size : 0;
+    // A limit of zero is the peer saying it takes no datagrams.
+    max_size_.store(limit > kDatagramFrameOverhead
+        ? std::min<size_t>(kMaxDatagramSize, limit - kDatagramFrameOverhead) : 0,
+        std::memory_order_release);
+  }
+
+  ngtcp2_ssize write(ngtcp2_conn* conn, ngtcp2_path* path, ngtcp2_pkt_info* pi,
+                     uint8_t* dest, size_t destlen, ngtcp2_tstamp ts)
+  {
+    auto& frame = frames_.front();
+    ngtcp2_vec vec{const_cast<uint8_t*>(frame.data_ptr()), frame.size()};
+    int accepted = 0;
+    const auto nwrite = ngtcp2_conn_writev_datagram(
+        conn, path, pi, dest, destlen, &accepted,
+        NGTCP2_WRITE_DATAGRAM_FLAG_PADDING, 0, &vec, 1, ts);
+    if (accepted) {
+      g_quic_stats.datagrams_sent.fetch_add(1, std::memory_order_relaxed);
+      pop();
+    } else if (nwrite == NGTCP2_ERR_INVALID_ARGUMENT || nwrite == NGTCP2_ERR_INVALID_STATE) {
+      NPRPC_QUIC_ERROR("dropping datagram of {} bytes: {}", frame.size(),
+                       ngtcp2_strerror(static_cast<int>(nwrite)));
+      pop();
+      return ngtcp2_conn_write_pkt(conn, path, pi, dest, destlen, ts);
+    }
+    return nwrite;
+  }
+
+private:
+  void pop()
+  {
+    frames_.pop_front();
+    queued_.fetch_sub(1, std::memory_order_relaxed);
+  }
+
+  std::deque<flat_buffer> frames_;
+  std::atomic<size_t> queued_{0};
+  std::atomic<size_t> max_size_{0};
+};
+
+// A datagram is one whole NPRPC frame.  False for anything else, which is not
+// worth failing a connection over: nothing here was promised to arrive anyway.
+static bool copy_datagram_frame(const uint8_t* data, size_t len, flat_buffer& frame)
+{
+  if (len < sizeof(impl::flat::Header)) return false;
+  uint32_t frame_len = 0;
+  std::memcpy(&frame_len, data, sizeof(frame_len));
+  if (frame_len != len) return false;
+  auto mb = frame.prepare(len);
+  std::memcpy(mb.data(), data, len);
+  frame.commit(len);
+  return true;
+}
+
 static uint64_t queued_bytes(const std::deque<flat_buffer>& queue)
 {
   uint64_t total = 0;
@@ -360,6 +449,12 @@ public:
 
   // Thread-safe: post a write to the RPC stream
   void enqueue_response(flat_buffer buf);
+  // Thread-safe: post a write to the stream's own QUIC stream.  `last` ends it.
+  void enqueue_stream_message(uint64_t nprpc_stream_id, bool last, flat_buffer buf);
+  // Thread-safe: the reader cancelled, so nothing still queued is wanted.
+  void cancel_data_stream(uint64_t nprpc_stream_id);
+  // Thread-safe.  False means the datagram did not go out.
+  bool send_datagram(flat_buffer&& frame);
 
   const ngtcp2_cid& scid()       const noexcept { return scid_; }
   bool              is_closed()   const noexcept { return closed_; }
@@ -376,6 +471,10 @@ private:
   void on_stream_opened(int64_t stream_id);
   void on_stream_data(int64_t stream_id, const uint8_t* data, size_t len);
   void on_stream_data_acked(int64_t stream_id, uint64_t offset, uint64_t datalen);
+  void on_data_stream_closed(int64_t stream_id);
+  void on_datagram(const uint8_t* data, size_t len);
+  ngtcp2_ssize write_data_stream(ngtcp2_conn*, ngtcp2_path*, ngtcp2_pkt_info*,
+                                 uint8_t*, size_t, ngtcp2_tstamp);
   void maybe_create_session();
   void remove_self();
 
@@ -390,6 +489,7 @@ private:
                                            uint64_t, void*, void*);
   static int  cb_stream_open(ngtcp2_conn*, int64_t, void*);
   static int  cb_stream_close(ngtcp2_conn*, uint32_t, int64_t, uint64_t, void*, void*);
+  static int  cb_recv_datagram(ngtcp2_conn*, uint32_t, const uint8_t*, size_t, void*);
   static int  cb_get_new_connection_id(ngtcp2_conn*, ngtcp2_cid*, uint8_t*, size_t, void*);
   static int  cb_remove_connection_id(ngtcp2_conn*, const ngtcp2_cid*, void*);
   static void cb_rand(uint8_t*, size_t, const ngtcp2_rand_ctx*);
@@ -421,6 +521,26 @@ private:
   uint64_t   tx_stream_acked_offset_ = 0;
   uint64_t   tx_stream_sent_offset_  = 0;
 
+  // One server-opened QUIC stream per NPRPC stream, so a slow stream holds up
+  // neither the others nor RPC replies.
+  struct DataStream {
+    uint64_t nprpc_stream_id = 0;
+    std::deque<flat_buffer> queue;
+    uint64_t acked_offset = 0;
+    uint64_t sent_offset = 0;
+    bool last_queued = false; // Send FIN after what is queued.
+    bool fin_sent = false;
+  };
+  std::map<int64_t, DataStream> data_streams_;
+  // Next to write, for taking turns; written round the map from here.
+  int64_t next_data_stream_ = -1;
+  // A value of -1 is a stream that found no room for a QUIC stream of its own,
+  // and stays on the main stream so that it stays in order.
+  std::unordered_map<uint64_t, int64_t> quic_stream_of_;
+  std::unordered_set<uint64_t> cancelled_streams_;
+
+  DatagramQueue datagrams_;
+
   bool closed_ = false;
   bool handshake_finished_ = false;
   std::unique_ptr<ActiveConnection> active_connection_;
@@ -447,6 +567,12 @@ public:
       : Session(conn->get_executor()), conn_(conn)
   {
     ctx_.stream_manager->set_active_stream_counter(active_stream_counter(monitor::Transport::Quic));
+    // Weak: the manager belongs to this session, which the connection owns.
+    ctx_.stream_manager->set_send_datagram_callback(
+        [weak = std::weak_ptr(conn)](flat_buffer&& frame) {
+          auto conn = weak.lock();
+          return conn && conn->send_datagram(std::move(frame));
+        });
   }
 
   void send_receive(flat_buffer&, uint32_t) override
@@ -470,8 +596,19 @@ public:
   {
     auto conn = conn_.lock();
     if (!conn) return false;
-    conn->enqueue_response(std::move(buf));
+    // Every message that comes here starts with its stream ID.
+    if (buf.size() < sizeof(impl::flat::Header) + sizeof(uint64_t)) return false;
+    uint64_t stream_id = 0;
+    std::memcpy(&stream_id, buf.data_ptr() + sizeof(impl::flat::Header), sizeof(stream_id));
+    const auto kind = impl::flat::Header_Direct(buf, 0).msg_id();
+    const bool last = kind == MessageId::StreamCompletion || kind == MessageId::StreamError;
+    conn->enqueue_stream_message(stream_id, last, std::move(buf));
     return true;
+  }
+  bool send_datagram(flat_buffer&& buf) override
+  {
+    auto conn = conn_.lock();
+    return conn && conn->send_datagram(std::move(buf));
   }
   bool send_main_stream_message(flat_buffer&& buf) override
   {
@@ -485,12 +622,25 @@ public:
   void dispatch_request(flat_buffer& frame)
   {
     const uint32_t rid = extract_request_id(frame);
+    if (frame.size() >= sizeof(impl::flat::Header) + sizeof(uint64_t) &&
+        impl::flat::Header_Direct(frame, 0).msg_id() == MessageId::StreamCancellation) {
+      uint64_t stream_id = 0;
+      std::memcpy(&stream_id, frame.data_ptr() + sizeof(impl::flat::Header), sizeof(stream_id));
+      if (auto conn = conn_.lock()) conn->cancel_data_stream(stream_id);
+    }
     flat_buffer tx;
     if (measured_dispatch(monitor::Transport::Quic, frame, tx,
                          [&] { return handle_request(frame, tx); }) && tx.size() > 0) {
       inject_request_id(tx, rid);
       if (auto conn = conn_.lock()) conn->enqueue_response(std::move(tx));
     }
+  }
+
+  // A datagram gets no reply, whatever the servant leaves behind.
+  void dispatch_datagram(flat_buffer& frame)
+  {
+    flat_buffer tx;
+    handle_request(frame, tx);
   }
 
   void timeout_action() override {}
@@ -637,6 +787,7 @@ bool QuicNgtcp2ServerConn::init()
       .get_path_challenge_data  = ngtcp2_crypto_get_path_challenge_data_cb,
       .version_negotiation      = ngtcp2_crypto_version_negotiation_cb,
   };
+  cbs.recv_datagram = cb_recv_datagram;
 
   ngtcp2_settings settings;
   ngtcp2_settings_default(&settings);
@@ -658,6 +809,7 @@ bool QuicNgtcp2ServerConn::init()
   params.initial_max_streams_uni             = 0;
   params.max_idle_timeout                    = 30 * NGTCP2_SECONDS;
   params.active_connection_id_limit          = 7;
+  params.max_datagram_frame_size             = kMaxDatagramFrameSize;
   params.original_dcid                       = original_client_dcid_;
   params.original_dcid_present               = 1;
 
@@ -726,6 +878,131 @@ void QuicNgtcp2ServerConn::enqueue_response(flat_buffer buf)
       });
 }
 
+void QuicNgtcp2ServerConn::enqueue_stream_message(uint64_t nprpc_stream_id,
+                                                  bool last,
+                                                  flat_buffer buf)
+{
+  boost::asio::post(
+      strand_,
+      [self = shared_from_this(), nprpc_stream_id, last, b = std::move(buf)]() mutable {
+        if (self->closed_) return;
+        // A chunk already on its way when the cancel came.
+        if (self->cancelled_streams_.contains(nprpc_stream_id)) return;
+
+        auto it = self->quic_stream_of_.find(nprpc_stream_id);
+        if (it == self->quic_stream_of_.end()) {
+          int64_t quic_stream = -1;
+          if (ngtcp2_conn_open_uni_stream(self->conn_, &quic_stream, nullptr) == 0) {
+            self->data_streams_[quic_stream].nprpc_stream_id = nprpc_stream_id;
+            g_quic_stats.data_streams_opened.fetch_add(1, std::memory_order_relaxed);
+          } else {
+            quic_stream = -1;
+            g_quic_stats.data_stream_fallbacks.fetch_add(1, std::memory_order_relaxed);
+          }
+          it = self->quic_stream_of_.emplace(nprpc_stream_id, quic_stream).first;
+        }
+
+        if (it->second < 0) {
+          self->write_queue_.emplace_back(std::move(b));
+          if (last) self->quic_stream_of_.erase(it);
+        } else {
+          auto& stream = self->data_streams_.at(it->second);
+          stream.queue.emplace_back(std::move(b));
+          stream.last_queued = stream.last_queued || last;
+        }
+        self->do_write();
+      });
+}
+
+void QuicNgtcp2ServerConn::cancel_data_stream(uint64_t nprpc_stream_id)
+{
+  boost::asio::post(strand_, [self = shared_from_this(), nprpc_stream_id]() {
+    if (self->closed_) return;
+    self->cancelled_streams_.insert(nprpc_stream_id);
+    auto it = self->quic_stream_of_.find(nprpc_stream_id);
+    if (it == self->quic_stream_of_.end()) return;
+    if (it->second >= 0) {
+      ngtcp2_conn_shutdown_stream_write(self->conn_, 0, it->second, 0);
+      self->data_streams_.erase(it->second);
+    }
+    self->quic_stream_of_.erase(it);
+    self->do_write();
+  });
+}
+
+bool QuicNgtcp2ServerConn::send_datagram(flat_buffer&& frame)
+{
+  if (closed_ || !datagrams_.can_accept(frame.size())) return false;
+  boost::asio::post(strand_, [self = shared_from_this(), f = std::move(frame)]() mutable {
+    if (self->closed_) return;
+    self->datagrams_.push(std::move(f));
+    self->do_write();
+  });
+  return true;
+}
+
+ngtcp2_ssize QuicNgtcp2ServerConn::write_data_stream(ngtcp2_conn* conn,
+                                                     ngtcp2_path* path,
+                                                     ngtcp2_pkt_info* pi,
+                                                     uint8_t* dest,
+                                                     size_t destlen,
+                                                     ngtcp2_tstamp ts)
+{
+  auto it = data_streams_.lower_bound(next_data_stream_);
+  for (size_t tried = 0, count = data_streams_.size(); tried < count; ++tried) {
+    if (it == data_streams_.end()) it = data_streams_.begin();
+    auto& stream = it->second;
+    const int64_t id = it->first;
+    ++it;
+
+    std::array<ngtcp2_vec, kMaxWriteVecs> vecs{};
+    const auto vec_count = build_unsent_vecs(
+        stream.queue, stream.acked_offset, stream.sent_offset, vecs);
+    const bool fin = stream.last_queued && !stream.fin_sent && vec_count < vecs.size();
+    if (vec_count == 0 && !fin) continue;
+
+    uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_PADDING;
+    if (fin) flags |= NGTCP2_WRITE_STREAM_FLAG_FIN;
+    ngtcp2_ssize ndatalen = -1;
+    const auto nwrite = ngtcp2_conn_writev_stream(
+        conn, path, pi, dest, destlen, &ndatalen, flags, id, vecs.data(), vec_count, ts);
+    if (nwrite == NGTCP2_ERR_STREAM_DATA_BLOCKED) continue; // Others may have credit.
+    if (nwrite == NGTCP2_ERR_STREAM_SHUT_WR || nwrite == NGTCP2_ERR_STREAM_NOT_FOUND) {
+      on_data_stream_closed(id);
+      it = data_streams_.upper_bound(id);
+      continue;
+    }
+
+    next_data_stream_ = id + 1;
+    if (nwrite > 0 && ndatalen >= 0) {
+      stream.sent_offset += static_cast<uint64_t>(ndatalen);
+      size_t total = 0;
+      for (size_t i = 0; i < vec_count; ++i) total += vecs[i].len;
+      if (fin && static_cast<size_t>(ndatalen) == total) stream.fin_sent = true;
+    }
+    return nwrite;
+  }
+  return ngtcp2_conn_write_pkt(conn, path, pi, dest, destlen, ts);
+}
+
+void QuicNgtcp2ServerConn::on_data_stream_closed(int64_t stream_id)
+{
+  auto it = data_streams_.find(stream_id);
+  if (it == data_streams_.end()) return;
+  quic_stream_of_.erase(it->second.nprpc_stream_id);
+  data_streams_.erase(it);
+}
+
+void QuicNgtcp2ServerConn::on_datagram(const uint8_t* data, size_t len)
+{
+  g_quic_stats.datagrams_received.fetch_add(1, std::memory_order_relaxed);
+  flat_buffer frame;
+  if (!copy_datagram_frame(data, len, frame)) return;
+  // A client's first message can be a datagram, ahead of its first stream data.
+  maybe_create_session();
+  session_->dispatch_datagram(frame);
+}
+
 void QuicNgtcp2ServerConn::do_read(const uint8_t* data, size_t len,
                                     const ngtcp2_pkt_info* pi)
 {
@@ -770,6 +1047,8 @@ void QuicNgtcp2ServerConn::do_write()
                           ngtcp2_pkt_info* pi, uint8_t* dest, size_t destlen,
                           ngtcp2_tstamp ts, void* user_data) -> ngtcp2_ssize {
     auto* self = static_cast<QuicNgtcp2ServerConn*>(user_data);
+    if (!self->datagrams_.empty())
+      return self->datagrams_.write(conn, path, pi, dest, destlen, ts);
     const bool has_stream  = self->rpc_stream_id_ >= 0;
     const bool has_data    = !self->write_queue_.empty();
     const uint64_t fc_left = ngtcp2_conn_get_max_data_left(conn);
@@ -785,7 +1064,7 @@ void QuicNgtcp2ServerConn::do_write()
           self->tx_stream_sent_offset_,
           vecs);
       if (vec_count == 0) {
-        return ngtcp2_conn_write_pkt(conn, path, pi, dest, destlen, ts);
+        return self->write_data_stream(conn, path, pi, dest, destlen, ts);
       }
       ngtcp2_ssize ndatalen = 0;
       auto nwrite = ngtcp2_conn_writev_stream(
@@ -797,14 +1076,14 @@ void QuicNgtcp2ServerConn::do_write()
           nwrite == NGTCP2_ERR_STREAM_SHUT_WR ||
           nwrite == NGTCP2_ERR_STREAM_NOT_FOUND) {
         // std::cerr << "[cb] stream blocked/shut/not_found, falling back\n";
-        return ngtcp2_conn_write_pkt(conn, path, pi, dest, destlen, ts);
+        return self->write_data_stream(conn, path, pi, dest, destlen, ts);
       }
       if (nwrite > 0 && ndatalen > 0) {
         self->tx_stream_sent_offset_ += static_cast<uint64_t>(ndatalen);
       }
       return nwrite;
     }
-    return ngtcp2_conn_write_pkt(conn, path, pi, dest, destlen, ts);
+    return self->write_data_stream(conn, path, pi, dest, destlen, ts);
   };
 
   ngtcp2_path_storage ps;
@@ -1018,8 +1297,13 @@ void QuicNgtcp2ServerConn::on_stream_data_acked(int64_t stream_id,
                                                  uint64_t offset,
                                                  uint64_t datalen)
 {
-  if (stream_id != rpc_stream_id_) return;
-  release_acked_prefix(write_queue_, tx_stream_acked_offset_, offset, datalen);
+  if (stream_id == rpc_stream_id_) {
+    release_acked_prefix(write_queue_, tx_stream_acked_offset_, offset, datalen);
+    return;
+  }
+  auto it = data_streams_.find(stream_id);
+  if (it != data_streams_.end())
+    release_acked_prefix(it->second.queue, it->second.acked_offset, offset, datalen);
 }
 
 // ngtcp2 static callbacks
@@ -1044,6 +1328,7 @@ int QuicNgtcp2ServerConn::cb_handshake_completed(ngtcp2_conn*, void* ud)
 {
   auto* self = static_cast<QuicNgtcp2ServerConn*>(ud);
   self->handshake_finished_ = true;
+  self->datagrams_.on_handshake_completed(self->conn_);
   self->active_connection_ = std::make_unique<ActiveConnection>(monitor::Transport::Quic);
   NPRPC_QUIC_TRACE("server handshake completed for {}",
                    static_cast<QuicNgtcp2ServerConn*>(ud)->remote_ep_.address().to_string());
@@ -1088,7 +1373,16 @@ int QuicNgtcp2ServerConn::cb_stream_close(ngtcp2_conn*, uint32_t,
     NPRPC_QUIC_TRACE("RPC stream closed");
     self->closed_ = true;
     self->remove_self();
+  } else {
+    self->on_data_stream_closed(stream_id);
   }
+  return 0;
+}
+
+int QuicNgtcp2ServerConn::cb_recv_datagram(ngtcp2_conn*, uint32_t,
+                                           const uint8_t* data, size_t len, void* ud)
+{
+  static_cast<QuicNgtcp2ServerConn*>(ud)->on_datagram(data, len);
   return 0;
 }
 
@@ -1466,6 +1760,8 @@ public:
                           std::optional<Handler>&&    handler,
                           uint32_t                    timeout_ms);
   void send_stream_message(flat_buffer&& buf);
+  // False means the datagram did not go out.
+  bool send_datagram(flat_buffer&& frame);
 
   // Register a handler for server-initiated Request frames (stream chunks)
   void set_request_dispatch(std::function<void(flat_buffer&)> fn)
@@ -1505,6 +1801,7 @@ private:
                                            uint64_t, void*, void*);
   static int  cb_stream_open(ngtcp2_conn*, int64_t, void*);
   static int  cb_stream_close(ngtcp2_conn*, uint32_t, int64_t, uint64_t, void*, void*);
+  static int  cb_recv_datagram(ngtcp2_conn*, uint32_t, const uint8_t*, size_t, void*);
   static int  cb_get_new_connection_id(ngtcp2_conn*, ngtcp2_cid*, uint8_t*, size_t, void*);
   static int  cb_remove_connection_id(ngtcp2_conn*, const ngtcp2_cid*, void*);
   static void cb_rand(uint8_t*, size_t, const ngtcp2_rand_ctx*);
@@ -1533,6 +1830,9 @@ private:
 
   int64_t     rpc_stream_id_ = -1;
   flat_buffer rx_buf_{flat_buffer::default_initial_size()};
+  // Server-opened streams, each carrying one NPRPC stream.
+  std::unordered_map<int64_t, flat_buffer> data_stream_rx_;
+  DatagramQueue datagrams_;
   std::deque<flat_buffer> write_queue_;
   uint64_t    tx_stream_acked_offset_ = 0;
   uint64_t    tx_stream_sent_offset_  = 0;
@@ -1728,6 +2028,7 @@ void QuicNgtcp2ClientConn::do_connect(boost::asio::ip::udp::endpoint   remote_ep
       .get_path_challenge_data  = ngtcp2_crypto_get_path_challenge_data_cb,
       .version_negotiation      = ngtcp2_crypto_version_negotiation_cb,
   };
+  cbs.recv_datagram = cb_recv_datagram;
 
   ngtcp2_settings settings;
   ngtcp2_settings_default(&settings);
@@ -1741,13 +2042,14 @@ void QuicNgtcp2ClientConn::do_connect(boost::asio::ip::udp::endpoint   remote_ep
   ngtcp2_transport_params_default(&params);
   params.initial_max_stream_data_bidi_local  = 16 * 1024 * 1024;
   params.initial_max_stream_data_bidi_remote = 16 * 1024 * 1024;
-  params.initial_max_stream_data_uni         = 0;
+  params.initial_max_stream_data_uni         = 16 * 1024 * 1024;
   params.initial_max_data                    = 32 * 1024 * 1024;
   params.max_ack_delay                       = 1 * NGTCP2_MILLISECONDS;
   params.initial_max_streams_bidi            = 0; // server doesn't open streams
-  params.initial_max_streams_uni             = 0;
+  params.initial_max_streams_uni             = kMaxDataStreams;
   params.max_idle_timeout                    = 30 * NGTCP2_SECONDS;
   params.active_connection_id_limit          = 7;
+  params.max_datagram_frame_size             = kMaxDatagramFrameSize;
 
   sockaddr_storage lss, rss;
   auto path = make_path(local_ep, remote_ep, lss, rss);
@@ -1855,6 +2157,8 @@ void QuicNgtcp2ClientConn::do_write()
                           ngtcp2_pkt_info* pi, uint8_t* dest, size_t destlen,
                           ngtcp2_tstamp ts, void* user_data) -> ngtcp2_ssize {
     auto* self = static_cast<QuicNgtcp2ClientConn*>(user_data);
+    if (!self->datagrams_.empty())
+      return self->datagrams_.write(conn, path, pi, dest, destlen, ts);
     const bool has_stream  = self->rpc_stream_id_ >= 0;
     const bool has_data    = !self->write_queue_.empty();
     const uint64_t fc_left = ngtcp2_conn_get_max_data_left(conn);
@@ -2062,7 +2366,7 @@ void QuicNgtcp2ClientConn::fail_expired_requests()
 void QuicNgtcp2ClientConn::on_stream_data(int64_t stream_id,
                                            const uint8_t* data, size_t len)
 {
-  if (stream_id != rpc_stream_id_) {
+  if (stream_id != rpc_stream_id_ && ngtcp2_is_bidi_stream(stream_id)) {
     if (conn_) {
       ngtcp2_conn_extend_max_stream_offset(conn_, stream_id, len);
       ngtcp2_conn_extend_max_offset(conn_, len);
@@ -2070,6 +2374,7 @@ void QuicNgtcp2ClientConn::on_stream_data(int64_t stream_id,
     return;
   }
 
+  auto& rx_buf_ = stream_id == rpc_stream_id_ ? this->rx_buf_ : data_stream_rx_[stream_id];
   auto mb = rx_buf_.prepare(len);
   std::memcpy(mb.data(), data, len);
   rx_buf_.commit(len);
@@ -2136,6 +2441,7 @@ void QuicNgtcp2ClientConn::on_handshake_complete()
   NPRPC_QUIC_TRACE("opened RPC stream id={}", rpc_stream_id_);
 
   connected_.store(true, std::memory_order_release);
+  datagrams_.on_handshake_completed(conn_);
 
   if (connect_callback_) {
     auto cb = std::move(connect_callback_);
@@ -2196,6 +2502,17 @@ void QuicNgtcp2ClientConn::send_stream_message(flat_buffer&& buf)
       });
 }
 
+bool QuicNgtcp2ClientConn::send_datagram(flat_buffer&& frame)
+{
+  if (closed_ || !datagrams_.can_accept(frame.size())) return false;
+  boost::asio::post(strand_, [self = shared_from_this(), f = std::move(frame)]() mutable {
+    if (self->closed_) return;
+    self->datagrams_.push(std::move(f));
+    self->do_write();
+  });
+  return true;
+}
+
 void QuicNgtcp2ClientConn::close()
 {
   boost::asio::post(strand_, [self = shared_from_this()]() {
@@ -2254,12 +2571,28 @@ int QuicNgtcp2ClientConn::cb_acked_stream_data_offset(ngtcp2_conn*,
 
 int QuicNgtcp2ClientConn::cb_stream_open(ngtcp2_conn*, int64_t, void*)
 {
-  return 0; // client doesn't accept server-opened streams currently
+  return 0;
 }
 
-int QuicNgtcp2ClientConn::cb_stream_close(ngtcp2_conn*, uint32_t,
-                                           int64_t, uint64_t, void*, void*)
+int QuicNgtcp2ClientConn::cb_stream_close(ngtcp2_conn* conn, uint32_t,
+                                           int64_t stream_id, uint64_t, void* ud, void*)
 {
+  if (!ngtcp2_is_bidi_stream(stream_id)) {
+    static_cast<QuicNgtcp2ClientConn*>(ud)->data_stream_rx_.erase(stream_id);
+    // Gives the server back the stream it just finished with.
+    ngtcp2_conn_extend_max_streams_uni(conn, 1);
+  }
+  return 0;
+}
+
+int QuicNgtcp2ClientConn::cb_recv_datagram(ngtcp2_conn*, uint32_t,
+                                           const uint8_t* data, size_t len, void* ud)
+{
+  auto* self = static_cast<QuicNgtcp2ClientConn*>(ud);
+  g_quic_stats.datagrams_received.fetch_add(1, std::memory_order_relaxed);
+  flat_buffer frame;
+  if (copy_datagram_frame(data, len, frame) && self->request_dispatch_)
+    self->request_dispatch_(frame);
   return 0;
 }
 
@@ -2421,6 +2754,15 @@ public:
     return send_stream_message(std::move(buf));
   }
 
+  bool send_datagram(flat_buffer&& buf) override
+  {
+    try {
+      return connected_conn(0)->send_datagram(std::move(buf));
+    } catch (const nprpc::Exception&) {
+      return false;
+    }
+  }
+
   // QuicNgtcp2ClientConn expires its own requests.
   void timeout_action() override {}
 
@@ -2516,6 +2858,11 @@ NPRPC_API void stop_quic_listener()
     g_quic_listener->stop();
     g_quic_listener.reset();
   }
+}
+
+NPRPC_API const QuicTransportStats& quic_transport_stats() noexcept
+{
+  return g_quic_stats;
 }
 
 NPRPC_API void stop_quic_client()

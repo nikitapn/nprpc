@@ -5,6 +5,7 @@
 
 #ifdef NPRPC_QUIC_ENABLED
 
+#include <atomic>
 #include <boost/asio/io_context.hpp>
 #include <memory>
 #include <nprpc/endpoint.hpp>
@@ -30,6 +31,17 @@ NPRPC_API void stop_quic_client();
 
 // Reload certificates for new connections, retaining the current context on failure.
 NPRPC_API bool reload_quic_certificates();
+
+// How much traffic took each path, process-wide, since delivery alone does not
+// show it: every path delivers.
+struct QuicTransportStats {
+  std::atomic<uint64_t> data_streams_opened{0};
+  // Streams that found no room for a QUIC stream and used the main stream.
+  std::atomic<uint64_t> data_stream_fallbacks{0};
+  std::atomic<uint64_t> datagrams_sent{0};
+  std::atomic<uint64_t> datagrams_received{0};
+};
+NPRPC_API const QuicTransportStats& quic_transport_stats() noexcept;
 
 // Create a client-side QUIC session for the given endpoint.
 NPRPC_API std::shared_ptr<Session>

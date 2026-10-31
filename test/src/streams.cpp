@@ -1,3 +1,6 @@
+#ifdef NPRPC_QUIC_ENABLED
+#include <nprpc/impl/quic_transport.hpp>
+#endif
 #include <cstdlib>
 #include <future>
 #include <sys/wait.h>
@@ -182,6 +185,57 @@ TEST_F(NprpcTest, TestStreams)
   // TODO: TCP stream crashes...
   exec_test(nprpc::ObjectActivationFlags::tcp);
 }
+
+#ifdef NPRPC_QUIC_ENABLED
+// Delivery alone cannot tell these apart: the main stream delivers everything.
+TEST_F(NprpcTest, TestQuicStreamPaths)
+{
+#include "common/tests/streams.inl"
+  TestStreamsImpl servant;
+  const auto& stats = nprpc::impl::quic_transport_stats();
+  auto obj = bind_and_resolve<nprpc::test::TestStreams>(
+      servant, nprpc::ObjectActivationFlags::quic, "streams_quic_paths");
+
+  // A reliable stream gets a QUIC stream of its own, and arrives whole.
+  const auto opened = stats.data_streams_opened.load();
+  const auto fallbacks = stats.data_stream_fallbacks.load();
+  {
+    auto reader = obj->GetStringStream(200);
+    size_t received = 0;
+    for (auto& value : reader) { (void)value; ++received; }
+    EXPECT_EQ(received, 200u);
+  }
+  EXPECT_EQ(stats.data_streams_opened.load(), opened + 1);
+
+  // Finished streams hand their QUIC stream back: this is well past what a
+  // client allows at once, so a leak would show up as fallbacks.
+  for (int i = 0; i < 150; ++i) {
+    auto reader = obj->GetStringStream(1);
+    size_t received = 0;
+    for (auto& value : reader) { (void)value; ++received; }
+    EXPECT_EQ(received, 1u);
+  }
+  // So do cancelled ones.
+  for (int i = 0; i < 150; ++i) {
+    auto reader = obj->GetStringStream(1000);
+    (void)reader.read_next();
+    reader.cancel();
+  }
+  EXPECT_EQ(stats.data_stream_fallbacks.load(), fallbacks);
+
+  // An [unreliable] stream uses datagrams, and its completion still arrives.
+  const auto sent = stats.datagrams_sent.load();
+  const auto delivered = stats.datagrams_received.load();
+  {
+    auto reader = obj->GetByteStream(100);
+    size_t received = 0;
+    for (auto& value : reader) { (void)value; ++received; }
+    EXPECT_LE(received, 100u);
+  }
+  EXPECT_GE(stats.datagrams_sent.load(), sent + 100);
+  EXPECT_GT(stats.datagrams_received.load(), delivered);
+}
+#endif // NPRPC_QUIC_ENABLED
 
 TEST_F(NprpcTest, TestObjectStream)
 {
@@ -448,7 +502,7 @@ TEST_F(NprpcTest, TestClientStream)
   };
 
   exec_test(nprpc::ObjectActivationFlags::ws);
-  // exec_test(nprpc::ObjectActivationFlags::quic);
+  exec_test(nprpc::ObjectActivationFlags::quic);
 }
 
 TEST_F(NprpcTest, TestBidiStream)
