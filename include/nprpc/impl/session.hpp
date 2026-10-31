@@ -124,7 +124,12 @@ public:
         // nothing we can do here
       }
     }
-    timeout_timer_.async_wait(std::bind(&Session::start_timeout_timer, this));
+    // Runs on cancellation too, since set_timeout() relies on that to re-arm,
+    // including the cancellation by this session's own destructor.
+    timeout_timer_.async_wait([cell = self_cell_](boost::system::error_code const&) {
+      if (auto self = cell->lock())
+        self->start_timeout_timer();
+    });
   }
   const EndPoint& remote_endpoint() const noexcept
   {

@@ -210,7 +210,7 @@ void StreamManager::start_task_after_reply(uint64_t stream_id, ::nprpc::Task<> t
   }
 
   if (completed_inline) {
-    post([this, stream_id]() { start_stream(stream_id); });
+    post([this, keep_alive = weak_from_this().lock(), stream_id]() { start_stream(stream_id); });
   }
 }
 
@@ -224,7 +224,7 @@ void StreamManager::on_reply_sent()
   }
 
   for (auto stream_id : streams) {
-    post([this, stream_id]() { start_stream(stream_id); });
+    post([this, keep_alive = weak_from_this().lock(), stream_id]() { start_stream(stream_id); });
   }
 }
 

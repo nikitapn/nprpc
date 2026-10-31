@@ -189,11 +189,14 @@ int main(int argc, char** argv)
 #endif
     [[maybe_unused]] auto oid = poa->activate_object_with_id(0, &server, flags);
 
-    boost::asio::signal_set signals(rpc->ioc(), SIGINT, SIGTERM);
-    signals.async_wait(
-        [&](boost::beast::error_code const&, int) { rpc->ioc().stop(); });
+    {
+      // Scoped: destroying it needs the io_context that rpc->destroy() frees.
+      boost::asio::signal_set signals(rpc->ioc(), SIGINT, SIGTERM);
+      signals.async_wait(
+          [&](boost::beast::error_code const&, int) { rpc->ioc().stop(); });
 
-    rpc->run();
+      rpc->run();
+    }
     rpc->destroy();
 
   } catch (const std::exception& e) {
