@@ -87,6 +87,7 @@ void WebSocketSession<Derived>::on_read(
       NPRPC_WEBSOCKET_SESSION_LOG_WARN(
           "on_read: Rejected throttled WebSocket request: rate={} burst={}",
           request_throttle_rate_, request_throttle_burst_);
+      record_throttled(monitor::Transport::WebSocket);
       close();
       return;
     }

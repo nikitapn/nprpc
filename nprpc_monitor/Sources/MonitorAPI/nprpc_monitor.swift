@@ -7,6 +7,7 @@ public enum Transport: UInt32, Codable, Sendable {
   case Http3
   case WebSocket
   case WebTransport
+  case Quic
 }
 
 public struct TransportSample: Codable, Sendable {
@@ -16,16 +17,26 @@ public struct TransportSample: Codable, Sendable {
   public var received_bytes: UInt64 = 0
   public var sent_bytes: UInt64 = 0
   public var dispatch_ns: UInt64 = 0
+  public var handshake_failures: UInt64 = 0
+  public var throttled: UInt64 = 0
+  /// Inbound connections open now; not cumulative, unlike the fields above.
+  public var active_connections: UInt64 = 0
+  /// Inbound stream directions open now; a bidi stream counts twice.
+  public var active_streams: UInt64 = 0
 
   public init() {}
 
-  public init(transport: Transport, completed: UInt64, errors: UInt64, received_bytes: UInt64, sent_bytes: UInt64, dispatch_ns: UInt64)   {
+  public init(transport: Transport, completed: UInt64, errors: UInt64, received_bytes: UInt64, sent_bytes: UInt64, dispatch_ns: UInt64, handshake_failures: UInt64, throttled: UInt64, active_connections: UInt64, active_streams: UInt64)   {
     self.transport = transport
     self.completed = completed
     self.errors = errors
     self.received_bytes = received_bytes
     self.sent_bytes = sent_bytes
     self.dispatch_ns = dispatch_ns
+    self.handshake_failures = handshake_failures
+    self.throttled = throttled
+    self.active_connections = active_connections
+    self.active_streams = active_streams
   }
 }
 
@@ -38,6 +49,10 @@ public func marshal_TransportSample(buffer: FlatBuffer, offset: Int, data: Trans
   buffer.storeBytes(of: data.received_bytes, toByteOffset: offset + 24, as: UInt64.self)
   buffer.storeBytes(of: data.sent_bytes, toByteOffset: offset + 32, as: UInt64.self)
   buffer.storeBytes(of: data.dispatch_ns, toByteOffset: offset + 40, as: UInt64.self)
+  buffer.storeBytes(of: data.handshake_failures, toByteOffset: offset + 48, as: UInt64.self)
+  buffer.storeBytes(of: data.throttled, toByteOffset: offset + 56, as: UInt64.self)
+  buffer.storeBytes(of: data.active_connections, toByteOffset: offset + 64, as: UInt64.self)
+  buffer.storeBytes(of: data.active_streams, toByteOffset: offset + 72, as: UInt64.self)
 }
 
 // MARK: - Unmarshal TransportSample
@@ -49,18 +64,27 @@ public func unmarshal_TransportSample(buffer: UnsafeRawPointer, offset: Int) -> 
   result.received_bytes = buffer.load(fromByteOffset: offset + 24, as: UInt64.self)
   result.sent_bytes = buffer.load(fromByteOffset: offset + 32, as: UInt64.self)
   result.dispatch_ns = buffer.load(fromByteOffset: offset + 40, as: UInt64.self)
+  result.handshake_failures = buffer.load(fromByteOffset: offset + 48, as: UInt64.self)
+  result.throttled = buffer.load(fromByteOffset: offset + 56, as: UInt64.self)
+  result.active_connections = buffer.load(fromByteOffset: offset + 64, as: UInt64.self)
+  result.active_streams = buffer.load(fromByteOffset: offset + 72, as: UInt64.self)
   return result
 }
 
 public struct Snapshot: Codable, Sendable {
   public var uptime_ms: UInt64 = 0
   public var transports: [TransportSample] = []
+  /// HTTP/1.1 has no transport row: TLS fails before a request can upgrade.
+  public var http1_handshake_failures: UInt64 = 0
+  public var http1_throttled: UInt64 = 0
 
   public init() {}
 
-  public init(uptime_ms: UInt64, transports: [TransportSample])   {
+  public init(uptime_ms: UInt64, transports: [TransportSample], http1_handshake_failures: UInt64, http1_throttled: UInt64)   {
     self.uptime_ms = uptime_ms
     self.transports = transports
+    self.http1_handshake_failures = http1_handshake_failures
+    self.http1_throttled = http1_throttled
   }
 }
 
@@ -68,18 +92,22 @@ public struct Snapshot: Codable, Sendable {
 // MARK: - Marshal Snapshot
 public func marshal_Snapshot(buffer: FlatBuffer, offset: Int, data: Snapshot) {
   buffer.storeBytes(of: data.uptime_ms, toByteOffset: offset + 0, as: UInt64.self)
-  NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + 8, vector: data.transports, elementSize: 48, elementAlignment: 8) { buf, off, elem in
+  NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + 8, vector: data.transports, elementSize: 80, elementAlignment: 8) { buf, off, elem in
     marshal_TransportSample(buffer: buf, offset: off, data: elem)
   }
+  buffer.storeBytes(of: data.http1_handshake_failures, toByteOffset: offset + 16, as: UInt64.self)
+  buffer.storeBytes(of: data.http1_throttled, toByteOffset: offset + 24, as: UInt64.self)
 }
 
 // MARK: - Unmarshal Snapshot
 public func unmarshal_Snapshot(buffer: UnsafeRawPointer, offset: Int) -> Snapshot {
   var result = Snapshot()
   result.uptime_ms = buffer.load(fromByteOffset: offset + 0, as: UInt64.self)
-  result.transports = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + 8, elementSize: 48) { buf, off in
+  result.transports = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + 8, elementSize: 80) { buf, off in
     unmarshal_TransportSample(buffer: buf, offset: off)
   }
+  result.http1_handshake_failures = buffer.load(fromByteOffset: offset + 16, as: UInt64.self)
+  result.http1_throttled = buffer.load(fromByteOffset: offset + 24, as: UInt64.self)
   return result
 }
 
@@ -212,7 +240,7 @@ open class MonitorServant: NPRPCServant, MonitorProtocol, @unchecked Sendable {
             return
           }
           let initialCredits = data.load(fromByteOffset: 44, as: UInt32.self)
-          let writer = NPRPC.createStreamManagerWriter(streamManager: streamManager, streamId: streamId, initialPayloadCapacity: 144, initialCredits: initialCredits, serializer: { (buffer: FlatBuffer, offset: Int, value: Snapshot) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 16, value: value) { buf, off, elem in marshal_Snapshot(buffer: buf, offset: off, data: elem) } })
+          let writer = NPRPC.createStreamManagerWriter(streamManager: streamManager, streamId: streamId, initialPayloadCapacity: 160, initialCredits: initialCredits, serializer: { (buffer: FlatBuffer, offset: Int, value: Snapshot) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 32, value: value) { buf, off, elem in marshal_Snapshot(buffer: buf, offset: off, data: elem) } })
           let source = watch(interval_ms: ia._1)
           nprpc_stream_manager_defer_stream_start(streamManager, streamId)
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)

@@ -193,11 +193,25 @@ Python's `cryptography` package.
 * CONNECT requests are excluded from HTTP/3 counts so WT sessions do not look
   like ordinary page requests. Counters aggregate the process's sessions;
   WebSocket includes incoming calls on client sessions as well as servers.
+* QUIC counts native NPRPC calls, including the monitor's own Watch.
+* Handshake failures count inbound connections that ended before the handshake
+  finished, whatever the cause: a rejected certificate, or a client that gave
+  up. HTTP/3 and QUIC count them per connection, and HTTP/3's are recorded when
+  the connection is destroyed, so they can lag by its idle timeout. WebSocket
+  counts failed upgrades. WebTransport has no handshake of its own.
+* Throttled counts requests, connections and stream opens refused by a rate or
+  session limit, on the transport they arrived on.
+* HTTP/1.1 reports only TLS handshake failures and throttled RPC requests, as
+  process totals, because a TLS failure happens before a connection can become
+  a WebSocket.
+* Active connections and streams are current values, not cumulative, and cover
+  inbound sessions only. An HTTP/3 connection counts once its handshake
+  completes. HTTP/3 has no NPRPC streams, so its stream count stays 0. Each
+  direction of a bidi stream counts separately.
 * Rates are deltas of cumulative counters divided by server monotonic elapsed
   time. First samples establish a baseline. Charts scale independently.
 
-This first version does not yet expose connection counts, handshake failures,
-stream throughput/backpressure, latency percentiles, per-method breakdowns,
+This first version does not yet expose stream throughput/backpressure, latency percentiles, per-method breakdowns,
 logs, alerts, or persistent history. It does not claim end-to-end latency.
 
 ## Framework exercise

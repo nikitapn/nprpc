@@ -818,6 +818,9 @@ private:
 
   // Static callbacks for ngtcp2
   static int on_handshake_completed(ngtcp2_conn* conn, void* user_data);
+  // Empty until the handshake completes, which is also how the destructor
+  // knows that it never did.
+  std::optional<ActiveConnection> active_connection_;
   static int on_recv_stream_data(ngtcp2_conn* conn,
                                  uint32_t flags,
                                  int64_t stream_id,
@@ -1041,10 +1044,14 @@ public:
       , throttle_session_key_(http_request_throttler().allocate_session_key())
       , rx_buffer_(4 * 1024 * 1024)
   {
+    ctx_.stream_manager->set_active_stream_counter(
+        active_stream_counter(monitor::Transport::WebTransport));
     ctx_.remote_endpoint = EndPoint(EndPointType::WebTransport,
                                     remote_ep.address().to_string(),
                                     remote_ep.port());
   }
+
+  ActiveConnection active_connection_{monitor::Transport::WebTransport};
 
   ~WebTransportControlSession() override
   {
@@ -1247,6 +1254,7 @@ public:
       return true;
     }
 
+    record_throttled(monitor::Transport::WebTransport);
     NPRPC_LOG_ERROR(
         "[HTTP/3][WT] Rejecting throttled child stream open: session_stream_id={} bind_kind={} rate={} burst={}",
         session_stream_id_, static_cast<unsigned>(bind_kind),
@@ -1258,10 +1266,13 @@ public:
 private:
   bool allow_request()
   {
-    return http_request_throttler().allow_session_request(
+    const bool allowed = http_request_throttler().allow_session_request(
         throttle_session_key_,
         g_cfg.http_webtransport_requests_per_session_per_second,
         g_cfg.http_webtransport_requests_burst);
+    if (!allowed)
+      record_throttled(monitor::Transport::WebTransport);
+    return allowed;
   }
 
   flat_buffer& receive_buffer_for(int64_t transport_stream_id)
@@ -1612,6 +1623,9 @@ Http3Connection::Http3Connection(
 
 Http3Connection::~Http3Connection()
 {
+  if (!active_connection_)
+    record_handshake_failure(monitor::Transport::Http3);
+
   timer_.cancel();
 
   if (httpconn_) {
@@ -3432,6 +3446,7 @@ int Http3Connection::handle_error()
 {
   if (last_error_.type == NGTCP2_CCERR_TYPE_IDLE_CLOSE) {
     closed_ = true;
+    server_->remove_connection(shared_from_this());
     return -1;
   }
 
@@ -3552,6 +3567,8 @@ int Http3Connection::on_handshake_completed(ngtcp2_conn* conn, void* user_data)
 
   NPRPC_HTTP3_TRACE("Handshake completed with {}",
                     h->remote_ep_.address().to_string());
+
+  h->active_connection_.emplace(monitor::Transport::Http3);
 
   return 0;
 }
@@ -5394,11 +5411,14 @@ void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
 bool Http3Server::allow_new_connection(
     const boost::asio::ip::udp::endpoint& remote_ep)
 {
-  return http_request_throttler().allow_http3_new_connection(
+  const bool allowed = http_request_throttler().allow_http3_new_connection(
     remote_ep.address(),
       g_cfg.http3_max_active_connections_per_ip,
       g_cfg.http3_max_new_connections_per_ip_per_second,
       g_cfg.http3_max_new_connections_burst);
+  if (!allowed)
+    record_throttled(monitor::Transport::Http3);
+  return allowed;
 }
 
 void Http3Server::on_connection_accepted(
@@ -5410,19 +5430,25 @@ void Http3Server::on_connection_accepted(
 
 bool Http3Server::allow_rpc_request(const boost::asio::ip::udp::endpoint& remote_ep)
 {
-  return http_request_throttler().allow_http_rpc_request(
+  const bool allowed = http_request_throttler().allow_http_rpc_request(
       remote_ep.address(),
       g_cfg.http_rpc_max_requests_per_ip_per_second,
       g_cfg.http_rpc_max_requests_burst);
+  if (!allowed)
+    record_throttled(monitor::Transport::Http3);
+  return allowed;
 }
 
 bool Http3Server::allow_webtransport_connect(
     const boost::asio::ip::udp::endpoint& remote_ep)
 {
-  return http_request_throttler().allow_webtransport_connect(
+  const bool allowed = http_request_throttler().allow_webtransport_connect(
     remote_ep.address(),
       g_cfg.http_webtransport_connects_per_ip_per_second,
       g_cfg.http_webtransport_connects_burst);
+  if (!allowed)
+    record_throttled(monitor::Transport::WebTransport);
+  return allowed;
 }
 
 int Http3Server::send_version_negotiation(

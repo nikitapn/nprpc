@@ -392,7 +392,7 @@ void StreamManager::register_stream(uint64_t stream_id,
       : kInitialWindowSize;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    writers_[stream_id] = StreamInfo{std::move(writer), credits};
+    writers_[stream_id] = StreamInfo{std::move(writer), credits, StreamGauge(active_stream_counter_)};
   }
 
   NPRPC_STREAM_MANAGER_LOG_TRACE("Stream registered: {} (unreliable={}, credits={})",
@@ -407,6 +407,7 @@ void StreamManager::register_reader(uint64_t stream_id,
   auto& state = readers_[stream_id];
   state.reader = reader;
   state.owned_reader.reset();
+  state.gauge = StreamGauge(active_stream_counter_);
 }
 
 void StreamManager::register_reader(uint64_t stream_id,
@@ -417,6 +418,7 @@ void StreamManager::register_reader(uint64_t stream_id,
   auto& state = readers_[stream_id];
   state.reader = reader.get();
   state.owned_reader = std::move(reader);
+  state.gauge = StreamGauge(active_stream_counter_);
 }
 
 void StreamManager::unregister_reader(uint64_t stream_id,
@@ -874,6 +876,7 @@ void StreamManager::register_external_writer(uint64_t stream_id, uint32_t initia
     StreamInfo info{};
     if (initial_credits > 0)
       info.credits = static_cast<int32_t>(initial_credits);
+    info.gauge = StreamGauge(active_stream_counter_);
     writers_[stream_id] = std::move(info);
   }
   // If already present (e.g. from a deferred stream start), leave credits alone.

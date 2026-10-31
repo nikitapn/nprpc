@@ -5,6 +5,7 @@
 
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/http_request_throttler.hpp>
+#include <nprpc/impl/telemetry.hpp>
 #include <nprpc/impl/session.hpp>
 #include <nprpc/impl/websocket_session.hpp>
 #include <nprpc_base_ext.hpp>
@@ -98,6 +99,7 @@ class websocket_session_with_acceptor : public Derived
   void on_accept(beast::error_code ec)
   {
     if (ec) {
+      record_handshake_failure(monitor::Transport::WebSocket);
       this->close();
       return fail(ec, "accept");
     }
@@ -119,7 +121,13 @@ public:
       this->ctx_.cookies = upgrade_cookies_;
     }
 
-    if (!throttle_ip.is_unspecified()) {
+    // The close hook owns it, so it lasts exactly until the session closes.
+    auto active = std::make_shared<ActiveConnection>(monitor::Transport::WebSocket);
+    this->ctx_.stream_manager->set_active_stream_counter(
+        active_stream_counter(monitor::Transport::WebSocket));
+    if (throttle_ip.is_unspecified()) {
+      this->set_close_hook([active] {});
+    } else {
       const auto session_key = http_request_throttler().allocate_session_key();
       const auto throttle_ip_key =
           HttpRequestThrottler::make_ip_key(throttle_ip);
@@ -129,7 +137,8 @@ public:
           g_cfg.http_websocket_requests_burst);
       this->set_close_hook([
           throttle_ip_key,
-          session_key]() mutable {
+          session_key,
+          active]() mutable {
         http_request_throttler().release_websocket_session(throttle_ip_key,
                                                            session_key);
       });

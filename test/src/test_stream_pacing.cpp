@@ -102,6 +102,29 @@ int main() {
     assert(live_producers == 0);
   }
 
+  // Every way of ending a stream takes it off the gauge.
+  {
+    boost::asio::io_context gauge_io;
+    nprpc::SessionContext gauge_context;
+    auto gauged = std::make_shared<nprpc::impl::StreamManager>(gauge_context, nullptr, gauge_io.get_executor());
+    std::atomic<int64_t> streams{0};
+    gauged->set_active_stream_counter(&streams);
+    gauged->set_send_callback([](nprpc::flat_buffer&&) { return true; });
+    const auto add_writer = [&](uint64_t id) {
+      auto writer = std::make_unique<nprpc::StreamWriter<uint8_t>>(values());
+      writer->set_manager(gauged.get(), id);
+      gauged->register_stream(id, std::move(writer));
+    };
+    add_writer(1);
+    add_writer(2);
+    gauged->register_external_writer(3);
+    assert(streams == 3);
+    gauged->on_stream_cancel(1);
+    assert(streams == 2);
+    gauged->cancel_all();
+    assert(streams == 0);
+  }
+
   // Delivery follows the stream ID's tag.
   {
     using Manager = nprpc::impl::StreamManager;

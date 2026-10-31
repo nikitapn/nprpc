@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
             if not reference.startswith('NPRPC1:'):
                 raise AssertionError('Server did not publish a reference: ' + reference)
             for label, trusted_server, client_cert, accepted, live in cases:
-                result = subprocess.run([fixture, {'alt': 'client-alt', 'ip': 'client-ip', 'cap': 'client-cap'}.get(live, 'client-live' if live else 'client'), reference,
+                result = subprocess.run([fixture, {'alt': 'client-alt', 'ip': 'client-ip', 'cap': 'client-cap', 'stats': 'client-stats', 'abandon': 'client-abandon'}.get(live, 'client-live' if live else 'client'), reference,
                                          path(trusted_server), path(client_cert), path(client_cert, '.key')],
                                         capture_output=True, text=True, timeout=10)
                 if live == 'alt' and result.returncode == 77:
@@ -114,6 +114,8 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
         ('mTLS untrusted client fails', 'ca', 'rogue-client', False, False),
         ('mTLS expired client fails', 'ca', 'expired-client', False, False),
         ('mTLS wrong certificate purpose fails', 'ca', 'wrong-purpose', False, False),
+        ('a Watch left open does not outlive its connection', 'ca', 'client', True, 'abandon'),
+        ('telemetry counts refused handshakes and live sessions', 'ca', 'client', True, 'stats'),
     ])
     group('server', 'self-client', [
         ('explicitly trusted self-signed client succeeds', 'ca', 'self-client', True, False),

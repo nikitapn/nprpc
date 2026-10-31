@@ -62,8 +62,11 @@ StreamWriter<monitor::Snapshot> samples(Clock::time_point started, WatchSlot)
     for (auto transport : kTelemetryTransports) {
       const auto c = read_telemetry(transport);
       snapshot.transports.push_back({transport, c.completed, c.errors,
-          c.received_bytes, c.sent_bytes, c.dispatch_ns});
+          c.received_bytes, c.sent_bytes, c.dispatch_ns,
+          c.handshake_failures, c.throttled, c.active_connections, c.active_streams});
     }
+    snapshot.http1_handshake_failures = read_http1_handshake_failures();
+    snapshot.http1_throttled = read_http1_throttled();
     co_yield snapshot;
   }
 }

@@ -3,7 +3,8 @@ module nprpc.monitor;
 enum Transport : u32 {
   Http3,
   WebSocket,
-  WebTransport
+  WebTransport,
+  Quic
 }
 
 message TransportSample {
@@ -13,11 +14,20 @@ message TransportSample {
   received_bytes: u64;
   sent_bytes: u64;
   dispatch_ns: u64;
+  handshake_failures: u64;
+  throttled: u64;
+  /// Inbound connections open now; not cumulative, unlike the fields above.
+  active_connections: u64;
+  /// Inbound stream directions open now; a bidi stream counts twice.
+  active_streams: u64;
 }
 
 message Snapshot {
   uptime_ms: u64;
   transports: TransportSample[];
+  /// HTTP/1.1 has no transport row: TLS fails before a request can upgrade.
+  http1_handshake_failures: u64;
+  http1_throttled: u64;
 }
 
 interface Monitor {

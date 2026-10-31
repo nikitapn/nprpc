@@ -14,6 +14,7 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/session.hpp>
 #include <nprpc/impl/stream_manager.hpp>
+#include <nprpc/impl/telemetry.hpp>
 #include "quic_peer_validation.hpp"
 
 #define NPRPC_ENABLE_QUIC_TRACE 0
@@ -488,6 +489,14 @@ void QuicConnection::close()
   }
 
   if (connection_) {
+    // Closing alone is silent and overrides a shutdown still queued, and the
+    // server would wait out its idle timeout.  Bounded, because the peer may
+    // already be gone and this may run on an MsQuic thread.
+    quic.api()->ConnectionShutdown(connection_, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
+    {
+      std::unique_lock lock(mutex_);
+      cv_.wait_for(lock, std::chrono::milliseconds(250), [this] { return shutdown_complete_; });
+    }
     quic.api()->ConnectionClose(connection_);
     connection_ = nullptr;
   }
@@ -575,6 +584,11 @@ void QuicConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
   case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
     connected_ = false;
     datagram_send_enabled_ = false;
+    {
+      std::lock_guard lock(mutex_);
+      shutdown_complete_ = true;
+      cv_.notify_all();
+    }
     // Clean up any data streams
     {
       std::lock_guard lock(data_streams_mutex_);
@@ -874,6 +888,12 @@ void QuicServerConnection::set_message_callback(MessageCallback callback)
   message_callback_ = std::move(callback);
 }
 
+void QuicServerConnection::set_shutdown_callback(std::function<void()> callback)
+{
+  std::lock_guard lock(mutex_);
+  shutdown_callback_ = std::move(callback);
+}
+
 void QuicServerConnection::set_datagram_callback(DatagramCallback callback)
 {
   std::lock_guard lock(mutex_);
@@ -1159,6 +1179,8 @@ void QuicServerConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
   case QUIC_CONNECTION_EVENT_CONNECTED:
     NPRPC_QUIC_TRACE("Server CONNECTED");
     NPRPC_QUIC_TRACE("[QUIC] Server connection established from {}:{}", remote_addr_, remote_port_);
+    handshake_finished_ = true;
+    active_connection_ = std::make_shared<ActiveConnection>(monitor::Transport::Quic);
     break;
 
   case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED: {
@@ -1174,8 +1196,23 @@ void QuicServerConnection::handle_connection_event(QUIC_CONNECTION_EVENT* event)
 
   case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
   case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
-  case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
+    if (!handshake_finished_) {
+      handshake_finished_ = true;
+      record_handshake_failure(monitor::Transport::Quic);
+    }
     break;
+
+  case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE: {
+    active_connection_.reset();
+    std::function<void()> on_shutdown;
+    {
+      std::lock_guard lock(mutex_);
+      on_shutdown = std::move(shutdown_callback_);
+      shutdown_callback_ = nullptr;
+    }
+    if (on_shutdown) on_shutdown();
+    break;
+  }
 
   case QUIC_CONNECTION_EVENT_DATAGRAM_RECEIVED: {
     NPRPC_QUIC_TRACE("Server DATAGRAM_RECEIVED!");
@@ -1404,6 +1441,7 @@ void QuicListener::stop()
   for (auto& conn : connections_to_close) {
     conn->set_message_callback(nullptr);
     conn->set_datagram_callback(nullptr);
+    conn->set_shutdown_callback(nullptr);
     conn->close();
   }
   connections_to_close.clear();
@@ -1641,7 +1679,8 @@ public:
       // Dispatch the RPC request
       NPRPC_QUIC_TRACE("calling handle_request");
       initialize_authentication_context();
-      bool needs_reply = handle_request(rx_buffer_, tx_buffer_);
+      bool needs_reply = measured_dispatch(monitor::Transport::Quic, rx_buffer_, tx_buffer_,
+          [&] { return handle_request(rx_buffer_, tx_buffer_); });
       NPRPC_QUIC_TRACE("handle_request returned, needs_reply={}", needs_reply);
 
       // Send response back only if needed (zero-copy: move tx_buffer_ into MsQuic)
@@ -1698,7 +1737,7 @@ public:
                    connection_->remote_address(), connection_->remote_port());
   }
 
-  void start()
+  void start(std::weak_ptr<QuicListener> listener)
   {
     connection_->set_message_callback(
         [this, self = shared_from_this()](std::vector<uint8_t>&& data) {
@@ -1708,12 +1747,29 @@ public:
         [this, self = shared_from_this()](std::vector<uint8_t>&& data) {
           on_datagram_received(std::move(data));
         });
-    
-    // Set up datagram callback for unreliable stream chunks
+    // These callbacks and the listener's list are all that keep a session
+    // alive.  Dropping them can close the connection, which MsQuic does not
+    // allow from inside its own callback, hence the post.
+    connection_->set_shutdown_callback(
+        [self = shared_from_this(), listener = std::move(listener)] {
+          boost::asio::post(static_cast<RpcImpl*>(g_rpc)->stream_executor(), [self, listener] {
+            self->connection_->set_message_callback(nullptr);
+            self->connection_->set_datagram_callback(nullptr);
+            if (auto alive = listener.lock())
+              alive->remove_connection(self->connection_.get());
+          });
+        });
+
+    ctx_.stream_manager->set_active_stream_counter(
+        active_stream_counter(monitor::Transport::Quic));
+    // Set up datagram callback for unreliable stream chunks.  The manager
+    // belongs to this session, so a strong reference here would never let go.
     ctx_.stream_manager->set_send_datagram_callback(
-        [this, self = shared_from_this()](flat_buffer&& buffer) -> bool {
+        [weak = weak_from_this()](flat_buffer&& buffer) -> bool {
+          auto self = weak.lock();
+          if (!self) return false;
           auto data = buffer.cdata();
-          return connection_->send_datagram(
+          return self->connection_->send_datagram(
               reinterpret_cast<const uint8_t*>(data.data()), data.size());
         });
   }
@@ -1946,11 +2002,11 @@ NPRPC_API void init_quic(boost::asio::io_context& ioc)
                                                      g_cfg.quic_key_file);
 
     g_quic_listener->start(g_cfg.listen_quic_port,
-                           [](std::shared_ptr<QuicServerConnection> conn) {
+                           [listener = std::weak_ptr(g_quic_listener)](std::shared_ptr<QuicServerConnection> conn) {
                              auto session =
                                  std::make_shared<QuicServerSession>(conn);
                              session->bind_self(session);
-                             session->start();
+                             session->start(listener);
                            });
   } catch (const std::exception& e) {
     NPRPC_QUIC_ERROR("Failed to start listener: {}", e.what());

@@ -3,6 +3,7 @@
 
 #include <nprpc/impl/http_file_cache.hpp>
 #include <nprpc/impl/http_request_throttler.hpp>
+#include <nprpc/impl/telemetry.hpp>
 #include <nprpc/impl/http_rpc_session.hpp>
 #include <nprpc/impl/http_utils.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
@@ -178,6 +179,7 @@ handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req,
           remote_ip,
           g_cfg.http_rpc_max_requests_per_ip_per_second,
           g_cfg.http_rpc_max_requests_burst)) {
+    record_http1_throttled();
     return too_many_requests("HTTP RPC rate limit exceeded");
   }
 
@@ -501,6 +503,7 @@ public:
               remote_ip,
               g_cfg.http_websocket_upgrades_per_ip_per_second,
               g_cfg.http_websocket_upgrades_burst)) {
+        record_throttled(monitor::Transport::WebSocket);
         http::response<http::string_body> res{http::status::too_many_requests,
                                               req.version()};
         res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
@@ -516,6 +519,7 @@ public:
       if (!http_request_throttler().try_acquire_websocket_session(
               remote_ip,
               g_cfg.http_websocket_max_active_sessions_per_ip)) {
+        record_throttled(monitor::Transport::WebSocket);
         http::response<http::string_body> res{http::status::too_many_requests,
                                               req.version()};
         res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
@@ -701,8 +705,10 @@ public:
 private:
   void on_handshake(beast::error_code ec, std::size_t bytes_used)
   {
-    if (ec)
+    if (ec) {
+      record_http1_handshake_failure();
       return fail(ec, "handshake");
+    }
 
     // Consume the portion of the buffer used by the handshake
     buffer_.consume(bytes_used);

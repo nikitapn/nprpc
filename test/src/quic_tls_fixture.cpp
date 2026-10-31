@@ -69,10 +69,36 @@ int main(int argc, char** argv) {
       }
       return 7;
     }
+    if (std::string(argv[1]) == "client-abandon") {
+      // Never cancelled: the server learns only from the connection going away.
+      auto* abandoned = new nprpc::StreamReader<nprpc::monitor::Snapshot>(object->Watch(250));
+      return abandoned->read_next() ? 0 : 5;
+    }
+    if (std::string(argv[1]) == "client-stats") {
+      auto stats = object->Watch(250);
+      // Earlier clients' connections take a moment to finish closing.
+      for (int i = 0; i < 28; ++i) {
+        auto value = stats.read_next();
+        if (!value) return 5;
+        for (const auto& sample : value->transports) {
+          if (sample.transport != nprpc::monitor::Transport::Quic) continue;
+          // The clients this server already refused, and only this one left.
+          if (sample.handshake_failures != 0 && sample.completed != 0 &&
+              sample.active_connections == 1 && sample.active_streams == 1) {
+            stats.cancel();
+            return 0;
+          }
+          if (i == 27)
+            std::cerr << "failures=" << sample.handshake_failures << " completed=" << sample.completed
+                      << " connections=" << sample.active_connections << " streams=" << sample.active_streams << '\n';
+        }
+      }
+      return 8;
+    }
     auto stream = object->Watch(250);
     for (int i = 0; i < 3; ++i) {
       auto value = stream.read_next();
-      if (!value || value->transports.size() != 3) return 5;
+      if (!value || value->transports.size() != 4) return 5;
     }
     stream.cancel();
     return 0;

@@ -12,12 +12,17 @@ struct Row: Identifiable {
     var dispatch: Double = 0
     var total: UInt64 = 0
     var errors: UInt64 = 0
+    var handshakeFailures: UInt64 = 0
+    var throttled: UInt64 = 0
+    var connections: UInt64 = 0
+    var streams: UInt64 = 0
     var history: [Double] = []
     var name: String {
         switch Transport(rawValue: UInt32(id)) {
         case .Http3: "HTTP/3"
         case .WebSocket: "WebSocket"
         case .WebTransport: "WebTransport"
+        case .Quic: "QUIC"
         case nil: "Unknown"
         }
     }
@@ -25,8 +30,9 @@ struct Row: Identifiable {
 
 @Observable final class Session: @unchecked Sendable {
     var reference = CommandLine.arguments.dropFirst().first ?? ""
+    var http1 = ""
     var status = "Disconnected — enter a Monitor object reference"
-    var rows = (0..<3).map { Row(id: UInt32($0)) }
+    var rows = (0..<4).map { Row(id: UInt32($0)) }
     private var previous: Snapshot?
     private var generation = 0
     private var task: Task<Void, Never>?
@@ -45,7 +51,7 @@ struct Row: Identifiable {
         let token = generation
         let address = reference
         status = "Connecting…"
-        rows = (0..<3).map { Row(id: UInt32($0)) }
+        rows = (0..<4).map { Row(id: UInt32($0)) }
         task = Task.detached { [weak self] in
             do {
                 guard let object = NPRPCObject.fromString(address),
@@ -79,11 +85,16 @@ struct Row: Identifiable {
     }
     private func receive(_ value: Snapshot) {
         defer { previous = value }
+        http1 = "HTTP/1.1: \(value.http1_handshake_failures) handshake failures / \(value.http1_throttled) throttled"
         status = "Live • server telemetry uptime \(value.uptime_ms / 1000)s"
         for sample in value.transports where rows.indices.contains(Int(sample.transport.rawValue)) {
             let index = Int(sample.transport.rawValue)
             rows[index].total = sample.completed
             rows[index].errors = sample.errors
+            rows[index].handshakeFailures = sample.handshake_failures
+            rows[index].throttled = sample.throttled
+            rows[index].connections = sample.active_connections
+            rows[index].streams = sample.active_streams
             guard let previous, value.uptime_ms > previous.uptime_ms,
                   let old = previous.transports.first(where: { $0.transport == sample.transport }),
                   sample.completed >= old.completed, sample.sent_bytes >= old.sent_bytes,
@@ -121,6 +132,7 @@ struct Dashboard: View {
                         Spacer()
                         Text("\(row.total) ops / \(row.errors) errors")
                     }
+                    Text("\(row.connections) connections / \(row.streams) streams / \(row.handshakeFailures) handshake failures / \(row.throttled) throttled")
                     Canvas(label: row.name + " operations per second", height: .pt(70), flexGrow: 1) { draw, frame in
                         draw.line(x1: frame.x, y1: frame.y + frame.h, x2: frame.x + frame.w, y2: frame.y + frame.h, color: .accent)
                         let top = max(1, row.history.max() ?? 1)
@@ -132,6 +144,7 @@ struct Dashboard: View {
                     }
                 }
             }
+            Text(session.http1)
             Text("120 samples • charts scale independently • payload bytes, not wire bytes")
             Text("HTTP/3: response preparation. WS / WT: synchronous RPC dispatch. Streaming data frames excluded.")
             Spacer()

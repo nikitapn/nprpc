@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <map>
@@ -11,6 +12,7 @@
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <deque>
 #include <vector>
 
@@ -81,6 +83,10 @@ public:
                std::shared_ptr<std::weak_ptr<Session>> self_cell,
                boost::asio::any_io_executor executor);
   ~StreamManager();
+
+  // Telemetry's gauge for the owning transport.  Set before any stream opens;
+  // unset means this session's streams are not counted.
+  void set_active_stream_counter(std::atomic<int64_t>* counter) noexcept { active_stream_counter_ = counter; }
 
   // Set the callback for sending on main stream (control messages)
   void set_send_callback(SendCallback callback) { send_callback_ = std::move(callback); }
@@ -193,10 +199,31 @@ private:
   // One entry per outstanding external_retain(). Guarded by mutex_.
   std::vector<std::shared_ptr<StreamManager>> extra_owners_;
 
+  std::atomic<int64_t>* active_stream_counter_ = nullptr;
+
+  // Held by a stream's entry, so every way of erasing one updates the gauge.
+  class StreamGauge {
+    std::atomic<int64_t>* counter_ = nullptr;
+  public:
+    StreamGauge() = default;
+    explicit StreamGauge(std::atomic<int64_t>* counter) noexcept : counter_(counter) {
+      if (counter_) counter_->fetch_add(1, std::memory_order_relaxed);
+    }
+    StreamGauge(StreamGauge&& other) noexcept : counter_(std::exchange(other.counter_, nullptr)) {}
+    StreamGauge& operator=(StreamGauge&& other) noexcept {
+      std::swap(counter_, other.counter_);
+      return *this;
+    }
+    ~StreamGauge() {
+      if (counter_) counter_->fetch_sub(1, std::memory_order_relaxed);
+    }
+  };
+
   // Active outgoing streams (server-side)
   struct StreamInfo {
     std::unique_ptr<StreamWriterBase> writer;  // null for external (Swift) writers
     int32_t credits = kInitialWindowSize;
+    StreamGauge gauge;
     // A coroutine in start_stream() owns the writer now; `writer` above is null.
     bool pumped = false;
     // Timer used to put the coroutine to sleep when credits are exhausted.
@@ -223,6 +250,7 @@ private:
     std::optional<uint64_t> final_sequence;
     uint64_t next_expected_sequence = 0;
     std::map<uint64_t, flat_buffer> pending_chunks;
+    StreamGauge gauge;
   };
   std::unordered_map<uint64_t, ReaderState> readers_;
 

@@ -189,6 +189,7 @@ private:
   HQUIC configuration_ = nullptr;
   HQUIC stream_ = nullptr; // Main bidirectional stream for RPC
   void fail_pending();
+  bool shutdown_complete_ = false; // Guarded by mutex_.
   std::shared_ptr<const QuicClientTlsConfig> tls_;
   std::string server_name_;
 
@@ -249,6 +250,10 @@ public:
   // Set callback for datagram messages (unreliable, no response)
   void set_datagram_callback(DatagramCallback callback);
 
+  // Called once when the connection has fully shut down, on an MsQuic thread,
+  // so it must not destroy this connection before returning.
+  void set_shutdown_callback(std::function<void()> callback);
+
   // Send response data on main RPC stream
   bool send(const void* data, size_t len);
 
@@ -277,6 +282,9 @@ public:
 
 private:
   std::atomic<bool> client_authenticated_{false};
+  // Touched only from connection callbacks, which MsQuic serializes.
+  bool handshake_finished_ = false;
+  std::shared_ptr<void> active_connection_;
   static QUIC_STATUS QUIC_API connection_callback(HQUIC connection,
                                                   void* context,
                                                   QUIC_CONNECTION_EVENT* event);
@@ -305,6 +313,7 @@ private:
 
   MessageCallback message_callback_;
   DatagramCallback datagram_callback_;
+  std::function<void()> shutdown_callback_;
   std::vector<uint8_t> receive_buffer_;
   std::string remote_addr_;
   uint16_t remote_port_ = 0;
