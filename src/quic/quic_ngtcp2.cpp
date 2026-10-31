@@ -52,7 +52,12 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <condition_variable>
+#include <future>
+#include <mutex>
+#include <optional>
 #include <stop_token>
+#include <thread>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -120,6 +125,7 @@ static constexpr size_t kMaxUdpPayload = 1350;
 // Maximum packets to batch per do_write() call
 static constexpr size_t kMaxBurst = 64;
 static constexpr int kMaxRecvBatch = 64;
+static constexpr uint32_t kDefaultClientTimeoutMs = 30000;
 static constexpr size_t kMaxWriteVecs = 32;
 
 // Hard limit of the buffer passed to the kernel for UDP GSO:
@@ -1394,19 +1400,67 @@ int QuicNgtcp2Listener::handle_new_connection(
 // ===========================================================================
 // QuicNgtcp2ClientConn — client-side QUIC connection
 // ===========================================================================
+// Client connections run here rather than on the runtime's io_context, which
+// has no thread at all unless the application started a pool, and whose threads
+// are free to block in a call waiting for this very transport.
+class QuicClientIo
+{
+public:
+  QuicClientIo()
+      : work_(boost::asio::make_work_guard(ioc))
+      , thread_([this] {
+          thread_id_ = std::this_thread::get_id();
+          set_thread_name("quic_client");
+          ioc.run();
+        })
+  {
+  }
+
+  // Runs whatever is already queued, such as closing connections, then stops.
+  // Connections keep this object alive past that, because their sockets and
+  // timers belong to ioc.
+  void stop()
+  {
+    if (stopped_.exchange(true)) return;
+    boost::asio::post(ioc, [this] { ioc.stop(); });
+    thread_.join();
+    // What is still queued holds connections, which hold this object.
+    work_.reset();
+    ioc.restart();
+    ioc.poll();
+  }
+
+  ~QuicClientIo() { stop(); }
+
+  bool stopped() const noexcept { return stopped_.load(); }
+  bool on_this_thread() const noexcept { return std::this_thread::get_id() == thread_id_.load(); }
+
+  boost::asio::io_context ioc{1};
+
+private:
+  boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_;
+  std::atomic<std::thread::id> thread_id_;
+  std::atomic<bool> stopped_{false};
+  std::thread thread_;
+};
+
 class QuicNgtcp2ClientConn
     : public std::enable_shared_from_this<QuicNgtcp2ClientConn>
 {
 public:
+  enum class ConnectResult { Connected, Failed, TimedOut };
+
   using Handler = std::function<void(const boost::system::error_code&, flat_buffer&)>;
 
-  QuicNgtcp2ClientConn(boost::asio::io_context& ioc, const EndPoint& ep);
+  QuicNgtcp2ClientConn(std::shared_ptr<QuicClientIo> io, const EndPoint& ep);
   ~QuicNgtcp2ClientConn();
 
-  // Synchronously connect; blocks calling thread (not the io_context thread)
-  bool connect();
+  // Blocks the caller until the handshake ends or timeout_ms passes.
+  // A connection gets one attempt: a closed one is replaced, not reused.
+  ConnectResult connect(uint32_t timeout_ms);
   void close();
   bool is_connected() const { return connected_.load(); }
+  bool is_closed() const { return closed_.load(); }
 
   void send_receive_async(flat_buffer&&               buf,
                           std::optional<Handler>&&    handler,
@@ -1433,6 +1487,8 @@ private:
   void on_stream_data_acked(int64_t stream_id, uint64_t offset, uint64_t datalen);
   void on_handshake_complete();
   bool setup_ssl_ctx();
+  void arm_request_timer(std::chrono::steady_clock::time_point deadline);
+  void fail_expired_requests();
 
   uint32_t generate_request_id()
   {
@@ -1453,13 +1509,16 @@ private:
   static int  cb_remove_connection_id(ngtcp2_conn*, const ngtcp2_cid*, void*);
   static void cb_rand(uint8_t*, size_t, const ngtcp2_rand_ctx*);
 
-  boost::asio::io_context& ioc_;
+  // First, so it is destroyed last: everything below belongs to its io_context.
+  std::shared_ptr<QuicClientIo> io_;
   EndPoint                 endpoint_;
   boost::asio::ip::udp::socket socket_;
   boost::asio::ip::udp::endpoint remote_ep_;
   boost::asio::strand<boost::asio::io_context::executor_type> strand_;
   boost::asio::steady_timer timer_;
   uint64_t last_scheduled_expiry_ = UINT64_MAX;
+  boost::asio::steady_timer request_timer_;
+  std::optional<std::chrono::steady_clock::time_point> request_timer_deadline_;
 
   SSL_CTX*            ssl_ctx_  = nullptr;
   ngtcp2_conn*        conn_     = nullptr;
@@ -1486,7 +1545,8 @@ private:
   std::atomic<uint32_t>                        next_request_id_{1};
 
   std::atomic<bool> connected_{false};
-  bool              closed_    = false;
+  std::atomic<bool> closed_{false};
+  bool              connect_attempted_ = false;
 
   // Contiguous send buffer: kMaxBurst slots of kMaxUdpPayload each.
   std::array<uint8_t, kGsoMaxBytes>               txbuf_;
@@ -1509,13 +1569,14 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-QuicNgtcp2ClientConn::QuicNgtcp2ClientConn(boost::asio::io_context& ioc,
+QuicNgtcp2ClientConn::QuicNgtcp2ClientConn(std::shared_ptr<QuicClientIo> io,
                                             const EndPoint& ep)
-    : ioc_(ioc)
+    : io_(std::move(io))
     , endpoint_(ep)
-    , socket_(ioc)
-    , strand_(boost::asio::make_strand(ioc))
-    , timer_(ioc)
+    , socket_(io_->ioc)
+    , strand_(boost::asio::make_strand(io_->ioc))
+    , timer_(io_->ioc)
+    , request_timer_(io_->ioc)
 {
   conn_ref_.get_conn = [](ngtcp2_crypto_conn_ref* r) -> ngtcp2_conn* {
     return static_cast<QuicNgtcp2ClientConn*>(r->user_data)->conn_;
@@ -1570,11 +1631,14 @@ bool QuicNgtcp2ClientConn::setup_ssl_ctx()
   return true;
 }
 
-bool QuicNgtcp2ClientConn::connect()
+QuicNgtcp2ClientConn::ConnectResult QuicNgtcp2ClientConn::connect(uint32_t timeout_ms)
 {
+  if (connect_attempted_ || io_->stopped()) return ConnectResult::Failed;
+  connect_attempted_ = true;
+
   if (!setup_ssl_ctx()) {
     NPRPC_QUIC_ERROR("client SSL context setup failed");
-    return false;
+    return ConnectResult::Failed;
   }
 
   // Resolve endpoint address
@@ -1591,13 +1655,17 @@ bool QuicNgtcp2ClientConn::connect()
   auto future = promise.get_future();
   boost::asio::post(
       strand_,
-      [this, remote_ep = remote_ep_, p = std::move(promise)]() mutable {
-        do_connect(remote_ep, [p = std::move(p)](bool ok) mutable {
+      [self = shared_from_this(), remote_ep = remote_ep_, p = std::move(promise)]() mutable {
+        self->do_connect(remote_ep, [p = std::move(p)](bool ok) mutable {
           p.set_value(ok);
         });
       });
 
-  return future.get();
+  if (future.wait_for(std::chrono::milliseconds(timeout_ms)) != std::future_status::ready) {
+    close();
+    return ConnectResult::TimedOut;
+  }
+  return future.get() ? ConnectResult::Connected : ConnectResult::Failed;
 }
 
 void QuicNgtcp2ClientConn::do_connect(boost::asio::ip::udp::endpoint   remote_ep,
@@ -1724,7 +1792,14 @@ void QuicNgtcp2ClientConn::do_receive()
       boost::asio::bind_executor(
           strand_,
           [self = shared_from_this()](boost::system::error_code ec, size_t n) {
-            if (ec || self->closed_) return;
+            if (self->closed_ || ec == boost::asio::error::operation_aborted) return;
+            if (ec) {
+              // Nothing would read this socket again, so nothing would ever
+              // complete what is waiting on it.
+              NPRPC_QUIC_ERROR("client recv: {}", ec.message());
+              self->handle_error();
+              return;
+            }
             // Drain what is queued before writing: one wake-up per datagram
             // cannot keep up with a sender, and neither can an ACK attempt
             // per datagram.
@@ -1919,6 +1994,7 @@ void QuicNgtcp2ClientConn::handle_error()
   closed_ = true;
   connected_.store(false, std::memory_order_release);
   timer_.cancel();
+  request_timer_.cancel();
   boost::system::error_code ignored;
   socket_.close(ignored);
 
@@ -1937,6 +2013,50 @@ void QuicNgtcp2ClientConn::handle_error()
     }
   }
   pending_requests_.clear();
+
+  for (auto& queued : pre_connect_queue_) {
+    if (queued.handler) {
+      flat_buffer empty;
+      (*queued.handler)(ec, empty);
+    }
+  }
+  pre_connect_queue_.clear();
+}
+
+void QuicNgtcp2ClientConn::arm_request_timer(std::chrono::steady_clock::time_point deadline)
+{
+  // One timer for all requests.  Most deadlines fall after the one already
+  // armed, and most calls finish first, so this rarely costs a syscall.
+  if (request_timer_deadline_ && *request_timer_deadline_ <= deadline) return;
+  request_timer_deadline_ = deadline;
+  request_timer_.expires_at(deadline);
+  request_timer_.async_wait(boost::asio::bind_executor(
+      strand_,
+      [self = shared_from_this()](boost::system::error_code ec) {
+        if (ec) return; // Re-armed, and a newer wait owns the deadline; or closed.
+        self->request_timer_deadline_.reset();
+        if (!self->closed_) self->fail_expired_requests();
+      }));
+}
+
+void QuicNgtcp2ClientConn::fail_expired_requests()
+{
+  const auto now = std::chrono::steady_clock::now();
+  std::optional<std::chrono::steady_clock::time_point> next;
+  for (auto it = pending_requests_.begin(); it != pending_requests_.end();) {
+    if (it->second.timeout_point > now) {
+      if (!next || it->second.timeout_point < *next) next = it->second.timeout_point;
+      ++it;
+      continue;
+    }
+    auto handler = std::move(it->second.handler);
+    it = pending_requests_.erase(it);
+    if (handler) {
+      flat_buffer empty;
+      (*handler)(boost::asio::error::timed_out, empty);
+    }
+  }
+  if (next) arm_request_timer(*next);
 }
 
 void QuicNgtcp2ClientConn::on_stream_data(int64_t stream_id,
@@ -2057,8 +2177,9 @@ void QuicNgtcp2ClientConn::send_receive_async(flat_buffer&&            buf,
         inject_request_id(b, rid);
 
         auto tp = std::chrono::steady_clock::now()
-                  + std::chrono::milliseconds(timeout_ms ? timeout_ms : 30000);
+                  + std::chrono::milliseconds(timeout_ms ? timeout_ms : kDefaultClientTimeoutMs);
         self->pending_requests_.emplace(rid, PendingRequest{std::move(h), tp});
+        self->arm_request_timer(tp);
         self->write_queue_.emplace_back(std::move(b));
         self->do_write();
       });
@@ -2170,51 +2291,66 @@ class QuicNgtcp2ClientSession
       public std::enable_shared_from_this<QuicNgtcp2ClientSession>
 {
 public:
-  QuicNgtcp2ClientSession(const EndPoint& ep, boost::asio::io_context& ioc)
+  QuicNgtcp2ClientSession(const EndPoint& ep,
+                          boost::asio::io_context& ioc,
+                          std::shared_ptr<QuicClientIo> io)
       : Session(ioc.get_executor())
-      , conn_(std::make_shared<QuicNgtcp2ClientConn>(ioc, ep))
+      , io_(std::move(io))
       , endpoint_(ep)
-      , connected_(false)
   {
     ctx_.remote_endpoint = ep;
-    // Route server-initiated Request frames (stream chunks) through handle_request
-    conn_->set_request_dispatch([cell = self_cell_](flat_buffer& frame) {
-      if (auto session = cell->lock()) {
-        flat_buffer tx; // no reply expected for stream messages
-        session->handle_request(frame, tx);
-      }
-    });
+    conn_ = make_conn();
   }
 
-  ~QuicNgtcp2ClientSession() override { conn_->close(); }
-  void shutdown() override { conn_->close(); }
+  ~QuicNgtcp2ClientSession() override { current_conn()->close(); }
+  void shutdown() override { current_conn()->close(); }
 
   void send_receive(flat_buffer& buf, uint32_t timeout_ms) override
   {
-    if (!ensure_connected()) throw nprpc::ExceptionCommFailure();
+    // The thread that would deliver the reply cannot also wait for it.
+    if (io_->on_this_thread()) {
+      NPRPC_QUIC_ERROR("blocking call from a QUIC client transport callback");
+      throw nprpc::ExceptionCommFailure();
+    }
+    auto conn = connected_conn(timeout_ms);
 
-    std::atomic<bool> done{false};
-    boost::system::error_code result_ec;
+    // Shared, because a reply can still arrive after this call has given up.
+    struct Waiter {
+      std::mutex mutex;
+      std::condition_variable cv;
+      bool done = false;
+      boost::system::error_code ec;
+      flat_buffer response;
+    };
+    auto waiter = std::make_shared<Waiter>();
 
-    conn_->send_receive_async(
+    conn->send_receive_async(
         std::move(buf),
-        [&](const boost::system::error_code& ec, flat_buffer& resp) {
-          result_ec = ec;
-          if (!ec) buf = std::move(resp);
-          done.store(true, std::memory_order_release);
-          done.notify_one();
+        [waiter](const boost::system::error_code& ec, flat_buffer& resp) {
+          std::lock_guard lock(waiter->mutex);
+          waiter->ec = ec;
+          if (!ec) waiter->response = std::move(resp);
+          waiter->done = true;
+          waiter->cv.notify_one();
         },
         timeout_ms);
 
-    done.wait(false);
-    if (result_ec) throw nprpc::ExceptionCommFailure();
+    // The connection's own timer normally answers first; this covers a client
+    // thread that is stuck or has already stopped.
+    std::unique_lock lock(waiter->mutex);
+    const auto limit = std::chrono::milliseconds(effective_timeout(timeout_ms)) + kWaitGrace;
+    if (!waiter->cv.wait_for(lock, limit, [&] { return waiter->done; }))
+      throw nprpc::ExceptionTimeout();
+    if (waiter->ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();
+    if (waiter->ec) throw nprpc::ExceptionCommFailure();
+    buf = std::move(waiter->response);
   }
 
   nprpc::Task<> send_receive_coro(flat_buffer& buf,
                                    uint32_t timeout_ms,
                                    std::stop_token /*st*/) override
   {
-    if (!ensure_connected()) throw nprpc::ExceptionCommFailure();
+    auto conn = connected_conn(timeout_ms);
 
     struct Awaiter {
       QuicNgtcp2ClientConn& conn;
@@ -2239,11 +2375,12 @@ public:
 
       void await_resume()
       {
+        if (result_ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();
         if (result_ec) throw nprpc::ExceptionCommFailure();
       }
     };
 
-    co_await Awaiter{*conn_, buf, timeout_ms};
+    co_await Awaiter{*conn, buf, timeout_ms};
   }
 
   void send_receive_async(
@@ -2252,52 +2389,97 @@ public:
           const boost::system::error_code&, flat_buffer&)>>&& handler,
       uint32_t timeout_ms) override
   {
-    if (!ensure_connected()) {
+    std::shared_ptr<QuicNgtcp2ClientConn> conn;
+    boost::system::error_code ec;
+    try {
+      conn = connected_conn(timeout_ms);
+    } catch (const nprpc::ExceptionTimeout&) {
+      ec = boost::asio::error::timed_out;
+    } catch (const nprpc::Exception&) {
+      ec = boost::asio::error::connection_aborted;
+    }
+    if (!conn) {
       if (handler) {
         flat_buffer empty;
-        (*handler)(boost::asio::error::connection_aborted, empty);
+        (*handler)(ec, empty);
       }
       return;
     }
-    conn_->send_receive_async(std::move(buf), std::move(handler), timeout_ms);
+    conn->send_receive_async(std::move(buf), std::move(handler), timeout_ms);
   }
 
   bool send_stream_message(flat_buffer&& buf) override
   {
-    if (!conn_) return false;
-    conn_->send_stream_message(std::move(buf));
+    auto conn = current_conn();
+    if (conn->is_closed()) return false;
+    conn->send_stream_message(std::move(buf));
     return true;
   }
 
   bool send_main_stream_message(flat_buffer&& buf) override
   {
-    if (!conn_) return false;
-    conn_->send_stream_message(std::move(buf));
-    return true;
+    return send_stream_message(std::move(buf));
   }
 
-  void timeout_action() override
-  {
-    // TODO: sweep timed-out pending_requests_ inside conn_
-  }
+  // QuicNgtcp2ClientConn expires its own requests.
+  void timeout_action() override {}
 
 private:
-  bool ensure_connected()
+  static constexpr auto kWaitGrace = std::chrono::seconds(1);
+
+  static uint32_t effective_timeout(uint32_t timeout_ms) noexcept
   {
-    if (connected_) return true;
-    connected_ = conn_->connect();
-    return connected_;
+    return timeout_ms ? timeout_ms : kDefaultClientTimeoutMs;
   }
 
-  std::shared_ptr<QuicNgtcp2ClientConn> conn_;
+  std::shared_ptr<QuicNgtcp2ClientConn> make_conn()
+  {
+    auto conn = std::make_shared<QuicNgtcp2ClientConn>(io_, endpoint_);
+    // Route server-initiated Request frames (stream chunks) through handle_request
+    conn->set_request_dispatch([cell = self_cell_](flat_buffer& frame) {
+      if (auto session = cell->lock()) {
+        flat_buffer tx; // no reply expected for stream messages
+        session->handle_request(frame, tx);
+      }
+    });
+    return conn;
+  }
+
+  std::shared_ptr<QuicNgtcp2ClientConn> current_conn()
+  {
+    std::lock_guard lock(conn_mutex_);
+    return conn_;
+  }
+
+  // Throws rather than returning an unusable connection.  A closed connection
+  // is replaced, so a timeout or a lost peer does not fail this session for good.
+  std::shared_ptr<QuicNgtcp2ClientConn> connected_conn(uint32_t timeout_ms)
+  {
+    std::lock_guard lock(conn_mutex_);
+    if (conn_->is_connected()) return conn_;
+    if (io_->on_this_thread()) throw nprpc::ExceptionCommFailure();
+    if (conn_->is_closed()) conn_ = make_conn();
+    switch (conn_->connect(effective_timeout(timeout_ms))) {
+    case QuicNgtcp2ClientConn::ConnectResult::Connected: return conn_;
+    case QuicNgtcp2ClientConn::ConnectResult::TimedOut: throw nprpc::ExceptionTimeout();
+    case QuicNgtcp2ClientConn::ConnectResult::Failed: break;
+    }
+    throw nprpc::ExceptionCommFailure();
+  }
+
+  std::shared_ptr<QuicClientIo>         io_;
   EndPoint                              endpoint_;
-  bool                                  connected_;
+  std::mutex                            conn_mutex_;
+  std::shared_ptr<QuicNgtcp2ClientConn> conn_;
 };
 
 // ===========================================================================
 // Global listener instance
 // ===========================================================================
 static std::shared_ptr<QuicNgtcp2Listener> g_quic_listener;
+
+static std::mutex g_quic_client_io_mutex;
+static std::shared_ptr<QuicClientIo> g_quic_client_io;
 
 // ===========================================================================
 // Public API
@@ -2336,10 +2518,27 @@ NPRPC_API void stop_quic_listener()
   }
 }
 
+NPRPC_API void stop_quic_client()
+{
+  std::shared_ptr<QuicClientIo> io;
+  {
+    std::lock_guard lock(g_quic_client_io_mutex);
+    io = std::move(g_quic_client_io);
+    g_quic_client_io.reset();
+  }
+  if (io) io->stop();
+}
+
 NPRPC_API std::shared_ptr<Session>
 make_quic_client_session(const EndPoint& endpoint, boost::asio::io_context& ioc)
 {
-  auto session = std::make_shared<QuicNgtcp2ClientSession>(endpoint, ioc);
+  std::shared_ptr<QuicClientIo> io;
+  {
+    std::lock_guard lock(g_quic_client_io_mutex);
+    if (!g_quic_client_io) g_quic_client_io = std::make_shared<QuicClientIo>();
+    io = g_quic_client_io;
+  }
+  auto session = std::make_shared<QuicNgtcp2ClientSession>(endpoint, ioc, std::move(io));
   session->bind_self(session);
   return session;
 }

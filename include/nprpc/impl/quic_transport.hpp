@@ -25,6 +25,8 @@ NPRPC_API void init_quic(boost::asio::io_context& ioc);
 
 // Stop the QUIC listener and free all connections.
 NPRPC_API void stop_quic_listener();
+// Ends the client transport thread, after the sessions have been shut down.
+NPRPC_API void stop_quic_client();
 
 // Reload certificates for new connections, retaining the current context on failure.
 NPRPC_API bool reload_quic_certificates();

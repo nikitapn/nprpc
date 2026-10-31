@@ -694,6 +694,10 @@ void RpcImpl::destroy()
   // Now destroy sessions outside the lock
   sessions_to_destroy.clear();
 
+#ifdef NPRPC_QUIC_ENABLED
+  stop_quic_client();
+#endif
+
   // Drain any handlers posted by session shutdown (e.g. cancellation
   // completions). ioc_ was stopped above, so restart it to allow poll() to run.
   ioc_.restart();

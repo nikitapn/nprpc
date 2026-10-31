@@ -1,4 +1,10 @@
 #include <nprpc/nprpc.hpp>
+#include <nprpc/impl/nprpc_impl.hpp>
+#include <boost/asio/ip/udp.hpp>
+#include <boost/asio/post.hpp>
+#include <csignal>
+#include <future>
+#include <optional>
 #include <nprpc_monitor.hpp>
 #include <iostream>
 #include <chrono>
@@ -31,7 +37,9 @@ int main(int argc, char** argv) {
     auto* rpc = builder.build();
     struct Cleanup { nprpc::Rpc* rpc; ~Cleanup() { rpc->destroy(); } } cleanup{rpc};
     if (live) rpc->configure_quic_client_tls(tls);
-    rpc->start_thread_pool(2);
+    const std::string mode = argv[1];
+    // A caller that blocks must never be what the transport is waiting for.
+    if (mode != "client-no-pool" && mode != "client-on-ioc") rpc->start_thread_pool(2);
     auto* raw = nprpc::Object::from_string(argv[2]);
     if (!raw) return 4;
     if (std::string(argv[1]) == "client-alt") {
@@ -42,12 +50,56 @@ int main(int argc, char** argv) {
       return 77;
 #endif
     }
+    boost::asio::io_context black_hole_io;
+    std::optional<boost::asio::ip::udp::socket> black_hole;
+    if (mode == "client-black-hole") {
+      black_hole.emplace(black_hole_io, boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::loopback(), 0));
+      raw->get_data().urls = "quic://127.0.0.1:" + std::to_string(black_hole->local_endpoint().port()) + ";";
+    }
     if (std::string(argv[1]) == "client-ip") {
       raw->get_data().urls = "quic://127.0.0.1:28444;";
     }
     auto object = nprpc::ObjectPtr(nprpc::narrow<nprpc::monitor::Monitor>(raw));
     if (!object || !object->select_endpoint()) return 4;
     object->set_timeout(3000);
+    const auto watch_once = [&] {
+      auto stream = object->Watch(250);
+      auto value = stream.read_next();
+      if (!value || value->transports.size() != 4) throw std::runtime_error("no snapshot");
+      stream.cancel();
+    };
+    if (mode == "client-no-pool") {
+      watch_once();
+      return 0;
+    }
+    if (mode == "client-on-ioc") {
+      rpc->start_thread_pool(1);
+      std::promise<void> done;
+      auto finished = done.get_future();
+      boost::asio::post(static_cast<nprpc::impl::RpcImpl*>(rpc)->ioc(), [&] {
+        try { watch_once(); done.set_value(); }
+        catch (...) { done.set_exception(std::current_exception()); }
+      });
+      finished.get();
+      return 0;
+    }
+    const auto expect_timeout = [&](int limit_ms) {
+      object->set_timeout(500);
+      const auto start = std::chrono::steady_clock::now();
+      try {
+        object->Watch(250);
+        return 6;
+      } catch (const nprpc::ExceptionTimeout&) {
+      }
+      const auto elapsed = std::chrono::steady_clock::now() - start;
+      return elapsed < std::chrono::milliseconds(limit_ms) ? 0 : 7;
+    };
+    if (mode == "client-black-hole") return expect_timeout(3000);
+    if (mode == "client-frozen-server") {
+      watch_once();
+      ::kill(std::stoi(std::getenv("QUIC_TLS_SERVER_PID")), SIGSTOP);
+      return expect_timeout(3000);
+    }
     if (std::string(argv[1]) == "client-cap") {
       // kMaxWatchesPerSession in telemetry_service.cpp.
       std::vector<nprpc::StreamReader<nprpc::monitor::Snapshot>> watches;

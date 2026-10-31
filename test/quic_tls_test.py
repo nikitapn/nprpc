@@ -2,6 +2,8 @@
 """Real QUIC handshakes and Monitor RPCs against isolated certificate fixtures."""
 import datetime
 import ipaddress
+import os
+import signal
 import pathlib
 import select
 import subprocess
@@ -74,9 +76,12 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
             if not reference.startswith('NPRPC1:'):
                 raise AssertionError('Server did not publish a reference: ' + reference)
             for label, trusted_server, client_cert, accepted, live in cases:
-                result = subprocess.run([fixture, {'alt': 'client-alt', 'ip': 'client-ip', 'cap': 'client-cap', 'stats': 'client-stats', 'abandon': 'client-abandon'}.get(live, 'client-live' if live else 'client'), reference,
+                result = subprocess.run([fixture, {'alt': 'client-alt', 'ip': 'client-ip', 'cap': 'client-cap', 'stats': 'client-stats', 'abandon': 'client-abandon', 'no-pool': 'client-no-pool', 'on-ioc': 'client-on-ioc', 'black-hole': 'client-black-hole', 'frozen': 'client-frozen-server'}.get(live, 'client-live' if live else 'client'), reference,
                                          path(trusted_server), path(client_cert), path(client_cert, '.key')],
-                                        capture_output=True, text=True, timeout=10)
+                                        capture_output=True, text=True, timeout=10,
+                                        env={**os.environ, 'QUIC_TLS_SERVER_PID': str(server.pid)})
+                if live == 'frozen':
+                    os.kill(server.pid, signal.SIGCONT)
                 if live == 'alt' and result.returncode == 77:
                     print('SKIP: TCP transport not compiled', flush=True)
                     continue
@@ -98,6 +103,10 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
         ('explicit server CA succeeds', 'ca', None, True, False),
         ('runtime TLS configuration succeeds', 'ca', None, True, True),
         ('telemetry watches are limited per session', 'ca', None, True, 'cap'),
+        ('a call needs no thread pool', 'ca', None, True, 'no-pool'),
+        ('a call can block the only io_context thread', 'ca', None, True, 'on-ioc'),
+        ('connecting to nothing times out', 'ca', None, True, 'black-hole'),
+        ('a frozen server times out', 'ca', None, True, 'frozen'),
         ('wrong server CA fails', 'rogue', None, False, False),
         ('DNS certificate rejected for IP endpoint', 'ca', None, False, 'ip'),
         ('missing trust bundle fails', 'missing', None, False, False),
