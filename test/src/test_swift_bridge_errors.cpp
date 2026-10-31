@@ -1,7 +1,9 @@
 #include "../../nprpc_swift/Sources/CNprpc/nprpc_bridge_error.hpp"
 #include <nprpc/nprpc.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/async_result.hpp>
 #include <gtest/gtest.h>
+#include <future>
 #include <thread>
 #include <vector>
 
@@ -80,7 +82,7 @@ TEST(SwiftBridgeErrors, TransportErrorsPreserveNativeDetails) {
         AsyncCompletion completion(&result, true);
         completion.callback = CompletionResult::receive;
         nprpc::flat_buffer buffer;
-        completion.complete(errors[i], buffer);
+        completion.complete(std::unexpected(nprpc::impl::transport_error(errors[i])), buffer);
         EXPECT_EQ(result.calls, 1);
         EXPECT_EQ(result.kind, kinds[i]);
         EXPECT_EQ(result.native_code, errors[i].value());
@@ -252,3 +254,157 @@ TEST_F(SessionResultTests, DisabledTransportsReturnUnsupportedTransport) {
         EXPECT_THROW(runtime().get_session(endpoint), nprpc::ExceptionCommFailure);
     }
 }
+
+TEST(TransportResultTests, NativeErrorsReachCompletionAsValues) {
+    const boost::system::error_code errors[] = {
+        {}, boost::asio::error::timed_out, boost::asio::error::operation_aborted,
+        boost::asio::error::connection_reset};
+    for (const auto& ec : errors) {
+        int calls = 0;
+        nprpc::flat_buffer response;
+        auto started = nprpc::impl::start_result_operation(
+            [&](nprpc::Result<void> status, nprpc::flat_buffer& received) {
+                ++calls;
+                EXPECT_EQ(&received, &response);
+                EXPECT_EQ(status.has_value(), !ec);
+                if (!status) {
+                    EXPECT_EQ(status.error().code, nprpc::impl::transport_error_code(ec));
+                    EXPECT_EQ(status.error().native_code, ec.value());
+                    EXPECT_STREQ(status.error().native_category.data(), ec.category().name());
+                }
+            }, [&](auto complete) { complete(ec, response); });
+        EXPECT_TRUE(started);
+        EXPECT_EQ(calls, 1);
+    }
+}
+
+TEST(TransportResultTests, InitiationFailureSuppressesLateCallback) {
+    int calls = 0;
+    std::function<void(const boost::system::error_code&, nprpc::flat_buffer&)> late;
+    auto started = nprpc::impl::start_result_operation(
+        [&](nprpc::Result<void>, nprpc::flat_buffer&) { ++calls; },
+        [&](auto complete) {
+            late = complete;
+            throw std::bad_alloc();
+        });
+    ASSERT_FALSE(started);
+    EXPECT_EQ(started.error().code, nprpc::ErrorCode::out_of_memory);
+    nprpc::flat_buffer response;
+    late({}, response);
+    EXPECT_EQ(calls, 0);
+}
+
+TEST(TransportResultTests, InlineCompletionWinsOverLaterInitiationException) {
+    int calls = 0;
+    nprpc::flat_buffer response;
+    auto started = nprpc::impl::start_result_operation(
+        [&](nprpc::Result<void> status, nprpc::flat_buffer&) { ++calls; EXPECT_TRUE(status); },
+        [&](auto complete) {
+            complete({}, response);
+            complete({}, response);
+            throw std::runtime_error("initiation failed after delivery");
+        });
+    EXPECT_TRUE(started);
+    EXPECT_EQ(calls, 1);
+}
+
+TEST(TransportResultTests, ConcurrentCallbacksCompleteOnlyOnce) {
+    std::atomic<int> calls{0};
+    std::function<void(const boost::system::error_code&, nprpc::flat_buffer&)> late;
+    auto started = nprpc::impl::start_result_operation(
+        [&](nprpc::Result<void> status, nprpc::flat_buffer&) { ++calls; EXPECT_TRUE(status); },
+        [&](auto complete) { late = complete; });
+    ASSERT_TRUE(started);
+    nprpc::flat_buffer response;
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 8; ++i) threads.emplace_back([&] { late({}, response); });
+    for (auto& thread : threads) thread.join();
+    EXPECT_EQ(calls, 1);
+}
+
+TEST(TransportResultTests, MissingHandlerDoesNotStartTransport) {
+    bool called = false;
+    auto result = nprpc::impl::start_result_operation({}, [&](auto) { called = true; });
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code, nprpc::ErrorCode::invalid_argument);
+    EXPECT_FALSE(called);
+}
+
+namespace {
+nprpc::flat_buffer request_for_unknown_poa() {
+    constexpr auto size = sizeof(nprpc::impl::Header) + sizeof(nprpc::impl::CallHeader);
+    nprpc::flat_buffer request;
+    std::memset(request.prepare(size).data(), 0, size);
+    request.commit(size);
+    auto* header = static_cast<nprpc::impl::Header*>(request.data().data());
+    header->size = size;
+    header->msg_id = nprpc::impl::MessageId::FunctionCall;
+    header->msg_type = nprpc::impl::MessageType::Request;
+    nprpc::impl::flat::CallHeader_Direct call(request, sizeof(nprpc::impl::Header));
+    call.poa_idx() = UINT16_MAX;
+    return request;
+}
+}
+
+TEST_F(SessionResultTests, ResultCallsDeliverRemoteErrorRepliesWithoutChangingTheWireProtocol) {
+    rpc->start_thread_pool(2);
+    const nprpc::EndPoint endpoint(nprpc::EndPointType::SharedMemory,
+                                  nprpc::impl::g_server_listener_uuid, 0);
+    auto request = request_for_unknown_poa();
+    auto result = runtime().call_result(endpoint, request, 1000);
+    ASSERT_TRUE(result);
+    EXPECT_EQ(nprpc::impl::flat::Header_Direct(request, 0).msg_id(),
+              nprpc::impl::MessageId::Error_PoaNotExist);
+
+    struct Received {
+        std::promise<void> done;
+        nprpc::Result<void> status;
+        nprpc::impl::MessageId id{};
+    };
+    auto received = std::make_shared<Received>();
+    auto done = received->done.get_future();
+    auto started = runtime().call_async_result(endpoint, request_for_unknown_poa(),
+        [received](nprpc::Result<void> status, nprpc::flat_buffer& response) {
+            received->status = std::move(status);
+            if (received->status) received->id = nprpc::impl::flat::Header_Direct(response, 0).msg_id();
+            received->done.set_value();
+        }, 1000);
+    ASSERT_TRUE(started);
+    ASSERT_EQ(done.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_TRUE(received->status);
+    EXPECT_EQ(received->id, nprpc::impl::MessageId::Error_PoaNotExist);
+}
+
+TEST_F(SessionResultTests, AcquisitionFailureDoesNotConsumeRequestOrCallHandler) {
+    const nprpc::EndPoint endpoint(nprpc::EndPointType::Http, "localhost", 1234);
+    auto request = request_for_unknown_poa();
+    const auto size = request.size();
+    int calls = 0;
+    auto result = runtime().call_async_result(endpoint, std::move(request),
+        [&](nprpc::Result<void>, nprpc::flat_buffer&) { ++calls; }, 1);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code, nprpc::ErrorCode::unsupported_transport);
+    EXPECT_EQ(request.size(), size);
+    EXPECT_EQ(calls, 0);
+}
+
+#ifdef NPRPC_TCP_ENABLED
+TEST_F(SessionResultTests, SocketTimeoutPreservesNativeErrorAndLegacyException) {
+    rpc->start_thread_pool(2);
+    nprpc::impl::g_cfg.use_uring_tcp = false;
+    boost::asio::io_context peer_io;
+    boost::asio::ip::tcp::acceptor silent_peer(peer_io,
+        {boost::asio::ip::address_v4::loopback(), 0});
+    const nprpc::EndPoint endpoint(nprpc::EndPointType::Tcp, "127.0.0.1",
+                                  silent_peer.local_endpoint().port());
+    auto request = request_for_unknown_poa();
+    auto result = runtime().call_result(endpoint, request, 30);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code, nprpc::ErrorCode::timeout);
+    const boost::system::error_code expected = boost::asio::error::timed_out;
+    EXPECT_EQ(result.error().native_code, expected.value());
+    EXPECT_STREQ(result.error().native_category.data(), expected.category().name());
+    auto legacy_request = request_for_unknown_poa();
+    EXPECT_THROW(runtime().call(endpoint, legacy_request, 30), nprpc::ExceptionCommFailure);
+}
+#endif

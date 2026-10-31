@@ -204,6 +204,8 @@ class SocketConnection : public Session,
   bool                                                  write_loop_running_{false};
   flat_buffer                                           rx_buffer_{flat_buffer::default_initial_size()};
 
+  boost::system::error_code send_receive_impl(flat_buffer& buffer, uint32_t timeout_ms);
+
   uint32_t generate_request_id() { return next_request_id_.fetch_add(1, std::memory_order_relaxed); }
   void inject_request_id(flat_buffer& buf, uint32_t id);
   uint32_t extract_request_id(const flat_buffer& buf);
@@ -252,6 +254,7 @@ public:
   void start();
 
   void send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
+  Result<void> send_receive_result(flat_buffer& buffer, uint32_t timeout_ms) noexcept override;
 
   nprpc::Task<> send_receive_coro(flat_buffer& buffer,
                                    uint32_t timeout_ms,
@@ -323,6 +326,12 @@ public:
   NPRPC_API void call(const EndPoint& endpoint,
                       flat_buffer& buffer,
                       uint32_t timeout_ms = 2500);
+
+  [[nodiscard]] NPRPC_API Result<void> call_result(
+      const EndPoint& endpoint, flat_buffer& buffer, uint32_t timeout_ms = 2500) noexcept;
+  [[nodiscard]] NPRPC_API Result<void> call_async_result(
+      const EndPoint& endpoint, flat_buffer&& buffer,
+      Session::ResultHandler handler, uint32_t timeout_ms = 2500) noexcept;
 
   NPRPC_API void call_async(
       const EndPoint& endpoint,

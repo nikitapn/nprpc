@@ -40,6 +40,7 @@
 
 #include <nprpc/common.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/result.hpp>
 #include <nprpc/impl/stream_manager.hpp>
 
 #include "helper.hpp"
@@ -222,6 +223,20 @@ net::awaitable<void> SocketConnection::read_loop()
 // ---------------------------------------------------------------------------
 void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 {
+  if (send_receive_impl(buffer, timeout_ms)) throw nprpc::ExceptionCommFailure();
+}
+
+Result<void> SocketConnection::send_receive_result(flat_buffer& buffer, uint32_t timeout_ms) noexcept
+{
+  return capture_result([&]() -> Result<void> {
+    const auto ec = send_receive_impl(buffer, timeout_ms);
+    if (ec) return std::unexpected(transport_error(ec));
+    return {};
+  }, ErrorCode::connection_failure);
+}
+
+boost::system::error_code SocketConnection::send_receive_impl(flat_buffer& buffer, uint32_t timeout_ms)
+{
   std::atomic_bool done{false};
   boost::system::error_code result_ec;
 
@@ -238,8 +253,7 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 
   done.wait(false);
 
-  if (result_ec)
-    throw nprpc::ExceptionCommFailure();
+  return result_ec;
 }
 
 // ---------------------------------------------------------------------------

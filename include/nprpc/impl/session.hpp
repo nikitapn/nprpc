@@ -16,6 +16,7 @@
 #include <nprpc/flat_buffer.hpp>
 #include <nprpc/session_context.h>
 #include <nprpc/task.hpp>
+#include <nprpc/result.hpp>
 
 namespace nprpc::impl {
 
@@ -205,6 +206,18 @@ public:
   Session(boost::asio::any_io_executor executor);
 
   virtual ~Session();
+
+  // Result API: appended to preserve existing virtual method ordering.
+  // Legacy transports use a translating adapter until their sync path migrates.
+  [[nodiscard]] NPRPC_API virtual Result<void>
+  send_receive_result(flat_buffer& buffer, uint32_t timeout_ms) noexcept;
+
+  using ResultHandler = std::function<void(Result<void>, flat_buffer&)>;
+  // On an initiation error no handler is invoked; the caller handles failure.
+  // On successful initiation the handler runs exactly once, possibly inline,
+  // and must not throw. The response is borrowed for the duration of the call.
+  [[nodiscard]] NPRPC_API Result<void> send_receive_async_result(
+      flat_buffer&& buffer, ResultHandler handler, uint32_t timeout_ms) noexcept;
 };
 
 } // namespace nprpc::impl

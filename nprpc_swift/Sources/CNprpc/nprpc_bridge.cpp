@@ -684,11 +684,12 @@ BridgeResult<void> start_async_rpc(void* obj_ptr, void* buffer_ptr, void* contex
 
         completion = std::make_shared<AsyncCompletion>(context, receive_response);
         configure(*completion);
-        (*session)->send_receive_async(
+        auto started = (*session)->send_receive_async_result(
             std::move(*static_cast<nprpc::flat_buffer*>(buffer_ptr)),
-            [state = completion](const boost::system::error_code& ec, nprpc::flat_buffer& buf) noexcept {
-                state->complete(ec, buf);
+            [state = completion](nprpc::Result<void> result, nprpc::flat_buffer& buf) noexcept {
+                state->complete(result, buf);
             }, timeout_ms > 0 ? timeout_ms : obj->get_timeout());
+        if (!started) return std::unexpected(BridgeError(started.error()));
         return {};
     });
 }

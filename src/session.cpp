@@ -8,6 +8,7 @@
 #include <nprpc/stream_writer.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/stream_manager.hpp>
+#include <nprpc/impl/async_result.hpp>
 
 #include "logging.hpp"
 
@@ -33,6 +34,22 @@ extern void reset_context();
 } // namespace nprpc
 
 namespace nprpc::impl {
+
+Result<void> Session::send_receive_result(flat_buffer& buffer, uint32_t timeout_ms) noexcept
+{
+  return capture_result([&]() -> Result<void> {
+    send_receive(buffer, timeout_ms);
+    return {};
+  }, ErrorCode::connection_failure);
+}
+
+Result<void> Session::send_receive_async_result(
+    flat_buffer&& buffer, ResultHandler handler, uint32_t timeout_ms) noexcept
+{
+  return start_result_operation(std::move(handler), [&](auto completion) {
+    send_receive_async(std::move(buffer), std::move(completion), timeout_ms);
+  });
+}
 
 std::optional<ObjectGuard>
 get_object(SessionContext& ctx, uint16_t poa_idx, uint64_t object_id)

@@ -33,10 +33,6 @@ struct BridgeError : nprpc::Error {
 
 template<class T> using BridgeResult = std::expected<T, BridgeError>;
 
-inline BridgeError transport_error(const boost::system::error_code& ec) {
-    return nprpc::impl::transport_error(ec);
-}
-
 template<class F>
 auto capture(F&& fn) noexcept -> decltype(fn()) {
     return nprpc::impl::capture_result(std::forward<F>(fn));
@@ -80,10 +76,10 @@ public:
         if (!completed_.exchange(true)) deliver(std::unexpected(error));
     }
 
-    void complete(const boost::system::error_code& ec, nprpc::flat_buffer& buf) noexcept {
+    void complete(const nprpc::Result<void>& status, nprpc::flat_buffer& buf) noexcept {
         if (completed_.exchange(true)) return;
         const auto result = capture([&]() -> BridgeResult<void*> {
-            if (ec) return std::unexpected(transport_error(ec));
+            if (!status) return std::unexpected(BridgeError(status.error()));
             if (!receive_response) return nullptr;
             auto* response = static_cast<nprpc::flat_buffer*>(nprpc_flatbuffer_acquire());
             *response = std::move(buf);
