@@ -3,6 +3,14 @@
 # Find GTest
 find_package(GTest REQUIRED)
 
+# Exercise the Swift ABI boundary and completion ownership from C++ as well.
+add_executable(test_swift_bridge_errors
+  src/test_swift_bridge_errors.cpp
+  ../nprpc_swift/Sources/CNprpc/nprpc_bridge.cpp
+)
+target_link_libraries(test_swift_bridge_errors PRIVATE nprpc::nprpc GTest::gtest_main)
+add_test(NAME SwiftBridgeErrors COMMAND test_swift_bridge_errors)
+
 # Generate test IDL files
 include(../cmake/npidl.cmake)
 

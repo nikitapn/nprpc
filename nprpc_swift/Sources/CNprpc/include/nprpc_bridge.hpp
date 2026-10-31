@@ -325,6 +325,41 @@ typedef void (*swift_async_callback)(void* context, int error_code, const char* 
 //                  Ownership is transferred to callback - must be freed with nprpc_flatbuffer_destroy
 typedef void (*swift_async_receive_callback)(void* context, int error_code, const char* error_message, void* response_buffer);
 
+enum NprpcBridgeErrorKind : int32_t {
+    NPRPC_BRIDGE_INVALID_ARGUMENT   = 1,
+    NPRPC_BRIDGE_NO_ENDPOINT        = 2,
+    NPRPC_BRIDGE_NOT_INITIALIZED    = 3,
+    NPRPC_BRIDGE_TIMEOUT            = 4,
+    NPRPC_BRIDGE_CANCELLED          = 5,
+    NPRPC_BRIDGE_CONNECTION_FAILURE = 6,
+    NPRPC_BRIDGE_OUT_OF_MEMORY      = 7,
+    NPRPC_BRIDGE_INTERNAL_ERROR     = 8,
+};
+
+struct NprpcBridgeError {
+    NprpcBridgeErrorKind kind;
+    int32_t native_code;
+    const char* native_category;
+    const char* message;
+};
+
+// Error and its strings are borrowed for the duration of the callback.
+// A null error means success. A returned response buffer belongs to the callback.
+// Callbacks must not throw C++ exceptions. Diagnostic messages may be truncated
+// to 511 bytes so translating an allocation failure needs no allocation itself.
+typedef void (*swift_rpc_completion)(void* context, const NprpcBridgeError* error,
+                                     void* response_buffer);
+
+// With a nonnull callback, completes exactly once, including immediate rejection.
+// Completion may run inline. The context is transferred to the callback on entry;
+// the caller must not reclaim it based on a separate initiation status.
+// receive_response=false discards the reply body, but still waits for a reply.
+// Request storage is moved when dispatch begins. Validation failures before
+// dispatch leave it intact; dispatch failures may already have consumed it.
+void nprpc_object_send_async_result(void* obj_ptr, void* buffer_ptr, void* context,
+                                   swift_rpc_completion callback, uint32_t timeout_ms,
+                                   bool receive_response) noexcept;
+
 // Object async RPC call with callback - for Swift async/await integration
 // Used for async methods in IDL
 // callback will be invoked when the operation completes (on success or failure)

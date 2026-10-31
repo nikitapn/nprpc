@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "include/nprpc_bridge.hpp"
+#include "nprpc_bridge_error.hpp"
 
 // Include full nprpc headers in implementation
 // Should never include boost/asio/ssl.hpp or boost/beast/ssl.hpp in the Swift bridge headers
@@ -655,6 +656,49 @@ std::string EndPointInfo::to_url() const {
 
 } // namespace nprpc_swift
 
+namespace {
+using nprpc_swift::detail::AsyncCompletion;
+using nprpc_swift::detail::BridgeError;
+using nprpc_swift::detail::BridgeResult;
+using nprpc_swift::detail::capture;
+
+// All setup, including endpoint selection, is inside the exception boundary.
+template<class Configure>
+BridgeResult<void> start_async_rpc(void* obj_ptr, void* buffer_ptr, void* context,
+                                  uint32_t timeout_ms, bool receive_response,
+                                  std::shared_ptr<AsyncCompletion>& completion,
+                                  Configure configure) noexcept {
+    return capture([&]() -> BridgeResult<void> {
+        if (!obj_ptr || !buffer_ptr)
+            return std::unexpected(BridgeError(NPRPC_BRIDGE_INVALID_ARGUMENT, "Invalid RPC arguments"));
+        if (!nprpc::impl::g_rpc)
+            return std::unexpected(BridgeError(NPRPC_BRIDGE_NOT_INITIALIZED, "NPRPC runtime is not initialized"));
+        auto* obj = static_cast<nprpc::Object*>(obj_ptr);
+        if (obj->get_endpoint().empty() && !obj->select_endpoint())
+            return std::unexpected(BridgeError(NPRPC_BRIDGE_NO_ENDPOINT, "No endpoint to connect to"));
+
+        completion = std::make_shared<AsyncCompletion>(context, receive_response);
+        configure(*completion);
+        nprpc::impl::rpc_call_async(
+            obj->get_endpoint(), std::move(*static_cast<nprpc::flat_buffer*>(buffer_ptr)),
+            [state = completion](const boost::system::error_code& ec, nprpc::flat_buffer& buf) noexcept {
+                state->complete(ec, buf);
+            }, timeout_ms > 0 ? timeout_ms : obj->get_timeout());
+        return {};
+    });
+}
+
+int legacy_start_status(const BridgeResult<void>& result,
+                        const std::shared_ptr<AsyncCompletion>& completion) noexcept {
+    // A synchronous completion already consumed the callback context.
+    if (result || (completion && completion->abandon())) return 0;
+    switch (result.error().kind) {
+    case NPRPC_BRIDGE_NO_ENDPOINT: return -2;
+    default: return -3;
+    }
+}
+} // namespace
+
 // ============================================================================
 // C Bridge Functions for Swift Interop
 // ============================================================================
@@ -902,50 +946,30 @@ const uint8_t* nprpc_object_get_origin(void* ptr) {
     return static_cast<nprpc::Object*>(ptr)->origin().data();
 }
 
-// Object async RPC call with callback - for Swift async/await integration
-int nprpc_object_send_async(
-    void* obj_ptr,
-    void* buffer_ptr,
-    void* context,
-    swift_async_callback callback,
-    uint32_t timeout_ms
-) {
-    if (!obj_ptr || !buffer_ptr || !callback) {
-        return -1;  // Invalid arguments
-    }
-
-    auto* obj = static_cast<nprpc::Object*>(obj_ptr);
-    auto* buffer = static_cast<nprpc::flat_buffer*>(buffer_ptr);
-
-    // Ensure endpoint is selected
-    if (obj->get_endpoint().empty()) {
-        if (!obj->select_endpoint()) {
-            return -2;  // Failed to select endpoint
+void nprpc_object_send_async_result(void* obj_ptr, void* buffer_ptr, void* context,
+                                   swift_rpc_completion callback, uint32_t timeout_ms,
+                                   bool receive_response) noexcept {
+    if (!callback) return;
+    std::shared_ptr<AsyncCompletion> completion;
+    const auto result = start_async_rpc(obj_ptr, buffer_ptr, context, timeout_ms,
+        receive_response, completion, [callback](AsyncCompletion& state) { state.callback = callback; });
+    if (!result) {
+        if (completion) completion->fail(result.error());
+        else {
+            const auto error = result.error().view();
+            callback(context, &error, nullptr);
         }
     }
+}
 
-    try {
-        // Create completion handler that invokes the Swift callback
-        auto handler = [context, callback](const boost::system::error_code& ec, nprpc::flat_buffer& buf) {
-            if (ec) {
-                std::string msg = ec.message();
-                callback(context, -3, msg.c_str());
-            } else {
-                callback(context, 0, nullptr);
-            }
-        };
-
-        nprpc::impl::rpc_call_async(
-            obj->get_endpoint(),
-            std::move(*buffer),
-            std::move(handler),
-            timeout_ms > 0 ? timeout_ms : obj->get_timeout()
-        );
-        return 0;  // Started successfully
-    } catch (const std::exception& e) {
-        NPRPC_LOG_ERROR("[SWB] nprpc_object_send_async exception: {}", e.what());
-        return -3;  // Failed to start
-    }
+// Compatibility ABI: initiation failures still return -1/-2/-3 without a callback.
+int nprpc_object_send_async(void* obj_ptr, void* buffer_ptr, void* context,
+                            swift_async_callback callback, uint32_t timeout_ms) {
+    if (!obj_ptr || !buffer_ptr || !callback) return -1;
+    std::shared_ptr<AsyncCompletion> completion;
+    const auto result = start_async_rpc(obj_ptr, buffer_ptr, context, timeout_ms,
+        false, completion, [callback](AsyncCompletion& state) { state.legacy_callback = callback; });
+    return legacy_start_status(result, completion);
 }
 
 const char* nprpc_object_check_fd_passing(void* obj_ptr) {
@@ -1001,54 +1025,13 @@ int nprpc_object_send_unreliable(void* obj_ptr, void* buffer_ptr) {
     }
 }
 
-// Object async RPC call with response - for async methods with output parameters
-int nprpc_object_send_async_receive(
-    void* obj_ptr,
-    void* buffer_ptr,
-    void* context,
-    swift_async_receive_callback callback,
-    uint32_t timeout_ms
-) {
-    if (!obj_ptr || !buffer_ptr || !callback) {
-        return -1;  // Invalid arguments
-    }
-
-    auto* obj = static_cast<nprpc::Object*>(obj_ptr);
-    auto* buffer = static_cast<nprpc::flat_buffer*>(buffer_ptr);
-
-    // Ensure endpoint is selected
-    if (obj->get_endpoint().empty()) {
-        if (!obj->select_endpoint()) {
-            return -2;  // Failed to select endpoint
-        }
-    }
-
-    try {
-        // Create completion handler that invokes the Swift callback with response buffer
-        auto handler = [context, callback](const boost::system::error_code& ec, nprpc::flat_buffer& buf) {
-            if (ec) {
-                std::string msg = ec.message();
-                callback(context, -3, msg.c_str(), nullptr);
-            } else {
-                // Prefer a pooled shell so response capacity can be reused on
-                // the next acquire() (e.g. repeated large RPCs).
-                auto* response = static_cast<nprpc::flat_buffer*>(nprpc_flatbuffer_acquire());
-                *response = std::move(buf);
-                callback(context, 0, nullptr, response);
-            }
-        };
-
-        nprpc::impl::rpc_call_async(
-            obj->get_endpoint(),
-            std::move(*buffer),
-            std::move(handler),
-            timeout_ms > 0 ? timeout_ms : obj->get_timeout()
-        );
-        return 0;  // Started successfully
-    } catch (const std::exception& e) {
-        NPRPC_LOG_ERROR("[SWB] nprpc_object_send_async_receive exception: {}", e.what());
-        return -3;  // Failed to start
-    }
+int nprpc_object_send_async_receive(void* obj_ptr, void* buffer_ptr, void* context,
+                                    swift_async_receive_callback callback, uint32_t timeout_ms) {
+    if (!obj_ptr || !buffer_ptr || !callback) return -1;
+    std::shared_ptr<AsyncCompletion> completion;
+    const auto result = start_async_rpc(obj_ptr, buffer_ptr, context, timeout_ms,
+        true, completion, [callback](AsyncCompletion& state) { state.legacy_receive = callback; });
+    return legacy_start_status(result, completion);
 }
 
 // Object string serialization (NPRPC IOR format)
