@@ -1,3 +1,4 @@
+import Foundation
 import CNprpc
 
 /// Represents NPRPC object metadata for marshalling
@@ -8,10 +9,38 @@ internal let invalidObjectId = UInt64.max
 
 /// Helper class to box a Swift continuation for passing to C++ as an opaque pointer
 /// Used for async RPC calls with callback-based completion
-private final class ContinuationBox<T> {
-    let continuation: CheckedContinuation<T, Error>
-    init(_ continuation: CheckedContinuation<T, Error>) {
-        self.continuation = continuation
+// A call in flight, which either its reply or its task's cancellation finishes,
+// whichever comes first. A reply after that is dropped, which frees its buffer.
+private final class PendingCall: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<FlatBuffer?, Error>?
+    private var cancelled = false
+
+    // False if the task was already cancelled, in which case nothing should be sent.
+    func start(_ continuation: CheckedContinuation<FlatBuffer?, Error>) -> Bool {
+        lock.lock()
+        let wasCancelled = cancelled
+        if !wasCancelled { self.continuation = continuation }
+        lock.unlock()
+        if wasCancelled { continuation.resume(throwing: CancellationError()) }
+        return !wasCancelled
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let waiting = continuation
+        continuation = nil
+        lock.unlock()
+        waiting?.resume(throwing: CancellationError())
+    }
+
+    func finish(_ result: Result<FlatBuffer?, Error>) {
+        lock.lock()
+        let waiting = continuation
+        continuation = nil
+        lock.unlock()
+        waiting?.resume(with: result)
     }
 }
 
@@ -178,21 +207,30 @@ open class NPRPCObject: Codable, @unchecked Sendable {
     private func sendResult(buffer: FlatBuffer, timeout: UInt32,
                             receiveResponse: Bool) async throws -> FlatBuffer? {
         try Task.checkCancellation()
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<FlatBuffer?, Error>) in
-            let context = Unmanaged.passRetained(ContinuationBox(continuation)).toOpaque()
-            let callback: swift_rpc_completion = { context, error, response in
-                guard let context else { return }
-                let box = Unmanaged<ContinuationBox<FlatBuffer?>>.fromOpaque(context).takeRetainedValue()
-                if let error {
-                    box.continuation.resume(throwing: RpcError(bridge: error.pointee))
-                } else {
-                    box.continuation.resume(returning: response.map { FlatBuffer(wrapping: $0, owned: true) })
+        let call = PendingCall()
+        // Cancelling stops this task waiting. The request itself stays pending
+        // underneath until its reply or timeout, because transports match replies
+        // to requests, and the server has no way to hear about it anyway.
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<FlatBuffer?, Error>) in
+                guard call.start(continuation) else { return }
+                let context = Unmanaged.passRetained(call).toOpaque()
+                let callback: swift_rpc_completion = { context, error, response in
+                    guard let context else { return }
+                    let call = Unmanaged<PendingCall>.fromOpaque(context).takeRetainedValue()
+                    if let error {
+                        call.finish(.failure(RpcError(bridge: error.pointee)))
+                    } else {
+                        call.finish(.success(response.map { FlatBuffer(wrapping: $0, owned: true) }))
+                    }
                 }
+                // Completion consumes the context exactly once, even for an inline
+                // setup failure. There is no separate startup-error ownership path.
+                nprpc_object_send_async_result(handle, buffer.handle, context, callback,
+                                               timeout, receiveResponse)
             }
-            // Completion consumes the context exactly once, even for an inline
-            // setup failure. There is no separate startup-error ownership path.
-            nprpc_object_send_async_result(handle, buffer.handle, context, callback,
-                                           timeout, receiveResponse)
+        } onCancel: {
+            call.cancel()
         }
     }
 

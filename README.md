@@ -621,7 +621,7 @@ interface BlogService {
 
 ## Swift Bindings
 
-NPRPC provides native Swift bindings via Swift 6.3+ C++ interop. The full feature set is supported: servants, client proxies, exceptions, object references, async methods, and all three stream directions.
+NPRPC provides native Swift bindings via Swift 6.4.1+ C++ interop. The full feature set is supported: servants, client proxies, exceptions, object references, async methods, and all three stream directions.
 
 ### Building (Docker workflow)
 

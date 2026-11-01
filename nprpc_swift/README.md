@@ -4,7 +4,7 @@ Swift bindings for [NPRPC](https://github.com/) using Swift 6+ C++ interoperabil
 
 ## Requirements
 
-- Swift 6.3+ (C++ interop)
+- Swift 6.4.1+ (C++ interop)
 - **libnprpc** installed system-wide **or** a monorepo CMake build (developer mode)
 - Linux (primary) or macOS
 - System Boost (same version/ABI as the libnprpc you link)

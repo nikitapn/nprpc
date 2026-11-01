@@ -8,7 +8,7 @@ configured sampling interval. The console retains 120 samples per transport.
 ## Build and run
 
 Requires the sibling `../../HelloWorld` LavaUI checkout and its Linux development
-dependencies, Swift 6.3+, and a full NPRPC build with QUIC and HTTP/3 enabled.
+dependencies, Swift 6.4.1+, and a full NPRPC build with QUIC and HTTP/3 enabled.
 The monitor links the full library, including SHM. The compositor and ordinary
 Lava apps can continue to use their own SHM-only build.
 

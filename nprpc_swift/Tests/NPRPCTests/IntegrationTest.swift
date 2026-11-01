@@ -1067,6 +1067,47 @@ final class IntegrationTests: XCTestCase {
         }
     }
 
+    /// Cancelling a task stops it waiting for a call already sent, rather than
+    /// leaving it until the reply or the timeout.
+    func testCancellationInFlight() async throws {
+        class SlowImpl: AsyncTestServant, @unchecked Sendable {
+            override func method1(arg1: UInt32, arg2: String) {}
+            override func method2(arg1: UInt32) -> String {
+                if arg1 == 1 { Thread.sleep(forTimeInterval: 1) }
+                return "reply \(arg1)"
+            }
+        }
+
+        let servant = SlowImpl()
+        let oid = try Self.poa!.activateObject(servant, flags: .tcp)
+        let client = narrow(try XCTUnwrap(NPRPCObject.fromObjectId(oid)), to: AsyncTest.self)!
+        client.timeout = 10_000
+
+        let started = Date()
+        let task = Task<String, Error> { try await client.method2(arg1: 1) }
+        try await Task.sleep(nanoseconds: 100_000_000) // Long enough to be in flight.
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Expected CancellationError")
+        } catch is CancellationError {
+            // Expected
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.8, "should not wait for the reply")
+
+        // The abandoned reply still arrives, and must not be mistaken for this one's.
+        let next = try await client.method2(arg1: 2)
+        XCTAssertEqual(next, "reply 2")
+
+        // Cancelling doesn't disturb a call that isn't cancelled.
+        let unrelated = Task<String, Error> { try await client.method2(arg1: 3) }
+        let cancelled = Task<String, Error> { try await client.method2(arg1: 1) }
+        cancelled.cancel()
+        _ = try? await cancelled.value
+        let unrelatedReply = try await unrelated.value
+        XCTAssertEqual(unrelatedReply, "reply 3")
+    }
+
     /// Test bad input validation for untrusted interfaces
     /// This simulates a malicious client sending a malformed buffer with an oversized vector
     func testBadInput() async throws {

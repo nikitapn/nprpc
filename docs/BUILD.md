@@ -14,7 +14,7 @@
   `NPRPC_USE_BORINGSSL=ON` to build BoringSSL from the bundled submodule.
   Neither library is needed when HTTPS/WSS, QUIC and HTTP/3 are all disabled.
 - Optional: **GoogleTest** for the tests, **Node.js** for the TypeScript
-  package, **Swift 6.3** for the Swift package, **libclang** and **md4c** for
+  package, **Swift 6.4.1** for the Swift package, **libclang** and **md4c** for
   the API docs tool.
 
 On Debian or Ubuntu:
