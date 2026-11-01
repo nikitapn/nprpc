@@ -89,6 +89,10 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     // update back to the producer.  Set by createObjectStreamReader /
     // createStreamManagerReader via the windowUpdateFn parameter.
     internal var windowUpdateFn: (() -> Void)?
+    // Tells the producer to stop. Set by createStreamManagerReader.
+    internal var sendCancelFn: (() -> Void)?
+    private var finished = false
+    private let finishedLock = NSLock()
     // Set via retainStreamManager() by createStreamManagerReader — nil for
     // createObjectStreamReader, which doesn't have a stream_manager pointer
     // to retain (window updates are already skipped on that path).
@@ -181,17 +185,30 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
 
     /// Called when stream completes successfully
     internal func onComplete() {
+        markFinished()
         continuation.finish()
     }
 
     /// Called when stream encounters an error
     internal func onError(_ error: Error) {
+        markFinished()
         continuation.finish(throwing: error)
     }
 
-    /// Cancel the stream
+    /// Stops the stream: the local loop throws, and the producer is told to stop.
     public func cancel() {
+        if !markFinished() { sendCancelFn?() }
         continuation.finish(throwing: CancellationError())
+    }
+
+    /// Returns whether the stream had already finished.
+    @discardableResult
+    private func markFinished() -> Bool {
+        finishedLock.lock()
+        defer { finishedLock.unlock() }
+        let was = finished
+        finished = true
+        return was
     }
 
     internal func makeBridgeContext() -> UnsafeMutableRawPointer {
@@ -207,7 +224,7 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     }
 
     deinit {
-        cancel()
+        continuation.finish(throwing: CancellationError())
         if let streamManagerHandle {
             nprpc_stream_manager_release(streamManagerHandle)
         }
@@ -327,6 +344,8 @@ public func createStreamManagerReader<T: Sendable>(
 ) -> NPRPCStreamReader<T> {
     let reader = NPRPCStreamReader(streamId: streamId, buffer: buffer, deserializer: deserializer)
     reader.retainStreamManager(streamManager)
+    // The reader's share of the manager's lifetime keeps this pointer valid.
+    reader.sendCancelFn = { nprpc_stream_manager_send_cancel(streamManager, streamId) }
     let context = reader.makeBridgeContext()
     nprpc_stream_manager_register_reader(
         streamManager,
