@@ -108,7 +108,15 @@ public func marshal_Person(buffer: FlatBuffer, offset: Int, data: Person) {
   NPRPC.marshal_string(buffer: buffer, offset: offset + 12, string: data.email)
 }
 
+/// Decode a bounded payload, rejecting malformed or incompatible wire data.
+public func unmarshal_Person(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) throws -> Person {
+  guard check_payload_0(buffer: buffer, bufferSize: bufferSize, offset: offset) else { throw NPRPC.BufferError(message: "Invalid Person payload (malformed data or incompatible IDL contract)") }
+  return unmarshal_Person(buffer: buffer, offset: offset)
+}
+
+
 // MARK: - Unmarshal Person
+/// Requires a validated payload; use the bufferSize overload for received bytes.
 public func unmarshal_Person(buffer: UnsafeRawPointer, offset: Int) -> Person {
   var result = Person()
   result.name = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 0)
@@ -142,7 +150,15 @@ public func marshal_Address(buffer: FlatBuffer, offset: Int, data: Address) {
   buffer.storeBytes(of: data.zipCode, toByteOffset: offset + 24, as: UInt32.self)
 }
 
+/// Decode a bounded payload, rejecting malformed or incompatible wire data.
+public func unmarshal_Address(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) throws -> Address {
+  guard check_payload_1(buffer: buffer, bufferSize: bufferSize, offset: offset) else { throw NPRPC.BufferError(message: "Invalid Address payload (malformed data or incompatible IDL contract)") }
+  return unmarshal_Address(buffer: buffer, offset: offset)
+}
+
+
 // MARK: - Unmarshal Address
+/// Requires a validated payload; use the bufferSize overload for received bytes.
 public func unmarshal_Address(buffer: UnsafeRawPointer, offset: Int) -> Address {
   var result = Address()
   result.street = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 0)
@@ -180,7 +196,15 @@ public func marshal_Employee(buffer: FlatBuffer, offset: Int, data: Employee) {
   NPRPC.marshal_string_vector(buffer: buffer, offset: offset + 64, vector: data.skills)
 }
 
+/// Decode a bounded payload, rejecting malformed or incompatible wire data.
+public func unmarshal_Employee(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) throws -> Employee {
+  guard check_payload_2(buffer: buffer, bufferSize: bufferSize, offset: offset) else { throw NPRPC.BufferError(message: "Invalid Employee payload (malformed data or incompatible IDL contract)") }
+  return unmarshal_Employee(buffer: buffer, offset: offset)
+}
+
+
 // MARK: - Unmarshal Employee
+/// Requires a validated payload; use the bufferSize overload for received bytes.
 public func unmarshal_Employee(buffer: UnsafeRawPointer, offset: Int) -> Employee {
   var result = Employee()
   result.person = unmarshal_Person(buffer: buffer, offset: offset + 0)
@@ -210,7 +234,15 @@ fileprivate func marshal_nprpc_benchmark_M1(buffer: FlatBuffer, offset: Int, dat
   buffer.storeBytes(of: data._2, toByteOffset: offset + 4, as: UInt32.self)
 }
 
+/// Decode a bounded payload, rejecting malformed or incompatible wire data.
+fileprivate func unmarshal_nprpc_benchmark_M1(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) throws -> nprpc_benchmark_M1 {
+  guard check_payload_3(buffer: buffer, bufferSize: bufferSize, offset: offset) else { throw NPRPC.BufferError(message: "Invalid nprpc_benchmark_M1 payload (malformed data or incompatible IDL contract)") }
+  return unmarshal_nprpc_benchmark_M1(buffer: buffer, offset: offset)
+}
+
+
 // MARK: - Unmarshal nprpc_benchmark_M1
+/// Requires a validated payload; use the bufferSize overload for received bytes.
 fileprivate func unmarshal_nprpc_benchmark_M1(buffer: UnsafeRawPointer, offset: Int) -> nprpc_benchmark_M1 {
   var result = nprpc_benchmark_M1()
   result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
@@ -234,7 +266,15 @@ fileprivate func marshal_nprpc_benchmark_M2(buffer: FlatBuffer, offset: Int, dat
   buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: UInt32.self)
 }
 
+/// Decode a bounded payload, rejecting malformed or incompatible wire data.
+fileprivate func unmarshal_nprpc_benchmark_M2(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) throws -> nprpc_benchmark_M2 {
+  guard check_payload_4(buffer: buffer, bufferSize: bufferSize, offset: offset) else { throw NPRPC.BufferError(message: "Invalid nprpc_benchmark_M2 payload (malformed data or incompatible IDL contract)") }
+  return unmarshal_nprpc_benchmark_M2(buffer: buffer, offset: offset)
+}
+
+
 // MARK: - Unmarshal nprpc_benchmark_M2
+/// Requires a validated payload; use the bufferSize overload for received bytes.
 fileprivate func unmarshal_nprpc_benchmark_M2(buffer: UnsafeRawPointer, offset: Int) -> nprpc_benchmark_M2 {
   var result = nprpc_benchmark_M2()
   result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
@@ -257,7 +297,15 @@ fileprivate func marshal_nprpc_benchmark_M3(buffer: FlatBuffer, offset: Int, dat
   NPRPC.marshal_string(buffer: buffer, offset: offset + 0, string: data._1)
 }
 
+/// Decode a bounded payload, rejecting malformed or incompatible wire data.
+fileprivate func unmarshal_nprpc_benchmark_M3(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) throws -> nprpc_benchmark_M3 {
+  guard check_payload_5(buffer: buffer, bufferSize: bufferSize, offset: offset) else { throw NPRPC.BufferError(message: "Invalid nprpc_benchmark_M3 payload (malformed data or incompatible IDL contract)") }
+  return unmarshal_nprpc_benchmark_M3(buffer: buffer, offset: offset)
+}
+
+
 // MARK: - Unmarshal nprpc_benchmark_M3
+/// Requires a validated payload; use the bufferSize overload for received bytes.
 fileprivate func unmarshal_nprpc_benchmark_M3(buffer: UnsafeRawPointer, offset: Int) -> nprpc_benchmark_M3 {
   var result = nprpc_benchmark_M3()
   result._1 = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 0)
@@ -280,7 +328,15 @@ fileprivate func marshal_nprpc_benchmark_M4(buffer: FlatBuffer, offset: Int, dat
   marshal_Employee(buffer: buffer, offset: offset + 0, data: data._1)
 }
 
+/// Decode a bounded payload, rejecting malformed or incompatible wire data.
+fileprivate func unmarshal_nprpc_benchmark_M4(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) throws -> nprpc_benchmark_M4 {
+  guard check_payload_6(buffer: buffer, bufferSize: bufferSize, offset: offset) else { throw NPRPC.BufferError(message: "Invalid nprpc_benchmark_M4 payload (malformed data or incompatible IDL contract)") }
+  return unmarshal_nprpc_benchmark_M4(buffer: buffer, offset: offset)
+}
+
+
 // MARK: - Unmarshal nprpc_benchmark_M4
+/// Requires a validated payload; use the bufferSize overload for received bytes.
 fileprivate func unmarshal_nprpc_benchmark_M4(buffer: UnsafeRawPointer, offset: Int) -> nprpc_benchmark_M4 {
   var result = nprpc_benchmark_M4()
   result._1 = unmarshal_Employee(buffer: buffer, offset: offset + 0)
@@ -303,7 +359,15 @@ fileprivate func marshal_nprpc_benchmark_M5(buffer: FlatBuffer, offset: Int, dat
   NPRPC.marshal_fundamental_vector(buffer: buffer, offset: offset + 0, vector: data._1)
 }
 
+/// Decode a bounded payload, rejecting malformed or incompatible wire data.
+fileprivate func unmarshal_nprpc_benchmark_M5(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) throws -> nprpc_benchmark_M5 {
+  guard check_payload_7(buffer: buffer, bufferSize: bufferSize, offset: offset) else { throw NPRPC.BufferError(message: "Invalid nprpc_benchmark_M5 payload (malformed data or incompatible IDL contract)") }
+  return unmarshal_nprpc_benchmark_M5(buffer: buffer, offset: offset)
+}
+
+
 // MARK: - Unmarshal nprpc_benchmark_M5
+/// Requires a validated payload; use the bufferSize overload for received bytes.
 fileprivate func unmarshal_nprpc_benchmark_M5(buffer: UnsafeRawPointer, offset: Int) -> nprpc_benchmark_M5 {
   var result = nprpc_benchmark_M5()
   result._1 = NPRPC.unmarshal_fundamental_vector(buffer: buffer, offset: offset + 0)
@@ -401,6 +465,7 @@ final public class Benchmark: NPRPCObject, @unchecked Sendable {
     if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
 
     guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
+    guard check_1Fu32(buffer: responseData, bufferSize: responseBuffer.size, offset: 16) else { throw BufferError(message: "Invalid RPC response (malformed data or incompatible IDL contract)") }
     let out = unmarshal_nprpc_benchmark_M2(buffer: responseData, offset: 16)
     return out._1
   }
@@ -477,6 +542,7 @@ final public class Benchmark: NPRPCObject, @unchecked Sendable {
     if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
 
     guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
+    guard check_1Employee_1(buffer: responseData, bufferSize: responseBuffer.size, offset: 16) else { throw BufferError(message: "Invalid RPC response (malformed data or incompatible IDL contract)") }
     let out = unmarshal_nprpc_benchmark_M4(buffer: responseData, offset: 16)
     return out._1
   }
@@ -517,6 +583,7 @@ final public class Benchmark: NPRPCObject, @unchecked Sendable {
     if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
 
     guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
+    guard check_1VFu8(buffer: responseData, bufferSize: responseBuffer.size, offset: 16) else { throw BufferError(message: "Invalid RPC response (malformed data or incompatible IDL contract)") }
     let out = unmarshal_nprpc_benchmark_M5(buffer: responseData, offset: 16)
     return out._1
   }
@@ -659,30 +726,72 @@ open class BenchmarkServant: NPRPCServant, BenchmarkProtocol, @unchecked Sendabl
 }
 
 
-// Safety check for nprpc_benchmark_M1
-fileprivate func check_1Fu322Fu32(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
-  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 8) else { return false }
+fileprivate func check_payload_0(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 20), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 12) else { return false }
   return true
 }
 
 
-// Safety check for nprpc_benchmark_M3
-fileprivate func check_1S(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
-  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 8) else { return false }
+fileprivate func check_payload_1(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 28), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 8) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 16) else { return false }
+  return true
+}
+
+
+fileprivate func check_payload_2(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 72), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 8) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 0) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 12) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 20 + 0) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 20 + 8) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 20 + 16) else { return false }
+  guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 64, elementSize: 8, elementAlignment: 4) else { return false }
+  do {
+    let relOffset = Int(buffer.load(fromByteOffset: offset + 64, as: UInt32.self))
+    let count = Int(buffer.load(fromByteOffset: offset + 64 + 4, as: UInt32.self))
+    let dataOffset = offset + 64 + relOffset
+    guard count == 0 || dataOffset % 4 == 0 else { return false }
+    for i in 0..<count {
+      let elemOffset = dataOffset + i * 8
+      guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: elemOffset) else { return false }
+    }
+  }
+  return true
+}
+
+
+fileprivate func check_payload_3(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 8), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
+  return true
+}
+
+
+fileprivate func check_payload_4(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 4), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
+  return true
+}
+
+
+fileprivate func check_payload_5(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 8), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0) else { return false }
   return true
 }
 
 
-// Safety check for nprpc_benchmark_M4
-fileprivate func check_1Employee_1(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
-  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 72) else { return false }
+fileprivate func check_payload_6(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 72), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 8) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 0 + 0) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 0 + 12) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 20 + 0) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 20 + 8) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 20 + 16) else { return false }
-  guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 64, elementSize: 8) else { return false }
+  guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 64, elementSize: 8, elementAlignment: 4) else { return false }
   do {
     let relOffset = Int(buffer.load(fromByteOffset: offset + 0 + 64, as: UInt32.self))
     let count = Int(buffer.load(fromByteOffset: offset + 0 + 64 + 4, as: UInt32.self))
@@ -697,10 +806,57 @@ fileprivate func check_1Employee_1(buffer: UnsafeRawPointer, bufferSize: Int, of
 }
 
 
-// Safety check for nprpc_benchmark_M5
+fileprivate func check_payload_7(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 8), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
+  guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0, elementSize: 1, elementAlignment: 1) else { return false }
+  return true
+}
+
+
+fileprivate func check_1Fu322Fu32(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 8), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
+  return true
+}
+
+
+fileprivate func check_1Fu32(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 4), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
+  return true
+}
+
+
+fileprivate func check_1S(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 8), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0) else { return false }
+  return true
+}
+
+
+fileprivate func check_1Employee_1(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 72), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 8) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 0 + 0) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 0 + 12) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 20 + 0) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 20 + 8) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 20 + 16) else { return false }
+  guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 64, elementSize: 8, elementAlignment: 4) else { return false }
+  do {
+    let relOffset = Int(buffer.load(fromByteOffset: offset + 0 + 64, as: UInt32.self))
+    let count = Int(buffer.load(fromByteOffset: offset + 0 + 64 + 4, as: UInt32.self))
+    let dataOffset = offset + 0 + 64 + relOffset
+    guard count == 0 || dataOffset % 4 == 0 else { return false }
+    for i in 0..<count {
+      let elemOffset = dataOffset + i * 8
+      guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: elemOffset) else { return false }
+    }
+  }
+  return true
+}
+
+
 fileprivate func check_1VFu8(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
-  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 8) else { return false }
-  guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0, elementSize: 1) else { return false }
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 8), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
+  guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0, elementSize: 1, elementAlignment: 1) else { return false }
   return true
 }
 

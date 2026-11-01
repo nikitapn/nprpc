@@ -37,6 +37,12 @@ stream, allowing a headless end-to-end check.
 For an existing server, telemetry is part of the C++ runtime. No monitor
 package dependency or Swift servant is needed on the server.
 
+The client and server must use the same telemetry IDL layout. Generated Swift
+stream decoders validate payload bounds, alignment and enum values before
+decoding. Malformed or structurally incompatible snapshots end the stream
+with a `BufferError`, which the app displays as a connection failure. These
+checks do not negotiate schema versions or make changed layouts compatible.
+
 ```cpp
 auto* rpc = nprpc::RpcBuilder()
     .with_hostname("localhost")
