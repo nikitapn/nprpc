@@ -411,7 +411,8 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   impl::g_rpc = new impl::RpcImpl();
   try {
     if (cfg_->telemetry_enabled)
-      static_cast<impl::RpcImpl*>(impl::g_rpc)->start_telemetry(cfg_->telemetry_min_interval_ms);
+      static_cast<impl::RpcImpl*>(impl::g_rpc)->start_telemetry(cfg_->telemetry_min_interval_ms,
+                                                             cfg_->telemetry_router_stats_file);
   } catch (...) {
     impl::g_rpc->destroy();
     throw;

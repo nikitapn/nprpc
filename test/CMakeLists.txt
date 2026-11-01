@@ -537,6 +537,10 @@ add_executable(test_telemetry_counters ${CMAKE_CURRENT_SOURCE_DIR}/../nprpc_moni
 target_link_libraries(test_telemetry_counters PRIVATE nprpc::nprpc)
 add_test(NAME telemetry_counters COMMAND test_telemetry_counters)
 
+add_executable(test_router_country_table ${CMAKE_CURRENT_SOURCE_DIR}/src/test_router_country_table.cpp)
+target_include_directories(test_router_country_table PRIVATE ${CMAKE_SOURCE_DIR}/npquicrouter/src)
+add_test(NAME RouterCountryTable COMMAND test_router_country_table)
+
 if(NPRPC_ENABLE_QUIC)
   add_executable(test_telemetry_builder src/test_telemetry_builder.cpp)
   target_link_libraries(test_telemetry_builder PRIVATE nprpc::nprpc)

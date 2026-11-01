@@ -52,6 +52,7 @@ struct RpcBuildConfig {
     bool telemetry_enabled = false;
     uint32_t telemetry_min_interval_ms = 250;
     bool telemetry_allow_anonymous = false;
+    std::string telemetry_router_stats_file;
     uint32_t log_level;
     uint8_t uuid[16];
 

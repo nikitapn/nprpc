@@ -300,7 +300,7 @@ class RpcImpl : public Rpc
 
 public:
   std::string telemetry_reference() const override { return telemetry_reference_; }
-  void start_telemetry(uint32_t min_interval_ms);
+  void start_telemetry(uint32_t min_interval_ms, std::string router_stats_file);
   void configure_quic_client_tls(const QuicClientTlsConfig& config) override;
   uint16_t port() const noexcept { return g_cfg.listen_tcp_port; }
   uint16_t websocket_port() const noexcept { return g_cfg.listen_http_port; }

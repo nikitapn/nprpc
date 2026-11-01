@@ -3,6 +3,10 @@
 #endif
 #include <nprpc/impl/telemetry.hpp>
 #include <cassert>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <unistd.h>
 #include <thread>
 #include <vector>
 using nprpc::impl::kTelemetryTransports;
@@ -46,4 +50,34 @@ int main() {
     assert(nprpc::impl::read_http1_handshake_failures() == 1 && nprpc::impl::read_http1_throttled() == 1);
   }
   assert(nprpc::impl::read_telemetry(static_cast<nprpc::monitor::Transport>(99)).completed == 0);
+  {
+    constexpr auto t = nprpc::monitor::Transport::WebTransport;
+    const auto before = nprpc::impl::read_telemetry(t).latency;
+    for (uint64_t ns : {uint64_t{0}, uint64_t{999}, uint64_t{1000}, uint64_t{1999}, uint64_t{2000},
+                        uint64_t{1} << 62})
+      nprpc::impl::record_telemetry(t, 0, 0, ns, false);
+    const auto after = nprpc::impl::read_telemetry(t).latency;
+    assert(after[0] - before[0] == 2); // under 1 us
+    assert(after[1] - before[1] == 2); // under 2 us
+    assert(after[2] - before[2] == 1); // under 4 us
+    assert(after.back() - before.back() == 1); // past the last limit
+  }
+  for (unsigned status : {199u, 200u, 204u, 301u, 304u, 404u, 500u, 599u, 600u})
+    nprpc::impl::record_http3_status(status);
+  nprpc::impl::record_http1_status(404);
+  const auto h3 = nprpc::impl::read_http3_status();
+  assert(h3.success == 2 && h3.redirect == 2 && h3.client_error == 1 && h3.server_error == 2);
+  const auto h1 = nprpc::impl::read_http1_status();
+  assert(h1.success == 0 && h1.client_error == 1);
+
+  const auto stats = std::filesystem::temp_directory_path() / ("router_stats_" + std::to_string(getpid()));
+  assert(nprpc::impl::read_router_stats(stats).json.empty());
+  std::ofstream(stats) << "{\"sessions\":1}";
+  const auto file = nprpc::impl::read_router_stats(stats);
+  assert(file.json == "{\"sessions\":1}" && file.age_ms < 60000);
+  std::filesystem::last_write_time(stats, std::filesystem::file_time_type::clock::now() - std::chrono::minutes(5));
+  assert(nprpc::impl::read_router_stats(stats).age_ms >= 300000);
+  std::ofstream(stats) << std::string(2 * 1024 * 1024, 'x');
+  assert(nprpc::impl::read_router_stats(stats).json.empty()); // too big to send
+  std::filesystem::remove(stats);
 }

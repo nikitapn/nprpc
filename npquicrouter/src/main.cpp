@@ -11,7 +11,9 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <condition_variable>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -33,6 +35,7 @@
 
 #include <glaze/json.hpp>
 
+#include "country_table.hpp"
 #include "quic_initial.hpp"
 #include "quic_shm_channel.hpp"
 #include "sni_parser.hpp"
@@ -113,6 +116,9 @@ struct Config {
     uint32_t     tcp_max_connections_per_ip = 2000;
     int          tcp_peek_timeout_sec       = 10; // Connections that send no ClientHello.
     int          stats_interval_sec         = 60; // Period of the [stats] log line; 0 = never.
+    std::string  geoip_csv;                       // DB-IP country CSV; empty = no country counts.
+    std::string  stats_file;                      // JSON copy of the stats; empty = none.
+    int          stats_file_interval_sec    = 5;
 };
 
 // Glaze reflection
@@ -155,7 +161,10 @@ struct glz::meta<Config> {
         "tcp_max_connections",     &T::tcp_max_connections,
         "tcp_max_connections_per_ip", &T::tcp_max_connections_per_ip,
         "tcp_peek_timeout_sec",    &T::tcp_peek_timeout_sec,
-        "stats_interval_sec",      &T::stats_interval_sec);
+        "stats_interval_sec",      &T::stats_interval_sec,
+        "geoip_csv",               &T::geoip_csv,
+        "stats_file",              &T::stats_file,
+        "stats_file_interval_sec", &T::stats_file_interval_sec);
 };
 
 //==============================================================================
@@ -190,6 +199,191 @@ static udp::endpoint parse_udp_endpoint(const std::string& s,
 }
 
 //==============================================================================
+// Per-site counters
+//==============================================================================
+
+// What the stats file holds. Readers ignore fields they don't know, so adding
+// one here needs no change anywhere else.
+struct SiteStatsJson {
+    std::string name;
+    uint64_t active_sessions, sessions, packets, bytes, ring_full_drops, reply_packets, reply_bytes;
+    uint64_t active_tcp, tcp, tcp_in_bytes, tcp_out_bytes;
+    std::map<std::string, uint64_t> quic_countries, tcp_countries;
+};
+
+struct RingStatsJson {
+    std::string name;
+    uint64_t used_bytes, capacity_bytes;
+    uint64_t packets = 0, bytes = 0, send_errors = 0; // Egress rings only.
+};
+
+struct RouterStatsJson {
+    uint64_t uptime_ms = 0;
+    uint64_t sessions = 0, pending = 0, tcp = 0;
+    std::map<std::string, uint64_t> counters;
+    std::vector<SiteStatsJson> sites;
+    std::vector<RingStatsJson> ingress, egress;
+};
+
+struct SiteStats {
+    using Counter = std::atomic<uint64_t>;
+    using CountryCounters = std::array<Counter, kCountryCodes>;
+    Counter active_sessions{0};
+    Counter sessions{0};
+    Counter packets{0};
+    Counter bytes{0};
+    Counter ring_full_drops{0};
+    // Replies seen here, which is UDP mode only. SHM replies are under egress[].
+    Counter reply_packets{0};
+    Counter reply_bytes{0};
+    Counter active_tcp{0};
+    Counter tcp{0};
+    Counter tcp_in_bytes{0};
+    Counter tcp_out_bytes{0};
+    // Running totals only: an interval's count could single out one visitor.
+    CountryCounters quic_countries{}; // Clients that finished a handshake.
+    CountryCounters tcp_countries{};  // Connections with a routed SNI.
+};
+
+// The country table, replaced from a background thread when its file changes.
+// Lookups happen once per connection and only a country count is kept.
+class GeoIp {
+public:
+    void start(const std::string& path) {
+        if (path.empty()) return;
+        enabled_ = true;
+        path_ = path;
+        reload();
+        if (!table_.load()) std::cerr << "[geoip] Can't load " << path_ << ", counting nothing until it can\n";
+        watcher_ = std::jthread([this](std::stop_token stop) { watch(stop); });
+    }
+
+    bool enabled() const noexcept { return enabled_; }
+
+    void count(SiteStats::CountryCounters& counters, const asio::ip::address& address) const noexcept {
+        const auto table = table_.load();
+        if (!table) return;
+        uint16_t country;
+        if (address.is_v4()) {
+            country = table->lookup(address.to_v4().to_uint());
+        } else if (address.to_v6().is_v4_mapped()) {
+            country = table->lookup(asio::ip::make_address_v4(asio::ip::v4_mapped, address.to_v6()).to_uint());
+        } else {
+            country = table->lookup(address.to_v6().to_bytes());
+        }
+        counters[country].fetch_add(1, std::memory_order_relaxed);
+    }
+
+private:
+    void reload() {
+        std::error_code ec;
+        const auto modified = std::filesystem::last_write_time(path_, ec);
+        if (ec || modified == modified_) return;
+        // Parsing takes a noticeable fraction of a second, so never on a worker.
+        if (auto table = CountryTable::load(path_)) {
+            std::clog << "[geoip] Loaded " << table->ranges() << " ranges from " << path_ << "\n";
+            table_.store(std::move(table));
+            modified_ = modified;
+        } else {
+            std::cerr << "[geoip] Can't load " << path_ << ", keeping the current table\n";
+            modified_ = modified; // Not worth retrying until the file changes again.
+        }
+    }
+
+    void watch(std::stop_token stop) {
+        std::mutex mutex;
+        std::condition_variable_any wake;
+        std::unique_lock lock(mutex);
+        while (!stop.stop_requested()) {
+            wake.wait_for(lock, stop, std::chrono::minutes(1), [] { return false; });
+            if (!stop.stop_requested()) reload();
+        }
+    }
+
+    bool enabled_ = false;
+    std::string path_;
+    std::filesystem::file_time_type modified_{};
+    std::atomic<std::shared_ptr<const CountryTable>> table_;
+    std::jthread watcher_;
+};
+
+static GeoIp g_geoip;
+
+// One entry per configured route, so a client's SNI can't grow the table.
+class SiteStatsTable {
+public:
+    SiteStats* get(const std::string& sni) {
+        std::lock_guard lock(mutex_);
+        auto& entry = sites_[sni];
+        if (!entry) entry = std::make_unique<SiteStats>();
+        return entry.get();
+    }
+
+    // One line per site with any counts, biggest countries first. These totals
+    // repeat every interval, so the length of each line is capped.
+    void print_countries(std::ostream& out) {
+        std::lock_guard lock(mutex_);
+        for (const auto& [name, site] : sites_) {
+            const auto quic = top_countries(site->quic_countries);
+            const auto tcp = top_countries(site->tcp_countries);
+            if (!quic.empty() || !tcp.empty())
+                out << "[countries] site[" << name << "] quic=" << quic << " tcp=" << tcp << "\n";
+        }
+    }
+
+    void fill(std::vector<SiteStatsJson>& out) {
+        const auto count = [](const SiteStats::Counter& c) { return c.load(std::memory_order_relaxed); };
+        const auto countries = [&](const SiteStats::CountryCounters& counters) {
+            std::map<std::string, uint64_t> result;
+            for (size_t i = 0; i < counters.size(); ++i)
+                if (const auto n = count(counters[i])) result[country_code(i)] = n;
+            return result;
+        };
+        std::lock_guard lock(mutex_);
+        for (const auto& [name, s] : sites_)
+            out.push_back({name, count(s->active_sessions), count(s->sessions), count(s->packets), count(s->bytes),
+                           count(s->ring_full_drops), count(s->reply_packets), count(s->reply_bytes),
+                           count(s->active_tcp), count(s->tcp), count(s->tcp_in_bytes), count(s->tcp_out_bytes),
+                           countries(s->quic_countries), countries(s->tcp_countries)});
+    }
+
+    void print(std::ostream& out) {
+        const auto count = [](const SiteStats::Counter& c) { return c.load(std::memory_order_relaxed); };
+        std::lock_guard lock(mutex_);
+        for (const auto& [name, site] : sites_) {
+            out << " site[" << name << "]=" << count(site->active_sessions) << "active/"
+                << count(site->sessions) << "sessions/" << count(site->packets) << "pkts/"
+                << count(site->bytes) << "B/" << count(site->ring_full_drops) << "ring_full/"
+                << count(site->reply_packets) << "reply_pkts/" << count(site->reply_bytes) << "reply_B/"
+                << count(site->active_tcp) << "tcp_active/" << count(site->tcp) << "tcp/"
+                << count(site->tcp_in_bytes) << "tcp_in_B/" << count(site->tcp_out_bytes) << "tcp_out_B";
+        }
+    }
+
+private:
+    static std::string top_countries(const SiteStats::CountryCounters& counters) {
+        static constexpr size_t kShown = 20;
+        std::vector<std::pair<uint64_t, size_t>> nonzero;
+        for (size_t i = 0; i < counters.size(); ++i)
+            if (const auto n = counters[i].load(std::memory_order_relaxed)) nonzero.emplace_back(n, i);
+        std::ranges::sort(nonzero, std::greater{});
+        std::ostringstream out;
+        uint64_t other = 0;
+        for (size_t i = 0; i < nonzero.size(); ++i) {
+            if (i >= kShown) { other += nonzero[i].first; continue; }
+            out << (i ? "," : "") << country_code(nonzero[i].second) << ":" << nonzero[i].first;
+        }
+        if (other) out << ",other:" << other;
+        return out.str();
+    }
+
+    std::mutex mutex_;
+    std::map<std::string, std::unique_ptr<SiteStats>> sites_;
+};
+
+static SiteStatsTable g_site_stats;
+
+//==============================================================================
 // Route table
 //==============================================================================
 
@@ -200,18 +394,18 @@ struct ResolvedRoute {
     bool            has_tcp = false;
     bool            has_udp = false;
     std::string     shm_ingress_channel; // empty = UDP mode for this route
+    SiteStats*      stats = nullptr;
 };
 
 struct RouteTable {
     std::vector<ResolvedRoute> routes;
-    tcp::endpoint              default_tcp;
-    bool                       has_default_tcp = false;
+    ResolvedRoute              default_tcp_route; // has_tcp indicates if set
     ResolvedRoute              default_udp_route; // has_udp indicates if set
 
-    const tcp::endpoint* lookup_tcp(std::string_view sni) const noexcept {
+    const ResolvedRoute* lookup_tcp(std::string_view sni) const noexcept {
         for (const auto& r : routes)
-            if (r.has_tcp && r.sni == sni) return &r.tcp_ep;
-        return has_default_tcp ? &default_tcp : nullptr;
+            if (r.has_tcp && r.sni == sni) return &r;
+        return default_tcp_route.has_tcp ? &default_tcp_route : nullptr;
     }
 
     const ResolvedRoute* lookup_udp(std::string_view sni) const noexcept {
@@ -228,6 +422,7 @@ static RouteTable build_route_table(const Config& cfg, asio::io_context& ioc)
         ResolvedRoute rr;
         rr.sni        = r.sni;
         rr.shm_ingress_channel = r.shm_ingress_channel;
+        rr.stats      = g_site_stats.get(r.sni);
         if (!r.tcp_backend.empty()) {
             rr.tcp_ep  = parse_tcp_endpoint(r.tcp_backend, ioc);
             rr.has_tcp = true;
@@ -239,12 +434,14 @@ static RouteTable build_route_table(const Config& cfg, asio::io_context& ioc)
         rt.routes.push_back(std::move(rr));
     }
     if (!cfg.default_tcp_backend.empty()) {
-        rt.default_tcp     = parse_tcp_endpoint(cfg.default_tcp_backend, ioc);
-        rt.has_default_tcp = true;
+        rt.default_tcp_route.tcp_ep  = parse_tcp_endpoint(cfg.default_tcp_backend, ioc);
+        rt.default_tcp_route.has_tcp = true;
+        rt.default_tcp_route.stats   = g_site_stats.get("default");
     }
     if (!cfg.default_udp_backend.empty()) {
         rt.default_udp_route.udp_ep  = parse_udp_endpoint(cfg.default_udp_backend, ioc);
         rt.default_udp_route.has_udp = true;
+        rt.default_udp_route.stats   = g_site_stats.get("default");
         // default backend has no shm_ingress_channel — always uses UDP mode
     }
     return rt;
@@ -361,8 +558,14 @@ public:
 
   void print_totals(std::ostream& out, size_t worker_count) const
   {
+    const auto [routed, drops] = totals(worker_count);
+    out << " bpf_routed=" << routed << " bpf_drops=" << drops;
+  }
+
+  std::pair<uint64_t, uint64_t> totals(size_t worker_count) const
+  {
     const int ncpus = libbpf_num_possible_cpus();
-    if (ncpus <= 0) return;
+    if (ncpus <= 0) return {0, 0};
     std::vector<uint64_t> per_cpu(static_cast<size_t>(ncpus));
     const auto sum = [&](int fd, uint32_t key) -> uint64_t {
       if (fd < 0 || bpf_map_lookup_elem(fd, &key, per_cpu.data()) != 0) return 0;
@@ -373,7 +576,7 @@ public:
     uint64_t routed = 0;
     for (uint32_t i = 0; i < static_cast<uint32_t>(worker_count); ++i)
       routed += sum(worker_counters_fd_, i);
-    out << " bpf_routed=" << routed << " bpf_drops=" << sum(drop_counter_fd_, 0);
+    return {routed, sum(drop_counter_fd_, 0)};
   }
 
   // Register a worker socket fd at the given index in the reuseport array.
@@ -444,45 +647,6 @@ struct RouterStats {
 
 static RouterStats g_stats;
 
-struct BackendStats {
-    std::atomic<uint64_t> packets{0};
-    std::atomic<uint64_t> bytes{0};
-    std::atomic<uint64_t> ring_full_drops{0};
-    // Replies seen here, which is UDP mode only. SHM replies are under egress[].
-    std::atomic<uint64_t> reply_packets{0};
-    std::atomic<uint64_t> reply_bytes{0};
-};
-
-// Traffic per backend, kept for the life of the process: backends are config.
-class BackendStatsTable {
-public:
-    BackendStats* get(const udp::endpoint& backend) {
-        std::ostringstream name;
-        name << backend;
-        std::lock_guard lock(mutex_);
-        auto& entry = backends_[name.str()];
-        if (!entry) entry = std::make_unique<BackendStats>();
-        return entry.get();
-    }
-
-    void print(std::ostream& out) {
-        std::lock_guard lock(mutex_);
-        for (const auto& [name, stats] : backends_) {
-            out << " backend[" << name << "]=" << stats->packets.load(std::memory_order_relaxed)
-                << "pkts/" << stats->bytes.load(std::memory_order_relaxed)
-                << "B/" << stats->ring_full_drops.load(std::memory_order_relaxed) << "ring_full/"
-                << stats->reply_packets.load(std::memory_order_relaxed) << "reply_pkts/"
-                << stats->reply_bytes.load(std::memory_order_relaxed) << "reply_B";
-        }
-    }
-
-private:
-    std::mutex mutex_;
-    std::map<std::string, std::unique_ptr<BackendStats>> backends_;
-};
-
-static BackendStatsTable g_backend_stats;
-
 // The SHM rings, which every router keeps open until the process exits.
 class RingStatsTable {
 public:
@@ -494,6 +658,15 @@ public:
     void add(const ShmEgressReader& ring) {
         std::lock_guard lock(mutex_);
         egress_[ring.ring_name()] = &ring;
+    }
+
+    void fill(RouterStatsJson& out) {
+        std::lock_guard lock(mutex_);
+        for (const auto& [name, ring] : ingress_)
+            out.ingress.push_back({name, ring->used_bytes(), ring->capacity_bytes()});
+        for (const auto& [name, ring] : egress_)
+            out.egress.push_back({name, ring->used_bytes(), ring->capacity_bytes(),
+                                  ring->packets(), ring->bytes(), ring->send_errors()});
     }
 
     void print(std::ostream& out) {
@@ -666,26 +839,58 @@ private:
 
 static RouterLimiter g_limiter;
 
-static void print_stats(std::ostream& out, const std::string& extra = {}) {
+static std::vector<std::pair<const char*, uint64_t>> router_counters() {
     const auto count = [](const std::atomic<uint64_t>& c) { return c.load(std::memory_order_relaxed); };
+    return {{"initial_too_small", count(g_stats.initial_too_small)},
+            {"initial_rate_limited", count(g_stats.initial_rate_limited)},
+            {"initial_undecryptable", count(g_stats.initial_undecryptable)},
+            {"initial_no_sni", count(g_stats.initial_no_sni)},
+            {"unknown_short_header", count(g_stats.unknown_short_header)},
+            {"no_route", count(g_stats.no_route)},
+            {"pending_cap_drops", count(g_stats.pending_cap_drops)},
+            {"session_cap_drops", count(g_stats.session_cap_drops)},
+            {"handshake_timeouts", count(g_stats.handshake_timeouts)},
+            {"idle_timeouts", count(g_stats.idle_timeouts)},
+            {"moved_clients", count(g_stats.moved_clients)},
+            {"tcp_cap_drops", count(g_stats.tcp_cap_drops)},
+            {"tcp_peek_timeouts", count(g_stats.tcp_peek_timeouts)}};
+}
+
+// Replaces the file in one step, so a reader never sees half of it. The group
+// is what lets a backend container read it, as it does the rings beside it.
+static void write_stats_file(const std::string& path, RouterStatsJson stats) {
+    stats.sessions = g_limiter.active(RouterLimiter::Session);
+    stats.pending = g_limiter.active(RouterLimiter::Pending);
+    stats.tcp = g_limiter.active(RouterLimiter::TcpConnection);
+    for (const auto& [name, value] : router_counters()) stats.counters[name] = value;
+    g_site_stats.fill(stats.sites);
+    g_ring_stats.fill(stats);
+
+    static bool reported = false;
+    const auto failed = [&](const std::string& what) {
+        if (!reported) std::cerr << "[stats] Can't write " << path << ": " << what << "\n";
+        reported = true;
+    };
+    std::string json;
+    if (const auto ec = glz::write_json(stats, json)) return failed(glz::format_error(ec, json));
+    const auto temporary = path + ".tmp";
+    std::ofstream(temporary, std::ios::binary | std::ios::trunc) << json;
+    std::error_code ec;
+    if (std::filesystem::file_size(temporary, ec) != json.size() || ec) return failed("short write");
+    namespace fs = std::filesystem;
+    fs::permissions(temporary, fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read, ec);
+    if (!ec) fs::rename(temporary, path, ec);
+    if (ec) return failed(ec.message());
+    reported = false;
+}
+
+static void print_stats(std::ostream& out, const std::string& extra = {}) {
     out << "[stats] sessions=" << g_limiter.active(RouterLimiter::Session)
         << " pending=" << g_limiter.active(RouterLimiter::Pending)
-        << " tcp=" << g_limiter.active(RouterLimiter::TcpConnection)
-        << " initial_too_small=" << count(g_stats.initial_too_small)
-        << " initial_rate_limited=" << count(g_stats.initial_rate_limited)
-        << " initial_undecryptable=" << count(g_stats.initial_undecryptable)
-        << " initial_no_sni=" << count(g_stats.initial_no_sni)
-        << " unknown_short_header=" << count(g_stats.unknown_short_header)
-        << " no_route=" << count(g_stats.no_route)
-        << " pending_cap_drops=" << count(g_stats.pending_cap_drops)
-        << " session_cap_drops=" << count(g_stats.session_cap_drops)
-        << " handshake_timeouts=" << count(g_stats.handshake_timeouts)
-        << " idle_timeouts=" << count(g_stats.idle_timeouts)
-        << " moved_clients=" << count(g_stats.moved_clients)
-        << " tcp_cap_drops=" << count(g_stats.tcp_cap_drops)
-        << " tcp_peek_timeouts=" << count(g_stats.tcp_peek_timeouts)
-        << extra;
-    g_backend_stats.print(out);
+        << " tcp=" << g_limiter.active(RouterLimiter::TcpConnection);
+    for (const auto& [name, value] : router_counters()) out << " " << name << "=" << value;
+    out << extra;
+    g_site_stats.print(out);
     g_ring_stats.print(out);
     out << std::endl;
 }
@@ -707,6 +912,7 @@ class TcpSession : public std::enable_shared_from_this<TcpSession> {
     // Splice buffers — allocated only after handshake
     std::vector<uint8_t> c2b_buf_; // client → backend
     std::vector<uint8_t> b2c_buf_; // backend → client
+    SiteStats* stats_ = nullptr;   // Set once the SNI is known.
 
 public:
     TcpSession(tcp::socket client, const RouteTable& routes,
@@ -718,6 +924,10 @@ public:
         , peek_timer_(client_.get_executor())
         , peek_timeout_sec_(peek_timeout_sec)
     {}
+
+    ~TcpSession() {
+        if (stats_) stats_->active_tcp.fetch_sub(1, std::memory_order_relaxed);
+    }
 
     void start() {
         if (peek_timeout_sec_ > 0) {
@@ -745,18 +955,26 @@ private:
         const auto span = std::span<const uint8_t>(peek_buf_.data(), peek_len_);
         const std::string_view sni = sni_from_tls_record(span);
 
-        const tcp::endpoint* ep = routes_.lookup_tcp(sni);
-        if (!ep) {
+        const ResolvedRoute* route = routes_.lookup_tcp(sni);
+        if (!route) {
             std::cerr << "[TCP] No route for SNI '" << sni
                       << "' — dropping connection\n";
             return;
         }
         if (!sni.empty())
-            std::clog << "[TCP] SNI='" << sni << "' → " << *ep << "\n";
+            std::clog << "[TCP] SNI='" << sni << "' → " << route->tcp_ep << "\n";
+
+        stats_ = route->stats;
+        stats_->active_tcp.fetch_add(1, std::memory_order_relaxed);
+        stats_->tcp.fetch_add(1, std::memory_order_relaxed);
+        stats_->tcp_in_bytes.fetch_add(peek_len_, std::memory_order_relaxed);
+        boost::system::error_code peer_ec;
+        if (const auto peer = client_.remote_endpoint(peer_ec); !peer_ec)
+            g_geoip.count(stats_->tcp_countries, peer.address());
 
         backend_.async_connect(
-            *ep,
-            [self = shared_from_this(), ep_str = ep->address().to_string()]
+            route->tcp_ep,
+            [self = shared_from_this(), ep_str = route->tcp_ep.address().to_string()]
             (boost::system::error_code ec) {
                 if (ec) {
                     std::cerr << "[TCP] connect to backend failed: "
@@ -787,6 +1005,7 @@ private:
             asio::buffer(c2b_buf_),
             [self = shared_from_this()](boost::system::error_code ec, size_t n) {
                 if (ec) { self->backend_.close(); return; }
+                self->stats_->tcp_in_bytes.fetch_add(n, std::memory_order_relaxed);
                 asio::async_write(
                     self->backend_,
                     asio::buffer(self->c2b_buf_.data(), n),
@@ -802,6 +1021,7 @@ private:
             asio::buffer(b2c_buf_),
             [self = shared_from_this()](boost::system::error_code ec, size_t n) {
                 if (ec) { self->client_.close(); return; }
+                self->stats_->tcp_out_bytes.fetch_add(n, std::memory_order_relaxed);
                 asio::async_write(
                     self->client_,
                     asio::buffer(self->b2c_buf_.data(), n),
@@ -1058,6 +1278,7 @@ public:
     struct Route {
         ShmIngressWriter* writer;
         udp::endpoint backend_ep;
+        SiteStats* stats;
     };
 
     void learn(std::string_view cid, const Route& route) {
@@ -1164,7 +1385,7 @@ struct UdpSession {
     uint16_t        backend_port = 0;
     std::chrono::steady_clock::time_point last_seen;
     std::vector<uint8_t> back_buf; // UDP mode only: a session can be a spoofed packet's cost.
-    BackendStats* stats = nullptr;
+    SiteStats* stats = nullptr;
     std::unique_ptr<RouterLimiter::Slot> slot;
     // Has sent a short header, which a client can't before finishing the handshake.
     bool established = false;
@@ -1174,6 +1395,15 @@ struct UdpSession {
     // first keeps the shared table's lock off the per-packet path.
     std::string learned_cid;
     std::chrono::steady_clock::time_point learned_at{};
+
+    ~UdpSession() {
+        if (stats) stats->active_sessions.fetch_sub(1, std::memory_order_relaxed);
+    }
+
+    void set_stats(SiteStats* site) {
+        stats = site;
+        stats->active_sessions.fetch_add(1, std::memory_order_relaxed);
+    }
 
     // SHM mode: only client/backend endpoints are tracked.
     UdpSession(udp::endpoint cep, udp::endpoint bep)
@@ -1459,10 +1689,13 @@ private:
         if (it != sessions_.end()) {
             // Existing session — forward to backend.
             it->second->last_seen = std::chrono::steady_clock::now();
-            if (n > 0 && !(data[0] & 0x80u)) it->second->established = true;
-            auto* backend = it->second->stats;
-            backend->packets.fetch_add(1, std::memory_order_relaxed);
-            backend->bytes.fetch_add(n, std::memory_order_relaxed);
+            if (n > 0 && !(data[0] & 0x80u) && !it->second->established) {
+                it->second->established = true;
+                g_geoip.count(it->second->stats->quic_countries, it->second->client_ep.address());
+            }
+            auto* site = it->second->stats;
+            site->packets.fetch_add(1, std::memory_order_relaxed);
+            site->bytes.fetch_add(n, std::memory_order_relaxed);
             if (it->second->shm_ingress) {
                 learn_connection_id(*it->second, datagram);
                 // SHM mode: write to this session's ingress ring.
@@ -1471,7 +1704,7 @@ private:
                         static_cast<const sockaddr*>(static_cast<const void*>(ep_data)),
                         static_cast<socklen_t>(sender.size()),
                         datagram.data(), datagram.size())) {
-                    backend->ring_full_drops.fetch_add(1, std::memory_order_relaxed);
+                    site->ring_full_drops.fetch_add(1, std::memory_order_relaxed);
                 }
             } else {
                 it->second->backend_sock->async_send(
@@ -1606,7 +1839,8 @@ private:
                       << " client=" << sess->client_ep << "\n";
         }
         sess->slot = std::move(slot);
-        sess->stats = g_backend_stats.get(route->udp_ep);
+        sess->set_stats(route->stats);
+        route->stats->sessions.fetch_add(1, std::memory_order_relaxed);
         sessions_.emplace(pend.client_ep, sess);
 
         auto queued = std::move(pend.queued_pkts);
@@ -1641,7 +1875,7 @@ private:
         if (sess.learned_cid == *cid && now - sess.learned_at < refresh) return;
         sess.learned_cid = *cid;
         sess.learned_at  = now;
-        g_shm_cid_routes.learn(*cid, {sess.shm_ingress, sess.backend_ep});
+        g_shm_cid_routes.learn(*cid, {sess.shm_ingress, sess.backend_ep, sess.stats});
     }
 
     // A known connection ID from an unknown address is a client that moved.
@@ -1659,7 +1893,7 @@ private:
         auto sess = std::make_shared<UdpSession>(sender, route->backend_ep);
         sess->shm_ingress = route->writer;
         sess->slot = std::move(slot);
-        sess->stats = g_backend_stats.get(route->backend_ep);
+        sess->set_stats(route->stats); // The same client, so not a new session.
         sess->established = true;
         sessions_.emplace(sender, sess);
         g_stats.moved_clients.fetch_add(1, std::memory_order_relaxed);
@@ -1787,6 +2021,7 @@ int main(int argc, char* argv[])
 
     // Resolve all backend addresses up front
     g_limiter.configure(cfg);
+    g_geoip.start(cfg.geoip_csv);
 
     RouteTable routes;
     try {
@@ -1914,6 +2149,7 @@ int main(int argc, char* argv[])
         if (reuseport_bpf) reuseport_bpf->print_totals(extra, num_workers);
 #endif
         print_stats(std::clog, extra.str());
+        if (g_geoip.enabled()) g_site_stats.print_countries(std::clog);
     };
 
     asio::steady_timer stats_timer(ioc);
@@ -1926,6 +2162,34 @@ int main(int argc, char* argv[])
         });
     };
     if (cfg.stats_interval_sec > 0) schedule_stats();
+
+    const auto started = std::chrono::steady_clock::now();
+    const auto report_stats_file = [&] {
+        RouterStatsJson stats;
+        stats.uptime_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+#if defined(NPRPC_ROUTER_REUSEPORT_BPF_ENABLED) && defined(SO_ATTACH_REUSEPORT_EBPF)
+        if (reuseport_bpf) {
+            const auto [routed, drops] = reuseport_bpf->totals(num_workers);
+            stats.counters["bpf_routed"] = routed;
+            stats.counters["bpf_drops"] = drops;
+        }
+#endif
+        write_stats_file(cfg.stats_file, std::move(stats));
+    };
+    asio::steady_timer stats_file_timer(ioc);
+    std::function<void()> schedule_stats_file = [&] {
+        stats_file_timer.expires_after(std::chrono::seconds(std::max(1, cfg.stats_file_interval_sec)));
+        stats_file_timer.async_wait([&](boost::system::error_code ec) {
+            if (ec) return;
+            report_stats_file();
+            schedule_stats_file();
+        });
+    };
+    if (!cfg.stats_file.empty()) {
+        report_stats_file();
+        schedule_stats_file();
+    }
 
     ioc.run();  // main thread: TCP + signals (+ UDP in single-worker mode)
 

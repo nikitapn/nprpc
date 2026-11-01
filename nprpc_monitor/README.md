@@ -214,7 +214,7 @@ Python's `cryptography` package.
 * Rates are deltas of cumulative counters divided by server monotonic elapsed
   time. First samples establish a baseline. Charts scale independently.
 
-This first version does not yet expose stream throughput/backpressure, latency percentiles, per-method breakdowns,
+This first version does not yet expose stream throughput/backpressure, per-method breakdowns,
 logs, alerts, or persistent history. It does not claim end-to-end latency.
 
 ## Framework exercise

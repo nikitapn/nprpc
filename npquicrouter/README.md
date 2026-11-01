@@ -83,6 +83,9 @@ All settings live in a single JSON file passed as the sole command-line argument
 | `tcp_max_connections`, `tcp_max_connections_per_ip` | uint32 | `50000`, `2000` | Caps on TCP connections. |
 | `tcp_peek_timeout_sec` | int | `10` | How long a TCP connection may take to send its ClientHello. |
 | `stats_interval_sec` | int | `60` | Period of the `[stats]` log line. |
+| `stats_file` | string | `""` | Where to write the stats as JSON, for a monitor. See [Reading the stats from NPRPC Monitor](#reading-the-stats-from-nprpc-monitor). |
+| `stats_file_interval_sec` | int | `5` | How often to write that file. |
+| `geoip_csv` | string | `""` | Path of a DB-IP country CSV, which turns on `[countries]` lines. See [Countries](#countries). |
 | `shm_egress_channel` | string | `""` | Shared-memory channel name for the egress (server→client) ring. See [SHM Fast Path](#shm-fast-path). Empty disables SHM egress. Used by every SHM route that does not name its own. |
 | `shm_egress_ring_kib` | uint32 | `0` | Size of that ring in KiB. `0` = 32 MiB. |
 | `num_workers` | int | `1` | Number of UDP worker threads. Values > 1 require `SO_REUSEPORT` support (Linux 3.9+). With eBPF enabled, each worker gets its own socket and the BPF program routes packets deterministically. |
@@ -118,9 +121,34 @@ The `[stats]` line reports current `sessions`, `pending` and `tcp`, then running
 
 - `initial_undecryptable`: datagrams with no readable Initial. `initial_no_sni`: pending connections that expired before an SNI could be read. `no_route`: an SNI with no route.
 - `bpf_routed` and `bpf_drops`: packets the eBPF program sent to a worker or dropped. These only appear with eBPF routing, which needs more than one worker and `CAP_BPF`.
-- `backend[addr]`: client packets and bytes, drops because the ingress ring was full, then reply packets and bytes. Replies are only counted here in UDP mode.
+- `site[sni]`: one entry per configured route, plus `default` for the default backends. QUIC: open and total sessions, client packets and bytes, drops because the ingress ring was full, then reply packets and bytes (UDP mode only; SHM replies are under `egress[ring]`, which sites can share). TCP: open and total connections, then bytes in and out. A client that moves address opens a new `active` session but doesn't add to `sessions`.
 - `ingress[ring]`: bytes waiting in the ring over its size. If this stays high, the backend isn't keeping up.
 - `egress[ring]`: the same for replies, then packets and bytes sent to clients, and send errors. A backend that finds this ring full drops the packet itself, so watch how full the ring gets.
+
+## Countries
+
+With `geoip_csv` set, each `[stats]` line is followed by one line per site with running totals by country, biggest first, up to 20 and then `other`:
+
+```
+[countries] site[example.com] quic=DE:120,US:87,ZZ:3 tcp=US:540,CN:310,DE:95
+```
+
+- `quic` counts clients that sent a short-header packet, which a real client only does after its handshake. The router can't verify the handshake, so a determined sender can still inflate this, but it is far closer to real visitors than `tcp`.
+- `tcp` counts connections with a routed SNI, and includes scanners.
+- These are connections, not visits. One visitor can open several, and a client that moves address isn't counted twice.
+- `ZZ` is an address with no known country. Sites with no counts have no line.
+
+Addresses are looked up when a connection is counted and never written down. Totals are cumulative and reset when the router restarts.
+
+`update-geoip.sh [destination.csv]` installs the current [DB-IP Lite](https://db-ip.com/db/download/ip-to-country-lite) database. Run it monthly: the router notices a changed file within a minute and swaps tables without dropping connections. If a new file can't be read, it keeps the current one. DB-IP Lite is CC BY 4.0, so anything showing these results publicly must credit DB-IP with a link to https://db-ip.com. The table takes about 16 MB of memory and 135 ms to load, and a lookup about 80 ns.
+
+## Reading the stats from NPRPC Monitor
+
+The router has no RPC of its own, so one backend carries its stats. With `stats_file` set, the router writes everything in the `[stats]` and `[countries]` lines as JSON, including every country rather than the top 20. Set the file inside the shared-memory directory, such as `/dev/shm/npquicrouter/router-stats.json`, which backend containers already mount. It's replaced in one step, and its group can read it.
+
+Then one backend adds it to its telemetry: `telemetry_router_stats_file(path)` in C++, or `telemetryRouterStatsFile(path)` in Swift. The file passes through as an opaque string, so a new router counter only needs the router and the monitor updated. NPRPC Monitor shows a Router section when that server is connected, and marks it stale if the router stops writing.
+
+If that backend is down, the monitor can't see the router either, but the log still has the numbers.
 
 ## ACME HTTP-01
 

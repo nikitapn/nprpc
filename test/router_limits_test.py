@@ -172,7 +172,9 @@ with tempfile.TemporaryDirectory(prefix='nprpc-router-limits-') as directory:
         sys.exit(0)
 
     # Nothing listens on the backend port, so these handshakes never finish.
-    with Router(root, 9, udp_handshake_timeout_sec=1) as r:
+    geoip = root / 'geoip.csv'
+    geoip.write_text('127.0.0.0,127.255.255.255,DE\n')
+    with Router(root, 9, udp_handshake_timeout_sec=1, geoip_csv=str(geoip)) as r:
         curl_ok('1')
         s = r.stats()
         expect('a session is created for a new client', s['sessions'] == 1 or s['handshake_timeouts'] == 1, s)
@@ -182,6 +184,8 @@ with tempfile.TemporaryDirectory(prefix='nprpc-router-limits-') as directory:
         # pending receive on its backend socket used to prevent.
         expect('a session that never finishes its handshake is destroyed',
                s['sessions'] == 0 and s['handshake_timeouts'] == 1, s)
+        expect('a client that never finishes its handshake has no country',
+               '[countries]' not in r.log.read_text(), s)
 
     # Nothing reads this ring, so what the router writes stays in it.
     channel = f'router_limits_{os.getpid()}'
@@ -204,16 +208,28 @@ with tempfile.TemporaryDirectory(prefix='nprpc-router-limits-') as directory:
     try:
         if not select.select([server.stdout], [], [], 10)[0] or server.stdout.readline().strip() != 'ready':
             raise AssertionError('server did not start')
-        with Router(root, BACKEND_PORT, udp_max_sessions_per_ip=1, udp_handshake_timeout_sec=1) as r:
+        stats_file = root / 'router-stats.json'
+        with Router(root, BACKEND_PORT, udp_max_sessions_per_ip=1, udp_handshake_timeout_sec=1,
+                    geoip_csv=str(geoip), stats_file=str(stats_file), stats_file_interval_sec=1) as r:
             ok = curl_ok()
             time.sleep(2.5)
             s = r.stats()
             expect('a real client gets through the limits', ok, s)
             expect('an established session outlives the handshake timeout',
                    s['sessions'] == 1 and s['handshake_timeouts'] == 0, s)
-            expect('traffic is counted per backend, both ways',
-                   re.search(rf'backend\[127\.0\.0\.1:{BACKEND_PORT}\]=[1-9]\d*pkts/\d+B/0ring_full/[1-9]\d*reply_pkts/[1-9]\d*reply_B',
+            expect('traffic is counted per site, both ways',
+                   re.search(r'site\[localhost\]=1active/1sessions/[1-9]\d*pkts/\d+B/0ring_full/[1-9]\d*reply_pkts/[1-9]\d*reply_B',
                              s['raw']) is not None, s)
+            expect('a client past its handshake is counted by country',
+                   '[countries] site[localhost] quic=DE:1 tcp=' in r.log.read_text(), s)
+            time.sleep(1.5)
+            written = json.loads(stats_file.read_text())
+            site = next(x for x in written['sites'] if x['name'] == 'localhost')
+            expect('the stats file holds what the log does',
+                   written['sessions'] == 1 and written['uptime_ms'] > 0 and written['counters']['session_cap_drops'] == 0
+                   and site['sessions'] == 1 and site['packets'] > 0 and site['quic_countries'] == {'DE': 1}, s)
+            expect('the stats file is readable by its group only',
+                   stats_file.stat().st_mode & 0o777 == 0o640, s)
             ok = curl_ok('1')
             s = r.stats()
             expect('sessions are capped per IP', not ok and s['session_cap_drops'] >= 1 and s['sessions'] == 1, s)

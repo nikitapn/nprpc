@@ -6,6 +6,67 @@ import NPRPC
 import MonitorAPI
 
 private let historyLength = 120
+/// Samples the latency percentiles cover. One sample is too few calls on a quiet server.
+private let latencyWindow = 60
+
+/// The duration below which `fraction` of the calls finished, in ms, from counts
+/// where bucket i holds durations under 2^i us and the last has no upper limit.
+/// Accurate to within its bucket, so to about a factor of two.
+func percentile(_ buckets: [UInt64], _ fraction: Double) -> Double? {
+    let total = buckets.reduce(0, +)
+    guard total > 0 else { return nil }
+    let rank = fraction * Double(total)
+    var seen = 0.0
+    for (index, count) in buckets.enumerated() where count > 0 {
+        let lower = index == 0 ? 0 : pow(2, Double(index - 1))
+        if index == buckets.count - 1 { return lower / 1000 }
+        if seen + Double(count) >= rank {
+            let upper = pow(2, Double(index))
+            return (lower + (upper - lower) * (rank - seen) / Double(count)) / 1000
+        }
+        seen += Double(count)
+    }
+    return nil
+}
+
+/// npquicrouter's stats file. Decoding ignores fields it doesn't know.
+struct RouterStats: Decodable {
+    struct Site: Decodable {
+        var name: String
+        var active_sessions: UInt64
+        var sessions: UInt64
+        var bytes: UInt64
+        var ring_full_drops: UInt64
+        var active_tcp: UInt64
+        var tcp: UInt64
+        var tcp_in_bytes: UInt64
+        var tcp_out_bytes: UInt64
+        var quic_countries: [String: UInt64]
+        var tcp_countries: [String: UInt64]
+    }
+    struct Ring: Decodable {
+        var name: String
+        var used_bytes: UInt64
+        var capacity_bytes: UInt64
+        var bytes: UInt64
+        var send_errors: UInt64
+    }
+    var uptime_ms: UInt64
+    var sessions: UInt64
+    var pending: UInt64
+    var tcp: UInt64
+    var counters: [String: UInt64]
+    var sites: [Site]
+    var ingress: [Ring]
+    var egress: [Ring]
+}
+
+/// Byte rates of one router site, in bytes per second.
+struct SiteRates {
+    var quic = 0.0
+    var tcpIn = 0.0
+    var tcpOut = 0.0
+}
 
 struct Row: Identifiable {
     var id: UInt32
@@ -17,6 +78,11 @@ struct Row: Identifiable {
     var sent: Double = 0
     /// Mean handler time in ms over the last sample; nil when no call finished in it.
     var dispatch: Double?
+    var p50: Double?
+    var p95: Double?
+    var p99: Double?
+    /// Cumulative latency buckets of recent samples, oldest first.
+    var latencySamples: [[UInt64]] = []
     var total: UInt64 = 0
     var errors: UInt64 = 0
     var handshakeFailures: UInt64 = 0
@@ -47,6 +113,14 @@ enum LinkState: Equatable {
     var reference = CommandLine.arguments.dropFirst().first ?? ""
     var http1HandshakeFailures: UInt64 = 0
     var http1Throttled: UInt64 = 0
+    var http1Status = HttpStatusCounts()
+    var http3Status = HttpStatusCounts()
+    var router: RouterStats?
+    var routerRates: [String: SiteRates] = [:]
+    var routerAgeMs: UInt64 = 0
+    /// A stats file this version of the monitor can't decode.
+    var routerUnreadable = false
+    private var routerJson = ""
     var uptimeMs: UInt64 = 0
     var state = LinkState.disconnected
     var status = "Not connected"
@@ -134,6 +208,10 @@ enum LinkState: Equatable {
     /// Totals and charts stay, as the last known history.
     private func clearLiveValues() {
         uptimeMs = 0
+        router = nil
+        routerRates = [:]
+        routerJson = ""
+        routerUnreadable = false
         for index in rows.indices {
             rows[index].hasRates = false
             rows[index].rate = 0
@@ -141,6 +219,10 @@ enum LinkState: Equatable {
             rows[index].received = 0
             rows[index].sent = 0
             rows[index].dispatch = nil
+            rows[index].p50 = nil
+            rows[index].p95 = nil
+            rows[index].p99 = nil
+            rows[index].latencySamples = []
             rows[index].connections = 0
             rows[index].streams = 0
         }
@@ -150,6 +232,9 @@ enum LinkState: Equatable {
         defer { previous = value }
         http1HandshakeFailures = value.http1_handshake_failures
         http1Throttled = value.http1_throttled
+        http1Status = value.http1_status
+        http3Status = value.http3_status
+        receiveRouter(json: value.router_stats_json, ageMs: value.router_stats_age_ms)
         uptimeMs = value.uptime_ms
         lastSample = Date()
         state = .live
@@ -178,7 +263,57 @@ enum LinkState: Equatable {
             Self.append(rows[index].rate, to: &rows[index].rateHistory)
             Self.append(rows[index].received, to: &rows[index].receivedHistory)
             Self.append(rows[index].sent, to: &rows[index].sentHistory)
+            updateLatency(&rows[index], with: sample.latency_buckets)
         }
+    }
+
+    /// The file changes every few seconds, while samples come every second.
+    private func receiveRouter(json: String, ageMs: UInt64) {
+        routerAgeMs = ageMs
+        guard json != routerJson else { return }
+        routerJson = json
+        routerUnreadable = false
+        guard !json.isEmpty else {
+            router = nil
+            routerRates = [:]
+            return
+        }
+        guard let stats = try? JSONDecoder().decode(RouterStats.self, from: Data(json.utf8)) else {
+            router = nil
+            routerRates = [:]
+            routerUnreadable = true
+            return
+        }
+        if let old = router, stats.uptime_ms > old.uptime_ms {
+            let seconds = Double(stats.uptime_ms - old.uptime_ms) / 1000
+            let rate = { (new: UInt64, old: UInt64) in new >= old ? Double(new - old) / seconds : 0 }
+            for site in stats.sites {
+                guard let before = old.sites.first(where: { $0.name == site.name }) else { continue }
+                routerRates[site.name] = SiteRates(quic: rate(site.bytes, before.bytes),
+                                                   tcpIn: rate(site.tcp_in_bytes, before.tcp_in_bytes),
+                                                   tcpOut: rate(site.tcp_out_bytes, before.tcp_out_bytes))
+            }
+        }
+        router = stats
+    }
+
+    private func updateLatency(_ row: inout Row, with buckets: [UInt64]) {
+        row.latencySamples.append(buckets)
+        if row.latencySamples.count > latencyWindow + 1 { row.latencySamples.removeFirst() }
+        guard let oldest = row.latencySamples.first, oldest.count == buckets.count else {
+            row.latencySamples = [buckets]
+            return
+        }
+        // A counter that went down is a restarted server, and the difference is meaningless.
+        guard zip(buckets, oldest).allSatisfy({ $0 >= $1 }) else {
+            row.latencySamples = [buckets]
+            row.p50 = nil; row.p95 = nil; row.p99 = nil
+            return
+        }
+        let recent = zip(buckets, oldest).map { $0 - $1 }
+        row.p50 = percentile(recent, 0.50)
+        row.p95 = percentile(recent, 0.95)
+        row.p99 = percentile(recent, 0.99)
     }
 
     private static func append(_ value: Double, to history: inout [Double]) {
@@ -353,9 +488,14 @@ struct TransportCard: View {
                 Metric(label: "Errors", value: row.hasRates ? Format.rate(row.errorRate) + "/s" : dash,
                        note: Format.count(row.errors) + " total",
                        color: row.errorRate > 0 ? Palette.bad : .primary)
-                Metric(label: "Mean handler", value: row.dispatch.map(Format.milliseconds) ?? dash)
                 Metric(label: "Received", value: row.hasRates ? Format.bytes(row.received) : dash)
                 Metric(label: "Sent", value: row.hasRates ? Format.bytes(row.sent) : dash)
+            }
+            HStack(spacing: 10) {
+                Metric(label: "Mean", value: row.dispatch.map(Format.milliseconds) ?? dash)
+                Metric(label: "p50, \(latencyWindow)s", value: row.p50.map(Format.milliseconds) ?? dash)
+                Metric(label: "p95, \(latencyWindow)s", value: row.p95.map(Format.milliseconds) ?? dash)
+                Metric(label: "p99, \(latencyWindow)s", value: row.p99.map(Format.milliseconds) ?? dash)
             }
             HStack(spacing: 8) {
                 Chart(title: "Calls/s", series: [.init(name: "Calls", values: row.rateHistory, color: Palette.operations)],
@@ -368,6 +508,146 @@ struct TransportCard: View {
         }
         .background(Environment.current.theme.panel)
         .cornerRadius(8)
+    }
+}
+
+/// The biggest countries of a site, as bars scaled to the biggest.
+struct CountryBars: View {
+    let title: String
+    let countries: [String: UInt64]
+    private static let shown = 8
+
+    var body: some View {
+        let theme = Environment.current.theme
+        let top = countries.sorted { ($0.value, $1.key) > ($1.value, $0.key) }
+        let visible = Array(top.prefix(Self.shown))
+        let rest = top.dropFirst(Self.shown).reduce(UInt64(0)) { $0 + $1.value }
+        let total = top.reduce(UInt64(0)) { $0 + $1.value }
+        let peak = Double(visible.first?.value ?? 1)
+        let textColor = theme.textSecondary
+        let barColor = Palette.operations
+        Canvas(label: title, width: .point(0), height: .point(Float(Self.shown) * 17 + 22), flexGrow: 1) { draw, frame in
+            let font = Fonts.small
+            let line = font?.lineHeight ?? 16
+            let heading = title + " · " + Format.count(total) + (rest > 0 ? " · others " + Format.count(rest) : "")
+            draw.text(heading, x: frame.x, y: frame.y, w: frame.w, h: line, color: textColor, font: font)
+            for (index, entry) in visible.enumerated() {
+                let y = frame.y + 22 + Float(index) * 17
+                let value = Format.count(entry.value)
+                let valueWidth = font?.measure(value).width ?? 0
+                let left = frame.x + 26, right = frame.x + frame.w - valueWidth - 8
+                draw.text(entry.key, x: frame.x, y: y - 1, w: 24, h: line, color: textColor, font: font)
+                draw.roundedRect(x: left, y: y + 2, w: max(2, (right - left) * Float(Double(entry.value) / peak)), h: 9,
+                                 color: barColor, radius: 2)
+                draw.text(value, x: right + 6, y: y - 1, w: valueWidth + 2, h: line, color: textColor, font: font)
+            }
+        }
+    }
+}
+
+struct RouterSiteCard: View {
+    let site: RouterStats.Site
+    let rates: SiteRates?
+    var body: some View {
+        let dash = "—"
+        VStack(flexGrow: 1, width: .point(0), padding: 14, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                Dot(color: site.active_sessions + site.active_tcp > 0 ? Palette.good : Palette.idle)
+                Text(site.name, color: .primary, lineLimit: 1)
+                Spacer()
+                if site.ring_full_drops > 0 {
+                    Text(Format.count(site.ring_full_drops) + " ring-full drops", color: Palette.warning, font: Fonts.small, lineLimit: 1)
+                }
+            }
+            HStack(spacing: 10) {
+                Metric(label: "QUIC sessions", value: Format.count(site.active_sessions), note: Format.count(site.sessions) + " total")
+                Metric(label: "QUIC in", value: rates.map { Format.bytes($0.quic) } ?? dash)
+                Metric(label: "TCP connections", value: Format.count(site.active_tcp), note: Format.count(site.tcp) + " total")
+                Metric(label: "TCP in", value: rates.map { Format.bytes($0.tcpIn) } ?? dash)
+                Metric(label: "TCP out", value: rates.map { Format.bytes($0.tcpOut) } ?? dash)
+            }
+            HStack(spacing: 16) {
+                CountryBars(title: "QUIC by country", countries: site.quic_countries)
+                CountryBars(title: "TCP by country", countries: site.tcp_countries)
+            }
+        }
+        .background(Environment.current.theme.panel)
+        .cornerRadius(8)
+    }
+}
+
+/// Two site cards side by side.
+struct SiteRow: Identifiable {
+    var sites: [RouterStats.Site]
+    var id: String { sites[0].name }
+}
+
+struct RouterPanel: View {
+    let stats: RouterStats
+    let rates: [String: SiteRates]
+    let ageMs: UInt64
+    /// Well past the router's default interval of 5 seconds.
+    private static let staleAfterMs: UInt64 = 20_000
+
+    var body: some View {
+        let stale = ageMs > Self.staleAfterMs
+        let problems = stats.counters.filter { $0.value > 0 }.sorted { $0.key < $1.key }
+            .map { "\($0.key) \(Format.count($0.value))" }.joined(separator: ", ")
+        let rings = (stats.ingress + stats.egress).map { ring in
+            "\(ring.name) \(ring.used_bytes * 100 / max(ring.capacity_bytes, 1))%"
+        }.joined(separator: ", ")
+        let sendErrors = stats.egress.reduce(UInt64(0)) { $0 + $1.send_errors }
+        let siteRows = stride(from: 0, to: stats.sites.count, by: 2).map {
+            SiteRow(sites: Array(stats.sites[$0..<min($0 + 2, stats.sites.count)]))
+        }
+        VStack(spacing: 12) {
+            VStack(padding: 14, spacing: 10) {
+                HStack(alignment: .center, spacing: 8) {
+                    Dot(color: stale ? Palette.warning : Palette.good)
+                    Text("Router", color: .primary, lineLimit: 1)
+                    Spacer()
+                    Text(stale ? "No update for \(ageMs / 1000)s, the router may be down" : "Updated \(ageMs / 1000)s ago",
+                         color: stale ? Palette.warning : .secondary, font: Fonts.small, lineLimit: 1)
+                }
+                HStack(spacing: 10) {
+                    Metric(label: "Uptime", value: Format.uptime(stats.uptime_ms))
+                    Metric(label: "QUIC sessions", value: Format.count(stats.sessions))
+                    Metric(label: "Pending", value: Format.count(stats.pending))
+                    Metric(label: "TCP connections", value: Format.count(stats.tcp))
+                    Metric(label: "Send errors", value: Format.count(sendErrors), color: sendErrors > 0 ? Palette.bad : .primary)
+                }
+                if !problems.isEmpty { Text(problems, color: .secondary, font: Fonts.small) }
+                if !rings.isEmpty { Text("Rings in use: " + rings, color: .secondary, font: Fonts.small) }
+            }
+            .background(Environment.current.theme.panel)
+            .cornerRadius(8)
+            ForEach(siteRows) { row in
+                HStack(spacing: 12) {
+                    RouterSiteCard(site: row.sites[0], rates: rates[row.sites[0].name])
+                    if row.sites.count > 1 {
+                        RouterSiteCard(site: row.sites[1], rates: rates[row.sites[1].name])
+                    } else {
+                        Spacer()
+                    }
+                }
+            }
+            Text("Country data: IP geolocation by DB-IP (db-ip.com). Connections, not visits; TCP includes scanners. Totals since the router started.",
+                 color: .secondary, font: Fonts.small)
+        }
+    }
+}
+
+/// HTTP responses of one status class, since the server started.
+struct StatusMetric: View {
+    let label: String
+    let http1: UInt64
+    let http3: UInt64
+    var problem: Color = .primary
+    var body: some View {
+        let total = http1 + http3
+        Metric(label: label + " responses", value: Format.count(total),
+               note: "HTTP/3 \(Format.count(http3)), HTTP/1.1 \(Format.count(http1))",
+               color: total > 0 ? problem : .primary)
     }
 }
 
@@ -424,6 +704,17 @@ struct Dashboard: View {
                     .background(Environment.current.theme.panel)
                     .cornerRadius(8)
                     HStack(spacing: 12) {
+                        StatusMetric(label: "2xx", http1: session.http1Status.success, http3: session.http3Status.success)
+                        StatusMetric(label: "3xx", http1: session.http1Status.redirect, http3: session.http3Status.redirect)
+                        StatusMetric(label: "4xx", http1: session.http1Status.client_error, http3: session.http3Status.client_error,
+                                     problem: Palette.warning)
+                        StatusMetric(label: "5xx", http1: session.http1Status.server_error, http3: session.http3Status.server_error,
+                                     problem: Palette.bad)
+                    }
+                    .padding(14)
+                    .background(Environment.current.theme.panel)
+                    .cornerRadius(8)
+                    HStack(spacing: 12) {
                         TransportCard(row: rows[0])
                         TransportCard(row: rows[1])
                     }
@@ -431,9 +722,16 @@ struct Dashboard: View {
                         TransportCard(row: rows[2])
                         TransportCard(row: rows[3])
                     }
+                    if let router = session.router {
+                        RouterPanel(stats: router, rates: session.routerRates, ageMs: session.routerAgeMs)
+                    }
+                    if session.routerUnreadable {
+                        Text("This server sends router stats that this version of the monitor can't read.",
+                             color: Palette.warning, font: Fonts.small)
+                    }
                     Text("HTTP/1.1: \(session.http1HandshakeFailures) handshake failures, \(session.http1Throttled) throttled. Totals above include these.",
                         color: .secondary, font: Fonts.small)
-                    Text("Payload bytes, not wire bytes. Streaming data frames are excluded. Charts cover the last \(historyLength) samples and scale independently.",
+                    Text("Payload bytes, not wire bytes. Streaming data frames are excluded. Charts cover the last \(historyLength) samples and scale independently. Latency is handler time for RPC, and time to the response headers for HTTP/3; percentiles are accurate to about a factor of two.",
                         color: .secondary, font: Fonts.small)
                 }
             }

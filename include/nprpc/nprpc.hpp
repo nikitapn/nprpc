@@ -637,6 +637,7 @@ struct BuildConfig {
   bool telemetry_enabled = false;
   uint32_t telemetry_min_interval_ms = 250;
   bool telemetry_allow_anonymous = false;
+  std::string telemetry_router_stats_file;
   LogLevel log_level = static_cast<LogLevel>(NPRPC_DEFAULT_LOG_LEVEL_U32);
   uuid_t uuid;
 
@@ -756,6 +757,13 @@ public:
   RpcBuilderBase& allow_anonymous_telemetry(bool allowed = true) noexcept
   {
     cfg_->telemetry_allow_anonymous = allowed;
+    return *this;
+  }
+  /// Add npquicrouter's stats file to each telemetry snapshot, so a monitor can
+  /// read the router through this server.
+  RpcBuilderBase& telemetry_router_stats_file(std::string_view path)
+  {
+    cfg_->telemetry_router_stats_file = path;
     return *this;
   }
   /// Verify outbound QUIC servers using system trust (empty ca_file) or the

@@ -53,7 +53,7 @@ public:
 };
 
 // The stream frame owns its start time rather than a pointer to the servant.
-StreamWriter<monitor::Snapshot> samples(Clock::time_point started, WatchSlot)
+StreamWriter<monitor::Snapshot> samples(Clock::time_point started, std::string router_stats_file, WatchSlot)
 {
   for (;;) {
     monitor::Snapshot snapshot;
@@ -63,10 +63,18 @@ StreamWriter<monitor::Snapshot> samples(Clock::time_point started, WatchSlot)
       const auto c = read_telemetry(transport);
       snapshot.transports.push_back({transport, c.completed, c.errors,
           c.received_bytes, c.sent_bytes, c.dispatch_ns,
-          c.handshake_failures, c.throttled, c.active_connections, c.active_streams});
+          c.handshake_failures, c.throttled, c.active_connections, c.active_streams,
+          {c.latency.begin(), c.latency.end()}});
     }
     snapshot.http1_handshake_failures = read_http1_handshake_failures();
     snapshot.http1_throttled = read_http1_throttled();
+    snapshot.http1_status = read_http1_status();
+    snapshot.http3_status = read_http3_status();
+    if (!router_stats_file.empty()) {
+      auto router = read_router_stats(router_stats_file);
+      snapshot.router_stats_json = std::move(router.json);
+      snapshot.router_stats_age_ms = router.age_ms;
+    }
     co_yield snapshot;
   }
 }
@@ -74,9 +82,11 @@ StreamWriter<monitor::Snapshot> samples(Clock::time_point started, WatchSlot)
 class TelemetryService final : public monitor::IMonitor_Servant {
   const Clock::time_point started_ = Clock::now();
   const uint32_t min_interval_ms_;
+  const std::string router_stats_file_;
   const std::shared_ptr<WatchLimits> limits_ = std::make_shared<WatchLimits>();
 public:
-  explicit TelemetryService(uint32_t min_interval_ms) : min_interval_ms_(min_interval_ms) {}
+  TelemetryService(uint32_t min_interval_ms, std::string router_stats_file)
+    : min_interval_ms_(min_interval_ms), router_stats_file_(std::move(router_stats_file)) {}
   void dispatch(SessionContext& ctx, bool from_parent) override
   {
     // Activation flags advertise endpoints; enforce the management boundary
@@ -96,7 +106,7 @@ public:
       make_simple_answer(ctx, MessageId::Error_BadAccess);
       throw Exception("Too many telemetry watches");
     }
-    auto writer = samples(started_, WatchSlot(limits_, &ctx));
+    auto writer = samples(started_, router_stats_file_, WatchSlot(limits_, &ctx));
     writer.set_interval(std::chrono::milliseconds(
         std::clamp(interval_ms, min_interval_ms_, uint32_t{10000})));
     return writer;
@@ -104,11 +114,11 @@ public:
 };
 }
 
-void RpcImpl::start_telemetry(uint32_t min_interval_ms)
+void RpcImpl::start_telemetry(uint32_t min_interval_ms, std::string router_stats_file)
 {
   auto* poa = create_poa().with_max_objects(1)
       .with_lifespan(PoaPolicy::Lifespan::Persistent).build();
-  auto service = std::make_unique<TelemetryService>(min_interval_ms);
+  auto service = std::make_unique<TelemetryService>(min_interval_ms, std::move(router_stats_file));
   const auto id = poa->activate_object(service.get(), ObjectActivationFlags::quic);
   service.release(); // the persistent POA owns the activated servant
   telemetry_reference_ = id.to_string();

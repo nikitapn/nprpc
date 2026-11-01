@@ -2343,7 +2343,7 @@ Http3Stream* Http3Connection::find_stream(int64_t stream_id)
 }
 
 // CONNECT is excluded so WebTransport sessions do not count as page requests.
-static void finish_http_telemetry(Http3Stream* stream, uint64_t sent, bool error)
+static void finish_http_telemetry(Http3Stream* stream, uint64_t sent, unsigned status)
 {
   if (!telemetry_enabled() || stream->telemetry_recorded || stream->method == "CONNECT")
     return;
@@ -2352,7 +2352,8 @@ static void finish_http_telemetry(Http3Stream* stream, uint64_t sent, bool error
   const auto elapsed = stream->telemetry_start == std::chrono::steady_clock::time_point{}
     ? std::chrono::nanoseconds{0} : std::chrono::steady_clock::now() - stream->telemetry_start;
   record_telemetry(monitor::Transport::Http3, stream->telemetry_received_bytes, sent,
-    std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count(), error);
+    std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count(), status >= 500);
+  record_http3_status(status);
 }
 
 Http3Stream* Http3Connection::create_stream(int64_t stream_id)
@@ -2990,7 +2991,7 @@ Http3Connection::make_response_headers(Http3Stream* stream,
                                        bool include_cors,
                                        bool preflight)
 {
-  finish_http_telemetry(stream, stream->method == "HEAD" ? 0 : content_length, status_code >= 500);
+  finish_http_telemetry(stream, stream->method == "HEAD" ? 0 : content_length, status_code);
   auto& prepared = stream->response_headers;
   prepared.headers.clear();
   prepared.status = std::to_string(status_code);
@@ -3105,7 +3106,7 @@ int Http3Connection::send_not_modified(
   // nghttp3 finishes draining the 304 headers (stream close).
   stream->cached_file = std::move(cached_file);
 
-  finish_http_telemetry(stream, 0, false);
+  finish_http_telemetry(stream, 0, 304);
   auto& prepared = stream->response_headers;
   prepared.headers.clear();
   prepared.status = "304";

@@ -298,6 +298,7 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.telemetry_enabled = config->telemetry_enabled;
         cxxConfig.telemetry_min_interval_ms = config->telemetry_min_interval_ms;
         cxxConfig.telemetry_allow_anonymous = config->telemetry_allow_anonymous;
+        cxxConfig.telemetry_router_stats_file = config->telemetry_router_stats_file;
         cxxConfig.log_level = static_cast<nprpc::LogLevel>(config->log_level);
         std::memcpy(&cxxConfig.uuid, config->uuid, 16);
         cxxConfig.tcp_port = config->tcp_port;

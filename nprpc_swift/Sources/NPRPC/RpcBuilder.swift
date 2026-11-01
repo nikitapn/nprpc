@@ -11,6 +11,7 @@ class BuildConfig {
     var telemetryEnabled = false
     var telemetryMinIntervalMs: UInt32 = 250
     var telemetryAllowAnonymous = false
+    var telemetryRouterStatsFile = ""
     var logLevel: LogLevel = .warn
     var hostname: String = ""
 
@@ -78,6 +79,10 @@ public protocol RpcBuilderProtocol {
     /// enableTelemetry requires requireClientCertificates.
     @discardableResult
     func allowAnonymousTelemetry(_ allowed: Bool) -> Self
+    /// Add npquicrouter's stats file to each telemetry snapshot, so a monitor
+    /// can read the router through this server.
+    @discardableResult
+    func telemetryRouterStatsFile(_ path: String) -> Self
 
     /// TLS trust and optional identity for outbound QUIC connections.
     @discardableResult
@@ -163,6 +168,12 @@ extension RpcBuilderInternal {
     }
 
     @discardableResult
+    public func telemetryRouterStatsFile(_ path: String) -> Self {
+        config.telemetryRouterStatsFile = path
+        return self
+    }
+
+    @discardableResult
     public func setLogLevel(_ level: LogLevel) -> Self {
         config.logLevel = level
         return self
@@ -210,6 +221,7 @@ extension RpcBuilderInternal {
         cxxConfig.telemetry_enabled = config.telemetryEnabled
         cxxConfig.telemetry_min_interval_ms = config.telemetryMinIntervalMs
         cxxConfig.telemetry_allow_anonymous = config.telemetryAllowAnonymous
+        cxxConfig.telemetry_router_stats_file = std.string(config.telemetryRouterStatsFile)
         cxxConfig.log_level = UInt32(config.logLevel.rawValue)
 
         // Hostname
