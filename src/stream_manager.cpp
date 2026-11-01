@@ -433,6 +433,22 @@ void StreamManager::unregister_reader(uint64_t stream_id,
   }
 }
 
+void StreamManager::discard_reader(uint64_t stream_id)
+{
+  NPRPC_STREAM_MANAGER_LOG_TRACE("Discarding reader: stream_id={}", stream_id);
+  std::lock_guard delivery(reader_delivery_mutex_);
+  std::unique_ptr<StreamReaderBase> owned_reader;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = readers_.find(stream_id);
+    if (it == readers_.end()) return;
+    owned_reader = std::move(it->second.owned_reader);
+    readers_.erase(it);
+  }
+  if (chunk_deliveries_ > 0 && owned_reader)
+    discarded_readers_.push_back(std::move(owned_reader));
+}
+
 void StreamManager::set_reader_unreliable(uint64_t stream_id, bool unreliable)
 {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -485,12 +501,14 @@ void StreamManager::on_chunk_received(flat_buffer&& fb)
     }
   }
 
+  ++chunk_deliveries_;
   for (auto& ready_fb : ready_chunks) {
     reader->on_chunk_received(std::move(ready_fb));
   }
   if (should_complete && reader) {
     reader->on_complete();
   }
+  if (--chunk_deliveries_ == 0) discarded_readers_.clear();
 }
 
 void StreamManager::on_stream_complete(uint64_t stream_id, uint64_t final_sequence)

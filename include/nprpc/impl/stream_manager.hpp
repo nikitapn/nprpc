@@ -111,6 +111,10 @@ public:
   void register_reader(uint64_t stream_id, StreamReaderBase* reader);
   void register_reader(uint64_t stream_id, std::unique_ptr<StreamReaderBase> reader);
   void unregister_reader(uint64_t stream_id, StreamReaderBase* reader);
+  // Forgets a stream's reader, whatever it is, for a client that has given up on
+  // the stream. Chunks still arriving are dropped. Safe from inside a delivery
+  // to that same reader: it's destroyed once the delivery ends.
+  void discard_reader(uint64_t stream_id);
   void set_reader_unreliable(uint64_t stream_id, bool unreliable);
 
   // Handle incoming messages
@@ -268,6 +272,10 @@ private:
   // is delivered.  Recursive because a delivery can end up destroying a reader.
   // Taken before mutex_, never while holding it.
   std::recursive_mutex reader_delivery_mutex_;
+  // Both guarded by reader_delivery_mutex_. A chunk delivery calls its reader
+  // without owning it, so one discarded meanwhile has to outlive that call.
+  int chunk_deliveries_ = 0;
+  std::vector<std::unique_ptr<StreamReaderBase>> discarded_readers_;
 
   bool is_stream_started(uint64_t stream_id) const;
   // Returns false without dispatching if the owning session has died, and

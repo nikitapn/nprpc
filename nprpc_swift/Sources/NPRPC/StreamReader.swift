@@ -91,6 +91,9 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     internal var windowUpdateFn: (() -> Void)?
     // Tells the producer to stop. Set by createStreamManagerReader.
     internal var sendCancelFn: (() -> Void)?
+    // Removes this reader from its stream manager, which holds it alive until
+    // the stream ends. Set by createStreamManagerReader.
+    internal var discardFn: (() -> Void)?
     private var finished = false
     private let finishedLock = NSLock()
     // Set via retainStreamManager() by createStreamManagerReader — nil for
@@ -191,6 +194,7 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
             // exception escaping the C callback or a reason to keep decoding.
             if !markFinished() {
                 continuation.finish(throwing: error)
+                discardFn?()
                 sendCancelFn?()
             }
         }
@@ -210,7 +214,17 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
 
     /// Stops the stream: the local loop throws, and the producer is told to stop.
     public func cancel() {
-        if !markFinished() { sendCancelFn?() }
+        if !markFinished() {
+            discardFn?()
+            sendCancelFn?()
+        }
+        continuation.finish(throwing: CancellationError())
+    }
+
+    /// For a stream that never opened: forgets the reader without telling the
+    /// producer, since there isn't one. Used by generated code.
+    public func abandon() {
+        if !markFinished() { discardFn?() }
         continuation.finish(throwing: CancellationError())
     }
 
@@ -310,6 +324,36 @@ public func unmarshal_stream_fundamental_vector<T>(data: UnsafeRawPointer, offse
     unmarshal_fundamental_vector(buffer: data, offset: offset)
 }
 
+/// Sends a prepared StreamInit and arms the stream if the server accepts it.
+/// Returns true if the reply is an IDL exception, which is left in `buffer`, and
+/// throws for anything else that isn't success. `onFailure` runs before either,
+/// to clean up what was registered for the stream. Used by generated code.
+public func openStream(
+    session: UnsafeMutableRawPointer,
+    buffer: FlatBuffer,
+    timeout: UInt32,
+    onFailure: () -> Void
+) throws -> Bool {
+    var failure: RpcError?
+    let status = withUnsafeMutablePointer(to: &failure) { context in
+        nprpc_session_stream_init(session, buffer.handle, timeout, context) { context, error in
+            guard let context, let error else { return }
+            context.assumingMemoryBound(to: RpcError?.self).pointee = RpcError(bridge: error.pointee)
+        }
+    }
+    if status == 0 { return false }
+    onFailure()
+    switch status {
+    case 1:
+        return true
+    case 2:
+        _ = try handleStandardReply(buffer: buffer)
+        throw RuntimeError(message: "The server sent an unknown reply to StreamInit")
+    default:
+        throw failure ?? RpcError(kind: .internalError, message: "StreamInit failed")
+    }
+}
+
 /// A reader for stream `streamId` opened through a proxy's object handle.
 /// Used by generated code.
 public func createObjectStreamReader<T: Sendable>(
@@ -359,6 +403,7 @@ public func createStreamManagerReader<T: Sendable>(
     reader.retainStreamManager(streamManager)
     // The reader's share of the manager's lifetime keeps this pointer valid.
     reader.sendCancelFn = { nprpc_stream_manager_send_cancel(streamManager, streamId) }
+    reader.discardFn = { nprpc_stream_manager_discard_reader(streamManager, streamId) }
     let context = reader.makeBridgeContext()
     nprpc_stream_manager_register_reader(
         streamManager,

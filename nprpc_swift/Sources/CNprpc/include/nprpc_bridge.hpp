@@ -573,6 +573,9 @@ void nprpc_stream_manager_send_complete(void* stream_manager, uint64_t stream_id
 // Send stream cancellation via stream_manager
 void nprpc_stream_manager_send_cancel(void* stream_manager, uint64_t stream_id);
 
+// Forget a stream's reader, releasing its on_destroy context.
+void nprpc_stream_manager_discard_reader(void* stream_manager, uint64_t stream_id);
+
 // Send stream error via stream_manager (server -> client)
 void nprpc_stream_manager_send_error(
     void* stream_manager,
@@ -695,7 +698,18 @@ int nprpc_stream_send_init(
     uint32_t timeout_ms);
 
 // Send StreamInit over an already selected Session* and arm the exact same
-// session's StreamManager after the reply succeeds.
+// session's StreamManager after the reply succeeds. Returns 0 on success, 1 if
+// the reply is an IDL exception, and 2 if it's a standard error reply; for both,
+// the reply is in the buffer. Returns -1 otherwise, after reporting why through
+// on_error, whose error is borrowed for the duration of the callback.
+int nprpc_session_stream_init(
+    void* session_ptr,
+    void* buffer_ptr,
+    uint32_t timeout_ms,
+    void* context,
+    void (*on_error)(void* context, const NprpcBridgeError* error));
+
+// The same with no error details, for stubs generated before it existed.
 int nprpc_session_stream_send_init(
     void* session_ptr,
     void* buffer_ptr,

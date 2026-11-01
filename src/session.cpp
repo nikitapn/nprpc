@@ -43,7 +43,9 @@ boost::system::error_code Session::do_send_receive(flat_buffer&, uint32_t)
 
 void Session::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 {
-  if (do_send_receive(buffer, timeout_ms)) throw nprpc::ExceptionCommFailure();
+  const auto ec = do_send_receive(buffer, timeout_ms);
+  if (ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();
+  if (ec) throw nprpc::ExceptionCommFailure();
 }
 
 Result<void> Session::send_receive_result(flat_buffer& buffer, uint32_t timeout_ms) noexcept

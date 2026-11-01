@@ -35,8 +35,8 @@ auto capture_result(F&& fn, ErrorCode exception_code = ErrorCode::internal_error
     return fn();
   } catch (const nprpc::ExceptionCommFailure& e) {
     return std::unexpected(Error(ErrorCode::connection_failure, e.what.c_str()));
-  } catch (const nprpc::ExceptionTimeout& e) {
-    return std::unexpected(Error(ErrorCode::timeout, e.what()));
+  } catch (const nprpc::ExceptionTimeout&) {
+    return std::unexpected(Error(ErrorCode::timeout, "Timed out"));
   } catch (const nprpc::OperationCancelled& e) {
     return std::unexpected(Error(ErrorCode::cancelled, e.what()));
   } catch (const boost::system::system_error& e) {

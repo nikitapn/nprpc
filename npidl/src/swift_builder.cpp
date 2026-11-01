@@ -1259,14 +1259,19 @@ void SwiftBuilder::emit_client_stream_method(AstInterfaceDecl* ifs, AstFunctionD
     assert(false);
   }
 
-  out << bl() << "let result = nprpc_session_stream_send_init(session, buffer.handle, self.timeout)\n";
-  // result mirrors handle_standart_reply: 0=Success, 1=Exception, other=error.
-  // On Exception the reply body remains in `buffer` (send_receive overwrote it).
+  // A reader registered above would otherwise stay registered until the session closes.
+  const char* const on_failure = fn->stream_kind == StreamKind::Server ? "reader.abandon()"
+                               : fn->stream_kind == StreamKind::Bidi   ? "stream.reader.abandon()"
+                                                                       : "";
+  out << bl() << "let hasException = try NPRPC.openStream(session: session, buffer: buffer, timeout: self.timeout, onFailure: { "
+      << on_failure << " })\n";
+  // The reply body remains in `buffer` (send_receive overwrote it).
   if (fn->is_throwing()) {
-    out << bl() << "if result == 1 { throw " << ctx_->current_file()
+    out << bl() << "if hasException { throw " << ctx_->current_file()
         << "_throwException(buffer: buffer) }\n";
+  } else {
+    out << bl() << "if hasException { throw RuntimeError(message: \"The server raised an exception this method doesn't declare\") }\n";
   }
-  out << bl() << "if result != 0 { throw RuntimeError(message: \"StreamInit failed (code: \\(result))\") }\n";
 
   switch (fn->stream_kind) {
   case StreamKind::Server:

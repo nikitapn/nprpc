@@ -5,6 +5,7 @@
 
 import XCTest
 import Foundation
+import CNprpc
 @testable import NPRPC
 
 // MARK: - Shared servant implementations
@@ -1619,6 +1620,24 @@ final class IntegrationTests: XCTestCase {
         }
         let client = narrow(obj, to: TestStreams.self)!
         XCTAssertTrue(client.classId.hasPrefix("nprpc_test/nprpc.test.TestStreams#"))
+
+        // The stream manager holds a reader alive until its stream ends, so giving
+        // up on a stream has to release it. These IDs are never opened, so nothing
+        // ends them for us.
+        let session = try XCTUnwrap(nprpc_object_get_session(client.handle))
+        let streamManager = try XCTUnwrap(nprpc_session_get_stream_manager(session))
+        for (index, giveUp) in [
+            { (reader: NPRPCStreamReader<UInt8>) in reader.cancel() },
+            { (reader: NPRPCStreamReader<UInt8>) in reader.abandon() },
+        ].enumerated() {
+            var reader: NPRPCStreamReader<UInt8>? = createStreamManagerReader(
+                streamManager: streamManager, streamId: 0x7000 + UInt64(index), buffer: FlatBuffer()
+            ) { data, _ in data.load(as: UInt8.self) }
+            weak let released = reader
+            giveUp(reader!)
+            reader = nil
+            XCTAssertNil(released, "giving up on a stream must release its reader")
+        }
 
         let stream = try client.getByteStream(size: 5)
         var receivedValues: [UInt8] = []

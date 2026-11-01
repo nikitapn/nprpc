@@ -206,3 +206,88 @@ TEST(StreamTeardown, DestroyingTheManagerIsNotADeadlock)
   ASSERT_TRUE(finishes_within(5s, [&m] { m->mgr.reset(); }))
       << "~StreamManager deadlocked";
 }
+
+namespace {
+
+struct CountingReader : StreamReaderBase {
+  std::atomic<int>* destroyed;
+  std::function<void()> on_chunk;
+  std::atomic<int> chunks{0};
+
+  explicit CountingReader(std::atomic<int>* d, std::function<void()> f = {})
+      : destroyed(d), on_chunk(std::move(f)) {}
+  ~CountingReader() override { ++*destroyed; }
+
+  void on_chunk_received(flat_buffer) override
+  {
+    ++chunks;
+    if (on_chunk) on_chunk();
+  }
+  void on_complete() override {}
+  void on_error(uint32_t, flat_buffer) override {}
+};
+
+flat_buffer make_chunk(uint64_t stream_id, uint64_t sequence)
+{
+  flat_buffer fb;
+  const size_t size = sizeof(impl::flat::Header) + sizeof(impl::flat::StreamChunk);
+  fb.prepare(size);
+  fb.commit(size);
+  impl::flat::StreamChunk_Direct chunk(fb, sizeof(impl::flat::Header));
+  chunk.stream_id() = stream_id;
+  chunk.sequence() = sequence;
+  return fb;
+}
+
+} // namespace
+
+// A client that gives up on a stream must not leave its reader behind: nothing
+// else removes it until the session closes.
+TEST(StreamReaderDiscard, FreesTheReaderAndIgnoresLateChunks)
+{
+  BareManager m;
+  std::atomic<int> destroyed{0};
+  auto owned = std::make_unique<CountingReader>(&destroyed);
+  m.mgr->register_reader(7, std::move(owned));
+
+  m.mgr->discard_reader(7);
+  EXPECT_EQ(destroyed.load(), 1);
+
+  m.mgr->on_chunk_received(make_chunk(7, 0)); // Was already on its way.
+  m.mgr->on_stream_complete(7, 0);
+  m.mgr->discard_reader(7);                   // Harmless the second time.
+  EXPECT_EQ(destroyed.load(), 1);
+}
+
+// A reader that fails to decode a chunk discards itself from inside the delivery,
+// which is still using it.
+TEST(StreamReaderDiscard, FromInsideADeliveryWaitsForItToEnd)
+{
+  BareManager m;
+  std::atomic<int> destroyed{0};
+  int destroyed_during_delivery = -1;
+  auto owned = std::make_unique<CountingReader>(&destroyed, [&] {
+    m.mgr->discard_reader(9);
+    destroyed_during_delivery = destroyed.load();
+  });
+  m.mgr->register_reader(9, std::move(owned));
+
+  m.mgr->on_chunk_received(make_chunk(9, 0));
+  EXPECT_EQ(destroyed_during_delivery, 0);
+  EXPECT_EQ(destroyed.load(), 1);
+}
+
+TEST(StreamReaderDiscard, LeavesOtherStreamsAlone)
+{
+  BareManager m;
+  std::atomic<int> destroyed{0};
+  auto kept = std::make_unique<CountingReader>(&destroyed);
+  auto* kept_ptr = kept.get();
+  m.mgr->register_reader(1, std::move(kept));
+  m.mgr->register_reader(2, std::make_unique<CountingReader>(&destroyed));
+
+  m.mgr->discard_reader(2);
+  m.mgr->on_chunk_received(make_chunk(1, 0));
+  EXPECT_EQ(kept_ptr->chunks.load(), 1);
+  EXPECT_EQ(destroyed.load(), 1);
+}

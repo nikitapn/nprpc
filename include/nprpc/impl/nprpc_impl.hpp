@@ -588,6 +588,13 @@ NPRPC_API void dump_message(flat_buffer& buffer, bool rx);
 //  0 - Success
 //  1 - exception
 // -1 - not handled
+// The reply's message ID, or nothing if the buffer can't hold a header.
+inline std::optional<MessageId> reply_message_id(const flat_buffer& buf) noexcept
+{
+  if (buf.size() < sizeof(impl::flat::Header)) return std::nullopt;
+  return static_cast<const impl::flat::Header*>(buf.cdata().data())->msg_id;
+}
+
 inline int handle_standart_reply(flat_buffer& buf)
 {
   if (buf.size() < sizeof(impl::flat::Header)) {

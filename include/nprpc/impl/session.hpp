@@ -65,8 +65,8 @@ protected:
                            nprpc::flat_buffer& tx_buffer);
 
 public:
-  // Throwing API used by generated stubs; timeouts raise ExceptionCommFailure
-  // unless a transport overrides this.
+  // Throwing API used by generated stubs: ExceptionTimeout if no reply came in
+  // time, and ExceptionCommFailure for any other transport failure.
   NPRPC_API virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms);
 
   // Coroutine variant — suspends the caller until the response arrives.

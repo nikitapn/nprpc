@@ -406,7 +406,7 @@ TEST_F(SessionResultTests, SocketTimeoutPreservesNativeErrorAndLegacyException) 
     EXPECT_EQ(result.error().native_code, expected.value());
     EXPECT_STREQ(result.error().native_category.data(), expected.category().name());
     auto legacy_request = request_for_unknown_poa();
-    EXPECT_THROW(runtime().call(endpoint, legacy_request, 30), nprpc::ExceptionCommFailure);
+    EXPECT_THROW(runtime().call(endpoint, legacy_request, 30), nprpc::ExceptionTimeout);
 }
 #endif
 

@@ -2843,13 +2843,6 @@ public:
   ~QuicNgtcp2ClientSession() override { current_conn()->close(); }
   void shutdown() override { current_conn()->close(); }
 
-  void send_receive(flat_buffer& buf, uint32_t timeout_ms) override
-  {
-    const auto ec = do_send_receive(buf, timeout_ms);
-    if (ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();
-    if (ec) throw nprpc::ExceptionCommFailure();
-  }
-
   boost::system::error_code do_send_receive(flat_buffer& buf, uint32_t timeout_ms) override
   {
     // The thread that would deliver the reply cannot also wait for it.

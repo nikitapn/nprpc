@@ -188,7 +188,7 @@ enum LinkState: Equatable {
                     self.status = "Stream ended, reconnect to resume"
                 }
             } catch {
-                let message = String(describing: error)
+                let message = (error as? NPRPCError)?.message ?? String(describing: error)
                 MainQueue.async { [weak self] in
                     guard let self, self.generation == token else { return }
                     self.clearLiveValues()

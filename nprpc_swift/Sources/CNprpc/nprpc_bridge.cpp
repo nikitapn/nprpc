@@ -1425,6 +1425,11 @@ void nprpc_stream_manager_send_cancel(void* stream_manager, uint64_t stream_id) 
     mgr->send_cancel(stream_id);
 }
 
+void nprpc_stream_manager_discard_reader(void* stream_manager, uint64_t stream_id) {
+    if (auto* mgr = static_cast<nprpc::impl::StreamManager*>(stream_manager))
+        mgr->discard_reader(stream_id);
+}
+
 void nprpc_stream_manager_send_error(
     void* stream_manager,
     uint64_t stream_id,
@@ -1726,34 +1731,53 @@ int nprpc_stream_send_init(
     return nprpc_session_stream_send_init(session, buffer_ptr, timeout_ms);
 }
 
+int nprpc_session_stream_init(
+    void* session_ptr,
+    void* buffer_ptr,
+    uint32_t timeout_ms,
+    void* context,
+    void (*on_error)(void* context, const NprpcBridgeError* error))
+{
+    const auto fail = [&](const nprpc_swift::detail::BridgeError& error) {
+        if (on_error) {
+            const auto view = error.view();
+            on_error(context, &view);
+        }
+        return -1;
+    };
+    auto* session = static_cast<nprpc::impl::Session*>(session_ptr);
+    auto* buf = static_cast<nprpc::flat_buffer*>(buffer_ptr);
+    if (!session || !buf)
+        return fail({NPRPC_BRIDGE_INVALID_ARGUMENT, "Invalid StreamInit arguments"});
+
+    nprpc::impl::flat::StreamInit_Direct init(*buf, sizeof(nprpc::impl::Header));
+    const auto stream_id = init.stream_id();
+
+    const auto sent = session->send_receive_result(*buf, timeout_ms);
+    if (!sent) return fail(sent.error());
+
+    const auto reply = nprpc::impl::reply_message_id(*buf);
+    if (!reply) return fail({NPRPC_BRIDGE_INTERNAL_ERROR, "StreamInit reply is too short"});
+    if (*reply == nprpc::impl::MessageId::Exception) return 1;
+    if (*reply != nprpc::impl::MessageId::Success) return 2;
+
+    const auto started = nprpc_swift::detail::capture([&]() -> nprpc::Result<void> {
+        if (session->ctx().stream_manager) {
+            session->ctx().stream_manager->defer_stream_start(stream_id);
+            session->ctx().stream_manager->on_reply_sent();
+        }
+        return {};
+    });
+    return started ? 0 : fail(started.error());
+}
+
 int nprpc_session_stream_send_init(
     void* session_ptr,
     void* buffer_ptr,
     uint32_t timeout_ms)
 {
-    auto* session = static_cast<nprpc::impl::Session*>(session_ptr);
-    auto* buf = static_cast<nprpc::flat_buffer*>(buffer_ptr);
-    if (!session || !buf) return -1;
-
-    nprpc::impl::flat::StreamInit_Direct init(*buf, sizeof(nprpc::impl::Header));
-    const auto stream_id = init.stream_id();
-
-    try {
-        if (!session->send_receive_result(*buf, timeout_ms)) return -1;
-        const auto std_reply = nprpc::impl::handle_standart_reply(*buf);
-        if (std_reply != 0) {
-            return std_reply;
-        }
-
-        if (session->ctx().stream_manager) {
-            session->ctx().stream_manager->defer_stream_start(stream_id);
-            session->ctx().stream_manager->on_reply_sent();
-        }
-
-        return 0;
-    } catch (...) {
-        return -1;
-    }
+    const int result = nprpc_session_stream_init(session_ptr, buffer_ptr, timeout_ms, nullptr, nullptr);
+    return result == 2 ? -1 : result;
 }
 
 } // extern "C"

@@ -285,8 +285,8 @@ final public class Monitor: NPRPCObject, @unchecked Sendable {
     }
 
     let reader = NPRPC.createStreamManagerReader(streamManager: streamManager, streamId: streamId, buffer: buffer, unreliable: false, producerWindow: defaultReaderWindow, deserializer: { (data: UnsafeRawPointer, size: Int) in guard check_payload_2(buffer: data, bufferSize: size, offset: 0) else { throw NPRPC.BufferError(message: "Invalid stream payload (malformed data or incompatible IDL contract)") }; return unmarshal_Snapshot(buffer: data, offset: 0) })
-    let result = nprpc_session_stream_send_init(session, buffer.handle, self.timeout)
-    if result != 0 { throw RuntimeError(message: "StreamInit failed (code: \(result))") }
+    let hasException = try NPRPC.openStream(session: session, buffer: buffer, timeout: self.timeout, onFailure: { reader.abandon() })
+    if hasException { throw RuntimeError(message: "The server raised an exception this method doesn't declare") }
     return reader
   }
 
