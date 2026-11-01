@@ -256,10 +256,6 @@ public:
 
   boost::system::error_code do_send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
 
-  nprpc::Task<> send_receive_coro(flat_buffer& buffer,
-                                   uint32_t timeout_ms,
-                                   std::stop_token st = {}) override;
-
   void send_receive_async(
       flat_buffer&& buffer,
       std::optional<std::function<void(const boost::system::error_code&,

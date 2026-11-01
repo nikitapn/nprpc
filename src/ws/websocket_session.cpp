@@ -280,43 +280,6 @@ boost::system::error_code WebSocketSession<Derived>::do_send_receive(flat_buffer
   return ec;
 }
 
-template <class Derived>
-nprpc::Task<> WebSocketSession<Derived>::send_receive_coro(flat_buffer& buffer,
-                                                            uint32_t timeout_ms,
-                                                            std::stop_token /*st*/)
-{
-  struct Awaiter {
-    WebSocketSession& self;
-    flat_buffer&      buf;
-    uint32_t          timeout_ms;
-    boost::system::error_code result_ec;
-
-    bool await_ready() noexcept { return false; }
-
-    void await_suspend(std::coroutine_handle<> h) noexcept
-    {
-      self.send_receive_async(
-          std::move(buf),
-          [this, h](const boost::system::error_code& ec,
-                    flat_buffer& response) mutable {
-            result_ec = ec;
-            if (!ec)
-              buf = std::move(response);
-            h.resume();
-          },
-          timeout_ms);
-    }
-
-    void await_resume()
-    {
-      if (result_ec)
-        throw nprpc::ExceptionCommFailure();
-    }
-  };
-
-  co_await Awaiter{*this, buffer, timeout_ms};
-}
-
 // Called outside of strand context, so we need to ensure thread safety
 template <class Derived>
 void WebSocketSession<Derived>::send_receive_async(

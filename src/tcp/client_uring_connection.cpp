@@ -588,6 +588,7 @@ public:
       CoroWaiter             waiter{};  // frame-local; pointer stored in map
       // stop_callback is optional — only constructed when st.stop_possible()
       std::optional<std::stop_callback<std::function<void()>>> stop_cb;
+      bool armed = false; // Guarded by pending_mutex_, like the waiter's entry.
 
       bool await_ready() noexcept { return false; }
 
@@ -611,25 +612,18 @@ public:
             if (it != self->pending_requests_.end()) {
               waiter.status = -2; // cancelled
               self->pending_requests_.erase(it);
-              boost::asio::post(self->exec_,
-                  [h = waiter.continuation]() { h.resume(); });
+              // Not until emplace below has returned: a resume can end this
+              // frame, and emplace is still writing to it.
+              if (armed)
+                boost::asio::post(self->exec_,
+                    [h = waiter.continuation]() { h.resume(); });
             }
           });
-          // If stop was already requested before we armed the callback, the
-          // callback fires synchronously inside the emplace above and the
-          // waiter is already removed.  Check whether we are still registered.
-          if (st.stop_requested()) {
-            std::lock_guard lk(self->pending_mutex_);
-            auto it = self->pending_requests_.find(rid);
-            if (it == self->pending_requests_.end()) {
-              // The stop_callback fired synchronously inside emplace above
-              // (stop was already requested).  It already posted h.resume()
-              // on exec_ — returning false here would cause a second resume
-              // (UB).  Return true instead so the single exec_-posted resume
-              // is the only path.
-              return true;
-            }
-          }
+          // A stop request may have run the callback already, inside emplace.
+          // From here on one that comes later posts the resume itself.
+          std::lock_guard lk(self->pending_mutex_);
+          armed = true;
+          if (waiter.status == -2) return false; // Resume now, nothing was sent.
         }
 
         bool ok;

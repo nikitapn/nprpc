@@ -2884,43 +2884,6 @@ public:
     return {};
   }
 
-  nprpc::Task<> send_receive_coro(flat_buffer& buf,
-                                   uint32_t timeout_ms,
-                                   std::stop_token /*st*/) override
-  {
-    auto conn = connected_conn(timeout_ms);
-
-    struct Awaiter {
-      QuicNgtcp2ClientConn& conn;
-      flat_buffer&          buf;
-      uint32_t              timeout_ms;
-      boost::system::error_code result_ec;
-
-      bool await_ready() noexcept { return false; }
-
-      void await_suspend(std::coroutine_handle<> h)
-      {
-        conn.send_receive_async(
-            std::move(buf),
-            [this, h](const boost::system::error_code& ec,
-                      flat_buffer& resp) {
-              result_ec = ec;
-              if (!ec) buf = std::move(resp);
-              h.resume();
-            },
-            timeout_ms);
-      }
-
-      void await_resume()
-      {
-        if (result_ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();
-        if (result_ec) throw nprpc::ExceptionCommFailure();
-      }
-    };
-
-    co_await Awaiter{*conn, buf, timeout_ms};
-  }
-
   void send_receive_async(
       flat_buffer&&                          buf,
       std::optional<std::function<void(

@@ -1,6 +1,11 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include <coroutine>
+#include <memory>
+#include <mutex>
+#include <stop_token>
+#include <utility>
 #include <optional>
 
 #include <nprpc/stream_base.hpp>
@@ -63,6 +68,85 @@ Result<void> Session::send_receive_async_result(
   return start_result_operation(std::move(handler), [&](auto completion) {
     send_receive_async(std::move(buffer), std::move(completion), timeout_ms);
   });
+}
+
+nprpc::Task<> Session::send_receive_coro(flat_buffer& buffer,
+                                         uint32_t timeout_ms,
+                                         std::stop_token st)
+{
+  // Outlives this coroutine: a cancelled call leaves its frame behind while the
+  // transport still holds the completion handler, until the reply or timeout.
+  struct Call {
+    std::mutex mutex;
+    std::coroutine_handle<> waiting;
+    bool finished = false;
+    bool cancelled = false;
+    boost::system::error_code ec;
+    flat_buffer response;
+
+    // The handle to resume, if this is what finished the call.
+    std::coroutine_handle<> finish(bool cancel) noexcept
+    {
+      std::lock_guard lock(mutex);
+      if (finished) return {};
+      finished = true;
+      cancelled = cancel;
+      return std::exchange(waiting, {});
+    }
+  };
+
+  if (st.stop_requested()) throw nprpc::OperationCancelled();
+
+  auto call = std::make_shared<Call>();
+  // Constructed before suspending, so a stop request that lands now finds nothing
+  // to resume, and await_suspend sees it. It runs on whichever thread asked to
+  // stop, so the caller is resumed on the executor rather than there.
+  std::stop_callback on_stop(st, [call, executor = timeout_timer_.get_executor()]() noexcept {
+    if (auto waiting = call->finish(true))
+      boost::asio::post(executor, [waiting] { waiting.resume(); });
+  });
+
+  struct Awaiter {
+    Session& session;
+    std::shared_ptr<Call> call;
+    flat_buffer& buffer;
+    uint32_t timeout_ms;
+
+    bool await_ready() noexcept { return false; }
+
+    bool await_suspend(std::coroutine_handle<> handle)
+    {
+      {
+        std::lock_guard lock(call->mutex);
+        if (call->finished) return false;
+        call->waiting = handle;
+      }
+      // Nothing here may touch this awaiter once the call is on its way: the
+      // completion can resume the coroutine, and end it, before this returns.
+      session.send_receive_async(
+          std::move(buffer),
+          [call = call](const boost::system::error_code& ec, flat_buffer& response) {
+            {
+              std::lock_guard lock(call->mutex);
+              if (call->finished) return;
+              call->ec = ec;
+              if (!ec) call->response = std::move(response);
+            }
+            if (auto waiting = call->finish(false)) waiting.resume();
+          },
+          timeout_ms);
+      return true;
+    }
+
+    void await_resume() noexcept {}
+  };
+
+  co_await Awaiter{*this, call, buffer, timeout_ms};
+
+  if (call->cancelled) throw nprpc::OperationCancelled();
+  if (call->ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();
+  if (call->ec) throw nprpc::ExceptionCommFailure();
+  buffer = std::move(call->response);
 }
 
 std::optional<ObjectGuard>

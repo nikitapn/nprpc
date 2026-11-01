@@ -909,5 +909,55 @@ TEST_F(NprpcTest, TestCancellation)
   }
 }
 
+// A stop request ends the wait for a call already sent, on every client transport,
+// and the reply that comes later isn't mistaken for the next call's.
+TEST_F(NprpcTest, TestCancellationInFlight)
+{
+#include "common/tests/basic.inl"
+  struct SlowServant : TestBasicImpl {
+    std::atomic<bool> slow{true};
+    uint32_t ReturnU32() override
+    {
+      if (slow.exchange(false)) std::this_thread::sleep_for(std::chrono::milliseconds(800));
+      return 42;
+    }
+  };
+
+  const std::pair<const char*, nprpc::ObjectActivationFlags> transports[] = {
+#ifdef NPRPC_ENABLE_TCP
+    {"tcp", nprpc::ObjectActivationFlags::tcp},
+#endif
+#ifdef NPRPC_WEBSOCKET_ENABLED
+    {"ws", nprpc::ObjectActivationFlags::ws},
+#endif
+    {"shm", nprpc::ObjectActivationFlags::shm},
+    {"quic", nprpc::ObjectActivationFlags::quic},
+  };
+  for (const auto& [name, flag] : transports) {
+    SCOPED_TRACE(name);
+    try {
+    SlowServant servant;
+    auto obj = bind_and_resolve<nprpc::test::TestBasic>(
+        servant, flag, std::string("cancel_in_flight_") + name);
+    obj->set_timeout(10000);
+
+    std::stop_source stop;
+    std::jthread canceller([&stop] {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      stop.request_stop();
+    });
+
+    const auto started = std::chrono::steady_clock::now();
+    EXPECT_THROW(obj->ReturnU32Async(stop.get_token()).get(), nprpc::OperationCancelled);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(600))
+        << "should stop waiting without the reply";
+
+    EXPECT_EQ(obj->ReturnU32Async().get(), 42u);
+    } catch (const std::exception& e) {
+      ADD_FAILURE() << "Unexpected exception: " << e.what();
+    }
+  }
+}
+
 } // namespace nprpctest
 

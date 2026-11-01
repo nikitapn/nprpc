@@ -365,6 +365,20 @@ void SharedMemoryConnection::send_receive_async(
     }
   };
 
+  const auto request_size = buffer.size();
+  // Stubs may have built the request in a ring reservation already. That slot is
+  // the request: claiming another and leaving it uncommitted stalls the ring.
+  // As on the blocking path, detach it first, so the reply can't land in it.
+  const bool zero_copy = buffer.is_view_mode() && buffer.has_write_reservation();
+  LockFreeRingBuffer::WriteReservation zero_copy_rsv{};
+  if (zero_copy) {
+    zero_copy_rsv.data = buffer.data_ptr();
+    zero_copy_rsv.max_size = buffer.max_size();
+    zero_copy_rsv.slot_idx = buffer.reservation_write_idx();
+    zero_copy_rsv.valid = true;
+    buffer.release_write_view();
+  }
+
   auto w = std::make_shared<work_impl>(
       std::move(buffer), *this, std::move(completion_handler), timeout_ms);
 
@@ -373,14 +387,16 @@ void SharedMemoryConnection::send_receive_async(
     return;
   }
 
-  // Claim slot on the caller thread (async path is currently always copy).
-  auto rsv = channel_->reserve_write(w->buf.size());
-  if (!rsv) {
-    w->on_failed(boost::system::error_code(boost::asio::error::no_buffer_space,
-                                           boost::system::system_category()));
-    return;
+  auto rsv = zero_copy_rsv;
+  if (!zero_copy) {
+    rsv = channel_->reserve_write(request_size);
+    if (!rsv) {
+      w->on_failed(boost::system::error_code(boost::asio::error::no_buffer_space,
+                                             boost::system::system_category()));
+      return;
+    }
+    std::memcpy(rsv.data, w->buf.data().data(), request_size);
   }
-  std::memcpy(rsv.data, w->buf.data().data(), w->buf.size());
   w->slot_idx = rsv.slot_idx;
   w->has_slot_order = true;
   w->deadline = deadline_from_now(timeout_ms);
@@ -390,7 +406,7 @@ void SharedMemoryConnection::send_receive_async(
     enqueue_ordered(w);
   }
 
-  channel_->commit_write(rsv, w->buf.size(), w->buf.fds());
+  channel_->commit_write(rsv, request_size, w->buf.fds());
 }
 
 SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
