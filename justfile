@@ -90,7 +90,7 @@ run-cpp-tests *args: (bt "nprpc_test") (bt "nprpc_server_test") (bt "test_http_u
     just _ensure-bpf "{{build_dir}}/test/nprpc_test"
     just _kill-test-procs
     set +e
-    timeout 60 ctest --test-dir "{{build_dir}}/test" --output-on-failure {{args}}
+    timeout 120 ctest --test-dir "{{build_dir}}/test" --output-on-failure {{args}}
     code=$?
     echo "Tests exited with code $code"
     exit $code
@@ -228,6 +228,10 @@ run-swift-benchmarks-baseline *args: gen-swift-stubs (bt "nprpc")
 
 # ── docker / images ──────────────────────────────────────────────────────────
 
+# Build the shared GPAC tools once for development and production images.
+build-gpac-image image="nprpc-gpac" tag="26.07.0":
+    DOCKER_BUILDKIT=1 docker build -f Dockerfile.gpac -t "{{image}}:{{tag}}" .
+
 # Build the nprpc-dev Docker image (`just build-dev-image` or `just build-dev-image myrepo/nprpc 1.0`)
 build-dev-image image="nprpc-dev" tag="latest":
     #!/usr/bin/env bash
@@ -253,6 +257,7 @@ build-dev-image image="nprpc-dev" tag="latest":
     project_commit="${PROJECT_GIT_COMMIT:-$(get_git_commit "$root")}"
     export DOCKER_BUILDKIT=1
     echo "Building ${image}:${tag} …"
+    just build-gpac-image
     docker build \
       -f Dockerfile.dev \
       -t "${image}:${tag}" \

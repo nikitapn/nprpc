@@ -440,6 +440,20 @@ class UringClientConnection
 
       const uint32_t rid = extract_request_id(buf);
 
+      // Check message type: server-pushed Request frames (stream chunks) must
+      // go through handle_request, not the pending_requests_ table.
+      {
+        impl::flat::Header_Direct hdr(buf, 0);
+        if (hdr.msg_type() == impl::MessageType::Request) {
+          boost::asio::post(exec_,
+              [self = shared_from_this(), frame = std::move(buf)]() mutable {
+                flat_buffer tx;
+                self->handle_request(frame, tx);
+              });
+          continue;
+        }
+      }
+
       std::optional<PendingEntry> entry;
       {
         std::lock_guard lk(pending_mutex_);
@@ -507,7 +521,7 @@ public:
 
   void timeout_action() final {}   // no Asio timer, nothing to cancel
 
-  void send_receive(flat_buffer& buffer, uint32_t /*timeout_ms*/) override
+  boost::system::error_code do_send_receive(flat_buffer& buffer, uint32_t /*timeout_ms*/) override
   {
     assert(*reinterpret_cast<const uint32_t*>(buffer.data().data()) ==
            buffer.size());
@@ -534,12 +548,12 @@ public:
 
     if (!do_send()) {
       { std::lock_guard lk(pending_mutex_); pending_requests_.erase(rid); }
-      try { reconnect(); } catch (...) { close(); throw nprpc::ExceptionCommFailure(); }
+      try { reconnect(); } catch (...) { close(); throw; }
       { std::lock_guard lk(pending_mutex_); pending_requests_.emplace(rid, &waiter); }
       if (!do_send()) {
         { std::lock_guard lk(pending_mutex_); pending_requests_.erase(rid); }
         close();
-        throw nprpc::ExceptionCommFailure();
+        return boost::asio::error::connection_aborted;
       }
     }
 
@@ -547,8 +561,9 @@ public:
     waiter.status.wait(0, std::memory_order_acquire);
     if (waiter.status.load(std::memory_order_relaxed) < 0) {
       close();
-      throw nprpc::ExceptionCommFailure();
+      return boost::asio::error::connection_aborted;
     }
+    return {};
   }
 
   nprpc::Task<> send_receive_coro(flat_buffer& buffer,

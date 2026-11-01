@@ -1,6 +1,6 @@
 # NPRPC runtime image: the base for production images of NPRPC applications.
 #
-# Holds only what a built application needs to run: libnprpc and libmsquic,
+# Holds only what a built application needs to run: libnprpc,
 # the Boost shared libraries, and the system packages they link against, on
 # the same Ubuntu and Swift runtime as the development image. Applications
 # are compiled in nprpc-dev (or an image derived from it) and copied on top:
@@ -43,8 +43,9 @@ LABEL org.opencontainers.image.version="${NPRPC_VERSION}"
 LABEL org.opencontainers.image.revision="${NPRPC_REVISION}"
 LABEL io.nprpc.libnprpc.sha256="${NPRPC_LIB_SHA256}"
 
-# liburing2 and libatomic1 are what libnprpc and libmsquic need beyond the
-# base image; ca-certificates and tzdata are what almost every server wants.
+# ngtcp2, nghttp3 and BoringSSL are linked statically into libnprpc by the dev
+# image. liburing2 and libatomic1 supply its remaining native dependencies.
+# ca-certificates and tzdata are what almost every server wants.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     tzdata \

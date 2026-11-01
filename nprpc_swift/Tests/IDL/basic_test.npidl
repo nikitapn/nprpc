@@ -19,6 +19,15 @@ enum Color {
   Blue
 }
 
+message FlatEnumPayload {
+  color: Color;
+  flag: boolean;
+}
+
+message OptionalEnumPayload {
+  color?: Color;
+}
+
 message Point {
   x: i32;
   y: i32;

@@ -1,3 +1,6 @@
+#ifdef NPRPC_QUIC_ENABLED
+#include <nprpc/impl/quic_transport.hpp>
+#endif
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -853,6 +856,7 @@ TEST_F(NprpcTest, TestQuicUnreliable)
     EXPECT_TRUE(result);
 
     // Test fire-and-forget (over QUIC DATAGRAM)
+    const auto datagrams_before = nprpc::impl::quic_transport_stats().datagrams_sent.load();
     for (int i = 0; i < 10; i++) {
       obj->FireAndForget(i, i % 2 == 0, nprpc::flat::make_read_only_span(data));
     }
@@ -862,6 +866,14 @@ TEST_F(NprpcTest, TestQuicUnreliable)
     EXPECT_EQ(servant.fire_and_forget_count.load(), 10);
     EXPECT_EQ(servant.last_a.load(), 9u); // Last call had a=9
     EXPECT_FALSE(servant.last_b.load());  // 9 % 2 != 0
+    EXPECT_EQ(nprpc::impl::quic_transport_stats().datagrams_sent.load(), datagrams_before + 10);
+
+    // Too large for one packet: refused rather than sent, and nothing else minds.
+    std::vector<uint8_t> oversized(64 * 1024, 0x55);
+    obj->FireAndForget(100, true, nprpc::flat::make_read_only_span(oversized));
+    EXPECT_EQ(nprpc::impl::quic_transport_stats().datagrams_sent.load(), datagrams_before + 10);
+    EXPECT_FALSE(servant.wait_for_count(11, 100));
+    EXPECT_TRUE(obj->ReliableCall(42, true, nprpc::flat::make_read_only_span(data)));
   } catch (nprpc::Exception& ex) {
     FAIL() << "Exception in TestQuicUnreliable: " << ex.what();
   }

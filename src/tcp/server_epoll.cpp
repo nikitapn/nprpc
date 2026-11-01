@@ -50,7 +50,6 @@ struct EpollConn : Session {
 
   // Session virtuals — server-side only; these will never be called.
   void timeout_action() final {}
-  void send_receive(flat_buffer&, uint32_t) override { assert(false); }
   nprpc::Task<> send_receive_coro(flat_buffer& buffer,
                                           uint32_t timeout_ms,
                                           std::stop_token st = {}) override

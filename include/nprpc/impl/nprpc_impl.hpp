@@ -33,6 +33,7 @@
 #include <nprpc/impl/session.hpp>
 #include <nprpc/config_default.hpp>
 #include <nprpc/nprpc.hpp>
+#include <nprpc/result.hpp>
 
 namespace nprpc::impl {
 
@@ -55,6 +56,9 @@ struct Config {
   std::string quic_cert_file;
   std::string quic_key_file;
   std::string quic_client_ca_file;
+  size_t quic_max_connections = 0;
+  size_t quic_max_connections_per_ip = 0;
+  size_t quic_new_connections_per_ip_per_second = 0;
   std::string http_root_dir;
   std::vector<std::string> http_allowed_origins;
   size_t http_max_request_body_size = NPRPC_DEFAULT_HTTP_MAX_REQUEST_BODY_SIZE;
@@ -250,7 +254,7 @@ public:
   // Must be called once after make_shared — shared_from_this() is valid here.
   void start();
 
-  void send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
+  boost::system::error_code do_send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
 
   nprpc::Task<> send_receive_coro(flat_buffer& buffer,
                                    uint32_t timeout_ms,
@@ -299,7 +303,7 @@ class RpcImpl : public Rpc
 
 public:
   std::string telemetry_reference() const override { return telemetry_reference_; }
-  void start_telemetry(uint32_t min_interval_ms);
+  void start_telemetry(uint32_t min_interval_ms, std::string router_stats_file);
   void configure_quic_client_tls(const QuicClientTlsConfig& config) override;
   uint16_t port() const noexcept { return g_cfg.listen_tcp_port; }
   uint16_t websocket_port() const noexcept { return g_cfg.listen_http_port; }
@@ -313,10 +317,21 @@ public:
   }
 
   bool has_session(const EndPoint& endpoint) const noexcept;
+  /// Acquire/cache a session, returning routine failures without throwing.
+  /// Unmigrated constructor exceptions are translated at this boundary.
+  [[nodiscard]] NPRPC_API Result<std::shared_ptr<Session>>
+  get_session_result(const EndPoint& endpoint) noexcept;
+  /// Compatibility API: routine acquisition failures throw ExceptionCommFailure.
   NPRPC_API std::shared_ptr<Session> get_session(const EndPoint& endpoint);
   NPRPC_API void call(const EndPoint& endpoint,
                       flat_buffer& buffer,
                       uint32_t timeout_ms = 2500);
+
+  [[nodiscard]] NPRPC_API Result<void> call_result(
+      const EndPoint& endpoint, flat_buffer& buffer, uint32_t timeout_ms = 2500) noexcept;
+  [[nodiscard]] NPRPC_API Result<void> call_async_result(
+      const EndPoint& endpoint, flat_buffer&& buffer,
+      Session::ResultHandler handler, uint32_t timeout_ms = 2500) noexcept;
 
   NPRPC_API void call_async(
       const EndPoint& endpoint,
@@ -408,6 +423,10 @@ public:
   explicit RpcImpl();
 
 protected:
+  // Shared implementation keeps exceptional legacy constructor behavior intact
+  // for get_session(), while get_session_result() contains those exceptions.
+  Result<std::shared_ptr<Session>> get_session_impl(const EndPoint& endpoint);
+
   Poa* create_poa_impl(
       uint32_t max_objects,
       PoaPolicy::Lifespan lifespan,

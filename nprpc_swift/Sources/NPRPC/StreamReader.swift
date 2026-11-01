@@ -84,11 +84,15 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     private let stream: AsyncThrowingStream<T, Error>
     private let continuation: AsyncThrowingStream<T, Error>.Continuation
     private var buffer: FlatBuffer?
-    private let deserializer: (UnsafeRawPointer, Int) -> T
+    private let deserializer: (UnsafeRawPointer, Int) throws -> T
     // Optional callback invoked after each yielded chunk to send a window
     // update back to the producer.  Set by createObjectStreamReader /
     // createStreamManagerReader via the windowUpdateFn parameter.
     internal var windowUpdateFn: (() -> Void)?
+    // Tells the producer to stop. Set by createStreamManagerReader.
+    internal var sendCancelFn: (() -> Void)?
+    private var finished = false
+    private let finishedLock = NSLock()
     // Set via retainStreamManager() by createStreamManagerReader — nil for
     // createObjectStreamReader, which doesn't have a stream_manager pointer
     // to retain (window updates are already skipped on that path).
@@ -100,7 +104,7 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     private let firstAccessLock = NSLock()
 
     /// Created by generated code; `deserializer` decodes one chunk's payload.
-    public init(streamId: UInt64, buffer: FlatBuffer, deserializer: @escaping (UnsafeRawPointer, Int) -> T) {
+    public init(streamId: UInt64, buffer: FlatBuffer, deserializer: @escaping (UnsafeRawPointer, Int) throws -> T) {
         self.streamId = streamId
         self.buffer = buffer
         self.deserializer = deserializer
@@ -174,24 +178,50 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     /// is deferred to WindowedIterator.next() so we don't grant a credit while
     /// still on the Boost.Asio strand thread.
     internal func onChunkReceived(data: UnsafeRawPointer, size: Int) {
-        guard size > 0 else { return }
-        let value = deserializer(data, size)
-        continuation.yield(value)
+        finishedLock.lock()
+        let alreadyFinished = finished
+        finishedLock.unlock()
+        guard !alreadyFinished else { return }
+        do {
+            guard size > 0 else { throw BufferError(message: "Empty stream payload") }
+            let value = try deserializer(data, size)
+            continuation.yield(value)
+        } catch {
+            // A malformed/incompatible payload is a stream failure, never an
+            // exception escaping the C callback or a reason to keep decoding.
+            if !markFinished() {
+                continuation.finish(throwing: error)
+                sendCancelFn?()
+            }
+        }
     }
 
     /// Called when stream completes successfully
     internal func onComplete() {
+        markFinished()
         continuation.finish()
     }
 
     /// Called when stream encounters an error
     internal func onError(_ error: Error) {
+        markFinished()
         continuation.finish(throwing: error)
     }
 
-    /// Cancel the stream
+    /// Stops the stream: the local loop throws, and the producer is told to stop.
     public func cancel() {
+        if !markFinished() { sendCancelFn?() }
         continuation.finish(throwing: CancellationError())
+    }
+
+    /// Returns whether the stream had already finished.
+    @discardableResult
+    private func markFinished() -> Bool {
+        finishedLock.lock()
+        defer { finishedLock.unlock() }
+        let was = finished
+        finished = true
+        return was
     }
 
     internal func makeBridgeContext() -> UnsafeMutableRawPointer {
@@ -207,7 +237,7 @@ public class NPRPCStreamReader<T: Sendable>: @unchecked Sendable, AsyncSequence 
     }
 
     deinit {
-        cancel()
+        continuation.finish(throwing: CancellationError())
         if let streamManagerHandle {
             nprpc_stream_manager_release(streamManagerHandle)
         }
@@ -287,7 +317,7 @@ public func createObjectStreamReader<T: Sendable>(
     streamId: UInt64,
     buffer: FlatBuffer,
     unreliable: Bool = false,
-    deserializer: @escaping (UnsafeRawPointer, Int) -> T
+    deserializer: @escaping (UnsafeRawPointer, Int) throws -> T
 ) -> NPRPCStreamReader<T> {
     let reader = NPRPCStreamReader(streamId: streamId, buffer: buffer, deserializer: deserializer)
     let context = reader.makeBridgeContext()
@@ -323,10 +353,12 @@ public func createStreamManagerReader<T: Sendable>(
     buffer: FlatBuffer,
     unreliable: Bool = false,
     producerWindow: UInt32 = kInitialWindowSize,
-    deserializer: @escaping (UnsafeRawPointer, Int) -> T
+    deserializer: @escaping (UnsafeRawPointer, Int) throws -> T
 ) -> NPRPCStreamReader<T> {
     let reader = NPRPCStreamReader(streamId: streamId, buffer: buffer, deserializer: deserializer)
     reader.retainStreamManager(streamManager)
+    // The reader's share of the manager's lifetime keeps this pointer valid.
+    reader.sendCancelFn = { nprpc_stream_manager_send_cancel(streamManager, streamId) }
     let context = reader.makeBridgeContext()
     nprpc_stream_manager_register_reader(
         streamManager,
@@ -721,7 +753,7 @@ public func createObjectBidiStream<TWrite: Sendable, TRead: Sendable>(
     initialPayloadCapacity: Int,
     unreliable: Bool = false,
     serializer: @escaping (FlatBuffer, Int, TWrite) -> Void,
-    deserializer: @escaping (UnsafeRawPointer, Int) -> TRead
+    deserializer: @escaping (UnsafeRawPointer, Int) throws -> TRead
 ) throws -> NPRPCBidiStream<TWrite, TRead> {
     let reader = createObjectStreamReader(
         objectHandle: objectHandle,
@@ -756,7 +788,7 @@ public func createStreamManagerBidiStream<TWrite: Sendable, TRead: Sendable>(
     initialCredits: UInt32 = 0,
     producerWindow: UInt32 = kInitialWindowSize,
     serializer: @escaping (FlatBuffer, Int, TWrite) -> Void,
-    deserializer: @escaping (UnsafeRawPointer, Int) -> TRead
+    deserializer: @escaping (UnsafeRawPointer, Int) throws -> TRead
 ) -> NPRPCBidiStream<TWrite, TRead> {
     let reader = createStreamManagerReader(
         streamManager: streamManager,

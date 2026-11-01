@@ -20,6 +20,16 @@ message TransportSample {
   active_connections: u64;
   /// Inbound stream directions open now; a bidi stream counts twice.
   active_streams: u64;
+  /// Calls by duration, cumulative. Bucket i counts durations under 2^i us, and
+  /// the last bucket has no upper limit. Same durations as dispatch_ns.
+  latency_buckets: u64[];
+}
+
+message HttpStatusCounts {
+  success: u64;      // 2xx
+  redirect: u64;     // 3xx
+  client_error: u64; // 4xx
+  server_error: u64; // 5xx
 }
 
 message Snapshot {
@@ -28,6 +38,15 @@ message Snapshot {
   /// HTTP/1.1 has no transport row: TLS fails before a request can upgrade.
   http1_handshake_failures: u64;
   http1_throttled: u64;
+  /// Responses sent, cumulative. HTTP/1.1 is counted here only: it has no
+  /// transport row, so no request totals or latency.
+  http1_status: HttpStatusCounts;
+  http3_status: HttpStatusCounts;
+  /// npquicrouter's stats file, passed through unread: empty unless this server
+  /// is configured to carry it, or the file can't be read. See the router's README.
+  router_stats_json: string;
+  /// How long ago the router wrote that file. A growing age means it stopped.
+  router_stats_age_ms: u64;
 }
 
 interface Monitor {

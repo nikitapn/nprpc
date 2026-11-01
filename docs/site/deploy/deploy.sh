@@ -21,6 +21,9 @@ REMOTE_TMP_DIR="/tmp/nprpc-docs-release"
 HTTP3=1
 SHM_CHANNEL="nprpc_docs"
 SHM_DIR="/dev/shm/npquicrouter"
+TELEMETRY_CLIENTS=""
+TELEMETRY_PORT="8447"
+REMOTE_TELEMETRY_CLIENTS="/etc/nprpc-docs/telemetry-clients.pem"
 BUILD_API=1
 
 usage() {
@@ -52,6 +55,11 @@ routes the hostname to --port on the server's loopback.
   --shm-dir <path>          npquicrouter's shared-memory directory, mounted as the
                             container's /dev/shm (default: /dev/shm/npquicrouter)
   --skip-api                Reuse the existing api.json instead of running `just docs-api`
+  --telemetry-clients <pem> Local PEM of client certificates allowed to read NPRPC
+                            Monitor telemetry. Installed on the server and turns
+                            telemetry on; a later deploy without it turns it off.
+  --telemetry-port <port>   Public UDP port for telemetry, directly exposed rather
+                            than routed through npquicrouter (default: 8447)
 
 The certificate must exist on the server before the first deploy:
 
@@ -78,6 +86,8 @@ while [ $# -gt 0 ]; do
     --no-shm) SHM_CHANNEL="" ;;
     --shm-dir) SHM_DIR="$2"; shift ;;
     --skip-api) BUILD_API=0 ;;
+    --telemetry-clients) TELEMETRY_CLIENTS="$2"; shift ;;
+    --telemetry-port) TELEMETRY_PORT="$2"; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -89,6 +99,26 @@ if [ -z "$SSH_TARGET" ]; then
   exit 1
 fi
 CERT_NAME=${CERT_NAME:-$HOSTNAME}
+
+if [ -n "$TELEMETRY_CLIENTS" ]; then
+  if [[ ! "$TELEMETRY_PORT" =~ ^[0-9]{1,5}$ ]] || (( 10#$TELEMETRY_PORT < 1 || 10#$TELEMETRY_PORT > 65535 )); then
+    echo "Telemetry port must be between 1 and 65535" >&2
+    exit 1
+  fi
+  TELEMETRY_PORT=$((10#$TELEMETRY_PORT))
+  if [ "$TELEMETRY_PORT" = "$PORT" ] || [ "$TELEMETRY_PORT" = 443 ]; then
+    echo "Telemetry needs a UDP port separate from the HTTP/3 port" >&2
+    exit 1
+  fi
+  openssl x509 -in "$TELEMETRY_CLIENTS" -noout || {
+    echo "$TELEMETRY_CLIENTS is not a PEM certificate" >&2
+    exit 1
+  }
+  if grep -q "PRIVATE KEY" "$TELEMETRY_CLIENTS"; then
+    echo "$TELEMETRY_CLIENTS holds a private key; pass only the certificates" >&2
+    exit 1
+  fi
+fi
 
 cd "$REPO_DIR"
 BUILD_DIR=${BUILD_DIR:-.build_relwith_debinfo}
@@ -156,6 +186,9 @@ else
 fi
 
 scp "$STAGE/nprpc-docs.tar.gz" "$SSH_TARGET:$REMOTE_TMP_DIR.tar.gz"
+if [ -n "$TELEMETRY_CLIENTS" ]; then
+  scp "$TELEMETRY_CLIENTS" "$SSH_TARGET:$REMOTE_TMP_DIR-clients.pem"
+fi
 
 ssh "$SSH_TARGET" \
   CERT_DIR="$CERT_DIR" \
@@ -165,6 +198,9 @@ ssh "$SSH_TARGET" \
   HTTP3="$HTTP3" \
   SHM_CHANNEL="$SHM_CHANNEL" \
   SHM_DIR="$SHM_DIR" \
+  TELEMETRY_ENABLED="${TELEMETRY_CLIENTS:+1}" \
+  TELEMETRY_PORT="$TELEMETRY_PORT" \
+  REMOTE_TELEMETRY_CLIENTS="$REMOTE_TELEMETRY_CLIENTS" \
   IMAGE_NAME="$IMAGE_NAME" \
   PORT="$PORT" \
   REMOTE_TMP_DIR="$REMOTE_TMP_DIR" \
@@ -188,6 +224,16 @@ OLD_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$IMAGE_NAME" 2>/dev/null
 docker build -t "$IMAGE_NAME" \
   --build-arg NPRPC_RUNTIME_IMAGE="$RUNTIME_TAG" \
   "$REMOTE_TMP_DIR"
+
+TELEMETRY_ARGS=()
+if [ -n "$TELEMETRY_ENABLED" ]; then
+  sudo install -D -m 644 -o root -g root "$REMOTE_TMP_DIR-clients.pem" "$REMOTE_TELEMETRY_CLIENTS"
+  rm -f "$REMOTE_TMP_DIR-clients.pem"
+  TELEMETRY_ARGS=(-p "$TELEMETRY_PORT:$TELEMETRY_PORT/udp"
+                  -v "$REMOTE_TELEMETRY_CLIENTS:/telemetry-clients.pem:ro"
+                  -e "DOCS_TELEMETRY_PORT=$TELEMETRY_PORT"
+                  -e "DOCS_TELEMETRY_CLIENTS=/telemetry-clients.pem")
+fi
 
 # SIGTERM first, with time to finish: a process killed mid-operation can
 # strand state it shares with npquicrouter. rm -f alone is a SIGKILL.
@@ -227,6 +273,7 @@ docker run -d \
   -e "DOCS_TLS_KEY=/certs/live/$CERT_NAME/privkey.pem" \
   -e "DOCS_HTTP3=$HTTP3" \
   "${SHM_ARGS[@]}" \
+  "${TELEMETRY_ARGS[@]}" \
   "$IMAGE_NAME"
 
 rm -rf "$REMOTE_TMP_DIR" "$REMOTE_TMP_DIR.tar.gz"

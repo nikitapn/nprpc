@@ -200,21 +200,24 @@ vd.set_kind(static_cast<std::uint32_t>(src.payload.kind));
 ```
 
 
-After `QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE`, MsQuic requires the app to call
-`StreamClose(stream)` to release the handle. Omitting this keeps the
-connection's rundown reference alive.
+## 8. Native QUIC: ngtcp2 Buffer and Connection Lifetime
 
-**Symptom**: `MsQuicRegistrationClose` blocks forever during `QuicApi`
-static-destructor teardown → process hangs after all tests pass (exit code
-124 from timeout).
+The native QUIC transport lives in `src/quic/quic_ngtcp2.cpp`. ngtcp2 drives
+stream callbacks on the connection's Asio strand and the transport owns the
+connection and TLS objects.
 
-```cpp
-case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE: {
-  data_streams_.erase(stream);               // remove from tracking map
-  QuicApi::instance().api()->StreamClose(stream);  // REQUIRED — releases handle
-  break;
-}
-```
+Stream send buffers must remain alive until ngtcp2 acknowledges their bytes.
+Keep them in the stream's send queue and release acknowledged prefixes in
+`cb_acked_stream_data_offset`; handing bytes to `ngtcp2_conn_writev_stream`
+does not release their storage.
 
-This applies to **all** stream types: main RPC stream, data streams (server
-and client side).
+`cb_stream_close` removes dedicated data-stream state. Closing the main RPC
+stream closes the connection. Connection cleanup cancels its timer, releases
+the server session and removes all listener CID mappings; releasing the
+session stops its stream producers. The connection destructor calls
+`ngtcp2_conn_del` and frees its TLS state.
+
+For a process that hangs after streaming tests, check pending Asio operations,
+connection/session ownership cycles and producers left waiting for credits.
+Use `StreamTeardown` for stream-manager cleanup and `QuicTLS` for native QUIC
+handshakes, telemetry subscriptions and abandoned-client cleanup.

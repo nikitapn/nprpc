@@ -23,10 +23,13 @@ public struct TransportSample: Codable, Sendable {
   public var active_connections: UInt64 = 0
   /// Inbound stream directions open now; a bidi stream counts twice.
   public var active_streams: UInt64 = 0
+  /// Calls by duration, cumulative. Bucket i counts durations under 2^i us, and
+  /// the last bucket has no upper limit. Same durations as dispatch_ns.
+  public var latency_buckets: [UInt64] = []
 
   public init() {}
 
-  public init(transport: Transport, completed: UInt64, errors: UInt64, received_bytes: UInt64, sent_bytes: UInt64, dispatch_ns: UInt64, handshake_failures: UInt64, throttled: UInt64, active_connections: UInt64, active_streams: UInt64)   {
+  public init(transport: Transport, completed: UInt64, errors: UInt64, received_bytes: UInt64, sent_bytes: UInt64, dispatch_ns: UInt64, handshake_failures: UInt64, throttled: UInt64, active_connections: UInt64, active_streams: UInt64, latency_buckets: [UInt64])   {
     self.transport = transport
     self.completed = completed
     self.errors = errors
@@ -37,6 +40,7 @@ public struct TransportSample: Codable, Sendable {
     self.throttled = throttled
     self.active_connections = active_connections
     self.active_streams = active_streams
+    self.latency_buckets = latency_buckets
   }
 }
 
@@ -53,9 +57,18 @@ public func marshal_TransportSample(buffer: FlatBuffer, offset: Int, data: Trans
   buffer.storeBytes(of: data.throttled, toByteOffset: offset + 56, as: UInt64.self)
   buffer.storeBytes(of: data.active_connections, toByteOffset: offset + 64, as: UInt64.self)
   buffer.storeBytes(of: data.active_streams, toByteOffset: offset + 72, as: UInt64.self)
+  NPRPC.marshal_fundamental_vector(buffer: buffer, offset: offset + 80, vector: data.latency_buckets)
 }
 
+/// Decode a bounded payload, rejecting malformed or incompatible wire data.
+public func unmarshal_TransportSample(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) throws -> TransportSample {
+  guard check_payload_0(buffer: buffer, bufferSize: bufferSize, offset: offset) else { throw NPRPC.BufferError(message: "Invalid TransportSample payload (malformed data or incompatible IDL contract)") }
+  return unmarshal_TransportSample(buffer: buffer, offset: offset)
+}
+
+
 // MARK: - Unmarshal TransportSample
+/// Requires a validated payload; use the bufferSize overload for received bytes.
 public func unmarshal_TransportSample(buffer: UnsafeRawPointer, offset: Int) -> TransportSample {
   var result = TransportSample()
   result.transport = Transport(rawValue: buffer.load(fromByteOffset: offset + 0, as: UInt32.self))!
@@ -68,6 +81,50 @@ public func unmarshal_TransportSample(buffer: UnsafeRawPointer, offset: Int) -> 
   result.throttled = buffer.load(fromByteOffset: offset + 56, as: UInt64.self)
   result.active_connections = buffer.load(fromByteOffset: offset + 64, as: UInt64.self)
   result.active_streams = buffer.load(fromByteOffset: offset + 72, as: UInt64.self)
+  result.latency_buckets = NPRPC.unmarshal_fundamental_vector(buffer: buffer, offset: offset + 80)
+  return result
+}
+
+public struct HttpStatusCounts: Codable, Sendable {
+  public var success: UInt64 = 0
+  public var redirect: UInt64 = 0
+  public var client_error: UInt64 = 0
+  public var server_error: UInt64 = 0
+
+  public init() {}
+
+  public init(success: UInt64, redirect: UInt64, client_error: UInt64, server_error: UInt64)   {
+    self.success = success
+    self.redirect = redirect
+    self.client_error = client_error
+    self.server_error = server_error
+  }
+}
+
+
+// MARK: - Marshal HttpStatusCounts
+public func marshal_HttpStatusCounts(buffer: FlatBuffer, offset: Int, data: HttpStatusCounts) {
+  buffer.storeBytes(of: data.success, toByteOffset: offset + 0, as: UInt64.self)
+  buffer.storeBytes(of: data.redirect, toByteOffset: offset + 8, as: UInt64.self)
+  buffer.storeBytes(of: data.client_error, toByteOffset: offset + 16, as: UInt64.self)
+  buffer.storeBytes(of: data.server_error, toByteOffset: offset + 24, as: UInt64.self)
+}
+
+/// Decode a bounded payload, rejecting malformed or incompatible wire data.
+public func unmarshal_HttpStatusCounts(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) throws -> HttpStatusCounts {
+  guard check_payload_1(buffer: buffer, bufferSize: bufferSize, offset: offset) else { throw NPRPC.BufferError(message: "Invalid HttpStatusCounts payload (malformed data or incompatible IDL contract)") }
+  return unmarshal_HttpStatusCounts(buffer: buffer, offset: offset)
+}
+
+
+// MARK: - Unmarshal HttpStatusCounts
+/// Requires a validated payload; use the bufferSize overload for received bytes.
+public func unmarshal_HttpStatusCounts(buffer: UnsafeRawPointer, offset: Int) -> HttpStatusCounts {
+  var result = HttpStatusCounts()
+  result.success = buffer.load(fromByteOffset: offset + 0, as: UInt64.self)
+  result.redirect = buffer.load(fromByteOffset: offset + 8, as: UInt64.self)
+  result.client_error = buffer.load(fromByteOffset: offset + 16, as: UInt64.self)
+  result.server_error = buffer.load(fromByteOffset: offset + 24, as: UInt64.self)
   return result
 }
 
@@ -77,14 +134,27 @@ public struct Snapshot: Codable, Sendable {
   /// HTTP/1.1 has no transport row: TLS fails before a request can upgrade.
   public var http1_handshake_failures: UInt64 = 0
   public var http1_throttled: UInt64 = 0
+  /// Responses sent, cumulative. HTTP/1.1 is counted here only: it has no
+  /// transport row, so no request totals or latency.
+  public var http1_status: HttpStatusCounts = HttpStatusCounts()
+  public var http3_status: HttpStatusCounts = HttpStatusCounts()
+  /// npquicrouter's stats file, passed through unread: empty unless this server
+  /// is configured to carry it, or the file can't be read. See the router's README.
+  public var router_stats_json: String = ""
+  /// How long ago the router wrote that file. A growing age means it stopped.
+  public var router_stats_age_ms: UInt64 = 0
 
   public init() {}
 
-  public init(uptime_ms: UInt64, transports: [TransportSample], http1_handshake_failures: UInt64, http1_throttled: UInt64)   {
+  public init(uptime_ms: UInt64, transports: [TransportSample], http1_handshake_failures: UInt64, http1_throttled: UInt64, http1_status: HttpStatusCounts, http3_status: HttpStatusCounts, router_stats_json: String, router_stats_age_ms: UInt64)   {
     self.uptime_ms = uptime_ms
     self.transports = transports
     self.http1_handshake_failures = http1_handshake_failures
     self.http1_throttled = http1_throttled
+    self.http1_status = http1_status
+    self.http3_status = http3_status
+    self.router_stats_json = router_stats_json
+    self.router_stats_age_ms = router_stats_age_ms
   }
 }
 
@@ -92,22 +162,38 @@ public struct Snapshot: Codable, Sendable {
 // MARK: - Marshal Snapshot
 public func marshal_Snapshot(buffer: FlatBuffer, offset: Int, data: Snapshot) {
   buffer.storeBytes(of: data.uptime_ms, toByteOffset: offset + 0, as: UInt64.self)
-  NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + 8, vector: data.transports, elementSize: 80, elementAlignment: 8) { buf, off, elem in
+  NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + 8, vector: data.transports, elementSize: 88, elementAlignment: 8) { buf, off, elem in
     marshal_TransportSample(buffer: buf, offset: off, data: elem)
   }
   buffer.storeBytes(of: data.http1_handshake_failures, toByteOffset: offset + 16, as: UInt64.self)
   buffer.storeBytes(of: data.http1_throttled, toByteOffset: offset + 24, as: UInt64.self)
+  marshal_HttpStatusCounts(buffer: buffer, offset: offset + 32, data: data.http1_status)
+  marshal_HttpStatusCounts(buffer: buffer, offset: offset + 64, data: data.http3_status)
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 96, string: data.router_stats_json)
+  buffer.storeBytes(of: data.router_stats_age_ms, toByteOffset: offset + 104, as: UInt64.self)
 }
 
+/// Decode a bounded payload, rejecting malformed or incompatible wire data.
+public func unmarshal_Snapshot(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) throws -> Snapshot {
+  guard check_payload_2(buffer: buffer, bufferSize: bufferSize, offset: offset) else { throw NPRPC.BufferError(message: "Invalid Snapshot payload (malformed data or incompatible IDL contract)") }
+  return unmarshal_Snapshot(buffer: buffer, offset: offset)
+}
+
+
 // MARK: - Unmarshal Snapshot
+/// Requires a validated payload; use the bufferSize overload for received bytes.
 public func unmarshal_Snapshot(buffer: UnsafeRawPointer, offset: Int) -> Snapshot {
   var result = Snapshot()
   result.uptime_ms = buffer.load(fromByteOffset: offset + 0, as: UInt64.self)
-  result.transports = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + 8, elementSize: 80) { buf, off in
+  result.transports = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + 8, elementSize: 88) { buf, off in
     unmarshal_TransportSample(buffer: buf, offset: off)
   }
   result.http1_handshake_failures = buffer.load(fromByteOffset: offset + 16, as: UInt64.self)
   result.http1_throttled = buffer.load(fromByteOffset: offset + 24, as: UInt64.self)
+  result.http1_status = unmarshal_HttpStatusCounts(buffer: buffer, offset: offset + 32)
+  result.http3_status = unmarshal_HttpStatusCounts(buffer: buffer, offset: offset + 64)
+  result.router_stats_json = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 96)
+  result.router_stats_age_ms = buffer.load(fromByteOffset: offset + 104, as: UInt64.self)
   return result
 }
 
@@ -127,7 +213,15 @@ fileprivate func marshal_nprpc_monitor_M1(buffer: FlatBuffer, offset: Int, data:
   buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: UInt32.self)
 }
 
+/// Decode a bounded payload, rejecting malformed or incompatible wire data.
+fileprivate func unmarshal_nprpc_monitor_M1(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) throws -> nprpc_monitor_M1 {
+  guard check_payload_3(buffer: buffer, bufferSize: bufferSize, offset: offset) else { throw NPRPC.BufferError(message: "Invalid nprpc_monitor_M1 payload (malformed data or incompatible IDL contract)") }
+  return unmarshal_nprpc_monitor_M1(buffer: buffer, offset: offset)
+}
+
+
 // MARK: - Unmarshal nprpc_monitor_M1
+/// Requires a validated payload; use the bufferSize overload for received bytes.
 fileprivate func unmarshal_nprpc_monitor_M1(buffer: UnsafeRawPointer, offset: Int) -> nprpc_monitor_M1 {
   var result = nprpc_monitor_M1()
   result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
@@ -142,7 +236,7 @@ public protocol MonitorProtocol {
 // Pure Swift implementation with direct marshalling
 final public class Monitor: NPRPCObject, @unchecked Sendable {
   public override class var classId: String {
-    "nprpc_monitor/nprpc.monitor.Monitor"
+    "nprpc_monitor/nprpc.monitor.Monitor#1a95cc449f62b8d0"
   }
 
   public required init(handle: UnsafeMutableRawPointer)   {
@@ -190,7 +284,7 @@ final public class Monitor: NPRPCObject, @unchecked Sendable {
       throw RuntimeError(message: "Failed to get session for stream")
     }
 
-    let reader = NPRPC.createStreamManagerReader(streamManager: streamManager, streamId: streamId, buffer: buffer, unreliable: false, producerWindow: defaultReaderWindow, deserializer: { (data: UnsafeRawPointer, _: Int) in unmarshal_Snapshot(buffer: data, offset: 0) })
+    let reader = NPRPC.createStreamManagerReader(streamManager: streamManager, streamId: streamId, buffer: buffer, unreliable: false, producerWindow: defaultReaderWindow, deserializer: { (data: UnsafeRawPointer, size: Int) in guard check_payload_2(buffer: data, bufferSize: size, offset: 0) else { throw NPRPC.BufferError(message: "Invalid stream payload (malformed data or incompatible IDL contract)") }; return unmarshal_Snapshot(buffer: data, offset: 0) })
     let result = nprpc_session_stream_send_init(session, buffer.handle, self.timeout)
     if result != 0 { throw RuntimeError(message: "StreamInit failed (code: \(result))") }
     return reader
@@ -203,7 +297,7 @@ open class MonitorServant: NPRPCServant, MonitorProtocol, @unchecked Sendable {
   public override init() { super.init() }
 
   public override func getClass() -> String   {
-    return "nprpc_monitor/nprpc.monitor.Monitor"
+    return "nprpc_monitor/nprpc.monitor.Monitor#1a95cc449f62b8d0"
   }
 
   open func watch(interval_ms: UInt32) -> AsyncStream<Snapshot>   {
@@ -240,7 +334,7 @@ open class MonitorServant: NPRPCServant, MonitorProtocol, @unchecked Sendable {
             return
           }
           let initialCredits = data.load(fromByteOffset: 44, as: UInt32.self)
-          let writer = NPRPC.createStreamManagerWriter(streamManager: streamManager, streamId: streamId, initialPayloadCapacity: 160, initialCredits: initialCredits, serializer: { (buffer: FlatBuffer, offset: Int, value: Snapshot) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 32, value: value) { buf, off, elem in marshal_Snapshot(buffer: buf, offset: off, data: elem) } })
+          let writer = NPRPC.createStreamManagerWriter(streamManager: streamManager, streamId: streamId, initialPayloadCapacity: 240, initialCredits: initialCredits, serializer: { (buffer: FlatBuffer, offset: Int, value: Snapshot) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 112, value: value) { buf, off, elem in marshal_Snapshot(buffer: buf, offset: off, data: elem) } })
           let source = watch(interval_ms: ia._1)
           nprpc_stream_manager_defer_stream_start(streamManager, streamId)
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)
@@ -268,9 +362,50 @@ open class MonitorServant: NPRPCServant, MonitorProtocol, @unchecked Sendable {
 }
 
 
-// Safety check for nprpc_monitor_M1
+fileprivate func check_payload_0(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 88), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 8) else { return false }
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset + 0, structSize: 4), NPRPC.check_alignment(buffer: buffer, offset: offset + 0, alignment: 4) else { return false }
+  guard Transport(rawValue: buffer.load(fromByteOffset: offset + 0, as: UInt32.self)) != nil else { return false }
+  guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 80, elementSize: 8, elementAlignment: 8) else { return false }
+  return true
+}
+
+
+fileprivate func check_payload_1(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 32), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 8) else { return false }
+  return true
+}
+
+
+fileprivate func check_payload_2(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 112), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 8) else { return false }
+  guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 8, elementSize: 88, elementAlignment: 8) else { return false }
+  do {
+    let relOffset = Int(buffer.load(fromByteOffset: offset + 8, as: UInt32.self))
+    let count = Int(buffer.load(fromByteOffset: offset + 8 + 4, as: UInt32.self))
+    let dataOffset = offset + 8 + relOffset
+    guard count == 0 || dataOffset % 8 == 0 else { return false }
+    for i in 0..<count {
+      let elemOffset = dataOffset + i * 88
+      guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: elemOffset, structSize: 88), NPRPC.check_alignment(buffer: buffer, offset: elemOffset, alignment: 8) else { return false }
+      guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: elemOffset + 0, structSize: 4), NPRPC.check_alignment(buffer: buffer, offset: elemOffset + 0, alignment: 4) else { return false }
+      guard Transport(rawValue: buffer.load(fromByteOffset: elemOffset + 0, as: UInt32.self)) != nil else { return false }
+      guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: elemOffset + 80, elementSize: 8, elementAlignment: 8) else { return false }
+    }
+  }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 96) else { return false }
+  return true
+}
+
+
+fileprivate func check_payload_3(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 4), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
+  return true
+}
+
+
 fileprivate func check_1Fu32(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
-  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 4) else { return false }
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 4), NPRPC.check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
   return true
 }
 

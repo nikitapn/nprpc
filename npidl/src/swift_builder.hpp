@@ -26,6 +26,7 @@ private:
   std::stringstream out;
 
   std::unordered_set<AstStructDecl*> emitted_marshal_structs_;
+  std::vector<AstTypeDecl*> payload_safety_types_;
 
   // Helper methods for type emission
   void emit_type(AstTypeDecl* type, std::ostream& os);

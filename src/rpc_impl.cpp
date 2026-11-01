@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/result.hpp>
 #include <nprpc/impl/telemetry.hpp>
 #include <nprpc/impl/shared_memory_channel.hpp>
 #include <nprpc/impl/shared_memory_connection.hpp>
@@ -288,10 +289,11 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   }
 
   // Configure SSL client settings based on RpcBuilder options.
-  // This Boost.Asio context is only used for outbound WSS/HTTPS. MsQuic and
-  // HTTP/3 have their own TLS stacks. Skip verify-path setup when nothing
-  // in the builder asks for HTTP/TLS — set_default_verify_paths SIGSEGVs on
-  // Ubuntu 24.04 + Boost.Asio (a SHM-only compositor dies immediately after
+  // This Boost.Asio context is only used for outbound WSS/HTTPS. Native QUIC
+  // and HTTP/3 configure their own TLS contexts for ngtcp2. Skip verify-path
+  // setup when nothing in the builder asks for HTTP/TLS —
+  // set_default_verify_paths SIGSEGVs on Ubuntu 24.04 + Boost.Asio
+  // (a SHM-only compositor dies immediately after
   // "SSL client verification paths set").
   const bool need_ssl_client =
       cfg_->http_ssl_enabled || cfg_->http_port != 0 ||
@@ -391,18 +393,15 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   g_cfg.quic_cert_file = cfg_->quic_cert_file;
   g_cfg.quic_key_file = cfg_->quic_key_file;
   g_cfg.quic_client_ca_file = cfg_->quic_client_ca_file;
+  g_cfg.quic_max_connections = cfg_->quic_max_connections;
+  g_cfg.quic_max_connections_per_ip = cfg_->quic_max_connections_per_ip;
+  g_cfg.quic_new_connections_per_ip_per_second = cfg_->quic_new_connections_per_ip_per_second;
 #ifdef NPRPC_QUIC_ENABLED
   // A certificate trusted for outbound TLS is trusted for outbound QUIC too.
   if (cfg_->quic_client_tls.ca_file.empty())
     cfg_->quic_client_tls.ca_file = cfg_->ssl_client_self_signed_cert_path;
   set_quic_client_tls(cfg_->quic_client_tls);
-  if (cfg_->quic_port != 0) {
-    auto& quic = QuicApi::instance();
-    auto checked = quic.create_configuration("nprpc", true,
-        cfg_->quic_cert_file.c_str(), cfg_->quic_key_file.c_str());
-    if (!checked) throw Exception("Invalid QUIC server credentials or client trust bundle");
-    quic.api()->ConfigurationClose(checked);
-  }
+  if (cfg_->quic_port != 0) validate_quic_server_tls();
 #else
   if (!cfg_->quic_client_tls.ca_file.empty() || !cfg_->quic_client_tls.certificate_file.empty() || !cfg_->quic_client_tls.private_key_file.empty() || !cfg_->quic_client_ca_file.empty())
     throw Exception("QUIC TLS configuration requires QUIC support");
@@ -415,7 +414,8 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   impl::g_rpc = new impl::RpcImpl();
   try {
     if (cfg_->telemetry_enabled)
-      static_cast<impl::RpcImpl*>(impl::g_rpc)->start_telemetry(cfg_->telemetry_min_interval_ms);
+      static_cast<impl::RpcImpl*>(impl::g_rpc)->start_telemetry(cfg_->telemetry_min_interval_ms,
+                                                             cfg_->telemetry_router_stats_file);
   } catch (...) {
     impl::g_rpc->destroy();
     throw;
@@ -700,6 +700,10 @@ void RpcImpl::destroy()
   // Now destroy sessions outside the lock
   sessions_to_destroy.clear();
 
+#ifdef NPRPC_QUIC_ENABLED
+  stop_quic_client();
+#endif
+
   // Drain any handlers posted by session shutdown (e.g. cancellation
   // completions). ioc_ was stopped above, so restart it to allow poll() to run.
   ioc_.restart();
@@ -832,6 +836,20 @@ std::string RpcImpl::produce_host_json(std::string_view output_path)
 NPRPC_API std::shared_ptr<Session>
 RpcImpl::get_session(const EndPoint& endpoint)
 {
+  auto session = get_session_impl(endpoint);
+  if (!session) throw nprpc::ExceptionCommFailure(session.error().message.data());
+  return std::move(*session);
+}
+
+NPRPC_API Result<std::shared_ptr<Session>>
+RpcImpl::get_session_result(const EndPoint& endpoint) noexcept
+{
+  return capture_result([&] { return get_session_impl(endpoint); }, ErrorCode::connection_failure);
+}
+
+Result<std::shared_ptr<Session>>
+RpcImpl::get_session_impl(const EndPoint& endpoint)
+{
   {
     // Fast path: check if session already exists for this endpoint
     std::shared_lock lk(connections_mut_);
@@ -861,8 +879,8 @@ RpcImpl::get_session(const EndPoint& endpoint)
   std::shared_ptr<Session> con;
   switch (endpoint.type()) {
   case EndPointType::TcpPrivate:
-    throw nprpc::ExceptionCommFailure(
-        "nprpc::impl::RpcImpl::get_session: Cannot create Ephemeral TCP connection");
+    return std::unexpected(Error(ErrorCode::connection_failure,
+        "nprpc::impl::RpcImpl::get_session: Cannot create Ephemeral TCP connection"));
   case EndPointType::Tcp:
 #ifdef NPRPC_TCP_ENABLED
 #if defined(__linux__)
@@ -881,24 +899,24 @@ RpcImpl::get_session(const EndPoint& endpoint)
     }
     break;
 #else
-    throw nprpc::ExceptionCommFailure(
-        "nprpc::impl::RpcImpl::get_session: TCP transport was not compiled in");
+    return std::unexpected(Error(ErrorCode::unsupported_transport,
+        "nprpc::impl::RpcImpl::get_session: TCP transport was not compiled in"));
 #endif
   case EndPointType::WebSocket:
 #ifdef NPRPC_WEBSOCKET_ENABLED
     con = make_client_plain_websocket_session(endpoint, ioc_);
     break;
 #else
-    throw nprpc::ExceptionCommFailure(
-        "nprpc::impl::RpcImpl::get_session: WebSocket transport was not compiled in");
+    return std::unexpected(Error(ErrorCode::unsupported_transport,
+        "nprpc::impl::RpcImpl::get_session: WebSocket transport was not compiled in"));
 #endif
   case EndPointType::SecuredWebSocket:
 #if defined(NPRPC_WEBSOCKET_ENABLED) && defined(NPRPC_SSL_ENABLED)
     con = make_client_ssl_websocket_session(endpoint, ioc_);
     break;
 #else
-    throw nprpc::ExceptionCommFailure(
-        "nprpc::impl::RpcImpl::get_session: WSS was not compiled in");
+    return std::unexpected(Error(ErrorCode::unsupported_transport,
+        "nprpc::impl::RpcImpl::get_session: WSS was not compiled in"));
 #endif
   case EndPointType::SharedMemory:
     {
@@ -907,15 +925,21 @@ RpcImpl::get_session(const EndPoint& endpoint)
       con = std::move(smc);
     }
     break;
-#ifdef NPRPC_QUIC_ENABLED
    case EndPointType::Quic:
+#ifdef NPRPC_QUIC_ENABLED
     con = make_quic_client_session(endpoint, ioc_);
     break;
+#else
+    return std::unexpected(Error(ErrorCode::unsupported_transport,
+        "nprpc::impl::RpcImpl::get_session: QUIC transport was not compiled in"));
 #endif
-   default:
-     throw nprpc::ExceptionCommFailure(
-         "nprpc::impl::RpcImpl::get_session: Unknown endpoint " "type: " +
-         std::to_string(static_cast<int>(endpoint.type())));
+   default: {
+     char message[128];
+     std::snprintf(message, sizeof(message),
+         "nprpc::impl::RpcImpl::get_session: Unknown endpoint type: %d",
+         static_cast<int>(endpoint.type()));
+     return std::unexpected(Error(ErrorCode::unsupported_transport, message));
+   }
   }
 
   add_connection(con);
@@ -928,6 +952,24 @@ NPRPC_API void RpcImpl::call(const EndPoint& endpoint,
                              uint32_t timeout_ms)
 {
   get_session(endpoint)->send_receive(buffer, timeout_ms);
+}
+
+Result<void> RpcImpl::call_result(const EndPoint& endpoint, flat_buffer& buffer,
+                                  uint32_t timeout_ms) noexcept
+{
+  auto session = get_session_result(endpoint);
+  if (!session) return std::unexpected(session.error());
+  return (*session)->send_receive_result(buffer, timeout_ms);
+}
+
+Result<void> RpcImpl::call_async_result(const EndPoint& endpoint, flat_buffer&& buffer,
+                                        Session::ResultHandler handler, uint32_t timeout_ms) noexcept
+{
+  if (!handler)
+    return std::unexpected(Error(ErrorCode::invalid_argument, "Missing RPC completion handler"));
+  auto session = get_session_result(endpoint);
+  if (!session) return std::unexpected(session.error());
+  return (*session)->send_receive_async_result(std::move(buffer), std::move(handler), timeout_ms);
 }
 
 // Free function wrapper for external callers (e.g., Swift bridge)

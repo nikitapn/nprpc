@@ -37,6 +37,12 @@ stream, allowing a headless end-to-end check.
 For an existing server, telemetry is part of the C++ runtime. No monitor
 package dependency or Swift servant is needed on the server.
 
+The client and server must use the same telemetry IDL layout. Generated Swift
+stream decoders validate payload bounds, alignment and enum values before
+decoding. Malformed or structurally incompatible snapshots end the stream
+with a `BufferError`, which the app displays as a connection failure. These
+checks do not negotiate schema versions or make changed layouts compatible.
+
 ```cpp
 auto* rpc = nprpc::RpcBuilder()
     .with_hostname("localhost")
@@ -129,7 +135,10 @@ trusted CA authorizes the valid client certificates it issues; explicitly truste
 self-signed leaf certificates provide a per-device allowlist. Certificates must be
 valid for their role (`serverAuth` / `clientAuth`) and within their validity
 period; the server certificate must match the hostname/IP in the reference.
-This implementation targets the MsQuic OpenSSL backend used on Linux.
+Native QUIC uses ngtcp2 with the TLS backend selected at build time:
+bundled BoringSSL (`NPRPC_USE_BORINGSSL=ON`) or system OpenSSL 3.5+.
+It shares these dependencies with HTTP/3 while using a separate listener
+for binary NPRPC RPCs. See the [build guide](../docs/BUILD.md#quic-and-http3).
 
 Configure the client before opening a remote QUIC connection:
 
@@ -211,7 +220,7 @@ Python's `cryptography` package.
 * Rates are deltas of cumulative counters divided by server monotonic elapsed
   time. First samples establish a baseline. Charts scale independently.
 
-This first version does not yet expose stream throughput/backpressure, latency percentiles, per-method breakdowns,
+This first version does not yet expose stream throughput/backpressure, per-method breakdowns,
 logs, alerts, or persistent history. It does not claim end-to-end latency.
 
 ## Framework exercise

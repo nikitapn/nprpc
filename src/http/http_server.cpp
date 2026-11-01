@@ -113,6 +113,15 @@ template <class Response> void add_alt_svc_header(Response& res)
   }
 }
 
+// The generator hides the status, so read it here on the way out.
+template <class Body, class Fields>
+http::message_generator counted(http::response<Body, Fields>&& res)
+{
+  if (telemetry_enabled())
+    record_http1_status(res.result_int());
+  return http::message_generator(std::move(res));
+}
+
 // Handle RPC request over HTTP POST
 template <class Body, class Allocator>
 http::message_generator
@@ -180,7 +189,7 @@ handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req,
           g_cfg.http_rpc_max_requests_per_ip_per_second,
           g_cfg.http_rpc_max_requests_burst)) {
     record_http1_throttled();
-    return too_many_requests("HTTP RPC rate limit exceeded");
+    return counted(too_many_requests("HTTP RPC rate limit exceeded"));
   }
 
   try {
@@ -188,7 +197,7 @@ handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req,
     std::string request_body = req.body();
 
     if (request_body.empty()) {
-      return rpc_error("Empty request body");
+      return counted(rpc_error("Empty request body"));
     }
 
     // Extract incoming Cookie: header (empty string_view if absent)
@@ -201,14 +210,14 @@ handle_rpc_request(http::request<Body, http::basic_fields<Allocator>>& req,
     std::vector<std::string> set_cookies;
     if (!process_http_rpc(g_rpc->ioc(), request_body, response_body,
                           cookies, &set_cookies)) {
-      return rpc_error("Failed to process RPC request");
+      return counted(rpc_error("Failed to process RPC request"));
     }
 
-    return rpc_response(std::move(response_body), set_cookies);
+    return counted(rpc_response(std::move(response_body), set_cookies));
 
   } catch (const std::exception& e) {
     NPRPC_LOG_ERROR("HTTP RPC exception: {}", e.what());
-    return rpc_error(e.what());
+    return counted(rpc_error(e.what()));
   }
 }
 
@@ -264,7 +273,7 @@ handle_request(beast::string_view doc_root,
   // Handle OPTIONS preflight for CORS
   if (req.method() == http::verb::options) {
     if (!is_rpc_http_target(req.target())) {
-      return bad_request("Unknown HTTP-method");
+      return counted(bad_request("Unknown HTTP-method"));
     }
 
     auto const origin = std::string(req[http::field::origin]);
@@ -278,7 +287,7 @@ handle_request(beast::string_view doc_root,
       res.keep_alive(req.keep_alive());
       res.body() = "CORS origin denied";
       res.prepare_payload();
-      return res;
+      return counted(std::move(res));
     }
 
     http::response<http::empty_body> res{http::status::no_content,
@@ -292,13 +301,13 @@ handle_request(beast::string_view doc_root,
     res.set(http::field::access_control_max_age, "86400"); // 24 hours
     add_alt_svc_header(res);
     res.keep_alive(req.keep_alive());
-    return res;
+    return counted(std::move(res));
   }
 
   // Make sure we can handle the method
   if (req.method() != http::verb::get && req.method() != http::verb::post &&
       req.method() != http::verb::head)
-    return bad_request("Unknown HTTP-method");
+    return counted(bad_request("Unknown HTTP-method"));
 
   // Check if this is an RPC request (POST to /rpc or /rpc/*)
   if (req.method() == http::verb::post && is_rpc_http_target(req.target())) {
@@ -345,16 +354,16 @@ handle_request(beast::string_view doc_root,
           res.body() = std::move(page->body);
           res.prepare_payload();
         }
-        return res;
+        return counted(std::move(res));
       }
     }
   }
 
   if (g_cfg.http_root_dir.empty())
-    return bad_request("Illegal request: only Upgrade is allowed");
+    return counted(bad_request("Illegal request: only Upgrade is allowed"));
 
   if (req.target().empty() || req.target()[0] != '/')
-    return bad_request("Illegal request-target");
+    return counted(bad_request("Illegal request-target"));
 
   auto request_target = std::string_view(req.target().data(), req.target().size());
   if (req.target().length() == 1 && req.target().back() == '/') {
@@ -363,13 +372,13 @@ handle_request(beast::string_view doc_root,
 
   auto path = resolve_http_doc_root_path(doc_root, request_target);
   if (!path) {
-    return not_found(req.target());
+    return counted(not_found(req.target()));
   }
 
   // Get file from cache (zero-copy)
   auto cached_file = get_file_cache().get(*path);
   if (!cached_file) {
-    return not_found(req.target());
+    return counted(not_found(req.target()));
   }
 
   // Cache the size since we need it for headers
@@ -384,7 +393,7 @@ handle_request(beast::string_view doc_root,
     add_alt_svc_header(res);
     res.content_length(size);
     res.keep_alive(req.keep_alive());
-    return res;
+    return counted(std::move(res));
   }
 
   // Respond to GET request using cached file body (zero-copy)
@@ -397,7 +406,7 @@ handle_request(beast::string_view doc_root,
   add_alt_svc_header(res);
   res.content_length(size);
   res.keep_alive(req.keep_alive());
-  return res;
+  return counted(std::move(res));
 }
 
 // Handles an HTTP server connection.

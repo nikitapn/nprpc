@@ -322,7 +322,14 @@ public func unmarshal_object_proxy(buffer: UnsafeRawPointer, offset: Int, endpoi
 /// - Returns: true if valid, false if out of bounds
 @inline(__always)
 public func check_struct_bounds(bufferSize: Int, offset: Int, structSize: Int) -> Bool {
-    return offset >= 0 && structSize >= 0 && offset + structSize <= bufferSize
+    offset >= 0 && offset <= bufferSize && structSize >= 0 && structSize <= bufferSize - offset
+}
+
+/// Validate the actual address before an aligned Swift load.
+@inline(__always)
+public func check_alignment(buffer: UnsafeRawPointer, offset: Int, alignment: Int) -> Bool {
+    guard offset >= 0, alignment > 0 else { return false }
+    return (UInt(bitPattern: buffer) &+ UInt(offset)) % UInt(alignment) == 0
 }
 
 /// Check that a vector/string field has valid bounds
@@ -335,28 +342,19 @@ public func check_struct_bounds(bufferSize: Int, offset: Int, structSize: Int) -
 ///   - elementSize: Size of each element
 /// - Returns: true if valid, false if out of bounds
 @inline(__always)
-public func check_vector_bounds(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int, elementSize: Int) -> Bool {
-    // Check header is within bounds (8 bytes for offset + count)
-    guard offset >= 0 && offset + 8 <= bufferSize else { return false }
-    
-    // Read the relative offset and count
+public func check_vector_bounds(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int,
+                                elementSize: Int, elementAlignment: Int = 1) -> Bool {
+    guard check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 8),
+          check_alignment(buffer: buffer, offset: offset, alignment: 4),
+          elementSize > 0 else { return false }
     let relativeOffset = Int(buffer.load(fromByteOffset: offset, as: UInt32.self))
     let count = Int(buffer.load(fromByteOffset: offset + 4, as: UInt32.self))
-    
-    // Empty vector is always valid
     guard count > 0 else { return true }
-    
-    // Calculate absolute data offset
+    // Subtract/divide before adding/multiplying, so malformed lengths cannot overflow.
+    guard relativeOffset >= 8, relativeOffset <= bufferSize - offset else { return false }
     let dataOffset = offset + relativeOffset
-    
-    // Check data region is within bounds
-    // Guard against integer overflow
-    guard dataOffset >= 0 && elementSize >= 0 else { return false }
-    let dataSize = count * elementSize
-    guard dataSize / elementSize == count else { return false }  // Overflow check
-    guard dataOffset + dataSize <= bufferSize else { return false }
-    
-    return true
+    return check_alignment(buffer: buffer, offset: dataOffset, alignment: elementAlignment)
+        && count <= (bufferSize - dataOffset) / elementSize
 }
 
 /// Check that a string field has valid bounds
@@ -375,22 +373,14 @@ public func check_string_bounds(buffer: UnsafeRawPointer, bufferSize: Int, offse
 ///   - valueSize: Size of the optional value (when present)
 /// - Returns: true if valid, false if out of bounds
 @inline(__always)
-public func check_optional_bounds(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int, valueSize: Int) -> Bool {
-    // Check header is within bounds (4 bytes for relative offset)
-    guard offset >= 0 && offset + 4 <= bufferSize else { return false }
-    
-    // Read the relative offset (0 means no value)
+public func check_optional_bounds(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int,
+                                  valueSize: Int, valueAlignment: Int = 1) -> Bool {
+    guard check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 4),
+          check_alignment(buffer: buffer, offset: offset, alignment: 4) else { return false }
     let relativeOffset = Int(buffer.load(fromByteOffset: offset, as: UInt32.self))
-    
-    // No value means valid
     guard relativeOffset != 0 else { return true }
-    
-    // Calculate absolute data offset
+    guard relativeOffset >= 4, relativeOffset <= bufferSize - offset else { return false }
     let dataOffset = offset + relativeOffset
-    
-    // Check value is within bounds
-    guard dataOffset >= 0 && valueSize >= 0 else { return false }
-    guard dataOffset + valueSize <= bufferSize else { return false }
-    
-    return true
+    return check_struct_bounds(bufferSize: bufferSize, offset: dataOffset, structSize: valueSize)
+        && check_alignment(buffer: buffer, offset: dataOffset, alignment: valueAlignment)
 }

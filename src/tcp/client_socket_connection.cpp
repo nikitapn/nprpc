@@ -40,6 +40,7 @@
 
 #include <nprpc/common.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/result.hpp>
 #include <nprpc/impl/stream_manager.hpp>
 
 #include "helper.hpp"
@@ -173,6 +174,21 @@ net::awaitable<void> SocketConnection::read_loop()
 
     const uint32_t request_id = extract_request_id(rx_buffer_);
 
+    // Check message type first: server-pushed Request frames (stream chunks)
+    // must go through handle_request, not the pending_requests_ table.
+    impl::flat::Header_Direct hdr(rx_buffer_, 0);
+    if (hdr.msg_type() == impl::MessageType::Request) {
+      flat_buffer frame;
+      auto dst = frame.prepare(msg_size);
+      std::memcpy(dst.data(), rx_buffer_.data_ptr(), msg_size);
+      frame.commit(msg_size);
+      rx_buffer_.consume(msg_size);
+
+      flat_buffer tx; // no reply expected
+      handle_request(frame, tx);
+      continue;
+    }
+
     auto it = pending_requests_.find(request_id);
     if (it != pending_requests_.end()) {
       if (it->second.timeout_timer)
@@ -205,7 +221,7 @@ net::awaitable<void> SocketConnection::read_loop()
 // ---------------------------------------------------------------------------
 // send_receive — synchronous bridge via atomic_bool.
 // ---------------------------------------------------------------------------
-void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
+boost::system::error_code SocketConnection::do_send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 {
   std::atomic_bool done{false};
   boost::system::error_code result_ec;
@@ -223,8 +239,7 @@ void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 
   done.wait(false);
 
-  if (result_ec)
-    throw nprpc::ExceptionCommFailure();
+  return result_ec;
 }
 
 // ---------------------------------------------------------------------------

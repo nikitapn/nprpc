@@ -681,14 +681,16 @@ public:
   ~Http3Connection();
 
   bool init();
-  int on_read(const uint8_t* data, size_t len, const ngtcp2_pkt_info* pi);
+  int on_read(const uint8_t* data, size_t len, const ngtcp2_pkt_info* pi,
+              const boost::asio::ip::udp::endpoint& from);
   int on_write();
   int handle_expiry();
   void schedule_timer();
   // Coalesces multiple write triggers into a single deferred on_write() so a
   // burst of inbound datagrams produces one GSO send instead of one per packet.
   void schedule_write();
-  void enqueue_packet(flat_buffer&& data, ngtcp2_pkt_info pi);
+  void enqueue_packet(flat_buffer&& data, ngtcp2_pkt_info pi,
+                      const boost::asio::ip::udp::endpoint& from);
 
   const ngtcp2_cid& scid() const { return scid_; }
   const boost::asio::ip::udp::endpoint& remote_endpoint() const
@@ -985,7 +987,11 @@ private:
   Http3Server* server_;
   boost::asio::ip::udp::socket& socket_;
   boost::asio::ip::udp::endpoint local_ep_;
+  // Where the connection started: per-IP accounting needs the same address at
+  // open and close, however far the client moves in between.
   boost::asio::ip::udp::endpoint remote_ep_;
+  // Where the client is now.
+  boost::asio::ip::udp::endpoint peer_ep_;
   boost::asio::strand<boost::asio::io_context::executor_type> strand_;
   boost::asio::steady_timer timer_;
 
@@ -1155,11 +1161,6 @@ public:
     }
 
     return true;
-  }
-
-  void send_receive(flat_buffer&, uint32_t) override
-  {
-    assert(false && "send_receive not supported on WebTransport server control session");
   }
 
   nprpc::Task<> send_receive_coro(flat_buffer& buffer,
@@ -1592,6 +1593,7 @@ Http3Connection::Http3Connection(
     , socket_(socket)
     , local_ep_(local_ep)
     , remote_ep_(remote_ep)
+    , peer_ep_(remote_ep)
     , strand_(boost::asio::make_strand(server->io_context()))
     , timer_(server->io_context())
     , ssl_ctx_(ssl_ctx)
@@ -1833,7 +1835,8 @@ bool Http3Connection::init()
 
 int Http3Connection::on_read(const uint8_t* data,
                              size_t len,
-                             const ngtcp2_pkt_info* pi)
+                             const ngtcp2_pkt_info* pi,
+                             const boost::asio::ip::udp::endpoint& from)
 {
   if (closed_) {
     return -1;
@@ -1846,7 +1849,7 @@ int Http3Connection::on_read(const uint8_t* data,
     NPRPC_HTTP3_TRACE(
         "Connection is in closing period, resend cached CONNECTION_CLOSE");
     if (!conn_close_buf_.empty()) {
-      server_->send_packet(remote_ep_, conn_close_buf_.data(),
+      server_->send_packet(peer_ep_, conn_close_buf_.data(),
                            conn_close_buf_.size());
     }
     return 0;
@@ -1864,9 +1867,10 @@ int Http3Connection::on_read(const uint8_t* data,
   memset(&remote_ss, 0, sizeof(remote_ss));
 
   auto local_ep_data = local_ep_.data();
-  auto remote_ep_data = remote_ep_.data();
+  // The real sender: a different one is how ngtcp2 learns the client moved.
+  auto remote_ep_data = from.data();
   memcpy(&local_ss, local_ep_data, local_ep_.size());
-  memcpy(&remote_ss, remote_ep_data, remote_ep_.size());
+  memcpy(&remote_ss, remote_ep_data, from.size());
 
   ngtcp2_path path{
       .local =
@@ -1877,7 +1881,7 @@ int Http3Connection::on_read(const uint8_t* data,
       .remote =
           {
               .addr = reinterpret_cast<sockaddr*>(&remote_ss),
-              .addrlen = static_cast<ngtcp2_socklen>(remote_ep_.size()),
+              .addrlen = static_cast<ngtcp2_socklen>(from.size()),
           },
   };
 
@@ -2110,7 +2114,10 @@ int Http3Connection::on_write()
   }
 
   if (nwrite > 0) {
-    server_->send_aggregated(remote_ep_, txbuf_.data(),
+    // Where ngtcp2 says: it moves to a client's new address once validated.
+    peer_ep_.resize(ps.path.remote.addrlen);
+    std::memcpy(peer_ep_.data(), ps.path.remote.addr, ps.path.remote.addrlen);
+    server_->send_aggregated(peer_ep_, txbuf_.data(),
                              static_cast<size_t>(nwrite), gso_size);
   }
 
@@ -2120,17 +2127,18 @@ int Http3Connection::on_write()
 }
 
 void Http3Connection::enqueue_packet(flat_buffer&& data,
-                                     ngtcp2_pkt_info pi)
+                                     ngtcp2_pkt_info pi,
+                                     const boost::asio::ip::udp::endpoint& from)
 {
   boost::asio::post(
-      strand_, [self = shared_from_this(), packet = std::move(data), pi]() {
+      strand_, [self = shared_from_this(), packet = std::move(data), pi, from]() {
         if (self->closed_) {
           return;
         }
 
         // on_read() already schedules a coalesced write on success; no direct
         // on_write() here (that produced two writes per inbound datagram).
-        self->on_read(packet.data_ptr(), packet.size(), &pi);
+        self->on_read(packet.data_ptr(), packet.size(), &pi, from);
       });
 }
 
@@ -2335,7 +2343,7 @@ Http3Stream* Http3Connection::find_stream(int64_t stream_id)
 }
 
 // CONNECT is excluded so WebTransport sessions do not count as page requests.
-static void finish_http_telemetry(Http3Stream* stream, uint64_t sent, bool error)
+static void finish_http_telemetry(Http3Stream* stream, uint64_t sent, unsigned status)
 {
   if (!telemetry_enabled() || stream->telemetry_recorded || stream->method == "CONNECT")
     return;
@@ -2344,7 +2352,8 @@ static void finish_http_telemetry(Http3Stream* stream, uint64_t sent, bool error
   const auto elapsed = stream->telemetry_start == std::chrono::steady_clock::time_point{}
     ? std::chrono::nanoseconds{0} : std::chrono::steady_clock::now() - stream->telemetry_start;
   record_telemetry(monitor::Transport::Http3, stream->telemetry_received_bytes, sent,
-    std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count(), error);
+    std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count(), status >= 500);
+  record_http3_status(status);
 }
 
 Http3Stream* Http3Connection::create_stream(int64_t stream_id)
@@ -2982,7 +2991,7 @@ Http3Connection::make_response_headers(Http3Stream* stream,
                                        bool include_cors,
                                        bool preflight)
 {
-  finish_http_telemetry(stream, stream->method == "HEAD" ? 0 : content_length, status_code >= 500);
+  finish_http_telemetry(stream, stream->method == "HEAD" ? 0 : content_length, status_code);
   auto& prepared = stream->response_headers;
   prepared.headers.clear();
   prepared.status = std::to_string(status_code);
@@ -3097,7 +3106,7 @@ int Http3Connection::send_not_modified(
   // nghttp3 finishes draining the 304 headers (stream close).
   stream->cached_file = std::move(cached_file);
 
-  finish_http_telemetry(stream, 0, false);
+  finish_http_telemetry(stream, 0, 304);
   auto& prepared = stream->response_headers;
   prepared.headers.clear();
   prepared.status = "304";
@@ -3467,7 +3476,7 @@ int Http3Connection::handle_error()
 
   // Send connection close
   if (!conn_close_buf_.empty()) {
-    server_->send_packet(remote_ep_, conn_close_buf_.data(),
+    server_->send_packet(peer_ep_, conn_close_buf_.data(),
                          conn_close_buf_.size());
   }
 
@@ -5359,7 +5368,7 @@ void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
 #endif
     // Existing connection - feed data
     ngtcp2_pkt_info pi{};
-    conn->enqueue_packet(copy_bytes_to_buffer(data, len), pi);
+    conn->enqueue_packet(copy_bytes_to_buffer(data, len), pi, remote_ep);
     return;
   }
 
@@ -5430,7 +5439,7 @@ void Http3Server::handle_packet(const boost::asio::ip::udp::endpoint& remote_ep,
 
   // Feed the initial packet
   ngtcp2_pkt_info pi{};
-  conn->enqueue_packet(copy_bytes_to_buffer(data, len), pi);
+  conn->enqueue_packet(copy_bytes_to_buffer(data, len), pi, remote_ep);
 }
 
 bool Http3Server::allow_new_connection(

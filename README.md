@@ -24,10 +24,16 @@ NPRPC is a high-performance, multi-transport RPC framework for distributed syste
 | **HTTP** | Stateless web APIs | Browser-compatible, page rendering; TLS via HTTPS; `-DNPRPC_ENABLE_HTTP=OFF` to disable |
 | **HTTP/3** | Modern web | QUIC-based, page rendering; requires `-DNPRPC_ENABLE_HTTP3=ON` |
 | **WebTransport** | Browser streaming | Multiplexed streams over HTTP/3; native stream mapping for `stream<T>` |
-| **QUIC** | Native next-gen | Multiplexed, encrypted; requires `-DNPRPC_ENABLE_QUIC=ON` |
+| **QUIC** | Native RPC | Multiplexed, encrypted NPRPC over ngtcp2; requires `-DNPRPC_ENABLE_QUIC=ON` |
 | **Shared Memory** | Same-machine IPC | Zero-copy in some cases; extremely low latency. Always compiled in. |
 
-TLS for HTTPS/WSS is optional (`-DNPRPC_ENABLE_SSL=OFF`). A shared-memory-only build (TCP/HTTP/WebSocket/SSL all off) does not need OpenSSL or liburing. See [docs/BUILD.md](docs/BUILD.md).
+TLS for HTTPS/WSS is optional (`-DNPRPC_ENABLE_SSL=OFF`). A shared-memory-only
+build (TCP, HTTP, WebSocket, SSL, QUIC and HTTP/3 all off) needs no OpenSSL or
+liburing. See [docs/BUILD.md](docs/BUILD.md).
+
+Native QUIC and HTTP/3 share ngtcp2 with bundled BoringSSL or system OpenSSL
+3.5+; HTTP/3 also uses nghttp3. Their TLS remains enabled independently of
+`NPRPC_ENABLE_SSL`. See [QUIC and HTTP/3 build options](docs/BUILD.md#quic-and-http3).
 
 ## Quick Start
 
@@ -539,8 +545,7 @@ case .msgB(let b): print("B: \(b.code)")
 - `in` — input parameter (by value)
 - `out` — output parameter
 - `raises(E1, E2)` — exception specification
-- `async` — fire-and-forget (no reply)
-- `[unreliable]` — fire-and-forget RPC (must be `void`, only `in` args, no `raises`) or best-effort streams (QUIC DATAGRAM when available; other transports may still deliver the bytes)
+- `[unreliable]` — best-effort delivery (QUIC/WebTransport only, others ignore)
 - `[force_helpers=1]` — emit helper `from_flat` / `to_flat` functions for a `message`
 - `[trusted=true]` — disable strict bounds checking for untrusted input
 
@@ -571,9 +576,9 @@ exception NotFound { id: u32; }
 message Post { id: u32; title: string; body: string; }
 
 interface BlogService {
-  Post        GetPost(id: in u32) raises(NotFound);
+  Post         GetPost(id: in u32) raises(NotFound);
   vector<Post> ListPosts(page: in u32, size: in u32);
-  async       DeletePost(id: in u32);
+  bool         DeletePost(id: in u32);
 
   // Stream all posts matching a query
   stream<Post> Search(query: in string) raises(NotFound);
@@ -674,9 +679,13 @@ let sum = try await calc.add(a: 10, b: 20)   // 30.0
 for try await item in try feed.watch(limit: 10) {
     show(item)
 }
-```
 
-See [docs/STREAMS.md](docs/STREAMS.md) for client and bidi streams.
+// Awaitable method
+await client.playerMoved(x: 1.0, y: 2.0, z: 0.0)
+
+// Awaitable method with return value
+let reply = try await client.method2(arg1: 42)
+```
 
 ### File descriptors (Swift)
 

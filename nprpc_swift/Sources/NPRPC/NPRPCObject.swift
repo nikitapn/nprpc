@@ -159,105 +159,40 @@ open class NPRPCObject: Codable, @unchecked Sendable {
         nprpc_object_send_unreliable(handle, buffer.handle) == 0
     }
 
-    /// Send a request asynchronously with async/await support
-    /// - Parameters:
-    ///   - buffer: The FlatBuffer containing the request (ownership transferred)
-    ///   - timeout: Timeout in milliseconds
-    /// - Throws: RpcError on communication failure
+    /// Send a request and wait for its reply, discarding the response body.
+    /// Throws `RpcError` for setup and transport failures.
     public func sendAsync(buffer: FlatBuffer, timeout: UInt32) async throws {
-        try Task.checkCancellation()
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            // Box the continuation so we can pass a pointer to C++
-            let boxedContinuation = Unmanaged.passRetained(
-                ContinuationBox(continuation)
-            ).toOpaque()
-
-            // C callback that resumes the Swift continuation
-            let callback: swift_async_callback = { context, errorCode, errorMessage in
-                guard let context = context else { return }
-                let box = Unmanaged<ContinuationBox<Void>>.fromOpaque(context).takeRetainedValue()
-                if errorCode == 0 {
-                    box.continuation.resume()
-                } else {
-                    let msg = errorMessage.map { String(cString: $0) } ?? "Unknown async RPC error"
-                    box.continuation.resume(throwing: RuntimeError(message: msg))
-                }
-            }
-
-            let result = nprpc_object_send_async(
-                handle,
-                buffer.handle,
-                boxedContinuation,
-                callback,
-                timeout
-            )
-
-            if result != 0 {
-                // Failed to start - take back ownership and resume with error
-                let box = Unmanaged<ContinuationBox<Void>>.fromOpaque(boxedContinuation).takeRetainedValue()
-                let errorMsg: String
-                switch result {
-                case -1: errorMsg = "Async RPC call failed: invalid arguments"
-                case -2: errorMsg = "Async RPC call failed: could not select endpoint"
-                default: errorMsg = "Async RPC call failed: unknown error (\(result))"
-                }
-                box.continuation.resume(throwing: RuntimeError(message: errorMsg))
-            }
-        }
+        _ = try await sendResult(buffer: buffer, timeout: timeout, receiveResponse: false)
     }
 
-    /// Send a request asynchronously and receive the response with async/await support
-    /// Use this for async methods that have output parameters
-    /// - Parameters:
-    ///   - buffer: The FlatBuffer containing the request (ownership transferred)
-    ///   - timeout: Timeout in milliseconds
-    /// - Returns: FlatBuffer containing the response
-    /// - Throws: RpcError on communication failure
+    /// Send a request and receive its response buffer.
+    /// Throws `RpcError` for setup and transport failures. Generated proxies
+    /// decode remote IDL errors separately from the returned response.
     public func sendAsyncReceive(buffer: FlatBuffer, timeout: UInt32) async throws -> FlatBuffer {
+        guard let response = try await sendResult(buffer: buffer, timeout: timeout, receiveResponse: true) else {
+            throw RpcError(kind: .internalError, message: "RPC completed without a response buffer")
+        }
+        return response
+    }
+
+    private func sendResult(buffer: FlatBuffer, timeout: UInt32,
+                            receiveResponse: Bool) async throws -> FlatBuffer? {
         try Task.checkCancellation()
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<FlatBuffer, Error>) in
-            // Box the continuation so we can pass a pointer to C++
-            let boxedContinuation = Unmanaged.passRetained(
-                ContinuationBox(continuation)
-            ).toOpaque()
-
-            // C callback that resumes the Swift continuation with the response buffer
-            let callback: swift_async_receive_callback = { context, errorCode, errorMessage, responseBuffer in
-                guard let context = context else { return }
-                let box = Unmanaged<ContinuationBox<FlatBuffer>>.fromOpaque(context).takeRetainedValue()
-                if errorCode == 0 {
-                    if let responseBuffer = responseBuffer {
-                        // Ownership of responseBuffer is transferred to Swift
-                        let responseFlat = FlatBuffer(wrapping: responseBuffer, owned: true)
-                        box.continuation.resume(returning: responseFlat)
-                    } else {
-                        box.continuation.resume(throwing: RuntimeError(message: "Async RPC completed but no response buffer"))
-                    }
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<FlatBuffer?, Error>) in
+            let context = Unmanaged.passRetained(ContinuationBox(continuation)).toOpaque()
+            let callback: swift_rpc_completion = { context, error, response in
+                guard let context else { return }
+                let box = Unmanaged<ContinuationBox<FlatBuffer?>>.fromOpaque(context).takeRetainedValue()
+                if let error {
+                    box.continuation.resume(throwing: RpcError(bridge: error.pointee))
                 } else {
-                    let msg = errorMessage.map { String(cString: $0) } ?? "Unknown async RPC error"
-                    box.continuation.resume(throwing: RuntimeError(message: msg))
+                    box.continuation.resume(returning: response.map { FlatBuffer(wrapping: $0, owned: true) })
                 }
             }
-
-            let result = nprpc_object_send_async_receive(
-                handle,
-                buffer.handle,
-                boxedContinuation,
-                callback,
-                timeout
-            )
-
-            if result != 0 {
-                // Failed to start - take back ownership and resume with error
-                let box = Unmanaged<ContinuationBox<FlatBuffer>>.fromOpaque(boxedContinuation).takeRetainedValue()
-                let errorMsg: String
-                switch result {
-                case -1: errorMsg = "Async RPC call failed: invalid arguments"
-                case -2: errorMsg = "Async RPC call failed: could not select endpoint"
-                default: errorMsg = "Async RPC call failed: unknown error (\(result))"
-                }
-                box.continuation.resume(throwing: RuntimeError(message: errorMsg))
-            }
+            // Completion consumes the context exactly once, even for an inline
+            // setup failure. There is no separate startup-error ownership path.
+            nprpc_object_send_async_result(handle, buffer.handle, context, callback,
+                                           timeout, receiveResponse)
         }
     }
 
@@ -346,6 +281,20 @@ open class NPRPCObject: Codable, @unchecked Sendable {
         // Release our reference to C++ object
         // nprpc_object_release(handle)
     }
+}
+
+/// Why `narrow` returned nil, for an error message. The part of a class ID after
+/// the `#` is a hash of the interface's IDL, so two IDs that differ only there
+/// are the same interface built from different versions of its IDL.
+public func narrowFailure<T: NPRPCObject>(_ object: NPRPCObject, to type: T.Type) -> String {
+    let actual = object.classId.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+    let expected = T.classId.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+    if actual.first == expected.first {
+        let theirs = actual.count > 1 ? String(actual[1]) : "none"
+        let ours = expected.count > 1 ? String(expected[1]) : "none"
+        return "\(expected[0]): the server's schema \(theirs) differs from this client's \(ours). Rebuild the older one."
+    }
+    return "This reference is a \(actual.first ?? ""), not a \(expected.first ?? "")."
 }
 
 /// Narrow Object reference to a specific class (for clientside proxies)

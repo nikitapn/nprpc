@@ -221,8 +221,8 @@ describe('WebTransport Browser Transport', function() {
         expect(resolved.found).to.equal(true);
         expect(resolved.endpointType).to.equal(EndPointType.WebTransport);
       }
-      expect((result as any).resolved[0].classId).to.equal('nprpc_test/nprpc.test.TestBasic');
-      expect((result as any).resolved[1].classId).to.equal('nprpc_test/nprpc.test.ServerControl');
+      expect((result as any).resolved[0].classId).to.match(/^nprpc_test\/nprpc\.test\.TestBasic#[0-9a-f]{16}$/);
+      expect((result as any).resolved[1].classId).to.match(/^nprpc_test\/nprpc\.test\.ServerControl#[0-9a-f]{16}$/);
     } finally {
       await context.close();
     }

@@ -14,8 +14,8 @@ it first. Use it for building; run applications on the
   `NPRPCWeb` for server-rendered pages
 - **swift-mustache**, which `NPRPCWeb` depends on
 - **Boost 1.89.0**
-- CMake, Ninja, pkg-config, Node.js, liburing, and ffmpeg/gpac for media
-  examples
+- CMake, Ninja, pkg-config, Node.js, liburing, ffmpeg, and GPAC 26.07.0
+  (`MP4Box` and `gpac`) for media examples
 
 ## Quick Start
 
@@ -25,11 +25,34 @@ it first. Use it for building; run applications on the
 just build-dev-image
 ```
 
+This first builds the shared `nprpc-gpac:26.07.0` artifact image, then copies
+its `/opt/gpac` tree into the development image. Docker caches the GPAC build
+independently of NPRPC. To build only the media tools:
+
+```bash
+just build-gpac-image
+```
+
+GPAC is built from a release archive verified by SHA-256 in
+`Dockerfile.gpac`, since Ubuntu no longer packages it. The headless tools
+embed libgpac and its modules; their system dependencies are OpenSSL
+(`libssl3t64`) and zlib (`zlib1g`) on Ubuntu 26.04. FFmpeg remains a separate
+package for transcoding.
+
+The sibling `nscalc` repository's `docker/Dockerfile.prod` copies the same
+artifacts, using `ARG GPAC_IMAGE=nprpc-gpac:26.07.0`, and installs those two
+runtime dependencies. Its deploy script ships this image to the server when
+needed, alongside `nprpc-runtime`. Override with `--gpac-image <image:tag>`.
+The GPAC image contains artifacts only; use `COPY --from`, rather than
+running it as a container. For direct `docker build -f Dockerfile.dev .`,
+build the GPAC image first (or pass `--build-arg GPAC_IMAGE=<image:tag>`).
+
 This creates `nprpc-dev:latest` with everything under `/opt/`:
 - `/opt/nprpc`: C++ library, headers, tools, CMake config
 - `/opt/nprpc_swift`: Swift package (source + compiled)
 - `/opt/swift-mustache`: template engine used by `NPRPCWeb`
 - `/opt/boost`: Boost libraries
+- `/opt/gpac`: shared media tools and resources
 
 The image runs as the `ubuntu` user (UID/GID 1000). Pass
 `--user $(id -u):$(id -g)` so files written to a mounted directory belong to
@@ -144,6 +167,7 @@ Pre-configured in the image:
 - `NPRPC_ROOT=/opt/nprpc`
 - `NPRPC_SWIFT_ROOT=/opt/nprpc_swift`
 - `PATH` includes `/opt/nprpc/bin` (npidl, npnameserver)
+- `PATH` includes `/opt/gpac/bin` (MP4Box, gpac)
 - `LD_LIBRARY_PATH` includes `/opt/nprpc/lib` and `/opt/boost/lib`
 - `PKG_CONFIG_PATH` includes `/opt/nprpc/lib/pkgconfig`
 

@@ -5,13 +5,18 @@ production. It holds what a built application needs at run time and nothing
 else:
 
 - the Swift 6.4.1 runtime (it is based on `swift:6.4.1-slim`)
-- `libnprpc` and `libmsquic`, without debug info
+- `libnprpc`, without debug info; ngtcp2, nghttp3 and BoringSSL are linked
+  statically into it by the development image
 - the Boost shared libraries
 - `liburing2`, `libatomic1`, `ca-certificates` and `tzdata`
 
-The image is about 320 MB, roughly 30 MB more than `swift:6.4.1-slim`.
 Applications are compiled in the [development image](DOCKER_DEV_IMAGE.md),
 and their production images are built `FROM nprpc-runtime`.
+
+QUIC and HTTP/3 need no separate transport or TLS shared libraries in this
+image. This assumes the development image's `NPRPC_USE_BORINGSSL=ON` build;
+a custom build using system OpenSSL also needs matching OpenSSL shared
+libraries at runtime.
 
 ## Why a shared base
 

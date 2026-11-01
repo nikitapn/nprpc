@@ -1,9 +1,6 @@
 [submodule "third_party/glaze"]
 	path = third_party/glaze
 	url = git@github.com:stephenberry/glaze.git
-[submodule "third_party/msquic"]
-	path = third_party/msquic
-	url = git@github.com:microsoft/msquic.git
 [submodule "third_party/ngtcp2"]
 	path = third_party/ngtcp2
 	url = git@github.com:nikitapn/ngtcp2.git

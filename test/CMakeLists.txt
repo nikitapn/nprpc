@@ -3,6 +3,14 @@
 # Find GTest
 find_package(GTest REQUIRED)
 
+# Exercise the Swift ABI boundary and completion ownership from C++ as well.
+add_executable(test_swift_bridge_errors
+  src/test_swift_bridge_errors.cpp
+  ../nprpc_swift/Sources/CNprpc/nprpc_bridge.cpp
+)
+target_link_libraries(test_swift_bridge_errors PRIVATE nprpc::nprpc GTest::gtest_main)
+add_test(NAME SwiftBridgeErrors COMMAND test_swift_bridge_errors)
+
 # Generate test IDL files
 include(../cmake/npidl.cmake)
 
@@ -529,6 +537,14 @@ add_executable(test_telemetry_counters ${CMAKE_CURRENT_SOURCE_DIR}/../nprpc_moni
 target_link_libraries(test_telemetry_counters PRIVATE nprpc::nprpc)
 add_test(NAME telemetry_counters COMMAND test_telemetry_counters)
 
+add_executable(test_router_country_table ${CMAKE_CURRENT_SOURCE_DIR}/src/test_router_country_table.cpp)
+target_include_directories(test_router_country_table PRIVATE ${CMAKE_SOURCE_DIR}/npquicrouter/src)
+add_test(NAME RouterCountryTable COMMAND test_router_country_table)
+
+add_executable(test_quic_connection_limiter ${CMAKE_CURRENT_SOURCE_DIR}/src/test_quic_connection_limiter.cpp)
+target_link_libraries(test_quic_connection_limiter PRIVATE nprpc::nprpc)
+add_test(NAME QuicConnectionLimiter COMMAND test_quic_connection_limiter)
+
 if(NPRPC_ENABLE_QUIC)
   add_executable(test_telemetry_builder src/test_telemetry_builder.cpp)
   target_link_libraries(test_telemetry_builder PRIVATE nprpc::nprpc)
@@ -543,5 +559,32 @@ if(NPRPC_ENABLE_QUIC)
     add_test(NAME QuicTLS COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/quic_tls_test.py $<TARGET_FILE:quic_tls_fixture>)
     set_tests_properties(QuicTLS PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+  endif()
+endif()
+
+if(NPRPC_ENABLE_HTTP3 AND NPRPC_BUILD_ROUTER)
+  add_executable(http3_rebinding_fixture src/http3_rebinding_fixture.cpp)
+  target_link_libraries(http3_rebinding_fixture PRIVATE nprpc::nprpc)
+  # The test runs these, and the usual test targets are what gets built before it.
+  add_dependencies(nprpc_test http3_rebinding_fixture npquicrouter)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME Http3RouterRebinding COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/http3_router_rebinding_test.py
+      $<TARGET_FILE:http3_rebinding_fixture> $<TARGET_FILE:npquicrouter>
+      ${CMAKE_SOURCE_DIR}/certs/out/localhost.crt ${CMAKE_SOURCE_DIR}/certs/out/localhost.key)
+    set_tests_properties(Http3RouterRebinding PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+    add_test(NAME NpidlSchemaHash COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_SOURCE_DIR}/npidl/test/integration_tests/schema_hash_test.py $<TARGET_FILE:npidl>)
+    add_test(NAME QuicListenerLimits COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/quic_listener_limits_test.py
+      $<TARGET_FILE:quic_tls_fixture>
+      ${CMAKE_SOURCE_DIR}/certs/out/localhost.crt ${CMAKE_SOURCE_DIR}/certs/out/localhost.key)
+    set_tests_properties(QuicListenerLimits PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+    add_test(NAME RouterLimits COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/router_limits_test.py
+      $<TARGET_FILE:http3_rebinding_fixture> $<TARGET_FILE:npquicrouter>
+      ${CMAKE_SOURCE_DIR}/certs/out/localhost.crt ${CMAKE_SOURCE_DIR}/certs/out/localhost.key)
+    set_tests_properties(RouterLimits PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
   endif()
 endif()

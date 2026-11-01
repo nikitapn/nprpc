@@ -66,12 +66,6 @@ public:
     // No-op for HTTP sessions
   }
 
-  virtual void send_receive(flat_buffer&, uint32_t) override
-  {
-    // HTTP sessions don't make outbound calls
-    assert(false && "send_receive not supported on HTTP sessions");
-  }
-
   nprpc::Task<> send_receive_coro(flat_buffer& buffer,
                                           uint32_t timeout_ms,
                                           std::stop_token st = {}) override

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "include/nprpc_bridge.hpp"
+#include "nprpc_bridge_error.hpp"
 
 // Include full nprpc headers in implementation
 // Should never include boost/asio/ssl.hpp or boost/beast/ssl.hpp in the Swift bridge headers
@@ -43,19 +44,11 @@ namespace nprpc::impl {
 
     NPRPC_API void rpc_call(const nprpc::EndPoint& endpoint, nprpc::flat_buffer& buffer, uint32_t timeout_ms);
 
-    NPRPC_API void rpc_call_async(
-        const nprpc::EndPoint& endpoint,
-        nprpc::flat_buffer&& buffer,
-        std::function<void(const boost::system::error_code&, nprpc::flat_buffer&)>&& completion_handler,
-        uint32_t timeout_ms);
-
     NPRPC_API void rpc_call_async_no_reply(
         const nprpc::EndPoint& endpoint,
         nprpc::flat_buffer&& buffer,
         uint32_t timeout_ms);
 
-    // Forward declare get_session - we'll use it for stream registration
-    NPRPC_API std::shared_ptr<Session> get_session_for_endpoint(const nprpc::EndPoint& endpoint);
 }
 
 namespace nprpc_swift {
@@ -305,6 +298,7 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.telemetry_enabled = config->telemetry_enabled;
         cxxConfig.telemetry_min_interval_ms = config->telemetry_min_interval_ms;
         cxxConfig.telemetry_allow_anonymous = config->telemetry_allow_anonymous;
+        cxxConfig.telemetry_router_stats_file = config->telemetry_router_stats_file;
         cxxConfig.log_level = static_cast<nprpc::LogLevel>(config->log_level);
         std::memcpy(&cxxConfig.uuid, config->uuid, 16);
         cxxConfig.tcp_port = config->tcp_port;
@@ -655,6 +649,63 @@ std::string EndPointInfo::to_url() const {
 
 } // namespace nprpc_swift
 
+namespace {
+using nprpc_swift::detail::AsyncCompletion;
+using nprpc_swift::detail::BridgeError;
+using nprpc_swift::detail::BridgeResult;
+using nprpc_swift::detail::capture;
+
+BridgeResult<std::shared_ptr<nprpc::impl::Session>> session_for_object(void* object_ptr) noexcept {
+    return capture([&]() -> BridgeResult<std::shared_ptr<nprpc::impl::Session>> {
+        auto* object = static_cast<nprpc::Object*>(object_ptr);
+        if (!object)
+            return std::unexpected(BridgeError(NPRPC_BRIDGE_INVALID_ARGUMENT, "Null RPC object"));
+        if (!nprpc::impl::g_rpc)
+            return std::unexpected(BridgeError(NPRPC_BRIDGE_NOT_INITIALIZED, "NPRPC runtime is not initialized"));
+        if (object->get_endpoint().empty() && !object->select_endpoint())
+            return std::unexpected(BridgeError(NPRPC_BRIDGE_NO_ENDPOINT, "No endpoint to connect to"));
+        auto session = nprpc::impl::g_rpc->get_session_result(object->get_endpoint());
+        if (!session) return std::unexpected(BridgeError(session.error()));
+        return std::move(*session);
+    });
+}
+
+// All setup, including endpoint selection, is inside the exception boundary.
+template<class Configure>
+BridgeResult<void> start_async_rpc(void* obj_ptr, void* buffer_ptr, void* context,
+                                  uint32_t timeout_ms, bool receive_response,
+                                  std::shared_ptr<AsyncCompletion>& completion,
+                                  Configure configure) noexcept {
+    return capture([&]() -> BridgeResult<void> {
+        if (!obj_ptr || !buffer_ptr)
+            return std::unexpected(BridgeError(NPRPC_BRIDGE_INVALID_ARGUMENT, "Invalid RPC arguments"));
+        auto* obj = static_cast<nprpc::Object*>(obj_ptr);
+        auto session = session_for_object(obj_ptr);
+        if (!session) return std::unexpected(session.error());
+
+        completion = std::make_shared<AsyncCompletion>(context, receive_response);
+        configure(*completion);
+        auto started = (*session)->send_receive_async_result(
+            std::move(*static_cast<nprpc::flat_buffer*>(buffer_ptr)),
+            [state = completion](nprpc::Result<void> result, nprpc::flat_buffer& buf) noexcept {
+                state->complete(result, buf);
+            }, timeout_ms > 0 ? timeout_ms : obj->get_timeout());
+        if (!started) return std::unexpected(BridgeError(started.error()));
+        return {};
+    });
+}
+
+int legacy_start_status(const BridgeResult<void>& result,
+                        const std::shared_ptr<AsyncCompletion>& completion) noexcept {
+    // A synchronous completion already consumed the callback context.
+    if (result || (completion && completion->abandon())) return 0;
+    switch (result.error().code) {
+    case nprpc::ErrorCode::no_endpoint: return -2;
+    default: return -3;
+    }
+}
+} // namespace
+
 // ============================================================================
 // C Bridge Functions for Swift Interop
 // ============================================================================
@@ -902,70 +953,43 @@ const uint8_t* nprpc_object_get_origin(void* ptr) {
     return static_cast<nprpc::Object*>(ptr)->origin().data();
 }
 
-// Object async RPC call with callback - for Swift async/await integration
-int nprpc_object_send_async(
-    void* obj_ptr,
-    void* buffer_ptr,
-    void* context,
-    swift_async_callback callback,
-    uint32_t timeout_ms
-) {
-    if (!obj_ptr || !buffer_ptr || !callback) {
-        return -1;  // Invalid arguments
-    }
-
-    auto* obj = static_cast<nprpc::Object*>(obj_ptr);
-    auto* buffer = static_cast<nprpc::flat_buffer*>(buffer_ptr);
-
-    // Ensure endpoint is selected
-    if (obj->get_endpoint().empty()) {
-        if (!obj->select_endpoint()) {
-            return -2;  // Failed to select endpoint
+void nprpc_object_send_async_result(void* obj_ptr, void* buffer_ptr, void* context,
+                                   swift_rpc_completion callback, uint32_t timeout_ms,
+                                   bool receive_response) noexcept {
+    if (!callback) return;
+    std::shared_ptr<AsyncCompletion> completion;
+    const auto result = start_async_rpc(obj_ptr, buffer_ptr, context, timeout_ms,
+        receive_response, completion, [callback](AsyncCompletion& state) { state.callback = callback; });
+    if (!result) {
+        if (completion) completion->fail(result.error());
+        else {
+            const auto error = result.error().view();
+            callback(context, &error, nullptr);
         }
-    }
-
-    try {
-        // Create completion handler that invokes the Swift callback
-        auto handler = [context, callback](const boost::system::error_code& ec, nprpc::flat_buffer& buf) {
-            if (ec) {
-                std::string msg = ec.message();
-                callback(context, -3, msg.c_str());
-            } else {
-                callback(context, 0, nullptr);
-            }
-        };
-
-        nprpc::impl::rpc_call_async(
-            obj->get_endpoint(),
-            std::move(*buffer),
-            std::move(handler),
-            timeout_ms > 0 ? timeout_ms : obj->get_timeout()
-        );
-        return 0;  // Started successfully
-    } catch (const std::exception& e) {
-        NPRPC_LOG_ERROR("[SWB] nprpc_object_send_async exception: {}", e.what());
-        return -3;  // Failed to start
     }
 }
 
+// Compatibility ABI: initiation failures still return -1/-2/-3 without a callback.
+int nprpc_object_send_async(void* obj_ptr, void* buffer_ptr, void* context,
+                            swift_async_callback callback, uint32_t timeout_ms) {
+    if (!obj_ptr || !buffer_ptr || !callback) return -1;
+    std::shared_ptr<AsyncCompletion> completion;
+    const auto result = start_async_rpc(obj_ptr, buffer_ptr, context, timeout_ms,
+        false, completion, [callback](AsyncCompletion& state) { state.legacy_callback = callback; });
+    return legacy_start_status(result, completion);
+}
+
 const char* nprpc_object_check_fd_passing(void* obj_ptr) {
-    thread_local std::string error;
-    if (!obj_ptr) {
-        error = "null object";
-        return error.c_str();
-    }
-    auto* obj = static_cast<nprpc::Object*>(obj_ptr);
-    try {
-        if (obj->get_endpoint().empty() && !obj->select_endpoint()) {
-            error = "no endpoint to connect to";
-            return error.c_str();
-        }
-        nprpc::impl::g_rpc->get_session(obj->get_endpoint())->require_fd_passing();
-        return nullptr;
-    } catch (const std::exception& e) {
-        error = e.what();
-        return error.c_str();
-    }
+    const auto result = capture([&]() -> BridgeResult<void> {
+        auto session = session_for_object(obj_ptr);
+        if (!session) return std::unexpected(session.error());
+        (*session)->require_fd_passing();
+        return {};
+    });
+    if (result) return nullptr;
+    thread_local std::array<char, 512> error;
+    error = result.error().message;
+    return error.data();
 }
 
 // Fire-and-forget for IDL `[unreliable]` methods. Must use send_unreliable /
@@ -1001,54 +1025,13 @@ int nprpc_object_send_unreliable(void* obj_ptr, void* buffer_ptr) {
     }
 }
 
-// Object async RPC call with response - for async methods with output parameters
-int nprpc_object_send_async_receive(
-    void* obj_ptr,
-    void* buffer_ptr,
-    void* context,
-    swift_async_receive_callback callback,
-    uint32_t timeout_ms
-) {
-    if (!obj_ptr || !buffer_ptr || !callback) {
-        return -1;  // Invalid arguments
-    }
-
-    auto* obj = static_cast<nprpc::Object*>(obj_ptr);
-    auto* buffer = static_cast<nprpc::flat_buffer*>(buffer_ptr);
-
-    // Ensure endpoint is selected
-    if (obj->get_endpoint().empty()) {
-        if (!obj->select_endpoint()) {
-            return -2;  // Failed to select endpoint
-        }
-    }
-
-    try {
-        // Create completion handler that invokes the Swift callback with response buffer
-        auto handler = [context, callback](const boost::system::error_code& ec, nprpc::flat_buffer& buf) {
-            if (ec) {
-                std::string msg = ec.message();
-                callback(context, -3, msg.c_str(), nullptr);
-            } else {
-                // Prefer a pooled shell so response capacity can be reused on
-                // the next acquire() (e.g. repeated large RPCs).
-                auto* response = static_cast<nprpc::flat_buffer*>(nprpc_flatbuffer_acquire());
-                *response = std::move(buf);
-                callback(context, 0, nullptr, response);
-            }
-        };
-
-        nprpc::impl::rpc_call_async(
-            obj->get_endpoint(),
-            std::move(*buffer),
-            std::move(handler),
-            timeout_ms > 0 ? timeout_ms : obj->get_timeout()
-        );
-        return 0;  // Started successfully
-    } catch (const std::exception& e) {
-        NPRPC_LOG_ERROR("[SWB] nprpc_object_send_async_receive exception: {}", e.what());
-        return -3;  // Failed to start
-    }
+int nprpc_object_send_async_receive(void* obj_ptr, void* buffer_ptr, void* context,
+                                    swift_async_receive_callback callback, uint32_t timeout_ms) {
+    if (!obj_ptr || !buffer_ptr || !callback) return -1;
+    std::shared_ptr<AsyncCompletion> completion;
+    const auto result = start_async_rpc(obj_ptr, buffer_ptr, context, timeout_ms,
+        true, completion, [callback](AsyncCompletion& state) { state.legacy_receive = callback; });
+    return legacy_start_status(result, completion);
 }
 
 // Object string serialization (NPRPC IOR format)
@@ -1367,56 +1350,13 @@ uint64_t nprpc_generate_unreliable_stream_id() {
 }
 
 void* nprpc_object_get_stream_manager(void* object_ptr) {
-    auto* obj = static_cast<nprpc::Object*>(object_ptr);
-    if (!obj) {
-        NPRPC_LOG_WARN("[SWB] nprpc_object_get_stream_manager: object_ptr is null");
-        return nullptr;
-    }
-
-    auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
-    if (!session || !session->ctx().stream_manager) {
-        NPRPC_LOG_WARN("[SWB] nprpc_object_get_stream_manager: no session or stream_manager");
-        return nullptr;
-    }
-
-    return session->ctx().stream_manager;
+    auto session = session_for_object(object_ptr);
+    return session ? (*session)->ctx().stream_manager : nullptr;
 }
 
 void* nprpc_object_get_session(void* object_ptr) {
-    auto* obj = static_cast<nprpc::Object*>(object_ptr);
-    if (!obj) {
-        NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: object_ptr is null");
-        return nullptr;
-    }
-
-    try {
-        if (obj->get_endpoint().empty()) {
-            if (!obj->select_endpoint()) {
-                NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: failed to select endpoint");
-                return nullptr;
-            }
-        }
-
-        auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
-        if (!session) {
-            NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: session lookup failed");
-            return nullptr;
-        }
-
-        return session.get();
-    } catch (const nprpc::ExceptionCommFailure& e) {
-        NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: communication failure: {}", e.what);
-        return nullptr;
-    } catch (const nprpc::Exception& e) {
-        NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: nprpc::Exception occurred: {}", e.what());
-        return nullptr;
-    } catch (const std::exception& e) {
-        NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: exception occurred: {}", e.what());
-        return nullptr;
-    } catch (...) {
-        NPRPC_LOG_WARN("[SWB] nprpc_object_get_session: exception occurred");
-        return nullptr;
-    }
+    auto session = session_for_object(object_ptr);
+    return session ? session->get() : nullptr;
 }
 
 void* nprpc_session_get_stream_manager(void* session_ptr) {
@@ -1686,8 +1626,8 @@ void nprpc_stream_register_reader(
     }
 
     // Get session from object's endpoint
-    auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
-    if (!session || !session->ctx().stream_manager) {
+    auto session = session_for_object(object_ptr);
+    if (!session || !(*session)->ctx().stream_manager) {
         NPRPC_LOG_ERROR("[SWB] nprpc_stream_register_reader: no session or stream_manager");
         if (context && on_destroy) {
             on_destroy(context);
@@ -1698,7 +1638,7 @@ void nprpc_stream_register_reader(
     // Create and register the Swift reader bridge
     // Note: Memory ownership is transferred to stream_manager
     auto reader = std::make_unique<SwiftStreamReader>(context, on_chunk, on_complete, on_error, on_destroy);
-    session->ctx().stream_manager->register_reader(stream_id, std::move(reader));
+    (*session)->ctx().stream_manager->register_reader(stream_id, std::move(reader));
 }
 
 void nprpc_stream_set_reader_unreliable(
@@ -1712,13 +1652,13 @@ void nprpc_stream_set_reader_unreliable(
         return;
     }
 
-    auto session = nprpc::impl::get_session_for_endpoint(obj->get_endpoint());
-    if (!session || !session->ctx().stream_manager) {
+    auto session = session_for_object(object_ptr);
+    if (!session || !(*session)->ctx().stream_manager) {
         NPRPC_LOG_ERROR("[SWB] nprpc_stream_set_reader_unreliable: no session or stream_manager");
         return;
     }
 
-    session->ctx().stream_manager->set_reader_unreliable(stream_id, unreliable);
+    (*session)->ctx().stream_manager->set_reader_unreliable(stream_id, unreliable);
 }
 
 void nprpc_stream_manager_register_reader(
@@ -1799,7 +1739,7 @@ int nprpc_session_stream_send_init(
     const auto stream_id = init.stream_id();
 
     try {
-        session->send_receive(*buf, timeout_ms);
+        if (!session->send_receive_result(*buf, timeout_ms)) return -1;
         const auto std_reply = nprpc::impl::handle_standart_reply(*buf);
         if (std_reply != 0) {
             return std_reply;

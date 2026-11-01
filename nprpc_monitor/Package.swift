@@ -21,6 +21,9 @@ let package = Package(
             dependencies: [.product(name: "NPRPC", package: "nprpc_swift")],
             swiftSettings: [.interoperabilityMode(.Cxx)]),
 
+        .testTarget(name: "MonitorAPITests", dependencies: ["MonitorAPI"],
+            swiftSettings: [.interoperabilityMode(.Cxx)]),
+
 
     ],
     cxxLanguageStandard: .gnucxx2b)

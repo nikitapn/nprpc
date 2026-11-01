@@ -1,6 +1,7 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include "schema_hash.hpp"
 #include "ts_builder.hpp"
 #include "utils.hpp"
 #include <cassert>
@@ -1980,7 +1981,7 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
       << " extends NPRPC.ObjectServant {\n"
       << bb(false) << bl() << "public static _get_class(): string { return \""
       << ctx_->current_file() << '/' << ctx_->nm_cur()->full_idl_namespace()
-      << '.' /*ns(ctx_->nm_cur()) */ << ifs->name << "\"; }\n"
+      << '.' /*ns(ctx_->nm_cur()) */ << ifs->name << '#' << SchemaHasher::hash(ifs) << "\"; }\n"
       << bl() << "public readonly get_class = () => { return _" << servant_iname
       << "._get_class(); }\n"
       << bl()

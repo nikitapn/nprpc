@@ -8,6 +8,7 @@
 #include <nprpc/stream_writer.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/stream_manager.hpp>
+#include <nprpc/impl/async_result.hpp>
 
 #include "logging.hpp"
 
@@ -33,6 +34,34 @@ extern void reset_context();
 } // namespace nprpc
 
 namespace nprpc::impl {
+
+boost::system::error_code Session::do_send_receive(flat_buffer&, uint32_t)
+{
+  assert(false && "this session cannot initiate RPC");
+  return boost::asio::error::operation_not_supported;
+}
+
+void Session::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
+{
+  if (do_send_receive(buffer, timeout_ms)) throw nprpc::ExceptionCommFailure();
+}
+
+Result<void> Session::send_receive_result(flat_buffer& buffer, uint32_t timeout_ms) noexcept
+{
+  return capture_result([&]() -> Result<void> {
+    if (const auto ec = do_send_receive(buffer, timeout_ms))
+      return std::unexpected(transport_error(ec));
+    return {};
+  }, ErrorCode::connection_failure);
+}
+
+Result<void> Session::send_receive_async_result(
+    flat_buffer&& buffer, ResultHandler handler, uint32_t timeout_ms) noexcept
+{
+  return start_result_operation(std::move(handler), [&](auto completion) {
+    send_receive_async(std::move(buffer), std::move(completion), timeout_ms);
+  });
+}
 
 std::optional<ObjectGuard>
 get_object(SessionContext& ctx, uint16_t poa_idx, uint64_t object_id)

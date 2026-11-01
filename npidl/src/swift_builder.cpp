@@ -1,8 +1,10 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include "schema_hash.hpp"
 #include "swift_builder.hpp"
 #include "utils.hpp"
+#include <algorithm>
 #include <cassert>
 #include <cctype>
 #include <iostream>
@@ -357,35 +359,46 @@ void SwiftBuilder::emit_stream_deserializer(AstTypeDecl* type,
     return;
   }
 
+  auto it = std::find(payload_safety_types_.begin(), payload_safety_types_.end(), type);
+  const auto check_index = std::distance(payload_safety_types_.begin(), it);
+  if (it == payload_safety_types_.end())
+    payload_safety_types_.push_back(type);
+  os << "{ (data: UnsafeRawPointer, size: Int) in "
+     << "guard check_payload_" << check_index
+     << "(buffer: data, bufferSize: size, offset: 0) else { "
+     << "throw NPRPC.BufferError(message: \"Invalid stream payload (malformed data or incompatible IDL contract)\") }; return ";
+
   switch (type->id) {
   case FieldType::Fundamental:
-    os << "{ (data: UnsafeRawPointer, _: Int) in data.load(as: ";
+    os << "data.load(as: ";
     emit_type(type, os);
-    os << ".self) }";
+    os << ".self)";
     break;
   case FieldType::Enum:
-    os << "{ (data: UnsafeRawPointer, _: Int) in ";
+
     emit_type(type, os);
-    os << "(rawValue: data.load(as: Int32.self))! }";
+    os << "(rawValue: data.load(as: ";
+    emit_fundamental_type(cenum(type)->token_id, os);
+    os << ".self))!";
     break;
   case FieldType::String:
-    os << "{ (data: UnsafeRawPointer, _: Int) in NPRPC.unmarshal_string(buffer: data, offset: 0) }";
+    os << "NPRPC.unmarshal_string(buffer: data, offset: 0)";
     break;
   case FieldType::Vector: {
     auto* element = cwt(type)->type;
     if (element->id == FieldType::Alias)
       element = calias(element)->get_real_type();
     if (element->id == FieldType::Fundamental) {
-      os << "{ (data: UnsafeRawPointer, _: Int) in NPRPC.unmarshal_stream_fundamental_vector(data: data) as ";
+      os << "NPRPC.unmarshal_stream_fundamental_vector(data: data) as ";
       emit_type(type, os);
-      os << " }";
+
       break;
     }
     if (element->id == FieldType::Struct) {
       auto* s = cflat(element);
-      os << "{ (data: UnsafeRawPointer, _: Int) in NPRPC.unmarshal_struct_vector(buffer: data, offset: 0, elementSize: "
+      os << "NPRPC.unmarshal_struct_vector(buffer: data, offset: 0, elementSize: "
          << s->size << ") { buf, off in unmarshal_" << s->name
-         << "(buffer: buf, offset: off) } }";
+         << "(buffer: buf, offset: off) }";
       break;
     }
     assert(false && "Unsupported Swift stream vector deserializer type");
@@ -396,17 +409,17 @@ void SwiftBuilder::emit_stream_deserializer(AstTypeDecl* type,
     if (element->id == FieldType::Alias)
       element = calias(element)->get_real_type();
     if (element->id == FieldType::Fundamental) {
-      os << "{ (data: UnsafeRawPointer, _: Int) in NPRPC.unmarshal_fundamental_array(buffer: data, offset: 0, count: "
+      os << "NPRPC.unmarshal_fundamental_array(buffer: data, offset: 0, count: "
          << arr->length << ") as ";
       emit_type(type, os);
-      os << " }";
+
       break;
     }
     if (element->id == FieldType::Struct) {
       auto* s = cflat(element);
-      os << "{ (data: UnsafeRawPointer, _: Int) in (0..<" << arr->length
+      os << "(0..<" << arr->length
          << ").map { i in unmarshal_" << s->name << "(buffer: data, offset: i * " << s->size
-         << ") } }";
+         << ") }";
       break;
     }
     assert(false && "Unsupported Swift stream array deserializer type");
@@ -414,19 +427,20 @@ void SwiftBuilder::emit_stream_deserializer(AstTypeDecl* type,
   case FieldType::Struct: {
     auto* s = cflat(type);
     const bool needs_endpoint = contains_object(type);
-    os << "{ (data: UnsafeRawPointer, _: Int) in ";
+
     if (needs_endpoint) {
-      os << "try! unmarshal_" << s->name << "(buffer: data, offset: 0, endpoint: "
+      os << "try unmarshal_" << s->name << "(buffer: data, offset: 0, endpoint: "
          << endpoint_expr << ")";
     } else {
       os << "unmarshal_" << s->name << "(buffer: data, offset: 0)";
     }
-    os << " }";
+
     break;
   }
   default:
     assert(false && "Unsupported Swift stream deserializer type");
   }
+  os << " }";
 }
 
 void SwiftBuilder::emit_constant(const std::string& name, AstNumber* number)
@@ -844,7 +858,7 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
 void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 {
   const std::string class_name = swift_type_name(ifs->name);
-  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->full_idl_namespace() + '.' + ifs->name;
+  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->full_idl_namespace() + '.' + ifs->name + '#' + SchemaHasher::hash(ifs);
 
   // The client proxy cannot conform to the protocol because:
   // - Non-IDL-async methods are `async throws` in the proxy but `throws` in the protocol
@@ -1046,6 +1060,9 @@ void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 
         // Unmarshal output arguments
         out << bl() << "guard let responseData = responseBuffer.data else { throw BufferError(message: \"Failed to get response data\") }\n";
+        out << bl() << "guard check_" << make_safety_check_name(fn->out_s)
+            << "(buffer: responseData, bufferSize: responseBuffer.size, offset: " << size_of_header
+            << ") else { throw BufferError(message: \"Invalid RPC response (malformed data or incompatible IDL contract)\") }\n";
 
         bool out_needs_endpoint = false;
         for (auto f : fn->out_s->fields) {
@@ -1281,7 +1298,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
   out << bl() << "public override init() { super.init() }\n\n";
 
   // getClass() override - return the fully qualified interface class name
-  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->full_idl_namespace() + '.' + ifs->name;
+  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->full_idl_namespace() + '.' + ifs->name + '#' + SchemaHasher::hash(ifs);
   out << bl() << "public override func getClass() -> String " << bb();
   out << bl() << "return \"" << class_id << "\"\n";
   out << eb() << "\n";
@@ -2151,7 +2168,7 @@ void SwiftBuilder::emit_field_marshal(AstFieldDecl* f, int& offset, const std::s
 
     out << bl() << "if let value = " << field_access << " {\n" << bb(false);
 
-    if (is_fundamental(wt)) {
+    if (wt->id == FieldType::Fundamental) {
       out << bl() << "NPRPC.marshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ", value: value)\n";
     } else if (wt->id == FieldType::Struct) {
       auto flat_struct = cflat(wt);
@@ -2341,7 +2358,7 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
     const int field_offset = align_offset(v_align, offset, v_size);
 
     out << bl() << "if buffer.load(fromByteOffset: offset + " << field_offset << ", as: UInt32.self) != 0 {\n" << bb(false);
-    if (is_fundamental(wt)) {
+    if (wt->id == FieldType::Fundamental) {
       out << bl() << field_name << " = NPRPC.unmarshal_optional_fundamental(buffer: buffer, offset: offset + " << field_offset << ")\n";
     } else if (wt->id == FieldType::Struct) {
       out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n" << bb(false);
@@ -2352,7 +2369,10 @@ void SwiftBuilder::emit_field_unmarshal(AstFieldDecl* f, int& offset, const std:
       out << bl() << "NPRPC.unmarshal_string(buffer: buf, offset: off)\n";
       out << eb();
     } else if (wt->id == FieldType::Enum) {
-      out << bl() << field_name << " = " << cenum(wt)->name << "(rawValue: buffer.load(fromByteOffset: offset + " << field_offset << " + 4, as: Int32.self))\n";
+      out << bl() << field_name << " = NPRPC.unmarshal_optional_struct(buffer: buffer, offset: offset + " << field_offset << ") { buf, off in\n" << bb(false);
+      out << bl() << cenum(wt)->name << "(rawValue: buf.load(fromByteOffset: off, as: ";
+      emit_fundamental_type(cenum(wt)->token_id, out);
+      out << ".self))!\n" << eb(false) << bl() << "}\n";
     } else if (wt->id == FieldType::Vector || wt->id == FieldType::Array) {
       auto real_elem_type = cwt(wt)->real_type();
       auto [ut_size, ut_align] = get_type_size_align(real_elem_type);
@@ -2411,7 +2431,25 @@ void SwiftBuilder::emit_unmarshal_function(AstStructDecl* s)
   const bool in_namespace = !s->nm->is_root(*ctx_);
   const char* visibility = s->internal ? "fileprivate " : "public ";
 
+  auto it = std::find(payload_safety_types_.begin(), payload_safety_types_.end(), s);
+  const auto check_index = std::distance(payload_safety_types_.begin(), it);
+  if (it == payload_safety_types_.end())
+    payload_safety_types_.push_back(s);
+  out << "\n" << bl() << "/// Decode a bounded payload, rejecting malformed or incompatible wire data.\n";
+  out << bl() << visibility << (in_namespace ? "static " : "") << "func unmarshal_" << s->name
+      << "(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int";
+  if (has_objects) out << ", endpoint: NPRPCEndpoint";
+  out << ") throws -> " << s->name << " " << bb();
+  out << bl() << "guard check_payload_" << check_index
+      << "(buffer: buffer, bufferSize: bufferSize, offset: offset) else { "
+      << "throw NPRPC.BufferError(message: \"Invalid " << s->name
+      << " payload (malformed data or incompatible IDL contract)\") }\n";
+  out << bl() << "return " << (has_objects ? "try " : "") << "unmarshal_" << s->name
+      << "(buffer: buffer, offset: offset";
+  if (has_objects) out << ", endpoint: endpoint";
+  out << ")\n" << eb() << "\n";
   out << "\n" << bl() << "// MARK: - Unmarshal " << s->name << "\n";
+  out << bl() << "/// Requires a validated payload; use the bufferSize overload for received bytes.\n";
   out << bl() << visibility << (in_namespace ? "static " : "") << "func unmarshal_" << s->name << "(buffer: UnsafeRawPointer, offset: Int";
   if (has_objects) {
     out << ", endpoint: NPRPCEndpoint";
@@ -2452,13 +2490,10 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
     auto s = cflat(type);
 
     if (top_type) {
-      out << bl() << "guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: " << op << ", structSize: " << s->size << ") else { return false }\n";
+      out << bl() << "guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: " << op << ", structSize: " << s->size << "), NPRPC.check_alignment(buffer: buffer, offset: " << op << ", alignment: " << s->align << ") else { return false }\n";
     }
 
-    if (s->flat)
-      break;
-
-    // Check non-flat fields
+    // Flat structs can still contain enums and booleans that need validation.
     int field_offset = 0;
     for (auto field : s->fields) {
       auto ftr = field->type;
@@ -2470,11 +2505,31 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
       if (ftr->id == FieldType::Vector || ftr->id == FieldType::Array ||
           ftr->id == FieldType::String || ftr->id == FieldType::Optional ||
           ftr->id == FieldType::Struct || ftr->id == FieldType::Object ||
-          ftr->id == FieldType::Variant)
+          ftr->id == FieldType::Variant || ftr->id == FieldType::Enum ||
+          (ftr->id == FieldType::Fundamental && cft(ftr)->token_id == TokenId::Boolean))
       {
         std::string field_op = op + " + " + std::to_string(aligned_offset);
         emit_safety_checks_r(ftr, field_op, aligned_offset, ftr->id != FieldType::Struct);
       }
+    }
+    break;
+  }
+
+  case FieldType::Fundamental:
+  case FieldType::Enum: {
+    const auto token = type->id == FieldType::Enum ? cenum(type)->token_id : cft(type)->token_id;
+    const auto size = get_fundamental_size(token);
+    out << bl() << "guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: " << op
+        << ", structSize: " << size << "), NPRPC.check_alignment(buffer: buffer, offset: " << op
+        << ", alignment: " << size << ") else { return false }\n";
+    if (type->id == FieldType::Enum) {
+      auto* e = cenum(type);
+      out << bl() << "guard " << ns(e->nm) << e->name << "(rawValue: buffer.load(fromByteOffset: "
+          << op << ", as: ";
+      emit_fundamental_type(token, out);
+      out << ".self)) != nil else { return false }\n";
+    } else if (token == TokenId::Boolean) {
+      out << bl() << "guard buffer.load(fromByteOffset: " << op << ", as: UInt8.self) <= 1 else { return false }\n";
     }
     break;
   }
@@ -2487,9 +2542,10 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
     auto wt = cwt(type)->type;
     auto [elem_size, elem_align] = get_type_size_align(wt);
 
-    out << bl() << "guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: " << op << ", elementSize: " << elem_size << ") else { return false }\n";
+    out << bl() << "guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: " << op << ", elementSize: " << elem_size << ", elementAlignment: " << elem_align << ") else { return false }\n";
 
-    if (is_flat(wt))
+    auto* real = wt->id == FieldType::Alias ? calias(wt)->get_real_type() : wt;
+    if (real->id == FieldType::Fundamental && cft(real)->token_id != TokenId::Boolean)
       break;
 
     // For non-flat element types, need to check each element  
@@ -2510,10 +2566,7 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
     auto wt = cwt(type)->type;
     auto [elem_size, elem_align] = get_type_size_align(wt);
 
-    out << bl() << "guard NPRPC.check_optional_bounds(buffer: buffer, bufferSize: bufferSize, offset: " << op << ", valueSize: " << elem_size << ") else { return false }\n";
-
-    if (is_flat(wt))
-      break;
+    out << bl() << "guard NPRPC.check_optional_bounds(buffer: buffer, bufferSize: bufferSize, offset: " << op << ", valueSize: " << elem_size << ", valueAlignment: " << elem_align << ") else { return false }\n";
 
     // If present, check the value
     out << bl() << "do {\n" << bb(false);
@@ -2530,7 +2583,11 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
     auto arr = static_cast<AstArrayDecl*>(type);
     auto wt = cwt(type)->real_type();
     
-    if (is_flat(wt))
+    const auto [array_size, array_align] = get_type_size_align(type);
+    out << bl() << "guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: " << op
+        << ", structSize: " << array_size << "), NPRPC.check_alignment(buffer: buffer, offset: "
+        << op << ", alignment: " << array_align << ") else { return false }\n";
+    if (wt->id == FieldType::Fundamental && cft(wt)->token_id != TokenId::Boolean)
       break;
 
     // Check each element of fixed-size array
@@ -2544,7 +2601,7 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
 
   case FieldType::Variant: {
     auto* v = cvar(type);
-    out << bl() << "guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: " << op << ", structSize: 8), (" << op << ") % 4 == 0 else { return false }\n";
+    out << bl() << "guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: " << op << ", structSize: 8), (" << op << ") % 4 == 0, NPRPC.check_alignment(buffer: buffer, offset: " << op << ", alignment: 4) else { return false }\n";
     out << bl() << "do {\n" << bb(false);
     out << bl() << "let kind = buffer.load(fromByteOffset: " << op << ", as: UInt32.self)\n";
     out << bl() << "let relOffset = Int(buffer.load(fromByteOffset: " << op << " + 4, as: UInt32.self))\n";
@@ -2556,7 +2613,7 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
       auto* arm_type = v->arms[i].type;
       auto [arm_size, arm_align] = get_type_size_align(arm_type);
       out << bl() << "case " << i << ":\n" << bb(false);
-      out << bl() << "guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: armOffset, structSize: " << arm_size << "), armOffset % " << arm_align << " == 0 else { return false }\n";
+      out << bl() << "guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: armOffset, structSize: " << arm_size << "), armOffset % " << arm_align << " == 0, NPRPC.check_alignment(buffer: buffer, offset: armOffset, alignment: " << arm_align << ") else { return false }\n";
       emit_safety_checks_r(arm_type, "armOffset", 0, false);
       out << eb(false);
     }
@@ -2584,31 +2641,25 @@ void SwiftBuilder::emit_safety_checks_r(AstTypeDecl* type, const std::string& op
 // Emit check functions for all untrusted interfaces
 void SwiftBuilder::emit_safety_checks()
 {
+  for (size_t i = 0; i < payload_safety_types_.size(); ++i) {
+    out << "\nfileprivate func check_payload_" << i
+        << "(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool " << bb();
+    emit_safety_checks_r(payload_safety_types_[i], "offset", 0, true);
+    out << bl() << "return true\n";
+    out << eb() << "\n";
+  }
   std::set<struct_id_t> emitted;
-
   for (auto ifs : ctx_->interfaces) {
-    if (ifs->trusted)
-      continue;
-
     for (auto fn : ifs->fns) {
-      auto s = fn->in_s;
-      if (!s)
-        continue;
-
-      auto id = s->get_function_struct_id();
-      if (emitted.find(id) != emitted.end())
-        continue;
-      emitted.emplace(id);
-
-      auto name = make_safety_check_name(s);
-
-      out << "\n" << bl() << "// Safety check for " << s->name << "\n";
-      out << bl() << "fileprivate func check_" << name << "(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool " << bb();
-
-      emit_safety_checks_r(s, "offset", 0, true);
-
-      out << bl() << "return true\n";
-      out << eb() << "\n";
+      for (auto* s : {fn->in_s, fn->out_s}) {
+        if (!s || !emitted.emplace(s->get_function_struct_id()).second)
+          continue;
+        out << "\n" << bl() << "fileprivate func check_" << make_safety_check_name(s)
+            << "(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool " << bb();
+        emit_safety_checks_r(s, "offset", 0, true);
+        out << bl() << "return true\n";
+        out << eb() << "\n";
+      }
     }
   }
 }
