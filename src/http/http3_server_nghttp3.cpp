@@ -1163,11 +1163,6 @@ public:
     return true;
   }
 
-  void send_receive(flat_buffer&, uint32_t) override
-  {
-    assert(false && "send_receive not supported on WebTransport server control session");
-  }
-
   nprpc::Task<> send_receive_coro(flat_buffer& buffer,
                                           uint32_t timeout_ms,
                                           std::stop_token st = {}) override

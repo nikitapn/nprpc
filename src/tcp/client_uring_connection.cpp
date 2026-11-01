@@ -521,7 +521,7 @@ public:
 
   void timeout_action() final {}   // no Asio timer, nothing to cancel
 
-  void send_receive(flat_buffer& buffer, uint32_t /*timeout_ms*/) override
+  boost::system::error_code do_send_receive(flat_buffer& buffer, uint32_t /*timeout_ms*/) override
   {
     assert(*reinterpret_cast<const uint32_t*>(buffer.data().data()) ==
            buffer.size());
@@ -548,12 +548,12 @@ public:
 
     if (!do_send()) {
       { std::lock_guard lk(pending_mutex_); pending_requests_.erase(rid); }
-      try { reconnect(); } catch (...) { close(); throw nprpc::ExceptionCommFailure(); }
+      try { reconnect(); } catch (...) { close(); throw; }
       { std::lock_guard lk(pending_mutex_); pending_requests_.emplace(rid, &waiter); }
       if (!do_send()) {
         { std::lock_guard lk(pending_mutex_); pending_requests_.erase(rid); }
         close();
-        throw nprpc::ExceptionCommFailure();
+        return boost::asio::error::connection_aborted;
       }
     }
 
@@ -561,8 +561,9 @@ public:
     waiter.status.wait(0, std::memory_order_acquire);
     if (waiter.status.load(std::memory_order_relaxed) < 0) {
       close();
-      throw nprpc::ExceptionCommFailure();
+      return boost::asio::error::connection_aborted;
     }
+    return {};
   }
 
   nprpc::Task<> send_receive_coro(flat_buffer& buffer,

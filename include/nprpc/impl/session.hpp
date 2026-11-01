@@ -6,6 +6,7 @@
 #include <boost/asio/deadline_timer.hpp>
 #include <boost/asio/system_timer.hpp>
 #include <boost/date_time/posix_time/ptime.hpp>
+#include <boost/system/error_code.hpp>
 
 #include <chrono>
 #include <memory>
@@ -64,7 +65,9 @@ protected:
                            nprpc::flat_buffer& tx_buffer);
 
 public:
-  virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms) = 0;
+  // Throwing API used by generated stubs; timeouts raise ExceptionCommFailure
+  // unless a transport overrides this.
+  NPRPC_API virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms);
 
   // Coroutine variant — suspends the caller until the response arrives.
   // Default implementation wraps the blocking send_receive(); concrete
@@ -207,9 +210,8 @@ public:
 
   virtual ~Session();
 
-  // Result API: appended to preserve existing virtual method ordering.
-  // Legacy transports use a translating adapter until their sync path migrates.
-  [[nodiscard]] NPRPC_API virtual Result<void>
+  // Non-throwing form of send_receive, for callers such as the Swift bridge.
+  [[nodiscard]] NPRPC_API Result<void>
   send_receive_result(flat_buffer& buffer, uint32_t timeout_ms) noexcept;
 
   using ResultHandler = std::function<void(Result<void>, flat_buffer&)>;
@@ -218,6 +220,13 @@ public:
   // and must not throw. The response is borrowed for the duration of the call.
   [[nodiscard]] NPRPC_API Result<void> send_receive_async_result(
       flat_buffer&& buffer, ResultHandler handler, uint32_t timeout_ms) noexcept;
+
+protected:
+  // The blocking call each client transport implements. It may still throw
+  // where its dependencies do. Server sessions cannot initiate calls and keep
+  // this default.
+  NPRPC_API virtual boost::system::error_code
+  do_send_receive(flat_buffer& buffer, uint32_t timeout_ms);
 };
 
 } // namespace nprpc::impl

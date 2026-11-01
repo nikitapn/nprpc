@@ -252,8 +252,7 @@ template <class Derived> void WebSocketSession<Derived>::timeout_action()
 }
 
 template <class Derived>
-void WebSocketSession<Derived>::send_receive(flat_buffer& buffer,
-                                             uint32_t timeout_ms)
+boost::system::error_code WebSocketSession<Derived>::do_send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 {
   assert(*(uint32_t*)buffer.data().data() == buffer.size());
 
@@ -277,9 +276,8 @@ void WebSocketSession<Derived>::send_receive(flat_buffer& buffer,
   if (!ec) {
     buffer = std::move(response);
     // dump_message(buffer, true);
-  } else {
-    throw nprpc::ExceptionCommFailure();
   }
+  return ec;
 }
 
 template <class Derived>

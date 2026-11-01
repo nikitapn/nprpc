@@ -313,11 +313,6 @@ public:
     Session::shutdown();
   }
 
-  virtual void send_receive(flat_buffer&, uint32_t) override
-  {
-    assert(false && "send_receive should not be called on server session");
-  }
-
   nprpc::Task<> send_receive_coro(flat_buffer&,
                                   uint32_t,
                                   std::stop_token = {}) override

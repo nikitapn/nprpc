@@ -69,7 +69,7 @@ public:
 
   auto get_executor() noexcept { return ioc_.get_executor(); }
 
-  void send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
+  boost::system::error_code do_send_receive(flat_buffer& buffer, uint32_t timeout_ms) override;
 
   nprpc::Task<> send_receive_coro(flat_buffer& buffer,
                                           uint32_t timeout_ms,

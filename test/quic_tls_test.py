@@ -133,7 +133,7 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
                     continue
                 prefix = [*private_hosts, str(hosts)] if hosts else []
                 relay_port, stop_relay = start_rebinding_relay(1.0) if live == 'rebinding' else (0, None)
-                result = subprocess.run([*prefix, fixture, {'alt': 'client-alt', 'ip': 'client-ip', 'cap': 'client-cap', 'stats': 'client-stats', 'abandon': 'client-abandon', 'no-pool': 'client-no-pool', 'on-ioc': 'client-on-ioc', 'black-hole': 'client-black-hole', 'frozen': 'client-frozen-server', 'named': 'client-named', 'named-hole': 'client-named-black-hole', 'unresolvable': 'client-unresolvable', 'secondary-v4': 'client-named-direct', 'secondary-v6': 'client-named-direct', 'rebinding': 'client-rebinding', 'dead-reader': 'client-reader-on-dead-connection', 'keepalive': 'client-keepalive'}.get(live, 'client-live' if live else 'client'), reference,
+                result = subprocess.run([*prefix, fixture, {'result': 'client-result', 'alt': 'client-alt', 'ip': 'client-ip', 'cap': 'client-cap', 'stats': 'client-stats', 'abandon': 'client-abandon', 'no-pool': 'client-no-pool', 'on-ioc': 'client-on-ioc', 'black-hole': 'client-black-hole', 'frozen': 'client-frozen-server', 'named': 'client-named', 'named-hole': 'client-named-black-hole', 'unresolvable': 'client-unresolvable', 'secondary-v4': 'client-named-direct', 'secondary-v6': 'client-named-direct', 'rebinding': 'client-rebinding', 'dead-reader': 'client-reader-on-dead-connection', 'keepalive': 'client-keepalive'}.get(live, 'client-live' if live else 'client'), reference,
                                          path(trusted_server), path(client_cert), path(client_cert, '.key')],
                                         capture_output=True, text=True, timeout=10,
                                         env={**os.environ, 'QUIC_TLS_SERVER_PID': str(server.pid),
@@ -167,6 +167,7 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
         ('system trust rejects private server', None, None, False, False),
         ('explicit server CA succeeds', 'ca', None, True, False),
         ('runtime TLS configuration succeeds', 'ca', None, True, True),
+        ('result-based sync calls succeed', 'ca', None, True, 'result'),
         ('telemetry watches are limited per session', 'ca', None, True, 'cap'),
         ('a call needs no thread pool', 'ca', None, True, 'no-pool'),
         ('a call can block the only io_context thread', 'ca', None, True, 'on-ioc'),
@@ -192,6 +193,7 @@ with tempfile.TemporaryDirectory(prefix='nprpc-quic-tls-') as directory:
     group('expired-server', None, [('expired server fails', 'ca', None, False, False)])
     group('server', 'ca', [
         ('mTLS trusted client succeeds after reload', 'ca', 'client', True, False),
+        ('result-based calls retain mTLS', 'ca', 'client', True, 'result'),
         ('mTLS live configuration succeeds', 'ca', 'client', True, True),
         ('mTLS missing client fails', 'ca', None, False, False),
         ('telemetry cannot bypass mTLS through TCP', 'ca', None, False, 'alt'),

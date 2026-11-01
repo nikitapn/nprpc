@@ -236,6 +236,7 @@ TEST_F(SessionResultTests, DisabledTransportsReturnUnsupportedTransport) {
 #ifndef NPRPC_TCP_ENABLED
     disabled.push_back(nprpc::EndPointType::Tcp);
 #endif
+
 #ifndef NPRPC_WEBSOCKET_ENABLED
     disabled.push_back(nprpc::EndPointType::WebSocket);
 #endif
@@ -406,5 +407,44 @@ TEST_F(SessionResultTests, SocketTimeoutPreservesNativeErrorAndLegacyException) 
     EXPECT_STREQ(result.error().native_category.data(), expected.category().name());
     auto legacy_request = request_for_unknown_poa();
     EXPECT_THROW(runtime().call(endpoint, legacy_request, 30), nprpc::ExceptionCommFailure);
+}
+#endif
+
+#if defined(NPRPC_HTTP_ENABLED) && defined(NPRPC_WEBSOCKET_ENABLED)
+TEST(WebSocketResultTests, SyncCallsPreserveReplyAndTimeoutDetails) {
+    boost::asio::io_context io;
+    boost::asio::ip::tcp::acceptor reserve(io, {boost::asio::ip::address_v4::loopback(), 0});
+    const auto port = reserve.local_endpoint().port();
+    reserve.close();
+    auto* rpc = nprpc::RpcBuilder().with_http(port).build();
+    struct Cleanup { nprpc::Rpc* rpc; ~Cleanup() { rpc->destroy(); } } cleanup{rpc};
+    rpc->start_thread_pool(1);
+    auto& runtime = *static_cast<nprpc::impl::RpcImpl*>(rpc);
+    const nprpc::EndPoint endpoint(nprpc::EndPointType::WebSocket, "127.0.0.1", port);
+    auto request = request_for_unknown_poa();
+    ASSERT_TRUE(runtime.call_result(endpoint, request, 1000));
+    EXPECT_EQ(nprpc::impl::flat::Header_Direct(request, 0).msg_id(), nprpc::impl::MessageId::Error_PoaNotExist);
+    auto legacy = request_for_unknown_poa();
+    EXPECT_NO_THROW(runtime.call(endpoint, legacy, 1000));
+
+    // A cancellation control frame gets no reply. Drive the existing session
+    // timer after its request deadline to exercise the native timeout result.
+    auto session = runtime.get_session_result(endpoint);
+    ASSERT_TRUE(session);
+    (*session)->set_timeout(200);
+    (*session)->start_timeout_timer();
+    constexpr auto size = sizeof(nprpc::impl::Header) + sizeof(nprpc::impl::flat::StreamCancel);
+    nprpc::flat_buffer no_reply;
+    std::memset(no_reply.prepare(size).data(), 0, size);
+    no_reply.commit(size);
+    auto* header = static_cast<nprpc::impl::Header*>(no_reply.data().data());
+    header->size = size;
+    header->msg_id = nprpc::impl::MessageId::StreamCancellation;
+    header->msg_type = nprpc::impl::MessageType::Request;
+    auto timed_out = runtime.call_result(endpoint, no_reply, 30);
+    ASSERT_FALSE(timed_out);
+    EXPECT_EQ(timed_out.error().code, nprpc::ErrorCode::timeout);
+    const boost::system::error_code expected = boost::asio::error::timed_out;
+    EXPECT_EQ(timed_out.error().native_code, expected.value());
 }
 #endif

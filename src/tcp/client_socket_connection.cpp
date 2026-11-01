@@ -221,21 +221,7 @@ net::awaitable<void> SocketConnection::read_loop()
 // ---------------------------------------------------------------------------
 // send_receive — synchronous bridge via atomic_bool.
 // ---------------------------------------------------------------------------
-void SocketConnection::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
-{
-  if (send_receive_impl(buffer, timeout_ms)) throw nprpc::ExceptionCommFailure();
-}
-
-Result<void> SocketConnection::send_receive_result(flat_buffer& buffer, uint32_t timeout_ms) noexcept
-{
-  return capture_result([&]() -> Result<void> {
-    const auto ec = send_receive_impl(buffer, timeout_ms);
-    if (ec) return std::unexpected(transport_error(ec));
-    return {};
-  }, ErrorCode::connection_failure);
-}
-
-boost::system::error_code SocketConnection::send_receive_impl(flat_buffer& buffer, uint32_t timeout_ms)
+boost::system::error_code SocketConnection::do_send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 {
   std::atomic_bool done{false};
   boost::system::error_code result_ec;

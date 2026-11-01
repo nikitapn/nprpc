@@ -84,6 +84,25 @@ int main(int argc, char** argv) {
     auto object = nprpc::ObjectPtr(nprpc::narrow<nprpc::monitor::Monitor>(raw));
     if (!object || !object->select_endpoint()) return 4;
     object->set_timeout(3000);
+    if (mode == "client-result") {
+      auto request = [] {
+        constexpr auto size = sizeof(nprpc::impl::Header) + sizeof(nprpc::impl::CallHeader);
+        nprpc::flat_buffer buffer;
+        std::memset(buffer.prepare(size).data(), 0, size);
+        buffer.commit(size);
+        auto* header = static_cast<nprpc::impl::Header*>(buffer.data().data());
+        header->size = size;
+        header->msg_id = nprpc::impl::MessageId::FunctionCall;
+        header->msg_type = nprpc::impl::MessageType::Request;
+        nprpc::impl::flat::CallHeader_Direct(buffer, sizeof(nprpc::impl::Header)).poa_idx() = UINT16_MAX;
+        return buffer;
+      };
+      auto& runtime = *static_cast<nprpc::impl::RpcImpl*>(rpc);
+      auto sync = request();
+      auto result = runtime.call_result(object->get_endpoint(), sync, 3000);
+      if (!result) { std::cerr << result.error().message.data() << '\n'; return 10; }
+      return nprpc::impl::flat::Header_Direct(sync, 0).msg_id() == nprpc::impl::MessageId::Error_PoaNotExist ? 0 : 11;
+    }
     const auto watch_once = [&] {
       auto stream = object->Watch(250);
       auto value = stream.read_next();

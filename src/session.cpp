@@ -35,10 +35,22 @@ extern void reset_context();
 
 namespace nprpc::impl {
 
+boost::system::error_code Session::do_send_receive(flat_buffer&, uint32_t)
+{
+  assert(false && "this session cannot initiate RPC");
+  return boost::asio::error::operation_not_supported;
+}
+
+void Session::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
+{
+  if (do_send_receive(buffer, timeout_ms)) throw nprpc::ExceptionCommFailure();
+}
+
 Result<void> Session::send_receive_result(flat_buffer& buffer, uint32_t timeout_ms) noexcept
 {
   return capture_result([&]() -> Result<void> {
-    send_receive(buffer, timeout_ms);
+    if (const auto ec = do_send_receive(buffer, timeout_ms))
+      return std::unexpected(transport_error(ec));
     return {};
   }, ErrorCode::connection_failure);
 }

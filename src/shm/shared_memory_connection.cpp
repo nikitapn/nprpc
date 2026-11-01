@@ -170,8 +170,7 @@ bool SharedMemoryConnection::consume_reply_for_abandoned()
   return true;
 }
 
-void SharedMemoryConnection::send_receive(flat_buffer& buffer,
-                                          uint32_t timeout_ms)
+boost::system::error_code SharedMemoryConnection::do_send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 {
   // Protocol (Option B — commit-before-queue, slot-ordered responses):
   //  1. Request is fully serialised (possibly into a zero-copy reservation).
@@ -231,7 +230,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
 
   if (server_dead_.load()) {
     // No point claiming a ring slot nobody will ever read.
-    throw nprpc::ExceptionCommFailure();
+    return boost::asio::error::connection_aborted;
   }
 
   if (buffer.size() == 0 || buffer.size() > max_message_size) {
@@ -239,7 +238,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
                                    boost::system::system_category()),
          "send_receive");
     close();
-    throw nprpc::ExceptionCommFailure();
+    return boost::asio::error::message_size;
   }
 
   // Peek the slot we will use.  For zero-copy the slot is already claimed;
@@ -259,7 +258,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
                                      boost::system::system_category()),
            "send_receive");
       close();
-      throw nprpc::ExceptionCommFailure();
+      return boost::asio::error::no_buffer_space;
     }
     std::memcpy(pending_copy_rsv.data, buffer.data().data(), buffer.size());
     slot = pending_copy_rsv.slot_idx;
@@ -304,7 +303,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
   auto ec = w->wait();
 
   if (!ec) {
-    return;
+    return {};
   }
 
   // A timeout is this request's problem, not the connection's — as on
@@ -315,7 +314,7 @@ void SharedMemoryConnection::send_receive(flat_buffer& buffer,
     fail(ec, "send_receive");
     close();
   }
-  throw nprpc::ExceptionCommFailure();
+  return ec;
 }
 
 void SharedMemoryConnection::send_receive_async(

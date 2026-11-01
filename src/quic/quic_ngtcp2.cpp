@@ -634,10 +634,6 @@ public:
         });
   }
 
-  void send_receive(flat_buffer&, uint32_t) override
-  {
-    assert(false && "server session cannot initiate RPC");
-  }
   nprpc::Task<> send_receive_coro(flat_buffer&, uint32_t, std::stop_token) override
   {
     assert(false && "server session cannot initiate RPC");
@@ -2767,10 +2763,17 @@ public:
 
   void send_receive(flat_buffer& buf, uint32_t timeout_ms) override
   {
+    const auto ec = do_send_receive(buf, timeout_ms);
+    if (ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();
+    if (ec) throw nprpc::ExceptionCommFailure();
+  }
+
+  boost::system::error_code do_send_receive(flat_buffer& buf, uint32_t timeout_ms) override
+  {
     // The thread that would deliver the reply cannot also wait for it.
     if (io_->on_this_thread()) {
       NPRPC_QUIC_ERROR("blocking call from a QUIC client transport callback");
-      throw nprpc::ExceptionCommFailure();
+      return boost::asio::error::operation_not_supported;
     }
     auto conn = connected_conn(timeout_ms);
 
@@ -2800,10 +2803,10 @@ public:
     std::unique_lock lock(waiter->mutex);
     const auto limit = std::chrono::milliseconds(effective_timeout(timeout_ms)) + kWaitGrace;
     if (!waiter->cv.wait_for(lock, limit, [&] { return waiter->done; }))
-      throw nprpc::ExceptionTimeout();
-    if (waiter->ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();
-    if (waiter->ec) throw nprpc::ExceptionCommFailure();
+      return boost::asio::error::timed_out;
+    if (waiter->ec) return waiter->ec;
     buf = std::move(waiter->response);
+    return {};
   }
 
   nprpc::Task<> send_receive_coro(flat_buffer& buf,
