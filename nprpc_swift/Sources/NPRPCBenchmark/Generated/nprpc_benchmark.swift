@@ -11,7 +11,7 @@ public protocol ServerControlProtocol {
 // Pure Swift implementation with direct marshalling
 final public class ServerControl: NPRPCObject, @unchecked Sendable {
   public override class var classId: String {
-    "nprpc_benchmark/nprpc.benchmark.ServerControl"
+    "nprpc_benchmark/nprpc.benchmark.ServerControl#19012059c25ef266"
   }
 
   public required init(handle: UnsafeMutableRawPointer)   {
@@ -60,7 +60,7 @@ open class ServerControlServant: NPRPCServant, ServerControlProtocol, @unchecked
   public override init() { super.init() }
 
   public override func getClass() -> String   {
-    return "nprpc_benchmark/nprpc.benchmark.ServerControl"
+    return "nprpc_benchmark/nprpc.benchmark.ServerControl#19012059c25ef266"
   }
 
   open func shutdown()   {
@@ -386,7 +386,7 @@ public protocol BenchmarkProtocol {
 // Pure Swift implementation with direct marshalling
 final public class Benchmark: NPRPCObject, @unchecked Sendable {
   public override class var classId: String {
-    "nprpc_benchmark/nprpc.benchmark.Benchmark"
+    "nprpc_benchmark/nprpc.benchmark.Benchmark#d5c36b3812be181a"
   }
 
   public required init(handle: UnsafeMutableRawPointer)   {
@@ -595,7 +595,7 @@ open class BenchmarkServant: NPRPCServant, BenchmarkProtocol, @unchecked Sendabl
   public override init() { super.init() }
 
   public override func getClass() -> String   {
-    return "nprpc_benchmark/nprpc.benchmark.Benchmark"
+    return "nprpc_benchmark/nprpc.benchmark.Benchmark#d5c36b3812be181a"
   }
 
   open func ping()   {

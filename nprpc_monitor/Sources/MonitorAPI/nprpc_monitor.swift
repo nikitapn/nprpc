@@ -236,7 +236,7 @@ public protocol MonitorProtocol {
 // Pure Swift implementation with direct marshalling
 final public class Monitor: NPRPCObject, @unchecked Sendable {
   public override class var classId: String {
-    "nprpc_monitor/nprpc.monitor.Monitor"
+    "nprpc_monitor/nprpc.monitor.Monitor#1a95cc449f62b8d0"
   }
 
   public required init(handle: UnsafeMutableRawPointer)   {
@@ -297,7 +297,7 @@ open class MonitorServant: NPRPCServant, MonitorProtocol, @unchecked Sendable {
   public override init() { super.init() }
 
   public override func getClass() -> String   {
-    return "nprpc_monitor/nprpc.monitor.Monitor"
+    return "nprpc_monitor/nprpc.monitor.Monitor#1a95cc449f62b8d0"
   }
 
   open func watch(interval_ms: UInt32) -> AsyncStream<Snapshot>   {

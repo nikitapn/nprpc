@@ -283,6 +283,20 @@ open class NPRPCObject: Codable, @unchecked Sendable {
     }
 }
 
+/// Why `narrow` returned nil, for an error message. The part of a class ID after
+/// the `#` is a hash of the interface's IDL, so two IDs that differ only there
+/// are the same interface built from different versions of its IDL.
+public func narrowFailure<T: NPRPCObject>(_ object: NPRPCObject, to type: T.Type) -> String {
+    let actual = object.classId.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+    let expected = T.classId.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+    if actual.first == expected.first {
+        let theirs = actual.count > 1 ? String(actual[1]) : "none"
+        let ours = expected.count > 1 ? String(expected[1]) : "none"
+        return "\(expected[0]): the server's schema \(theirs) differs from this client's \(ours). Rebuild the older one."
+    }
+    return "This reference is a \(actual.first ?? ""), not a \(expected.first ?? "")."
+}
+
 /// Narrow Object reference to a specific class (for clientside proxies)
 public func narrow<T: NPRPCObject>(_ object: NPRPCObject, to type: T.Type) -> T? {
     // In a full implementation, we would check the classId against the expected interface

@@ -191,7 +191,7 @@ final class IntegrationTests: XCTestCase {
         let text = try String(contentsOfFile: outputPath, encoding: .utf8)
         // print("Produced host.json content:\n\(text)")
         XCTAssertTrue(text.contains("\"shape\""))
-        XCTAssertTrue(text.contains("\"class_id\": \"basic_test/swift.test.ShapeService\""))
+        XCTAssertTrue(text.contains("\"class_id\": \"basic_test/swift.test.ShapeService#"))
         XCTAssertTrue(text.contains("\"secured\": true"))
         XCTAssertTrue(text.contains("\"urls\": \"web://localhost:16001;\""))
     }
@@ -248,8 +248,8 @@ final class IntegrationTests: XCTestCase {
         let client = narrow(obj, to: ShapeService.self)!
 
         // Verify the class ID matches
-        XCTAssertEqual(client.classId, "basic_test/swift.test.ShapeService")
-        XCTAssertEqual(oid.class_id, "basic_test/swift.test.ShapeService")
+        XCTAssertTrue(client.classId.hasPrefix("basic_test/swift.test.ShapeService#"))
+        XCTAssertTrue(oid.class_id.hasPrefix("basic_test/swift.test.ShapeService#"))
 
         // Actually call RPC methods through the client proxy
         // This tests the full serialization/dispatch/deserialization cycle
@@ -1610,7 +1610,7 @@ final class IntegrationTests: XCTestCase {
             objectUploadExpectation: objectUploadExpectation
         )
         let oid = try Self.poa!.activateObject(servant, flags: .ws)
-        XCTAssertEqual(oid.class_id, "nprpc_test/nprpc.test.TestStreams")
+        XCTAssertTrue(oid.class_id.hasPrefix("nprpc_test/nprpc.test.TestStreams#"))
 
         // Create client proxy
         guard let obj = NPRPCObject.fromObjectId(oid) else {
@@ -1618,7 +1618,7 @@ final class IntegrationTests: XCTestCase {
             return
         }
         let client = narrow(obj, to: TestStreams.self)!
-        XCTAssertEqual(client.classId, "nprpc_test/nprpc.test.TestStreams")
+        XCTAssertTrue(client.classId.hasPrefix("nprpc_test/nprpc.test.TestStreams#"))
 
         let stream = try client.getByteStream(size: 5)
         var receivedValues: [UInt8] = []

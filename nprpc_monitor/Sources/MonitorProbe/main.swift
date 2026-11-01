@@ -14,9 +14,11 @@ import MonitorAPI
         }
         try rpc.startThreadPool(2)
         defer { rpc.stop() }
-        guard let object = NPRPCObject.fromString(CommandLine.arguments[1]),
-              let monitor = narrow(object, to: Monitor.self) else {
+        guard let object = NPRPCObject.fromString(CommandLine.arguments[1]) else {
             fatalError("Invalid Monitor reference")
+        }
+        guard let monitor = narrow(object, to: Monitor.self) else {
+            fatalError(narrowFailure(object, to: Monitor.self))
         }
         let stream = try monitor.watch(interval_ms: 250)
         defer { stream.cancel() }

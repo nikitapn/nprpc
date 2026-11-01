@@ -574,6 +574,8 @@ if(NPRPC_ENABLE_HTTP3 AND NPRPC_BUILD_ROUTER)
       $<TARGET_FILE:http3_rebinding_fixture> $<TARGET_FILE:npquicrouter>
       ${CMAKE_SOURCE_DIR}/certs/out/localhost.crt ${CMAKE_SOURCE_DIR}/certs/out/localhost.key)
     set_tests_properties(Http3RouterRebinding PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+    add_test(NAME NpidlSchemaHash COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_SOURCE_DIR}/npidl/test/integration_tests/schema_hash_test.py $<TARGET_FILE:npidl>)
     add_test(NAME QuicListenerLimits COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/quic_listener_limits_test.py
       $<TARGET_FILE:quic_tls_fixture>

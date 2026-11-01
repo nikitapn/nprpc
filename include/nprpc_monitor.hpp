@@ -206,7 +206,7 @@ class NPRPC_MONITOR_API IMonitor_Servant
   : public virtual ::nprpc::ObjectServant
 {
 public:
-  static std::string_view _get_class() noexcept { return "nprpc_monitor/nprpc.monitor.Monitor"; }
+  static std::string_view _get_class() noexcept { return "nprpc_monitor/nprpc.monitor.Monitor#1a95cc449f62b8d0"; }
   std::string_view get_class() const noexcept override { return IMonitor_Servant::_get_class(); }
   void dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) override;
   virtual ::nprpc::StreamWriter<Snapshot> Watch (uint32_t interval_ms) = 0;

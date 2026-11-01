@@ -1,6 +1,7 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include "schema_hash.hpp"
 #include "swift_builder.hpp"
 #include "utils.hpp"
 #include <algorithm>
@@ -857,7 +858,7 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
 void SwiftBuilder::emit_client_proxy(AstInterfaceDecl* ifs)
 {
   const std::string class_name = swift_type_name(ifs->name);
-  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->full_idl_namespace() + '.' + ifs->name;
+  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->full_idl_namespace() + '.' + ifs->name + '#' + SchemaHasher::hash(ifs);
 
   // The client proxy cannot conform to the protocol because:
   // - Non-IDL-async methods are `async throws` in the proxy but `throws` in the protocol
@@ -1297,7 +1298,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
   out << bl() << "public override init() { super.init() }\n\n";
 
   // getClass() override - return the fully qualified interface class name
-  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->full_idl_namespace() + '.' + ifs->name;
+  const std::string class_id = std::string(ctx_->current_file()) + '/' + ctx_->nm_cur()->full_idl_namespace() + '.' + ifs->name + '#' + SchemaHasher::hash(ifs);
   out << bl() << "public override func getClass() -> String " << bb();
   out << bl() << "return \"" << class_id << "\"\n";
   out << eb() << "\n";

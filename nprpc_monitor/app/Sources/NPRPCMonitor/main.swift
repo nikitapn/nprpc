@@ -163,9 +163,11 @@ enum LinkState: Equatable {
         }
         task = Task.detached { [weak self] in
             do {
-                guard let object = NPRPCObject.fromString(address),
-                      let monitor = narrow(object, to: Monitor.self) else {
+                guard let object = NPRPCObject.fromString(address) else {
                     throw NSError(domain: "Invalid Monitor object reference", code: 1)
+                }
+                guard let monitor = narrow(object, to: Monitor.self) else {
+                    throw NSError(domain: narrowFailure(object, to: Monitor.self), code: 2)
                 }
                 let stream = try monitor.watch(interval_ms: 1000)
                 MainQueue.async { [weak self] in

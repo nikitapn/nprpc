@@ -13,6 +13,7 @@
 
 #include <boost/container/small_vector.hpp>
 
+#include "schema_hash.hpp"
 #include "cpp_builder.hpp"
 #include "utils.hpp"
 
@@ -2476,6 +2477,7 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
   oh << "public:\n"
         "  static std::string_view _get_class() noexcept { return \""
      << ctx_->current_file() << '/' << ctx_->nm_cur()->full_idl_namespace() << '.' << ifs->name
+     << '#' << SchemaHasher::hash(ifs)
      << "\"; }\n"
         "  std::string_view get_class() const noexcept override { return I"
      << ifs->name

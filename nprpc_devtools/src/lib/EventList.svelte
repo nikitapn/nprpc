@@ -111,9 +111,11 @@
   // ── Formatting helpers ──────────────────────────────────────────
 
   function short_class(class_id: string): string {
-    // "nprpc_nameserver/nprpc.common.Nameserver" → "nprpc.common.Nameserver"
+    // "nprpc_nameserver/nprpc.common.Nameserver#<schema hash>" → "nprpc.common.Nameserver"
     const slash = class_id.lastIndexOf('/');
-    return slash >= 0 ? class_id.slice(slash + 1) : class_id;
+    const name = slash >= 0 ? class_id.slice(slash + 1) : class_id;
+    const hash = name.indexOf('#');
+    return hash >= 0 ? name.slice(0, hash) : name;
   }
 
   function method_label(ev: CallEntry): string {
