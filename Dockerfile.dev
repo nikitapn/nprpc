@@ -1,6 +1,9 @@
 # Multi-stage Docker image with NPRPC C++ and Swift artifacts
 # Use this as a base image for projects that depend on NPRPC
 
+ARG GPAC_IMAGE=nprpc-gpac:26.07.0
+FROM ${GPAC_IMAGE} AS gpac
+
 # ============================================================================
 # Stage 1: Build Boost
 # ============================================================================
@@ -133,8 +136,11 @@ RUN swift build -c release \
 
 # Archive the compiled bridge object so downstream packages can link it
 # without recompiling nprpc_bridge.cpp.
-RUN ar rcs /opt/nprpc/lib/libCNprpc.a \
-    .build/release/CNprpc.build/nprpc_bridge.cpp.o
+# Found by name, since where SwiftPM puts it differs between Swift versions.
+RUN bridge="$(find -L .build -name 'nprpc_bridge*.o' -path '*elease*' | head -n1)" \
+    && test -n "$bridge" \
+    && echo "Archiving $bridge" \
+    && ar rcs /opt/nprpc/lib/libCNprpc.a "$bridge"
 
 # ============================================================================
 # Stage 4: Final runtime image with all artifacts
@@ -158,8 +164,14 @@ RUN apt-get update && apt-get install -y \
     nodejs \
     liburing-dev \
     ffmpeg \
-    gpac \
+    libssl3t64 \
+    zlib1g \
     && rm -rf /var/lib/apt/lists/*
+
+# Shared media tools, built separately by `just build-gpac-image`.
+COPY --from=gpac /opt/gpac /opt/gpac
+ENV PATH="/opt/gpac/bin:${PATH}"
+RUN MP4Box -version && gpac -h >/dev/null
 
 # Copy Boost runtime libraries
 COPY --from=boost-builder /opt/boost /opt/boost

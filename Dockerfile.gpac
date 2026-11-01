@@ -1,0 +1,47 @@
+# Shared GPAC artifacts for Dockerfile.dev and nscalc/docker/Dockerfile.prod.
+# Build once with `just build-gpac-image`; consumers copy /opt/gpac.
+FROM ubuntu:26.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    curl \
+    libssl-dev \
+    pkg-config \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pin both the release and its source archive, rather than building master.
+ARG GPAC_VERSION=26.07.0
+ARG GPAC_SHA256=57822c1a74dcb83d76ff1f671e1b4fae2e7614e8194a5adb9f20661e0e9421dd
+WORKDIR /build/gpac
+RUN curl -fsSL --retry 3 \
+      "https://codeload.github.com/gpac/gpac/tar.gz/refs/tags/v${GPAC_VERSION}" \
+      -o /tmp/gpac.tar.gz \
+    && echo "${GPAC_SHA256}  /tmp/gpac.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/gpac.tar.gz --strip-components=1 \
+    && rm /tmp/gpac.tar.gz
+
+# Embed libgpac and its modules into the tools. Keep system OpenSSL/zlib
+# dynamic (including HTTPS support), without bringing in GUI or FFmpeg libs.
+RUN ./configure --prefix=/opt/gpac --static-build \
+      --disable-x11 --disable-sdl --disable-3d --disable-vout --disable-aout \
+    && make -j"$(nproc)" \
+    && make install \
+    && strip /opt/gpac/bin/MP4Box /opt/gpac/bin/gpac \
+    && rm -rf /opt/gpac/include /opt/gpac/lib \
+      /opt/gpac/share/man /opt/gpac/share/icons /opt/gpac/share/applications \
+    && install -D -m 644 COPYING /opt/gpac/share/licenses/gpac/COPYING
+
+# Check the exact runtime dependency set used by both consumers.
+FROM ubuntu:26.04 AS verify
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl3t64 zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /opt/gpac /opt/gpac
+RUN /opt/gpac/bin/MP4Box -version && /opt/gpac/bin/gpac -h >/dev/null
+
+FROM scratch
+LABEL org.opencontainers.image.title="GPAC artifacts for NPRPC media tools"
+LABEL org.opencontainers.image.version="26.07.0"
+COPY --from=verify /opt/gpac /opt/gpac
