@@ -98,10 +98,10 @@ nprpc::Task<> Session::send_receive_coro(flat_buffer& buffer,
   if (st.stop_requested()) throw nprpc::OperationCancelled();
 
   auto call = std::make_shared<Call>();
+  const auto executor = timeout_timer_.get_executor();
   // Constructed before suspending, so a stop request that lands now finds nothing
-  // to resume, and await_suspend sees it. It runs on whichever thread asked to
-  // stop, so the caller is resumed on the executor rather than there.
-  std::stop_callback on_stop(st, [call, executor = timeout_timer_.get_executor()]() noexcept {
+  // to resume, and await_suspend sees it.
+  std::stop_callback on_stop(st, [call, executor]() noexcept {
     if (auto waiting = call->finish(true))
       boost::asio::post(executor, [waiting] { waiting.resume(); });
   });
@@ -109,6 +109,7 @@ nprpc::Task<> Session::send_receive_coro(flat_buffer& buffer,
   struct Awaiter {
     Session& session;
     std::shared_ptr<Call> call;
+    boost::asio::any_io_executor executor;
     flat_buffer& buffer;
     uint32_t timeout_ms;
 
@@ -122,17 +123,21 @@ nprpc::Task<> Session::send_receive_coro(flat_buffer& buffer,
         call->waiting = handle;
       }
       // Nothing here may touch this awaiter once the call is on its way: the
-      // completion can resume the coroutine, and end it, before this returns.
+      // coroutine can be resumed elsewhere, and end, before this returns.
       session.send_receive_async(
           std::move(buffer),
-          [call = call](const boost::system::error_code& ec, flat_buffer& response) {
+          // Never resume the caller here. A transport can complete a call on its
+          // reader thread with its locks held, and the caller is free to make its
+          // next call as soon as it's running.
+          [call = call, executor = executor](const boost::system::error_code& ec, flat_buffer& response) {
             {
               std::lock_guard lock(call->mutex);
               if (call->finished) return;
               call->ec = ec;
               if (!ec) call->response = std::move(response);
             }
-            if (auto waiting = call->finish(false)) waiting.resume();
+            if (auto waiting = call->finish(false))
+              boost::asio::post(executor, [waiting] { waiting.resume(); });
           },
           timeout_ms);
       return true;
@@ -141,7 +146,7 @@ nprpc::Task<> Session::send_receive_coro(flat_buffer& buffer,
     void await_resume() noexcept {}
   };
 
-  co_await Awaiter{*this, call, buffer, timeout_ms};
+  co_await Awaiter{*this, call, executor, buffer, timeout_ms};
 
   if (call->cancelled) throw nprpc::OperationCancelled();
   if (call->ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();

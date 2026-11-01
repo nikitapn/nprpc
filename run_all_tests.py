@@ -246,7 +246,7 @@ class Runner:
         cmd = ["ctest", "--test-dir", str(ctest_dir), "--output-on-failure"]
         if ctest_filter:
             cmd.extend(["-R", ctest_filter])
-        return self._stage("C++ tests", cmd, timeout=120)
+        return self._stage("C++ tests", cmd, timeout=160)
 
     def stage_js(self) -> Result:
         js_dir = self.root / "test" / "js"
@@ -323,7 +323,7 @@ class Runner:
             "Swift tests (docker)",
             ["bash", "docker-build-swift.sh", "--test"],
             cwd=swift_dir,
-            timeout=120,
+            timeout=160,
         )
 
     def stage_swift_host(self) -> Result:

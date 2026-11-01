@@ -69,9 +69,11 @@ public:
   // time, and ExceptionCommFailure for any other transport failure.
   NPRPC_API virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms);
 
-  // Coroutine variant — suspends the caller until the response arrives. A stop
-  // request ends the wait at once with OperationCancelled, on this session's
-  // executor, and the reply is dropped when it comes: the server isn't told.
+  // Coroutine variant — suspends the caller until the response arrives, then
+  // resumes it on this session's executor. A stop request ends the wait at once
+  // with OperationCancelled, and the reply is dropped when it comes: the server
+  // isn't told. Don't make a blocking call from the resumed coroutine: on a socket
+  // session the executor is the strand that has to deliver that call's reply.
   // Built on send_receive_async(), so a transport only needs to provide that.
   NPRPC_API virtual nprpc::Task<> send_receive_coro(flat_buffer& buffer,
                                                     uint32_t timeout_ms,

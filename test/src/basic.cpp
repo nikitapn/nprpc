@@ -1,4 +1,5 @@
 #ifdef NPRPC_QUIC_ENABLED
+#include <future>
 #include <nprpc/impl/quic_transport.hpp>
 #endif
 #include <chrono>
@@ -906,6 +907,39 @@ TEST_F(NprpcTest, TestCancellation)
     EXPECT_TRUE(caught);
   } catch (nprpc::Exception& ex) {
     FAIL() << "Unexpected exception in TestCancellation: " << ex.what();
+  }
+}
+
+// A coroutine goes straight from one reply to its next call, on whatever thread
+// resumed it. That must not be a thread still holding locks for the reply.
+TEST_F(NprpcTest, TestCoroutineCallsInSequence)
+{
+#include "common/tests/basic.inl"
+  const std::pair<const char*, nprpc::ObjectActivationFlags> transports[] = {
+#ifdef NPRPC_ENABLE_TCP
+    {"tcp", nprpc::ObjectActivationFlags::tcp},
+#endif
+#ifdef NPRPC_WEBSOCKET_ENABLED
+    {"ws", nprpc::ObjectActivationFlags::ws},
+#endif
+    {"shm", nprpc::ObjectActivationFlags::shm},
+    {"quic", nprpc::ObjectActivationFlags::quic},
+  };
+  for (const auto& [name, flag] : transports) {
+    SCOPED_TRACE(name);
+    TestBasicImpl servant;
+    auto obj = bind_and_resolve<nprpc::test::TestBasic>(
+        servant, flag, std::string("coroutine_sequence_") + name);
+    auto calls = [](nprpc::test::TestBasic* proxy) -> nprpc::Task<uint32_t> {
+      uint32_t sum = 0;
+      for (int i = 0; i < 5; ++i) sum += co_await proxy->ReturnU32Async();
+      co_return sum;
+    };
+    auto task = calls(obj.get());
+    std::future<uint32_t> result = std::async(std::launch::async, [&] { return task.get(); });
+    ASSERT_EQ(result.wait_for(std::chrono::seconds(10)), std::future_status::ready)
+        << "deadlocked";
+    EXPECT_EQ(result.get(), 5 * 42u);
   }
 }
 
