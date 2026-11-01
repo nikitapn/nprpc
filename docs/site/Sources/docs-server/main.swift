@@ -15,6 +15,9 @@
 //   DOCS_SHM_CHANNEL  take HTTP/3 through npquicrouter's shared-memory rings
 //                   /nprpc_<name>_c2s and _s2c instead of loopback UDP
 //   DOCS_TEMPLATE_RELOAD=1  re-read templates on every request
+//   DOCS_TELEMETRY_CLIENTS  PEM of client certificates allowed to read NPRPC
+//                   Monitor telemetry over native QUIC (requires TLS)
+//   DOCS_TELEMETRY_PORT  telemetry UDP port (default 8447)
 //
 // SIGINT and SIGTERM stop the server.
 
@@ -57,15 +60,31 @@ do {
             }
         }
     }
-    let rpc = try http
+    let builder = http
         .withPageHandler { site.handle($0) }
         .rootDir(root + "/web")
-        .build()
+    if let clients = env["DOCS_TELEMETRY_CLIENTS"] {
+        guard tls else {
+            throw RuntimeError(message: "Telemetry requires DOCS_TLS_CERT and DOCS_TLS_KEY")
+        }
+        guard let quicPort = UInt16(env["DOCS_TELEMETRY_PORT"] ?? "8447"), quicPort > 0 else {
+            throw RuntimeError(message: "DOCS_TELEMETRY_PORT must be between 1 and 65535")
+        }
+        guard env["DOCS_HTTP3"] != "1" || quicPort != port else {
+            throw RuntimeError(message: "Telemetry needs a UDP port separate from HTTP/3")
+        }
+        try builder.withQuic(quicPort)
+            .ssl(certFile: env["DOCS_TLS_CERT"]!, keyFile: env["DOCS_TLS_KEY"]!)
+            .requireClientCertificates(caFile: clients)
+            .enableTelemetry()
+    }
+    let rpc = try builder.build()
 
     let scheme = tls ? "https" : "http"
     log("NPRPC docs: \(scheme)://\(hostname):\(port)/")
     log("  api.json:  \(apiPath) (reloaded when it changes)")
     log("  templates: \(site.templateNames.joined(separator: ", "))")
+    if let reference = rpc.telemetryReference { log("  telemetry: \(reference)") }
 
     // Signal sources only fire once the default action is disabled.
     var signalSources: [DispatchSourceSignal] = []

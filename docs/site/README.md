@@ -57,8 +57,33 @@ a name that is unique among them.
 | `DOCS_HTTP3` | unset; `1` also serves HTTP/3 (needs TLS) |
 | `DOCS_SHM_CHANNEL` | unset; a name takes HTTP/3 through npquicrouter's shared-memory rings `/nprpc_<name>_c2s` / `_s2c` instead of loopback UDP. The deploy script sets it (`--shm-channel`, `--no-shm`) and mounts the router's directory as `/dev/shm` |
 | `DOCS_TEMPLATE_RELOAD` | unset; `1` re-reads templates per request |
+| `DOCS_TELEMETRY_CLIENTS` | unset; a PEM of trusted client certificates enables NPRPC Monitor telemetry (requires TLS) |
+| `DOCS_TELEMETRY_PORT` | `8447`; native QUIC UDP port for telemetry |
 
 `SIGINT` and `SIGTERM` stop the server.
+
+## Telemetry
+
+Enable NPRPC Monitor telemetry with the same client identity used by the
+other sites:
+
+```sh
+docs/site/deploy/deploy.sh --ssh debian@nikitapn.com \
+  --telemetry-clients ~/.config/nprpc-monitor/mysite-client.crt
+```
+
+The deploy installs only the trusted client certificates on the VPS and
+mounts them read-only. Keep the monitor's private key on your own machine;
+the deploy rejects PEM files containing a private key.
+
+Telemetry connects directly over public UDP **8447**, separate from HTTP/3
+and the other sites' telemetry ports. Override it with `--telemetry-port`
+and allow that UDP port through the host firewall. The listener uses the
+HTTPS server certificate and admits only clients trusted by the PEM file.
+
+The container logs `telemetry: <object-reference>` at startup. Paste that
+reference into NPRPC Monitor and select your client certificate and key.
+A later deploy without `--telemetry-clients` disables telemetry.
 
 ## Deploying
 
@@ -79,7 +104,7 @@ the two differ. The runtime image is copied to the server only when the
 server doesn't have it.
 
 The container runs with a read-only filesystem and no capabilities except
-binding port 443, publishes its port on `127.0.0.1` only, and restarts unless
+binding port 443, publishes HTTPS/HTTP3 on `127.0.0.1` only, and restarts unless
 stopped.
 
 ### A new hostname, once
