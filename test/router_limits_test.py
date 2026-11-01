@@ -149,6 +149,7 @@ with tempfile.TemporaryDirectory(prefix='nprpc-router-limits-') as directory:
         time.sleep(6)  # The 5 second pending timeout.
         s = r.stats()
         expect('an expired pending connection gives its place back', s['pending'] == 0, s)
+        expect('a connection that never showed an SNI is counted', s['initial_no_sni'] == 3, s)
 
     with Router(root, 9, udp_max_pending=2, udp_max_pending_per_ip=0) as r:
         udp_send(*[initial_without_sni(os.urandom(8)) for _ in range(20)])
@@ -182,6 +183,19 @@ with tempfile.TemporaryDirectory(prefix='nprpc-router-limits-') as directory:
         expect('a session that never finishes its handshake is destroyed',
                s['sessions'] == 0 and s['handshake_timeouts'] == 1, s)
 
+    # Nothing reads this ring, so what the router writes stays in it.
+    channel = f'router_limits_{os.getpid()}'
+    routes = [{'sni': 'localhost', 'udp_backend': f'127.0.0.1:{BACKEND_PORT}', 'shm_ingress_channel': channel}]
+    try:
+        with Router(root, BACKEND_PORT, routes=routes) as r:
+            curl_ok('1')
+            s = r.stats()
+            used = re.search(rf'ingress\[[^\]]*{channel}[^\]]*\]=(\d+)/(\d+)B', s['raw'])
+            expect('an unread ring shows what is waiting in it',
+                   used is not None and 0 < int(used[1]) < int(used[2]), s)
+    finally:
+        pathlib.Path(f'/dev/shm/nprpc_{channel}_c2s').unlink(missing_ok=True)
+
     www = root / 'www'
     www.mkdir()
     (www / 'payload').write_bytes(b'x' * 100_000)
@@ -197,8 +211,9 @@ with tempfile.TemporaryDirectory(prefix='nprpc-router-limits-') as directory:
             expect('a real client gets through the limits', ok, s)
             expect('an established session outlives the handshake timeout',
                    s['sessions'] == 1 and s['handshake_timeouts'] == 0, s)
-            expect('traffic is counted per backend',
-                   re.search(rf'backend\[127\.0\.0\.1:{BACKEND_PORT}\]=[1-9]', s['raw']) is not None, s)
+            expect('traffic is counted per backend, both ways',
+                   re.search(rf'backend\[127\.0\.0\.1:{BACKEND_PORT}\]=[1-9]\d*pkts/\d+B/0ring_full/[1-9]\d*reply_pkts/[1-9]\d*reply_B',
+                             s['raw']) is not None, s)
             ok = curl_ok('1')
             s = r.stats()
             expect('sessions are capped per IP', not ok and s['session_cap_drops'] >= 1 and s['sessions'] == 1, s)

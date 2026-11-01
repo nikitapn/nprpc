@@ -359,6 +359,23 @@ public:
     }
   }
 
+  void print_totals(std::ostream& out, size_t worker_count) const
+  {
+    const int ncpus = libbpf_num_possible_cpus();
+    if (ncpus <= 0) return;
+    std::vector<uint64_t> per_cpu(static_cast<size_t>(ncpus));
+    const auto sum = [&](int fd, uint32_t key) -> uint64_t {
+      if (fd < 0 || bpf_map_lookup_elem(fd, &key, per_cpu.data()) != 0) return 0;
+      uint64_t total = 0;
+      for (const auto value : per_cpu) total += value;
+      return total;
+    };
+    uint64_t routed = 0;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(worker_count); ++i)
+      routed += sum(worker_counters_fd_, i);
+    out << " bpf_routed=" << routed << " bpf_drops=" << sum(drop_counter_fd_, 0);
+  }
+
   // Register a worker socket fd at the given index in the reuseport array.
   bool register_socket(uint32_t index, int socket_fd)
   {
@@ -413,6 +430,7 @@ struct RouterStats {
     Counter initial_too_small{0};     // Under the 1200 bytes QUIC requires of a client.
     Counter initial_rate_limited{0};  // Over the per-IP or overall rate.
     Counter initial_undecryptable{0}; // No readable Initial in it.
+    Counter initial_no_sni{0};        // Pending connections that expired with no SNI.
     Counter unknown_short_header{0};  // Not a session, and an unknown connection ID.
     Counter no_route{0};              // Unknown SNI.
     Counter pending_cap_drops{0};
@@ -430,6 +448,9 @@ struct BackendStats {
     std::atomic<uint64_t> packets{0};
     std::atomic<uint64_t> bytes{0};
     std::atomic<uint64_t> ring_full_drops{0};
+    // Replies seen here, which is UDP mode only. SHM replies are under egress[].
+    std::atomic<uint64_t> reply_packets{0};
+    std::atomic<uint64_t> reply_bytes{0};
 };
 
 // Traffic per backend, kept for the life of the process: backends are config.
@@ -449,7 +470,9 @@ public:
         for (const auto& [name, stats] : backends_) {
             out << " backend[" << name << "]=" << stats->packets.load(std::memory_order_relaxed)
                 << "pkts/" << stats->bytes.load(std::memory_order_relaxed)
-                << "B/" << stats->ring_full_drops.load(std::memory_order_relaxed) << "ring_full";
+                << "B/" << stats->ring_full_drops.load(std::memory_order_relaxed) << "ring_full/"
+                << stats->reply_packets.load(std::memory_order_relaxed) << "reply_pkts/"
+                << stats->reply_bytes.load(std::memory_order_relaxed) << "reply_B";
         }
     }
 
@@ -459,6 +482,36 @@ private:
 };
 
 static BackendStatsTable g_backend_stats;
+
+// The SHM rings, which every router keeps open until the process exits.
+class RingStatsTable {
+public:
+    void add(const ShmIngressWriter& ring) {
+        std::lock_guard lock(mutex_);
+        ingress_[ring.ring_name()] = &ring; // Workers share a ring; any one can read it.
+    }
+
+    void add(const ShmEgressReader& ring) {
+        std::lock_guard lock(mutex_);
+        egress_[ring.ring_name()] = &ring;
+    }
+
+    void print(std::ostream& out) {
+        std::lock_guard lock(mutex_);
+        for (const auto& [name, ring] : ingress_)
+            out << " ingress[" << name << "]=" << ring->used_bytes() << "/" << ring->capacity_bytes() << "B";
+        for (const auto& [name, ring] : egress_)
+            out << " egress[" << name << "]=" << ring->used_bytes() << "/" << ring->capacity_bytes() << "B/"
+                << ring->packets() << "pkts/" << ring->bytes() << "B/" << ring->send_errors() << "send_errors";
+    }
+
+private:
+    std::mutex mutex_;
+    std::map<std::string, const ShmIngressWriter*> ingress_;
+    std::map<std::string, const ShmEgressReader*> egress_;
+};
+
+static RingStatsTable g_ring_stats;
 
 class RouterLimiter {
 public:
@@ -613,7 +666,7 @@ private:
 
 static RouterLimiter g_limiter;
 
-static void print_stats(std::ostream& out) {
+static void print_stats(std::ostream& out, const std::string& extra = {}) {
     const auto count = [](const std::atomic<uint64_t>& c) { return c.load(std::memory_order_relaxed); };
     out << "[stats] sessions=" << g_limiter.active(RouterLimiter::Session)
         << " pending=" << g_limiter.active(RouterLimiter::Pending)
@@ -621,6 +674,7 @@ static void print_stats(std::ostream& out) {
         << " initial_too_small=" << count(g_stats.initial_too_small)
         << " initial_rate_limited=" << count(g_stats.initial_rate_limited)
         << " initial_undecryptable=" << count(g_stats.initial_undecryptable)
+        << " initial_no_sni=" << count(g_stats.initial_no_sni)
         << " unknown_short_header=" << count(g_stats.unknown_short_header)
         << " no_route=" << count(g_stats.no_route)
         << " pending_cap_drops=" << count(g_stats.pending_cap_drops)
@@ -629,8 +683,10 @@ static void print_stats(std::ostream& out) {
         << " idle_timeouts=" << count(g_stats.idle_timeouts)
         << " moved_clients=" << count(g_stats.moved_clients)
         << " tcp_cap_drops=" << count(g_stats.tcp_cap_drops)
-        << " tcp_peek_timeouts=" << count(g_stats.tcp_peek_timeouts);
+        << " tcp_peek_timeouts=" << count(g_stats.tcp_peek_timeouts)
+        << extra;
     g_backend_stats.print(out);
+    g_ring_stats.print(out);
     out << std::endl;
 }
 
@@ -1244,9 +1300,12 @@ public:
 #endif
         recv();
         schedule_gc();
-        for (const auto& [name, writer] : shm_ingress_map_)
+        for (const auto& [name, writer] : shm_ingress_map_) {
+            g_ring_stats.add(*writer);
             std::clog << "  SHM ingress channel: " << writer->ring_name() << "\n";
+        }
         for (const auto& [name, reader] : shm_egress_map_) {
+            g_ring_stats.add(*reader);
             reader->start();
             std::clog << "  SHM egress  channel: " << reader->ring_name() << "\n";
         }
@@ -1620,6 +1679,8 @@ private:
             [this, sess](boost::system::error_code ec, size_t n) {
                 if (ec) return; // session torn down
                 sess->last_seen = std::chrono::steady_clock::now();
+                sess->stats->reply_packets.fetch_add(1, std::memory_order_relaxed);
+                sess->stats->reply_bytes.fetch_add(n, std::memory_order_relaxed);
                 listen_sock_.async_send_to(
                     asio::buffer(sess->back_buf.data(), n),
                     sess->client_ep,
@@ -1657,10 +1718,12 @@ private:
             g_limiter.expire();
             // Evict stale pending reassembly entries (typically < 5 s old)
             for (auto it = pending_.begin(); it != pending_.end(); ) {
-                if (now - it->second.created_at > kPendingTimeout)
+                if (now - it->second.created_at > kPendingTimeout) {
+                    g_stats.initial_no_sni.fetch_add(1, std::memory_order_relaxed);
                     it = pending_.erase(it);
-                else
+                } else {
                     ++it;
+                }
             }
             schedule_gc();
         });
@@ -1845,12 +1908,20 @@ int main(int argc, char* argv[])
         ioc.stop();
     });
 
+    const auto report_stats = [&] {
+        std::ostringstream extra;
+#if defined(NPRPC_ROUTER_REUSEPORT_BPF_ENABLED) && defined(SO_ATTACH_REUSEPORT_EBPF)
+        if (reuseport_bpf) reuseport_bpf->print_totals(extra, num_workers);
+#endif
+        print_stats(std::clog, extra.str());
+    };
+
     asio::steady_timer stats_timer(ioc);
     std::function<void()> schedule_stats = [&] {
         stats_timer.expires_after(std::chrono::seconds(cfg.stats_interval_sec));
         stats_timer.async_wait([&](boost::system::error_code ec) {
             if (ec) return;
-            print_stats(std::clog);
+            report_stats();
             schedule_stats();
         });
     };
@@ -1861,7 +1932,7 @@ int main(int argc, char* argv[])
     for (auto& w : udp_workers) {
         if (w->thread.joinable()) w->thread.join();
     }
-    print_stats(std::clog);
+    report_stats();
 
 #if defined(NPRPC_ROUTER_REUSEPORT_BPF_ENABLED) && defined(SO_ATTACH_REUSEPORT_EBPF)
     if (reuseport_bpf) reuseport_bpf->print_metrics(num_workers);

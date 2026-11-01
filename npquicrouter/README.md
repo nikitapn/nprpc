@@ -114,7 +114,13 @@ backend outpaces any real client, arrives intact.
 
 For every limit, `0` means unlimited. "Per IP" means per IPv4 address or per IPv6 /64. The per-IP defaults are high because a carrier NAT can put many real clients behind one address, so lower them if your clients don't sit behind one.
 
-The `[stats]` line reports current `sessions`, `pending` and `tcp`, then running totals of drops and timeouts by reason, and packets, bytes and full-ring drops per backend.
+The `[stats]` line reports current `sessions`, `pending` and `tcp`, then running totals of drops and timeouts by reason:
+
+- `initial_undecryptable`: datagrams with no readable Initial. `initial_no_sni`: pending connections that expired before an SNI could be read. `no_route`: an SNI with no route.
+- `bpf_routed` and `bpf_drops`: packets the eBPF program sent to a worker or dropped. These only appear with eBPF routing, which needs more than one worker and `CAP_BPF`.
+- `backend[addr]`: client packets and bytes, drops because the ingress ring was full, then reply packets and bytes. Replies are only counted here in UDP mode.
+- `ingress[ring]`: bytes waiting in the ring over its size. If this stays high, the backend isn't keeping up.
+- `egress[ring]`: the same for replies, then packets and bytes sent to clients, and send errors. A backend that finds this ring full drops the packet itself, so watch how full the ring gets.
 
 ## ACME HTTP-01
 

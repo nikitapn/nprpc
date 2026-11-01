@@ -22,6 +22,29 @@ struct {
   __type(value, __u64);
 } reuseport_array SEC(".maps");
 
+// Read by the router for its [stats] line.
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, 161);
+  __type(key, __u32);
+  __type(value, __u64);
+} worker_counters SEC(".maps");
+
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, __u32);
+  __type(value, __u64);
+} drop_counter SEC(".maps");
+
+static __always_inline int count_drop(void)
+{
+  const __u32 key = 0;
+  __u64* drops = bpf_map_lookup_elem(&drop_counter, &key);
+  if (drops) ++*drops;
+  return SK_DROP;
+}
+
 SEC("sk_reuseport")
 int quic_select_reuseport(struct sk_reuseport_md* ctx)
 {
@@ -34,7 +57,7 @@ int quic_select_reuseport(struct sk_reuseport_md* ctx)
 
   cfg = bpf_map_lookup_elem(&config_map, &key);
   if (!cfg || cfg->worker_count == 0) {
-    return SK_DROP;
+    return count_drop();
   }
 
   selected = hash % cfg->worker_count;
@@ -74,10 +97,12 @@ int quic_select_reuseport(struct sk_reuseport_md* ctx)
   }
 
   if (bpf_sk_select_reuseport(ctx, &reuseport_array, &selected, 0) == 0) {
+    __u64* routed = bpf_map_lookup_elem(&worker_counters, &selected);
+    if (routed) ++*routed;
     return SK_PASS;
   }
 
-  return SK_DROP;
+  return count_drop();
 }
 
 char LICENSE[] SEC("license") = "GPL";

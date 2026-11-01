@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import select
 import socket
 import subprocess
@@ -94,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix='nprpc-http3-rebinding-') as directory:
     (root / 'router.json').write_text(json.dumps({
         'listen_address': '127.0.0.1', 'listen_tcp_port': ROUTER_PORT - 1, 'listen_udp_port': ROUTER_PORT,
         'http_redirect_port': 0, 'acme_webroot': '', 'default_tcp_backend': '', 'default_udp_backend': '',
-        'udp_session_timeout_sec': 120, 'shm_egress_channel': egress, 'num_workers': 1,
+        'udp_session_timeout_sec': 120, 'shm_egress_channel': egress, 'num_workers': 1, 'stats_interval_sec': 1,
         'routes': [{'sni': 'localhost', 'udp_backend': f'127.0.0.1:{ROUTED_SERVER_PORT}',
                     'shm_ingress_channel': ingress}],
     }))
@@ -109,8 +110,9 @@ with tempfile.TemporaryDirectory(prefix='nprpc-http3-rebinding-') as directory:
     processes = []
     try:
         # Creates the rings the routed server opens.
+        router_log = root / 'router.log'
         processes.append(subprocess.Popen([router, str(root / 'router.json')],
-                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+                                          stdout=subprocess.DEVNULL, stderr=router_log.open('w')))
         time.sleep(0.5)
         processes.append(start_server(str(ROUTED_SERVER_PORT), egress, ingress))
         processes.append(start_server(str(SERVER_PORT)))
@@ -118,6 +120,15 @@ with tempfile.TemporaryDirectory(prefix='nprpc-http3-rebinding-') as directory:
 
         download('through the router, no port change', root, ROUTER_PORT, None, expected)
         download('through the router, port change', root, ROUTER_PORT, REBIND_AFTER, expected)
+
+        # At least the file went out through the egress ring.
+        time.sleep(1.5)
+        stats = [l for l in router_log.read_text().splitlines() if l.startswith('[stats]')][-1]
+        sent = re.search(rf'egress\[[^\]]*{egress}[^\]]*\]=\d+/\d+B/([1-9]\d*)pkts/(\d+)B/0send_errors', stats)
+        if not sent or int(sent[2]) < FILE_SIZE:
+            raise AssertionError(f'egress traffic is not counted\n{stats}')
+        print('PASS: egress traffic is counted', flush=True)
+
         download('direct, port change', root, SERVER_PORT, REBIND_AFTER, expected)
     finally:
         for process in processes:

@@ -106,6 +106,12 @@ inline void make_ring_group_writable(const std::string& ring_name)
   ::close(fd);
 }
 
+// Bytes waiting in a ring.
+inline size_t ring_used_bytes(const nprpc::impl::LockFreeRingBuffer& ring)
+{
+  return ring.buffer_size() - ring.available_bytes() - 1;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ShmIngressWriter  (npquicrouter side, c2s ring)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,6 +163,8 @@ public:
   }
 
   const std::string& ring_name() const noexcept { return ring_name_; }
+  size_t used_bytes() const { return ring_used_bytes(*ring_); }
+  size_t capacity_bytes() const { return ring_->buffer_size(); }
 
 private:
   std::string                                       ring_name_;
@@ -207,6 +215,11 @@ public:
   }
 
   const std::string& ring_name() const noexcept { return ring_name_; }
+  size_t used_bytes() const { return ring_used_bytes(*ring_); }
+  size_t capacity_bytes() const { return ring_->buffer_size(); }
+  uint64_t packets() const noexcept { return packets_.load(std::memory_order_relaxed); }
+  uint64_t bytes() const noexcept { return bytes_.load(std::memory_order_relaxed); }
+  uint64_t send_errors() const noexcept { return send_errors_.load(std::memory_order_relaxed); }
 
 private:
   void loop()
@@ -275,7 +288,14 @@ private:
 #endif
 
     const auto ret = ::sendmsg(sock_fd_, &msg, MSG_DONTWAIT);
-    if (ret < 0) {
+    if (ret >= 0) {
+      // A GSO frame goes out as several datagrams.
+      const size_t segment = hdr.gso_segment_size;
+      packets_.fetch_add(segment > 0 ? (payload_len + segment - 1) / segment : 1,
+                         std::memory_order_relaxed);
+      bytes_.fetch_add(payload_len, std::memory_order_relaxed);
+    } else {
+      send_errors_.fetch_add(1, std::memory_order_relaxed);
       const int err = errno;
       char addr_buf[INET6_ADDRSTRLEN] = {};
       uint16_t dest_port = 0;
@@ -299,4 +319,7 @@ private:
   std::unique_ptr<nprpc::impl::LockFreeRingBuffer>  ring_;
   std::thread                                       thread_;
   std::atomic<bool>                                 running_{false};
+  std::atomic<uint64_t>                             packets_{0};
+  std::atomic<uint64_t>                             bytes_{0};
+  std::atomic<uint64_t>                             send_errors_{0};
 };
