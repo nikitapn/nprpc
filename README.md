@@ -6,6 +6,7 @@ NPRPC is a high-performance, multi-transport RPC framework for distributed syste
 
 - **Multiple transports** — WebSocket (WS/WSS), HTTP/HTTPS, HTTP/3, TCP, Shared Memory, QUIC, WebTransport
 - **Streaming RPC** — server (`stream<T>`), client (`client_stream<T>`), and bidi (`bidi_stream<In,Out>`) streams with C++20 coroutines
+- **Runtime telemetry** — live traffic, latency, errors, and connection/stream counters over QUIC, with a native [NPRPC Monitor](nprpc_monitor/README.md) app
 - **Type-safe IDL** — `.npidl` → C++/TypeScript/Swift stubs with `npidl`
 - **Cross-language** — seamless C++ ↔ TypeScript/JavaScript ↔ Swift interop
 - **Browser-first** — WebSocket, HTTP, and WebTransport endpoints; `host.json` bootstrap for static deployments
@@ -173,6 +174,36 @@ for await (const item of await feed.Watch(10)) show(item);
 ```swift
 for try await item in try feed.watch(limit: 10) { show(item) }
 ```
+
+## Runtime Telemetry
+
+The runtime can stream typed telemetry snapshots to **NPRPC Monitor**, a
+native Swift/LavaUI app. Snapshots include per-transport traffic, latency
+histograms, errors, handshake failures, throttling, and active connections
+and streams, plus HTTP status counts and optional npquicrouter statistics.
+The monitor uses NPRPC streaming with flow control rather than HTTP polling.
+
+Telemetry is disabled by default. Enable it on a separate native QUIC
+listener with trusted client certificates:
+
+```cpp
+auto* rpc = nprpc::RpcBuilder()
+  .with_hostname("example.com")
+  .with_quic(8444).ssl("server.pem", "server.key")
+  .require_client_certificates("trusted-clients.pem")
+  .enable_telemetry()
+  .build();
+
+auto reference = rpc->telemetry_reference(); // Connect to this in NPRPC Monitor.
+```
+
+Swift exposes the same feature through `.enableTelemetry()` and
+`rpc.telemetryReference`. Server and client must use the same telemetry IDL
+layout; generated Swift decoders reject malformed or structurally
+incompatible snapshots as stream errors.
+
+See the [Monitor guide](nprpc_monitor/README.md) for setup, client certificate
+configuration, sampling intervals, and the headless `MonitorProbe` tool.
 
 ## WebTransport
 

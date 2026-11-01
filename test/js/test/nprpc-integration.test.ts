@@ -1178,15 +1178,27 @@ describe('NPRPC Integration Tests', function() {
     describe('HTTP Request Throttling', function() {
         let testBasic: test.TestBasic;
 
+        async function refillHttpRpcQuota(): Promise<void> {
+            // NprpcTestEnvironment uses a 64-token burst at 64 requests/second.
+            // A second of idle time refills the shared per-IP bucket; allow a margin.
+            await new Promise(resolve => setTimeout(resolve, 1200));
+        }
+
         before(async function() {
             testBasic = await resolveTestObject('nprpc_test_basic', test.TestBasic);
+        });
+
+        after(async function() {
+            // Restore the quota even if the burst assertions fail, so subsequent
+            // HTTP tests do not inherit an exhausted bucket.
+            await refillHttpRpcQuota();
         });
 
         it('should reject abusive HTTP RPC bursts with 429', async function() {
             this.timeout(30000);
 
             // Let prior HTTP traffic settle so the limiter starts from a refilled state.
-            await new Promise(resolve => setTimeout(resolve, 1200));
+            await refillHttpRpcQuota();
 
             const attempts = 160;
             const results = await Promise.allSettled(
@@ -1244,7 +1256,6 @@ describe('NPRPC Integration Tests', function() {
         });
 
         it('should echo payloadA via HTTP transport', async function() {
-            this.timeout(100); // wait a bit avoiding 429 throttling errors
             const variantRpc = await resolveTestObject('nprpc_test_variant_rpc', test.TestVariantRpc);
             const input: test.TestVariant = { kind: 'payloadA', value: { id: 7, label: 'http test' } };
             const result = await variantRpc.http.Echo(input);
