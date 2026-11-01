@@ -144,7 +144,7 @@ Addresses are looked up when a connection is counted and never written down. Tot
 
 ## Reading the stats from NPRPC Monitor
 
-The router has no RPC of its own, so one backend carries its stats. With `stats_file` set, the router writes everything in the `[stats]` and `[countries]` lines as JSON, including every country rather than the top 20. Set the file inside the shared-memory directory, such as `/dev/shm/npquicrouter/router-stats.json`, which backend containers already mount. It's replaced in one step, and its group can read it.
+The router has no RPC of its own, so one backend carries its stats. With `stats_file` set, the router writes everything in the `[stats]` and `[countries]` lines as JSON, including every country rather than the top 20. Set the file inside the shared-memory directory, which backend containers already mount. Give the path as the router sees it: under the systemd unit's `BindPaths`, that is `/dev/shm/router-stats.json`. It's replaced in one step, and its group can read it.
 
 Then one backend adds it to its telemetry: `telemetry_router_stats_file(path)` in C++, or `telemetryRouterStatsFile(path)` in Swift. The file passes through as an opaque string, so a new router counter only needs the router and the monitor updated. NPRPC Monitor shows a Router section when that server is connected, and marks it stale if the router stops writing.
 
