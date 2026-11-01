@@ -1738,7 +1738,7 @@ int nprpc_session_stream_send_init(
     const auto stream_id = init.stream_id();
 
     try {
-        session->send_receive(*buf, timeout_ms);
+        if (!session->send_receive_result(*buf, timeout_ms)) return -1;
         const auto std_reply = nprpc::impl::handle_standart_reply(*buf);
         if (std_reply != 0) {
             return std_reply;
