@@ -393,6 +393,9 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   g_cfg.quic_cert_file = cfg_->quic_cert_file;
   g_cfg.quic_key_file = cfg_->quic_key_file;
   g_cfg.quic_client_ca_file = cfg_->quic_client_ca_file;
+  g_cfg.quic_max_connections = cfg_->quic_max_connections;
+  g_cfg.quic_max_connections_per_ip = cfg_->quic_max_connections_per_ip;
+  g_cfg.quic_new_connections_per_ip_per_second = cfg_->quic_new_connections_per_ip_per_second;
 #ifdef NPRPC_QUIC_ENABLED
   // A certificate trusted for outbound TLS is trusted for outbound QUIC too.
   if (cfg_->quic_client_tls.ca_file.empty())

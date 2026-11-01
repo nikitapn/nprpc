@@ -56,6 +56,9 @@ struct Config {
   std::string quic_cert_file;
   std::string quic_key_file;
   std::string quic_client_ca_file;
+  size_t quic_max_connections = 0;
+  size_t quic_max_connections_per_ip = 0;
+  size_t quic_new_connections_per_ip_per_second = 0;
   std::string http_root_dir;
   std::vector<std::string> http_allowed_origins;
   size_t http_max_request_body_size = NPRPC_DEFAULT_HTTP_MAX_REQUEST_BODY_SIZE;

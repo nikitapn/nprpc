@@ -541,6 +541,10 @@ add_executable(test_router_country_table ${CMAKE_CURRENT_SOURCE_DIR}/src/test_ro
 target_include_directories(test_router_country_table PRIVATE ${CMAKE_SOURCE_DIR}/npquicrouter/src)
 add_test(NAME RouterCountryTable COMMAND test_router_country_table)
 
+add_executable(test_quic_connection_limiter ${CMAKE_CURRENT_SOURCE_DIR}/src/test_quic_connection_limiter.cpp)
+target_link_libraries(test_quic_connection_limiter PRIVATE nprpc::nprpc)
+add_test(NAME QuicConnectionLimiter COMMAND test_quic_connection_limiter)
+
 if(NPRPC_ENABLE_QUIC)
   add_executable(test_telemetry_builder src/test_telemetry_builder.cpp)
   target_link_libraries(test_telemetry_builder PRIVATE nprpc::nprpc)
@@ -570,6 +574,11 @@ if(NPRPC_ENABLE_HTTP3 AND NPRPC_BUILD_ROUTER)
       $<TARGET_FILE:http3_rebinding_fixture> $<TARGET_FILE:npquicrouter>
       ${CMAKE_SOURCE_DIR}/certs/out/localhost.crt ${CMAKE_SOURCE_DIR}/certs/out/localhost.key)
     set_tests_properties(Http3RouterRebinding PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+    add_test(NAME QuicListenerLimits COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/quic_listener_limits_test.py
+      $<TARGET_FILE:quic_tls_fixture>
+      ${CMAKE_SOURCE_DIR}/certs/out/localhost.crt ${CMAKE_SOURCE_DIR}/certs/out/localhost.key)
+    set_tests_properties(QuicListenerLimits PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
     add_test(NAME RouterLimits COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/router_limits_test.py
       $<TARGET_FILE:http3_rebinding_fixture> $<TARGET_FILE:npquicrouter>

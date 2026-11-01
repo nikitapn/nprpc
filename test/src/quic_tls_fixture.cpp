@@ -4,6 +4,8 @@
 #include <boost/asio/ip/udp.hpp>
 #include <boost/asio/post.hpp>
 #include <csignal>
+#include <cstdio>
+#include <cstdlib>
 #include <future>
 #include <optional>
 #include <nprpc_monitor.hpp>
@@ -22,6 +24,11 @@ int main(int argc, char** argv) {
 #ifdef NPRPC_ENABLE_TCP
       builder.with_tcp(28445);
 #endif
+      if (const char* limits = std::getenv("QUIC_TLS_LIMITS")) {
+        size_t total = 0, per_ip = 0, rate = 0;
+        if (std::sscanf(limits, "%zu,%zu,%zu", &total, &per_ip, &rate) != 3) return 2;
+        builder.quic_connection_limits(total, per_ip, rate);
+      }
       if (!arg(4).empty()) builder.require_client_certificates(arg(4));
       else builder.allow_anonymous_telemetry();
       auto* rpc = builder.enable_telemetry().build();

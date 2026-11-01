@@ -667,6 +667,9 @@ struct BuildConfig {
   size_t http3_worker_count = NPRPC_DEFAULT_HTTP3_WORKER_COUNT;
   bool http3_compression_enabled = NPRPC_DEFAULT_HTTP3_COMPRESSION_ENABLED;
   size_t http3_compression_min_size = NPRPC_DEFAULT_HTTP3_COMPRESSION_MIN_SIZE;
+  size_t quic_max_connections = NPRPC_DEFAULT_QUIC_MAX_CONNECTIONS;
+  size_t quic_max_connections_per_ip = NPRPC_DEFAULT_QUIC_MAX_CONNECTIONS_PER_IP;
+  size_t quic_new_connections_per_ip_per_second = NPRPC_DEFAULT_QUIC_NEW_CONNECTIONS_PER_IP_PER_SECOND;
   size_t http3_max_active_connections_per_ip = NPRPC_DEFAULT_HTTP3_MAX_ACTIVE_CONNECTIONS_PER_IP;
   size_t http3_max_new_connections_per_ip_per_second = NPRPC_DEFAULT_HTTP3_MAX_NEW_CONNECTIONS_PER_IP_PER_SECOND;
   size_t http3_max_new_connections_burst = NPRPC_DEFAULT_HTTP3_MAX_NEW_CONNECTIONS_BURST;
@@ -1177,6 +1180,19 @@ public:
   explicit RpcBuilderQuic(std::shared_ptr<impl::BuildConfig> cfg)
       : RpcBuilderBase(std::move(cfg))
   {
+  }
+
+  /// Caps on inbound native QUIC connections, handshaking ones included. "Per IP"
+  /// is per IPv4 address or IPv6 /64. 0 means no limit. Connections over a cap
+  /// are dropped and counted as throttled in telemetry.
+  RpcBuilderQuic& quic_connection_limits(size_t max_connections,
+                                         size_t max_per_ip,
+                                         size_t new_per_ip_per_second) noexcept
+  {
+    cfg_->quic_max_connections = max_connections;
+    cfg_->quic_max_connections_per_ip = max_per_ip;
+    cfg_->quic_new_connections_per_ip_per_second = new_per_ip_per_second;
+    return *this;
   }
 
   /// Require client certificates chaining to this PEM trust bundle.

@@ -15,6 +15,7 @@
 #include <nprpc/impl/session.hpp>
 #include <nprpc/impl/stream_manager.hpp>
 #include <nprpc/impl/telemetry.hpp>
+#include <nprpc/impl/quic_connection_limiter.hpp>
 #include "../logging.hpp"
 
 #include <openssl/ssl.h>
@@ -120,6 +121,11 @@ static constexpr size_t  kNprpcAlpnLen = sizeof(kNprpcAlpn) - 1; // no null
 
 // Connection ID length for server-generated CIDs
 static constexpr size_t kScidLen = 18;
+// A client gets this long to finish a handshake. Without it, one that stops
+// halfway holds its connection until the idle timeout.
+static constexpr ngtcp2_duration kServerHandshakeTimeout = 10 * NGTCP2_SECONDS;
+// Only has to cover the round trip between the Retry and the client's reply.
+static constexpr ngtcp2_duration kRetryTokenLifetime = 10 * NGTCP2_SECONDS;
 
 // Maximum single UDP payload (conservative to avoid fragmentation)
 static constexpr size_t kMaxUdpPayload = 1350;
@@ -489,9 +495,9 @@ public:
                        const boost::asio::ip::udp::endpoint&     local_ep,
                        const boost::asio::ip::udp::endpoint&     remote_ep,
                        const PacketSource&                       reply_source,
-                       const ngtcp2_cid*                         client_scid,
-                       const ngtcp2_cid*                         client_dcid,
-                       uint32_t                                  version,
+                       const ngtcp2_pkt_hd&                      initial,
+                       const ngtcp2_cid&                         original_dcid,
+                       std::unique_ptr<QuicConnectionLimiter::Slot> limit_slot,
                        std::shared_ptr<SSL_CTX>                   ssl_ctx);
   ~QuicNgtcp2ServerConn();
 
@@ -572,6 +578,9 @@ private:
   ngtcp2_cid scid_;             // our source CID
   ngtcp2_cid dcid_;             // client's source CID (our peer CID)
   ngtcp2_cid original_client_dcid_;
+  ngtcp2_cid retry_scid_; // What the client's Initial after our Retry was sent to.
+  std::vector<uint8_t> retry_token_; // Only needed until init().
+  std::unique_ptr<QuicConnectionLimiter::Slot> limit_slot_;
   uint32_t   version_;
 
   int64_t    rpc_stream_id_ = -1;
@@ -741,6 +750,9 @@ private:
                              const PacketSource& source,
                               const uint8_t* data, size_t len,
                               const ngtcp2_version_cid& vc);
+  void send_retry(const boost::asio::ip::udp::endpoint& from,
+                  const PacketSource& source,
+                  const ngtcp2_pkt_hd& hd);
   bool setup_ssl_ctx();
   std::shared_ptr<QuicNgtcp2ServerConn> find_connection(const ngtcp2_cid* dcid);
 
@@ -755,6 +767,9 @@ private:
   std::array<uint8_t, 65536>     recv_buf_;
 
   std::atomic<std::shared_ptr<SSL_CTX>> ssl_ctx_;
+
+  std::array<uint8_t, 32> retry_secret_{}; // Tokens don't outlive the listener.
+  std::shared_ptr<QuicConnectionLimiter> limiter_;
 
   std::mutex conns_mutex_;
   std::unordered_map<std::string, std::shared_ptr<QuicNgtcp2ServerConn>> conns_;
@@ -771,9 +786,9 @@ QuicNgtcp2ServerConn::QuicNgtcp2ServerConn(
     const boost::asio::ip::udp::endpoint& local_ep,
     const boost::asio::ip::udp::endpoint& remote_ep,
     const PacketSource&                   reply_source,
-    const ngtcp2_cid*                     client_scid,
-    const ngtcp2_cid*                     client_dcid,
-    uint32_t                              version,
+    const ngtcp2_pkt_hd&                  initial,
+    const ngtcp2_cid&                     original_dcid,
+    std::unique_ptr<QuicConnectionLimiter::Slot> limit_slot,
     std::shared_ptr<SSL_CTX>               ssl_ctx)
     : listener_(listener->shared_from_this())
     , socket_(socket)
@@ -783,10 +798,13 @@ QuicNgtcp2ServerConn::QuicNgtcp2ServerConn(
     , strand_(boost::asio::make_strand(listener->io_context()))
     , timer_(listener->io_context())
     , ssl_ctx_(std::move(ssl_ctx))
-    , version_(version)
+    , version_(initial.version)
 {
-  dcid_               = *client_scid;
-  original_client_dcid_ = *client_dcid;
+  dcid_               = initial.scid;
+  original_client_dcid_ = original_dcid;
+  retry_scid_         = initial.dcid;
+  retry_token_.assign(initial.token, initial.token + initial.tokenlen);
+  limit_slot_         = std::move(limit_slot);
   generate_cid(&scid_, kScidLen);
 
   conn_ref_.get_conn = [](ngtcp2_crypto_conn_ref* r) -> ngtcp2_conn* {
@@ -851,6 +869,10 @@ bool QuicNgtcp2ServerConn::init()
   settings.max_tx_udp_payload_size = kMaxUdpPayload;
   settings.initial_rtt          = 100 * NGTCP2_MICROSECONDS;
   settings.ack_thresh           = 1;
+  settings.handshake_timeout    = kServerHandshakeTimeout;
+  settings.token                = retry_token_.data();
+  settings.tokenlen             = retry_token_.size();
+  settings.token_type           = NGTCP2_TOKEN_TYPE_RETRY;
 
   ngtcp2_transport_params params;
   ngtcp2_transport_params_default(&params);
@@ -866,6 +888,8 @@ bool QuicNgtcp2ServerConn::init()
   params.max_datagram_frame_size             = kMaxDatagramFrameSize;
   params.original_dcid                       = original_client_dcid_;
   params.original_dcid_present               = 1;
+  params.retry_scid                          = retry_scid_;
+  params.retry_scid_present                  = 1;
 
   sockaddr_storage lss, rss;
   auto path = make_path(local_ep_, remote_ep_, lss, rss);
@@ -1276,6 +1300,7 @@ void QuicNgtcp2ServerConn::remove_self()
     record_handshake_failure(monitor::Transport::Quic);
   }
   active_connection_.reset();
+  limit_slot_.reset();
   session_.reset();
   boost::asio::post(listener_->io_context(), [self = shared_from_this()]() {
     self->listener_->remove_connection(self);
@@ -1484,7 +1509,12 @@ QuicNgtcp2Listener::QuicNgtcp2Listener(boost::asio::io_context& ioc,
     , key_file_(std::move(key_file))
     , port_(port)
     , socket_(ioc)
-{}
+    , limiter_(std::make_shared<QuicConnectionLimiter>(g_cfg.quic_max_connections,
+                                                       g_cfg.quic_max_connections_per_ip,
+                                                       g_cfg.quic_new_connections_per_ip_per_second))
+{
+  random_bytes(retry_secret_.data(), retry_secret_.size());
+}
 
 QuicNgtcp2Listener::~QuicNgtcp2Listener() { stop(); }
 
@@ -1775,9 +1805,32 @@ int QuicNgtcp2Listener::handle_new_connection(
     return 0;
   }
 
+  // Keep no state for a client until a Retry proves it owns its address. A
+  // spoofed Initial costs one small reply, sent to the address it named, and
+  // the limits below can then trust the address.
+  if (hd.tokenlen == 0 || hd.token[0] != NGTCP2_CRYPTO_TOKEN_MAGIC_RETRY2) {
+    send_retry(from, source, hd);
+    return 0;
+  }
+  ngtcp2_cid original_dcid;
+  if (ngtcp2_crypto_verify_retry_token2(
+          &original_dcid, hd.token, hd.tokenlen, retry_secret_.data(), retry_secret_.size(),
+          hd.version, from.data(), static_cast<ngtcp2_socklen>(from.size()), &hd.dcid,
+          kRetryTokenLifetime, timestamp_ns()) != 0) {
+    NPRPC_QUIC_TRACE("invalid Retry token from {}", from.address().to_string());
+    return 0;
+  }
+
+  auto slot = limiter_->acquire(from.address());
+  if (!slot) {
+    record_throttled(monitor::Transport::Quic);
+    NPRPC_QUIC_TRACE("over the connection limits: {}", from.address().to_string());
+    return 0;
+  }
+
   auto conn = std::make_shared<QuicNgtcp2ServerConn>(
       this, socket_, local_ep_, from, source,
-      &hd.scid, &hd.dcid, hd.version, ssl_ctx_.load());
+      hd, original_dcid, std::move(slot), ssl_ctx_.load());
 
   if (!conn->init()) {
     NPRPC_QUIC_ERROR("failed to init new connection from {}", from.address().to_string());
@@ -1801,6 +1854,35 @@ int QuicNgtcp2Listener::handle_new_connection(
 
   NPRPC_QUIC_TRACE("accepted connection from {}", from.address().to_string());
   return 0;
+}
+
+void QuicNgtcp2Listener::send_retry(
+    const boost::asio::ip::udp::endpoint& from,
+    const PacketSource& source,
+    const ngtcp2_pkt_hd& hd)
+{
+  ngtcp2_cid scid;
+  generate_cid(&scid, kScidLen);
+
+  std::array<uint8_t, NGTCP2_CRYPTO_MAX_RETRY_TOKENLEN2> token;
+  const auto tokenlen = ngtcp2_crypto_generate_retry_token2(
+      token.data(), retry_secret_.data(), retry_secret_.size(), hd.version,
+      from.data(), static_cast<ngtcp2_socklen>(from.size()), &scid, &hd.dcid, timestamp_ns());
+  if (tokenlen < 0) {
+    NPRPC_QUIC_ERROR("ngtcp2_crypto_generate_retry_token2 failed");
+    return;
+  }
+
+  std::array<uint8_t, 1280> packet;
+  const auto n = ngtcp2_crypto_write_retry(packet.data(), packet.size(), hd.version,
+                                           &hd.scid, &scid, &hd.dcid,
+                                           token.data(), static_cast<size_t>(tokenlen));
+  if (n < 0) {
+    NPRPC_QUIC_ERROR("ngtcp2_crypto_write_retry: {}", ngtcp2_strerror(static_cast<int>(n)));
+    return;
+  }
+  send_gso(socket_.native_handle(), from, packet.data(), static_cast<size_t>(n),
+           static_cast<size_t>(n), source);
 }
 
 // ===========================================================================
