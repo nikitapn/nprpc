@@ -3,6 +3,8 @@ import './websocket-polyfill';
 
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
+import * as http from 'http';
+import type { AddressInfo } from 'net';
 import { installHttp3Fetch, http3Fetch } from './http3-fetch-polyfill';
 // Use the Node.js compatible build
 // const NPRPC = require('nprpc/index.node.js');
@@ -1368,6 +1370,79 @@ describe('NPRPC Integration Tests', function() {
             // The connection still works, and a timeout doesn't stop the servant.
             cancellable.timeout = 1000;
             expect(await cancellable.Quick()).to.equal(stopsBefore);
+        });
+
+        describe('over HTTP', function() {
+            let server: http.Server;       // never responds
+            let stallServer: http.Server;  // sends headers, then stalls
+            let silent: test.TestBasic;
+            let stalling: test.TestBasic;
+
+            before(async function() {
+                server = http.createServer(() => {});
+                stallServer = http.createServer((_req, res) => {
+                    res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+                    res.write('x');
+                });
+                await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()));
+                await new Promise<void>(resolve => stallServer.listen(0, '127.0.0.1', () => resolve()));
+
+                const pointAt = async (s: http.Server) => {
+                    const obj = await resolveTestObject('nprpc_test_basic', test.TestBasic);
+                    (obj as any).endpoint_ = new NPRPC.EndPoint(
+                        EndPointType.Http, '127.0.0.1', (s.address() as AddressInfo).port);
+                    obj.timeout = 50;
+                    return obj;
+                };
+                silent = await pointAt(server);
+                stalling = await pointAt(stallServer);
+            });
+
+            after(function() {
+                for (const s of [server, stallServer]) {
+                    s.closeAllConnections();
+                    s.close();
+                }
+            });
+
+            const expectTimeout = async (call: Promise<unknown>) => {
+                const started = Date.now();
+                let error: any;
+                try {
+                    await call;
+                } catch (e: any) {
+                    error = e;
+                }
+                expect(error).to.be.instanceOf(NPRPC.ExceptionTimeout);
+                expect(Date.now() - started).to.be.below(1000);
+            };
+
+            it('should time out when the server never responds', async function() {
+                await expectTimeout(silent.http.ReturnU32());
+            });
+
+            it('should time out when the response stalls partway', async function() {
+                await expectTimeout(stalling.http.ReturnU32());
+            });
+
+            it('should report an abort as an abort, not a timeout', async function() {
+                silent.timeout = 5000;
+                const controller = new AbortController();
+                const call = silent.http.ReturnU32(controller.signal);
+                setTimeout(() => controller.abort(), 10);
+                let errorName = '';
+                try {
+                    await call;
+                } catch (e: any) {
+                    errorName = e.name;
+                }
+                silent.timeout = 50;
+                expect(errorName).to.equal('AbortError');
+            });
+
+            it('should still get a reply from a real server', async function() {
+                expect(await testBasic.http.ReturnU32()).to.equal(42);
+            });
         });
 
         it('should report why a call was refused with ExceptionCommFailure', async function() {

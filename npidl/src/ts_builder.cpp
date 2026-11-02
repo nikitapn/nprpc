@@ -1764,18 +1764,8 @@ void TSBuilder::emit_interface(AstInterfaceDecl* ifs)
     out << bl()
         << "const url = `http${this.endpoint.is_ssl() ? 's' : "
            "''}://${this.endpoint.hostname}:${this.endpoint.port}/rpc`;\n"
-        << bl() << "const response = await fetch(url, {\n"
-        << bb(false) << bl() << "method: 'POST',\n"
-        << bl() << "headers: { 'Content-Type': 'application/octet-stream' },\n"
-        << bl() << "credentials: 'include',\n"
-        << bl() << "body: buf.array_buffer,\n"
-        << bl() << "signal\n"
-        << eb() << ");\n\n"
         << bl()
-        << "if (!response.ok) throw new NPRPC.Exception(`HTTP error: "
-           "${response.status}`);\n"
-        << bl() << "const response_data = await response.arrayBuffer();\n"
-        << bl() << "buf.set_buffer(response_data);\n\n"
+        << "buf.set_buffer(await NPRPC.http_call(url, buf.array_buffer, this.timeout, signal));\n\n"
         << bl() << "let std_reply = NPRPC.handle_standart_reply(buf);\n";
 
     if (fn->ex) {

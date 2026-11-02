@@ -1243,6 +1243,45 @@ export class ReferenceList {
   }
 };
 
+/**
+ * Sends a call over HTTP and returns the reply's body. Fails with `ExceptionTimeout`
+ * if the whole reply hasn't arrived within `timeout_ms`, connecting included: fetch
+ * doesn't say when it has connected.
+ */
+export const http_call = async (url: string, body: ArrayBuffer, timeout_ms: number,
+                                signal?: AbortSignal): Promise<ArrayBuffer> => {
+  const controller = new AbortController();
+  let timed_out = false;
+  const timer = setTimeout(() => {
+    timed_out = true;
+    controller.abort();
+  }, Math.min(timeout_ms, max_timer_delay_ms));
+
+  const forward_abort = () => controller.abort(signal!.reason);
+  if (signal?.aborted)
+    forward_abort();
+  else
+    signal?.addEventListener('abort', forward_abort, { once: true });
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      credentials: 'include',
+      body,
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Exception(`HTTP error: ${response.status}`);
+    return await response.arrayBuffer();
+  } catch (e) {
+    if (timed_out && !signal?.aborted) throw new ExceptionTimeout();
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', forward_abort);
+  }
+};
+
 // Helper function to handle standard reply messages (Success, Exception, Errors).
 export const handle_standart_reply = (buf: FlatBuffer): number => {
   if (buf.size < 16)

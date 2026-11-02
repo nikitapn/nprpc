@@ -115,7 +115,9 @@ The servant is told over WebSocket and WebTransport. A TypeScript call made thro
 
 A call fails with `ExceptionTimeout` if no reply arrives within the object's timeout,
 which is 1 second by default. The servant isn't told, in any language, so it keeps
-running. TypeScript calls made through `.http` don't time out. A method that takes longer than this needs a longer timeout on the client:
+running. For a TypeScript call through `.http`, the time includes connecting, because
+`fetch` doesn't report when it has connected. A method that takes longer than this
+needs a longer timeout on the client:
 
 ```cpp
 report->set_timeout(30'000);
