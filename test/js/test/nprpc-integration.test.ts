@@ -1313,5 +1313,61 @@ describe('NPRPC Integration Tests', function() {
             }
             expect(threw, 'expected AbortError to be thrown').to.be.true;
         });
+
+        it('should stop the servant when a running call is aborted', async function() {
+            const cancellable = await resolveTestObject('nprpc_test_cancellable', test.TestCoroutine);
+            const stopsBefore = await cancellable.Quick();
+
+            const ac = new AbortController();
+            const waiting = cancellable.Wait(ac.signal);
+            // Quick is answered after Wait has started, because the session reads in order.
+            expect(await cancellable.Quick()).to.equal(stopsBefore);
+
+            ac.abort();
+            let errorName = '';
+            try {
+                await waiting;
+            } catch (e: any) {
+                errorName = e.name;
+            }
+            expect(errorName).to.equal('AbortError');
+
+            let stops = stopsBefore;
+            for (let i = 0; i < 100 && stops === stopsBefore; ++i) {
+                await new Promise(resolve => setTimeout(resolve, 10));
+                stops = await cancellable.Quick();
+            }
+            expect(stops).to.equal(stopsBefore + 1);
+        });
+
+        it('should keep working after a call is aborted and its late reply arrives', async function() {
+            const ac = new AbortController();
+            const call = testBasic.ReturnU32(ac.signal);
+            ac.abort();
+            await call.catch(() => undefined);
+            expect(await testBasic.ReturnU32()).to.equal(42);
+        });
+
+        it('should fail a call with ExceptionTimeout when no reply arrives in time', async function() {
+            const cancellable = await resolveTestObject('nprpc_test_cancellable', test.TestCoroutine);
+            const stopsBefore = await cancellable.Quick();
+            cancellable.timeout = 50;
+
+            const started = Date.now();
+            let error: any;
+            try {
+                await cancellable.Wait();
+            } catch (e: any) {
+                error = e;
+            }
+            const elapsed = Date.now() - started;
+            expect(error).to.be.instanceOf(NPRPC.ExceptionTimeout);
+            expect(elapsed).to.be.at.least(40);
+            expect(elapsed).to.be.below(1000);
+
+            // The connection still works, and a timeout doesn't stop the servant.
+            cancellable.timeout = 1000;
+            expect(await cancellable.Quick()).to.equal(stopsBefore);
+        });
     }); // describe Cancellation
 });

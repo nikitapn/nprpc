@@ -1,5 +1,5 @@
 import * as NPRPC from 'nprpc';
-import { TestBasic, TestStreams } from '../../src/gen/nprpc_test';
+import { TestBasic, TestCoroutine, TestStreams } from '../../src/gen/nprpc_test';
 
 function createNameserverClient() {
   return NPRPC.get_nameserver('localhost');
@@ -345,9 +345,24 @@ export async function testCancellation() {
     httpErrorName = e.name;
   }
 
+  // Aborting a running call stops the servant.
+  const cancellable = await resolveProxy<TestCoroutine>('nprpc_test_cancellable', TestCoroutine);
+  const stopsBefore = await cancellable.Quick();
+  const ac3 = new AbortController();
+  const waiting = cancellable.Wait(ac3.signal);
+  await cancellable.Quick();
+  ac3.abort();
+  await waiting.catch(() => undefined);
+  let stops = stopsBefore;
+  for (let i = 0; i < 100 && stops === stopsBefore; ++i) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    stops = await cancellable.Quick();
+  }
+
   return {
     wtThrew,
     wtErrorName,
+    servantStops: stops - stopsBefore,
     httpThrew,
     httpErrorName,
     endpointType: testBasic.endpoint.type,

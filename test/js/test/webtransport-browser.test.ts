@@ -444,6 +444,7 @@ describe('WebTransport Browser Transport', function() {
       expect((result as any).endpointType).to.equal(EndPointType.WebTransport);
       expect((result as any).wtThrew, 'WebTransport pre-flight should throw').to.be.true;
       expect((result as any).wtErrorName).to.equal('AbortError');
+      expect((result as any).servantStops, 'aborting should stop the servant').to.equal(1);
       expect((result as any).httpThrew, 'HTTP pre-flight should throw').to.be.true;
       expect((result as any).httpErrorName).to.equal('AbortError');
     } finally {

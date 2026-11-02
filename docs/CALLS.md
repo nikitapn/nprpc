@@ -30,7 +30,7 @@ server stops working as well.
 | Style | Languages | Use for | Can cancel |
 |---|---|---|---|
 | Blocking | C++ | Simple code, lowest overhead | No |
-| Suspending | C++, Swift, TypeScript | Many calls at once without a thread for each | C++ and Swift |
+| Suspending | C++, Swift, TypeScript | Many calls at once without a thread for each | Yes |
 
 ### Blocking
 
@@ -62,7 +62,7 @@ let text = try await first + second
 
 ### Cancelling a call
 
-In C++, pass a `std::stop_token` to the `Async` method. The call ends with
+Each language has its own way to cancel. In C++, pass a `std::stop_token` to the `Async` method. The call ends with
 `nprpc::OperationCancelled` as soon as you request a stop.
 
 ```cpp
@@ -92,8 +92,38 @@ do {
 }
 ```
 
-A TypeScript client can't send a cancel yet. A call that times out doesn't send one
-either, so the servant isn't told.
+In TypeScript, pass an `AbortSignal` as the last argument. The call rejects with an
+`AbortError` as soon as you abort.
+
+```ts
+const controller = new AbortController();
+const call = report.Fetch(7, controller.signal);
+
+controller.abort();
+
+try {
+  await call;
+} catch (e: any) {
+  if (e.name !== 'AbortError') throw e;
+}
+```
+
+The servant is told over WebSocket and WebTransport. A TypeScript call made through
+`.http` ends for the client, but the servant isn't told.
+
+### Timeouts
+
+A call fails with `ExceptionTimeout` if no reply arrives within the object's timeout,
+which is 1 second by default. The servant isn't told, in any language, so it keeps
+running. TypeScript calls made through `.http` don't time out. A method that takes longer than this needs a longer timeout on the client:
+
+```cpp
+report->set_timeout(30'000);
+```
+
+```ts
+report.timeout = 30000;
+```
 
 ## Servant: how the method runs
 

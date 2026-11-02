@@ -12,6 +12,7 @@ import {
   ExceptionUnknownFunctionIndex,
   ExceptionUnknownMessageId,
   ExceptionCommFailure,
+  ExceptionTimeout,
   ExceptionBadAccess,
   ExceptionBadInput,
   EndPointType,
@@ -147,7 +148,12 @@ export type HostInfo = {
 interface PendingRequest {
   buffer: FlatBuffer;
   promise: MyPromise<void, Error>;
+  sent: boolean;
+  timer?: ReturnType<typeof setTimeout>;
 }
+
+// setTimeout treats anything longer than this as no delay at all.
+const max_timer_delay_ms = 2147483647;
 
 interface WebTransportStreamState {
   writer: any;
@@ -191,13 +197,32 @@ export class Connection {
 
   public get is_closed() { return this.closed_; }
 
-  private async perform_request(request_id: number, buffer: FlatBuffer) {
+  private async perform_request(request_id: number, buffer: FlatBuffer, timeout_ms: number) {
     // Inject request ID into the message header
     buffer.write_request_id(request_id);
     await this.ready_;
     // Guard: abort may have fired while waiting for the connection to be established.
-    if (!this.pending_requests.has(request_id)) return;
+    const pending_request = this.pending_requests.get(request_id);
+    if (!pending_request) return;
+    pending_request.sent = true;
+    // Counts from here, so the time taken to connect isn't held against the call.
+    // A connection that fails rejects the call by itself.
+    pending_request.timer = setTimeout(() => {
+      if (this.pending_requests.delete(request_id))
+        pending_request.promise.set_exception(new ExceptionTimeout() as any);
+    }, Math.min(timeout_ms, max_timer_delay_ms));
     await this.send_payload(buffer.writable_view);
+  }
+
+  // Tells the server to stop a call this client no longer wants. Gets no reply.
+  private async send_cancel_call(request_id: number) {
+    const buf = FlatBuffer.create(header_size + 4);
+    buf.commit(header_size + 4);
+    buf.write_msg_id(impl.MessageId.CancelCall);
+    buf.write_msg_type(impl.MessageType.Request);
+    impl.marshal_CancelCallBody(buf, header_size, { request_id });
+    buf.write_len(buf.size);
+    await this.send_payload(buf.writable_view);
   }
 
   private async send_payload(payload: ArrayBufferView<ArrayBuffer>) {
@@ -244,10 +269,11 @@ export class Connection {
 
     const request_id = this.next_request_id++;
     const promise = new MyPromise<void, Error>();
+    const pending: PendingRequest = { buffer: buffer, promise: promise, sent: false };
 
-    this.pending_requests.set(request_id, { buffer: buffer, promise: promise });
+    this.pending_requests.set(request_id, pending);
 
-    this.perform_request(request_id, buffer).catch(error => {
+    this.perform_request(request_id, buffer, timeout_ms).catch(error => {
       const pending_request = this.pending_requests.get(request_id);
       if (!pending_request) return;
       this.pending_requests.delete(request_id);
@@ -255,13 +281,25 @@ export class Connection {
     });
 
     if (!signal) {
-      return await promise.$;
+      try {
+        return await promise.$;
+      } finally {
+        clearTimeout(pending.timer);
+      }
     }
 
     // Mid-flight cancellation: race the RPC promise against an abort promise.
     let abort_handler!: () => void;
     const abort_promise = new Promise<never>((_, reject) => {
-      abort_handler = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+      abort_handler = () => {
+        // A call that hasn't gone out never will, and one that's been answered is over.
+        if (this.pending_requests.get(request_id)?.sent) {
+          this.send_cancel_call(request_id).catch(() => {
+            // The connection is gone, and the server stops the call for that anyway.
+          });
+        }
+        reject(new DOMException('The operation was aborted.', 'AbortError'));
+      };
       signal.addEventListener('abort', abort_handler, { once: true });
     });
 
@@ -269,6 +307,7 @@ export class Connection {
       return await Promise.race([promise.$, abort_promise]);
     } finally {
       signal.removeEventListener('abort', abort_handler);
+      clearTimeout(pending.timer);
       // Clean up pending request in case we lost the race to abort.
       this.pending_requests.delete(request_id);
     }
@@ -319,6 +358,10 @@ export class Connection {
           this.stream_manager.on_stream_window_update(msg.stream_id, msg.credits);
           return;
         }
+        case impl.MessageId.CancelCall:
+          // Servants here run to completion before the next message is read, so
+          // the call it names has already finished.
+          return;
       }
 
       // Remaining messages require a reply - store request_id to echo back
@@ -940,6 +983,9 @@ export class ObjectProxy {
 
   public get timeout() { return this.timeout_ms_; }
 
+  /** How long a call waits for its reply before failing with `ExceptionTimeout`. */
+  public set timeout(timeout_ms: number) { this.timeout_ms_ = timeout_ms; }
+
   public add_ref(): number {
     this.local_ref_cnt_++;
     if (this.local_ref_cnt_ != 1) return this.local_ref_cnt_;
@@ -1234,6 +1280,9 @@ export const handle_standart_reply = (buf: FlatBuffer): number => {
 
     case impl.MessageId.Error_Unknown:
       throw new Exception("Unknown error");
+
+    case impl.MessageId.Error_Cancelled:
+      throw new DOMException('The operation was aborted.', 'AbortError');
 
     default:
       // Should be handled by caller (for example, for stream messages or simple answers)
