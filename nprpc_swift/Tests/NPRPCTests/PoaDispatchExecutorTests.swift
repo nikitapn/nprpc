@@ -264,6 +264,60 @@ final class PoaDispatchExecutorTests: XCTestCase {
         XCTAssertTrue(servant.sawCancel)
     }
 
+    /// A `[coroutine]` method keeps its POA's executor across awaits, doesn't hold
+    /// up its session, and hears about cancellation through its task.
+    func testCoroutineMethod() async throws {
+        final class Servant: TestCoroutineServant, @unchecked Sendable {
+            let loopThread: Thread
+            nonisolated(unsafe) var onLoop = true
+            init(loopThread: Thread) { self.loopThread = loopThread }
+
+            override func add(a: UInt32, b: UInt32) async throws -> UInt32 {
+                onLoop = onLoop && Thread.current === loopThread
+                try await Task.sleep(nanoseconds: 1_000_000)
+                onLoop = onLoop && Thread.current === loopThread
+                return a + b
+            }
+            override func echo(text: String) async -> String {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                return text
+            }
+            override func wait() async {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 1_000_000)
+                }
+                onLoop = onLoop && Thread.current === loopThread
+            }
+            override func quick() -> UInt32 { 5 }
+        }
+
+        let servant = Servant(loopThread: Self.loop!.thread!)
+        let oid = try Self.loopPoa!.activateObject(servant, flags: .shm)
+        guard let obj = NPRPCObject.fromObjectId(oid),
+              let client = narrow(obj, to: TestCoroutine.self) else {
+            throw RuntimeError(message: "no client")
+        }
+
+        let sum = try await client.add(a: 2, b: 3)
+        XCTAssertEqual(sum, 5)
+
+        // Quick gets its reply while Echo is still asleep.
+        async let echoed = client.echo(text: "later")
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let quick = try await client.quick()
+        XCTAssertEqual(quick, 5)
+        let text = try await echoed
+        XCTAssertEqual(text, "later")
+
+        let waiting = Task { try await client.wait() }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        waiting.cancel()
+        _ = await waiting.result
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertTrue(servant.onLoop, "left the POA's executor")
+    }
+
     /// Sequential RPCs on a custom serial executor stay ordered and on-queue.
     func testCustomSerialQueueSequentialCalls() async throws {
         let queue = DispatchQueue(label: "nprpc.test.poa.custom-seq")

@@ -102,7 +102,7 @@ void WebSocketSession<Derived>::on_read(
     // Pre-size tx_buffer based on the last response we sent — after warm-up
     // this eliminates repeated doubling realloc/memcpy for large responses.
     flat_buffer tx_buffer{last_tx_size_};
-    bool needs_reply = measured_dispatch(monitor::Transport::WebSocket, rx_buffer_, tx_buffer,
+    bool needs_reply = measured_dispatch(*this, monitor::Transport::WebSocket, rx_buffer_, tx_buffer,
         [&] { return handle_request(rx_buffer_, tx_buffer); });
 
     if (needs_reply) {
@@ -143,7 +143,7 @@ void WebSocketSession<Derived>::process_handed_off(flat_buffer& rx, bool wants_r
 {
   const uint32_t request_id = extract_request_id(rx);
   flat_buffer tx{flat_buffer::default_initial_size()};
-  const bool needs_reply = measured_dispatch(monitor::Transport::WebSocket, rx, tx,
+  const bool needs_reply = measured_dispatch(*this, monitor::Transport::WebSocket, rx, tx,
       [&] { return handle_request(rx, tx); });
   if (!needs_reply || !wants_reply)
     return;
@@ -373,6 +373,7 @@ bool WebSocketSession<Derived>::send_stream_message(flat_buffer&& buffer)
 
 template <class Derived> void WebSocketSession<Derived>::start_read_loop()
 {
+  telemetry_transport_ = static_cast<int>(monitor::Transport::WebSocket);
   do_read();
 }
 

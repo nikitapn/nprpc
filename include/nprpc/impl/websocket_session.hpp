@@ -79,6 +79,7 @@ template <class Derived> class WebSocketSession : public Session
   void on_write(beast::error_code ec, std::size_t bytes_transferred);
   void do_write();
   void process_handed_off(flat_buffer& rx, bool wants_reply) override;
+  bool supports_deferred_replies() const noexcept override { return true; }
 
   // Helper methods for request ID correlation
   void inject_request_id(flat_buffer& buffer, uint32_t request_id);

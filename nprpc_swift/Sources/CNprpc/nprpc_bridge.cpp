@@ -1,6 +1,7 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include <nprpc/impl/deferred_call.hpp>
 #include "include/nprpc_bridge.hpp"
 #include "nprpc_bridge_error.hpp"
 
@@ -968,6 +969,53 @@ void nprpc_object_send_async_result(void* obj_ptr, void* buffer_ptr, void* conte
             const auto error = result.error().view();
             callback(context, &error, nullptr);
         }
+    }
+}
+
+namespace {
+using DeferredCallPtr = std::shared_ptr<nprpc::impl::DeferredCall>;
+DeferredCallPtr& deferred(void* call) noexcept { return *static_cast<DeferredCallPtr*>(call); }
+}
+
+void* nprpc_deferred_call_begin() noexcept {
+    try {
+        auto call = nprpc::impl::DeferredCall::begin(nprpc::get_context());
+        return call ? new DeferredCallPtr(std::move(call)) : nullptr;
+    } catch (const std::exception& e) {
+        NPRPC_LOG_ERROR("[SWB] Could not begin a coroutine call: {}", e.what());
+        return nullptr;
+    }
+}
+
+void* nprpc_deferred_call_tx(void* call) noexcept { return &deferred(call)->tx; }
+
+void nprpc_deferred_call_finish(void* call) noexcept {
+    try {
+        deferred(call)->finish();
+    } catch (const std::exception& e) {
+        NPRPC_LOG_ERROR("[SWB] Could not send a coroutine reply: {}", e.what());
+    }
+}
+
+void nprpc_deferred_call_release(void* call) noexcept { delete static_cast<DeferredCallPtr*>(call); }
+
+bool nprpc_deferred_call_has_executor(void* call) noexcept {
+    auto* poa = deferred(call)->ctx.call.poa;
+    return poa && poa->dispatch_executor();
+}
+
+void nprpc_deferred_call_post(void* call, void* context, void (*fn)(void*)) noexcept {
+    const auto& target = *deferred(call)->resume_target;
+    target.post(target.ctx, fn, context);
+}
+
+void nprpc_deferred_call_on_stop(void* call, void* context, void (*fire)(void*),
+                                 void (*release)(void*)) noexcept {
+    try {
+        std::shared_ptr<void> owned(context, release);
+        deferred(call)->on_stop([owned, fire] { fire(owned.get()); });
+    } catch (const std::exception& e) {
+        NPRPC_LOG_ERROR("[SWB] Could not watch for a call's cancellation: {}", e.what());
     }
 }
 

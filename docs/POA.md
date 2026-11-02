@@ -170,6 +170,45 @@ A cancelled call that hasn't started yet is skipped. A client that disconnects
 stops the running call, but its queued calls still run, with their tokens already
 stopped, because some may be one-way.
 
+### Methods that wait on something else
+
+A method marked `[coroutine]` in the IDL doesn't hold anything up while it waits.
+Its connection goes on to the next call, and its reply goes out whenever it's ready,
+so one client's calls can finish in any order. Clients don't change.
+
+```
+interface Report {
+  [coroutine] string Build(id: u32) raises (NotFound);
+}
+```
+
+```cpp
+nprpc::Task<std::string> ReportImpl::Build(std::stop_token stop, uint32_t id) {
+  auto rows = co_await database->QueryAsync(id, stop);
+  co_return render(rows);
+}
+```
+
+```swift
+override func build(id: UInt32) async throws -> String {
+    render(try await database.query(id: id))
+}
+```
+
+The method keeps the POA's choice of thread: after each `co_await` it's back on its
+executor, or on the thread pool or the session's executor if the POA has none. In
+Swift that's only for a POA with a `dispatch:`; otherwise a method runs on the
+concurrency pool. Other calls can run on that thread while it waits, so state read
+before an await may have changed after it.
+
+`stop` fires if the client cancels or disconnects, on any POA. In Swift, the task is
+cancelled: use `Task.isCancelled`. Arguments stay valid for the whole call.
+`get_context()` and `get_call_context()` only work until the first `co_await`.
+
+`[coroutine]` methods can't have out parameters or file descriptors. A session allows
+1024 at once; beyond that, a call fails with `ExceptionCommFailure`. HTTP RPC and the
+raw epoll and io_uring servers wait for the method to finish before replying.
+
 The runtime's thread pool also runs the transports' I/O, so size
 `start_thread_pool` for the number of methods you expect to block at once, plus
 some to spare.

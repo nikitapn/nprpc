@@ -684,6 +684,9 @@ struct AstFunctionDecl : AstNodeWithPosition {
   bool is_async;
   // [unreliable] attribute maybe used for quic methods
   bool is_reliable = true;
+  // [coroutine]: the servant suspends rather than holding up its connection.
+  // A server-side choice; the wire format and clients don't change.
+  bool is_coroutine = false;
   bool is_stream;
   StreamKind stream_kind = StreamKind::None;
   AstStreamDecl* stream_decl = nullptr;

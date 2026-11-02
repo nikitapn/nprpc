@@ -1403,6 +1403,241 @@ TEST_F(NprpcTest, SharedMemoryRepliesMatchById)
     server->stop_reading();
 }
 
+namespace {
+// Resumes whoever awaits it when opened, or when the token stops.
+class Gate
+{
+  std::mutex mutex_;
+  std::coroutine_handle<> waiting_;
+  bool open_ = false;
+public:
+  void open()
+  {
+    std::coroutine_handle<> waiting;
+    {
+      std::lock_guard lock(mutex_);
+      open_ = true;
+      waiting = std::exchange(waiting_, {});
+    }
+    if (waiting) waiting.resume();
+  }
+  bool await_ready() noexcept { return false; }
+  bool await_suspend(std::coroutine_handle<> h)
+  {
+    std::lock_guard lock(mutex_);
+    if (open_) return false;
+    waiting_ = h;
+    return true;
+  }
+  void await_resume() noexcept {}
+};
+
+class CoroutineServant : public nprpc::test::ITestCoroutine_Servant
+{
+public:
+  std::shared_ptr<Gate> gate = std::make_shared<Gate>();
+  std::promise<void> entered;
+  std::atomic<bool> saw_stop{false};
+  std::atomic<int> resumed_on_wrong_thread{0};
+  std::atomic<std::thread::id> affinity{};
+  nprpc::test::TestCoroutine* nested = nullptr;
+
+  void check_thread()
+  {
+    if (affinity.load() != std::thread::id{} && affinity.load() != std::this_thread::get_id())
+      resumed_on_wrong_thread.fetch_add(1);
+  }
+
+  nprpc::Task<uint32_t> Add(std::stop_token, uint32_t a, uint32_t b) override
+  {
+    check_thread();
+    if (a == 0) throw nprpc::test::SimpleException{"zero", 7};
+    if (nested) {
+      const auto more = co_await nested->QuickAsync();
+      check_thread();
+      co_return a + b + more;
+    }
+    co_return a + b;
+  }
+  nprpc::Task<std::string> Echo(std::stop_token, ::nprpc::flat::Span<char> text) override
+  {
+    // Still readable after the session has moved on.
+    co_await *gate;
+    check_thread();
+    co_return std::string((std::string_view)text);
+  }
+  nprpc::Task<> Wait(std::stop_token stop) override
+  {
+    auto keep = gate;
+    std::stop_callback on_stop(stop, [this, keep] {
+      saw_stop = true;
+      keep->open();
+    });
+    entered.set_value();
+    co_await *keep;
+    check_thread();
+    if (stop.stop_requested()) throw nprpc::OperationCancelled{};
+  }
+  uint32_t Quick() override { return 5; }
+};
+
+const std::pair<const char*, nprpc::ObjectActivationFlags> coroutine_transports[] = {
+  {"tcp", nprpc::ObjectActivationFlags::tcp},
+  {"ws", nprpc::ObjectActivationFlags::ws},
+  {"shm", nprpc::ObjectActivationFlags::shm},
+#if defined(NPRPC_HAS_QUIC) || defined(NPRPC_QUIC_ENABLED)
+  {"quic", nprpc::ObjectActivationFlags::quic},
+#endif
+};
+
+nprpc::ObjectPtr<nprpc::test::TestCoroutine> resolve_coroutine(
+    nprpc::Poa* poa, nprpc::ObjectServant& servant, nprpc::ObjectActivationFlags flag)
+{
+  auto oid = poa->activate_object(&servant, flag);
+  nprpc::Object* raw = nprpc::Object::from_string(oid.to_string());
+  auto obj = nprpc::ObjectPtr(nprpc::narrow<nprpc::test::TestCoroutine>(raw));
+  obj->set_timeout(10000);
+  EXPECT_TRUE(obj->select_endpoint());
+  return obj;
+}
+} // namespace
+
+// While a coroutine method waits, its session serves other calls, and the first
+// call's reply arrives after theirs, intact.
+TEST_F(NprpcTest, CoroutineMethodDoesNotHoldUpSession)
+{
+  for (const auto& [name, flag] : coroutine_transports) {
+    SCOPED_TRACE(name);
+    CoroutineServant servant;
+    auto obj = resolve_coroutine(poa, servant, flag);
+
+    EXPECT_EQ(obj->Add(2, 3), 5u);
+    try {
+      obj->Add(0, 1);
+      ADD_FAILURE() << "expected SimpleException";
+    } catch (const nprpc::test::SimpleException& e) {
+      EXPECT_EQ(e.code, 7u);
+    }
+
+    const std::string text(5000, 'x');
+    auto waiting = std::async(std::launch::async, [&] { return obj->Echo(text); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_EQ(waiting.wait_for(std::chrono::milliseconds(0)), std::future_status::timeout);
+
+    for (int i = 0; i < 20; ++i)
+      EXPECT_EQ(obj->Quick(), 5u);
+
+    servant.gate->open();
+    EXPECT_EQ(waiting.get(), text);
+
+    poa->deactivate_object(servant.oid());
+  }
+}
+
+// Cancelling reaches a coroutine method wherever it's suspended, on a default POA too.
+TEST_F(NprpcTest, CoroutineMethodCancelled)
+{
+  for (const auto& [name, flag] : coroutine_transports) {
+    SCOPED_TRACE(name);
+    CoroutineServant servant;
+    auto obj = resolve_coroutine(poa, servant, flag);
+
+    auto entered = servant.entered.get_future();
+    std::stop_source stop;
+    auto call = std::async(std::launch::async, [&] {
+      obj->WaitAsync(stop.get_token()).get();
+    });
+    ASSERT_EQ(entered.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    stop.request_stop();
+    EXPECT_THROW(call.get(), nprpc::OperationCancelled);
+
+    for (int i = 0; i < 500 && !servant.saw_stop; ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    EXPECT_TRUE(servant.saw_stop);
+    EXPECT_EQ(obj->Quick(), 5u); // still in step
+
+    poa->deactivate_object(servant.oid());
+  }
+}
+
+// After every co_await, the method is back on its POA's executor.
+TEST_F(NprpcTest, CoroutineMethodKeepsExecutor)
+{
+  struct Queue {
+    std::mutex m;
+    std::condition_variable cv;
+    std::deque<std::function<void()>> jobs;
+    bool stop = false;
+    std::atomic<std::thread::id> worker_id{};
+  } queue;
+  std::thread worker([&] {
+    queue.worker_id = std::this_thread::get_id();
+    std::unique_lock lk(queue.m);
+    for (;;) {
+      queue.cv.wait(lk, [&] { return queue.stop || !queue.jobs.empty(); });
+      if (queue.jobs.empty())
+        return;
+      auto job = std::move(queue.jobs.front());
+      queue.jobs.pop_front();
+      lk.unlock();
+      job();
+      lk.lock();
+    }
+  });
+  while (queue.worker_id.load() == std::thread::id{})
+    std::this_thread::yield();
+
+  nprpc::DispatchExecutor ex;
+  ex.ctx = &queue;
+  ex.post = [](void* c, void (*fn)(void*), void* arg) {
+    auto* q = static_cast<Queue*>(c);
+    {
+      std::lock_guard lk(q->m);
+      q->jobs.push_back([fn, arg] { fn(arg); });
+    }
+    q->cv.notify_one();
+  };
+  ex.is_running_on = [](void* c) {
+    return std::this_thread::get_id() == static_cast<Queue*>(c)->worker_id.load();
+  };
+  auto* exec_poa = rpc->create_poa()
+                       .with_max_objects(8)
+                       .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                       .with_dispatch_executor(ex)
+                       .build();
+
+  for (const auto& [name, flag] : coroutine_transports) {
+    SCOPED_TRACE(name);
+    CoroutineServant inner, servant;
+    auto inner_obj = resolve_coroutine(poa, inner, flag);
+    auto obj = resolve_coroutine(exec_poa, servant, flag);
+    servant.affinity = queue.worker_id.load();
+    servant.nested = inner_obj.get();
+
+    for (int i = 0; i < 20; ++i)
+      EXPECT_EQ(obj->Add(1, 2), 8u);
+
+    auto echo = std::async(std::launch::async, [&] { return obj->Echo("after a wait"); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    std::thread opener([&] { servant.gate->open(); }); // not the executor
+    EXPECT_EQ(echo.get(), "after a wait");
+    opener.join();
+
+    EXPECT_EQ(servant.resumed_on_wrong_thread.load(), 0);
+
+    exec_poa->deactivate_object(servant.oid());
+    poa->deactivate_object(inner.oid());
+  }
+
+  rpc->destroy_poa(exec_poa);
+  {
+    std::lock_guard lk(queue.m);
+    queue.stop = true;
+  }
+  queue.cv.notify_one();
+  worker.join();
+}
+
 // A client that disconnects stops the call it left running.
 TEST_F(NprpcTest, DisconnectStopsServant)
 {

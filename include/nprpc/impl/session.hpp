@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <stop_token>
+#include <unordered_map>
 #include <utility>
 
 #include <nprpc/basic.hpp>
@@ -24,6 +25,7 @@
 
 namespace nprpc {
 struct DispatchExecutor;
+namespace impl { class DeferredCall; }
 }
 
 namespace nprpc::impl {
@@ -96,6 +98,14 @@ protected:
   // anything that does is logged and the message dropped.
   virtual void process_handed_off(nprpc::flat_buffer& rx, bool wants_reply);
 
+  // Whether this transport can send a reply after handle_request returns, from
+  // any thread, through send_main_stream_message. Otherwise it waits for a
+  // `[coroutine]` call to finish, holding its thread.
+  virtual bool supports_deferred_replies() const noexcept { return false; }
+
+  // monitor::Transport for telemetry on deferred calls; -1 if this one isn't measured.
+  int telemetry_transport_ = -1;
+
   // A request id, never zero and unique on this session. Every transport draws
   // from here, so an id reserved ahead of sending can't collide with another.
   uint32_t next_call_id() noexcept
@@ -119,6 +129,9 @@ public:
     buffer.set_call_id(id);
     return id;
   }
+  // A `[coroutine]` call left dispatch without a reply. Reads and clears.
+  bool take_call_deferred() noexcept { return std::exchange(call_deferred_, false); }
+
   // Tells the server this call is no longer wanted. Its reply still comes.
   NPRPC_API void cancel_call(uint32_t call_id);
   // The client is gone: stops the running call's token, and those of calls not
@@ -312,6 +325,14 @@ private:
   bool skip_running_call_ = false;
 
   std::atomic<uint32_t> next_call_id_{1};
+
+  // Calls running with no thread of their own. Guarded by handoff_mu_.
+  friend class DeferredCall;
+  static constexpr size_t max_deferred_calls = 1024;
+  std::unordered_map<uint32_t, std::stop_source> deferred_calls_;
+  // Set during dispatch, on the thread running it.
+  bool call_deferred_ = false;
+  std::shared_ptr<DeferredCall> blocking_deferred_call_;
 
 protected:
   // The blocking call each client transport implements. It may still throw

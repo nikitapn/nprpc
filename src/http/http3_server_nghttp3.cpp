@@ -1054,6 +1054,7 @@ public:
       , throttle_session_key_(http_request_throttler().allocate_session_key())
       , rx_buffer_(4 * 1024 * 1024)
   {
+    telemetry_transport_ = static_cast<int>(monitor::Transport::WebTransport);
     ctx_.stream_manager->set_active_stream_counter(
         active_stream_counter(monitor::Transport::WebTransport));
     ctx_.remote_endpoint = EndPoint(EndPointType::WebTransport,
@@ -1159,11 +1160,13 @@ public:
     return true;
   }
 
+  bool supports_deferred_replies() const noexcept override { return true; }
+
   void process_handed_off(flat_buffer& rx, bool wants_reply) override
   {
     const auto request_id = extract_request_id(rx);
     flat_buffer tx_buffer{std::max(last_tx_size_, flat_buffer::default_initial_size())};
-    const bool needs_reply = measured_dispatch(monitor::Transport::WebTransport, rx, tx_buffer,
+    const bool needs_reply = measured_dispatch(*this, monitor::Transport::WebTransport, rx, tx_buffer,
         [&] { return handle_request(rx, tx_buffer); });
 
     if (needs_reply && wants_reply) {

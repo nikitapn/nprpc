@@ -189,9 +189,11 @@ public:
       return false;
     }
     std::memcpy(rsv.data, buffer.data().data(), buffer.size());
-    channel_->commit_write(rsv, buffer.size());
+    channel_->commit_write(rsv, buffer.size(), buffer.fds());
     return true;
   }
+
+  bool supports_deferred_replies() const noexcept override { return true; }
 
   bool supports_fd_passing() const noexcept override
   {

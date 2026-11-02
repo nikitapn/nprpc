@@ -1325,7 +1325,7 @@ void CppBuilder::finalize()
 
   ofs_cpp << ctx_->current_file() << ".hpp\"\n";
 
-  ofs_cpp << "#include <nprpc/impl/nprpc_impl.hpp>\n\n"
+  ofs_cpp << "#include <nprpc/impl/nprpc_impl.hpp>\n#include <nprpc/impl/deferred_call.hpp>\n\n"
              "void "
           << ctx_->current_file() << "_throw_exception(::nprpc::flat_buffer& buf);\n\n";
 
@@ -2459,6 +2459,403 @@ void CppBuilder::emit_stream_serialize(AstTypeDecl* stream_type, bool direct)
   bd = bd_saved;
 }
 
+void CppBuilder::emit_servant_call_body(AstInterfaceDecl* ifs, AstFunctionDecl* fn)
+{
+    if (fn->in_s) {
+      oc << "      assert(ctx.rx_buffer != nullptr);\n"
+            "      "
+         << fn->in_s->name << "_Direct ia(*ctx.rx_buffer, " << get_arguments_offset() << ");\n";
+      if (ifs->trusted == false) {
+        // const auto fixed_size = get_arguments_offset() +
+        // fn->in_s->size;
+        oc << "      if ( !check_" << make_safety_check_name(fn->in_s)
+           << "(*ctx.rx_buffer, ia) ) {\n";
+        // [unreliable] is fire-and-forget: client never waits, so do not reply
+        // even on validation failure (orphan replies confuse SHM/QUIC paths).
+        if (fn->is_reliable) {
+          oc << "        ::nprpc::impl::make_simple_answer(ctx, "
+                "::nprpc::impl::MessageId::Error_BadInput);\n";
+        }
+        oc << (fn->is_coroutine ? "        co_return;\n" : "        break;\n")
+           << "      }\n";
+      }
+    }
+
+    auto passed_as_direct = [](AstFunctionArgument* arg) {
+      auto real_type = arg->type;
+      if (real_type->id == FieldType::Alias)
+        real_type = calias(real_type)->get_real_type();
+
+      return arg->modifier == ArgumentModifier::Out &&
+             (real_type->id == FieldType::Vector || real_type->id == FieldType::String ||
+              real_type->id == FieldType::Struct);
+    };
+
+    // Helper to check if an argument is a Struct type (resolving aliases)
+    auto is_struct_type = [](AstFunctionArgument* arg) {
+      auto real_type = arg->type;
+      if (real_type->id == FieldType::Alias)
+        real_type = calias(real_type)->get_real_type();
+      return real_type->id == FieldType::Struct || real_type->id == FieldType::Array;
+    };
+
+    // Out-parameters on a non-flat response are filled via Direct / buffer
+    // references during the servant call, so the final wire size is not known
+    // beforehand.  Those paths stay on the heap (session layer does
+    // reserve+copy).  Pure return-value responses are measured after the
+    // servant returns, then reserved exactly for true zero-copy.
+    bool has_out_args = false;
+    if (fn->out_s) {
+      for (auto arg : fn->args) {
+        if (arg->modifier == ArgumentModifier::Out) {
+          has_out_args = true;
+          break;
+        }
+      }
+    }
+    // Non-flat response with out-args (or any Direct-style fill during call)
+    // → prepare heap buffer before servant.
+    const bool pre_buffer_out =
+        fn->out_s && !fn->out_s->flat && has_out_args;
+
+    if (pre_buffer_out) {
+      // Heap path only — do not claim a ring slot with a size guess.
+      const auto offset = size_of_header;
+      const auto initial_size = offset + fn->out_s->size;
+      oc << "      assert(ctx.tx_buffer != nullptr);\n"
+            "      auto& obuf = *ctx.tx_buffer;\n"
+            "      obuf.consume(obuf.size());\n"
+            "      obuf.prepare("
+         << initial_size + 128
+         << ");\n"
+            "      obuf.commit("
+         << initial_size
+         << ");\n"
+            "      "
+         << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n";
+    }
+    auto bd0 = bd;
+    bd = 3;
+    if (!fn->is_void()) {
+      oc << bd;
+      emit_type(fn->ret_value, oc);
+      oc << " __ret_val;\n";
+    }
+
+    // Create stack variables for output parameters BEFORE the try block
+    // For flat output structs: ALL out parameters need stack variables
+    // For non-flat output structs: only Vector/String/Struct need temporary
+    // variables (for _d() access)
+    size_t out_ix = fn->is_void() ? 0 : 1, out_temp_ix = 0;
+
+    // For flat output structs with Struct-type outputs, we need to prepare
+    // the output buffer BEFORE calling the servant so we can pass _Direct types
+    bool flat_has_struct_out = false;
+    if (fn->out_s && fn->out_s->flat) {
+      for (auto arg : fn->args) {
+        if (arg->modifier == ArgumentModifier::Out && is_struct_type(arg)) {
+          flat_has_struct_out = true;
+          break;
+        }
+      }
+    }
+
+    if (flat_has_struct_out) {
+      // Flat layout → exact size known at compile time
+      const auto offset = size_of_header;
+      const auto initial_size = offset + fn->out_s->size;
+      oc << bd << "assert(ctx.tx_buffer != nullptr);\n"
+         << bd << "auto& obuf = *ctx.tx_buffer;\n"
+         << bd << "obuf.consume(obuf.size());\n"
+         << bd << "if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, "
+         << initial_size << "))\n"
+         << bd << "  obuf.prepare(" << initial_size << ");\n"
+         << bd << "obuf.commit(" << initial_size << ");\n"
+         << bd << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n";
+    }
+
+    if (fn->out_s && fn->out_s->flat) {
+      // For flat output structs, create stack variables for non-Struct output
+      // parameters. Struct outputs use _Direct accessors from the output buffer.
+      for (auto arg : fn->args) {
+        if (arg->modifier != ArgumentModifier::Out)
+          continue;
+        ++out_ix;
+        if (!is_struct_type(arg)) {
+          oc << bd;
+          emit_type(arg->type, oc);
+          oc << " _out_" << out_ix << ";\n";
+        }
+      }
+    } else if (fn->out_s && pre_buffer_out) {
+      // Pre-buffered path: create temporary Direct wrappers for complex outs
+      for (auto arg : fn->args) {
+        if (arg->modifier != ArgumentModifier::Out)
+          continue;
+
+        if (!passed_as_direct(arg)) {
+          ++out_ix;
+          // The servant fills in an fd; it is attached after the call.
+          if (arg->type->id == FieldType::Fd)
+            oc << bd << "::nprpc::UniqueFd _out_" << out_ix << ";\n";
+          continue;
+        }
+
+        auto real_type = arg->type;
+        if (real_type->id == FieldType::Alias)
+          real_type = calias(real_type)->get_real_type();
+
+        oc << bd << "auto oa_" << ++out_temp_ix << " = oa._" << ++out_ix
+           << ((real_type->id == FieldType::Vector || real_type->id == FieldType::String)
+                   ? "_d();\n"
+                   : "();\n");
+      }
+    }
+
+    if (fn->ex)
+      oc << bd++ << "try {\n";
+
+    oc << bd << (fn->is_void() ? "" : "__ret_val = ")
+       << (fn->is_coroutine ? "co_await " : "") << fn->name << "(";
+    if (fn->is_coroutine)
+      oc << "std::move(__stop)" << (fn->args.empty() ? "" : ", ");
+
+    size_t in_ix = 0, idx = 0;
+    out_ix = fn->is_void() ? 0 : 1;
+    out_temp_ix = 0;
+    for (auto arg : fn->args) {
+      if (arg->modifier == ArgumentModifier::Out) {
+        assert(fn->out_s);
+        if (fn->out_s->flat) {
+          ++out_ix;
+          if (is_struct_type(arg)) {
+            // For Struct types in flat output structs, pass _Direct accessor
+            oc << "oa._" << out_ix << "()";
+          } else {
+            // For non-Struct types, pass stack variable reference
+            oc << "_out_" << out_ix;
+          }
+        } else if (passed_as_direct(arg)) {
+          // For non-flat structs with complex types, pass temporary
+          // variable
+          oc << "oa_" << ++out_temp_ix;
+          ++out_ix;
+        } else if (arg->type->id == FieldType::Fd) {
+          oc << "_out_" << ++out_ix;
+        } else {
+          // Simple / Object out: buffer already prepared (pre_buffer_out)
+          oc << "oa._" << ++out_ix << "()";
+        }
+      } else {
+        if (arg->type->id == FieldType::Object) {
+          oc << "::nprpc::impl::create_object_from_flat(ia._" << ++in_ix
+             << "(), ctx.remote_endpoint)";
+        } else if (arg->type->id == FieldType::Fd) {
+          oc << "ia._" << ++in_ix << "().take()";
+        } else {
+          oc << "ia._" << ++in_ix << "()";
+        }
+      }
+      if (++idx != fn->args.size())
+        oc << ", ";
+    }
+    oc << ");\n";
+
+    /*
+    out_ix = fn->is_void() ? 0 : 1;
+    for (auto arg : fn->args) {
+      if (arg->modifier == ArgumentModifier::Out) {
+        ++out_ix;
+        if (arg->type->id == FieldType::Object) {
+          oc <<
+            "{\n"
+            "  auto obj = impl::g_rpc->get_object(" << "oa._" << out_ix <<
+    "().poa_idx(), " << "oa._" << out_ix << "().object_id());\n" "  if (obj)
+    if (auto real_obj = (*obj).get(); real_obj)
+    ref_list.add_ref(real_obj);\n"
+            "}\n"
+            ;
+        }
+      }
+    }
+    */
+
+    if (fn->is_throwing()) {
+      auto declared_exceptions = fn->exceptions;
+      if (declared_exceptions.empty() && fn->ex)
+        declared_exceptions.push_back(fn->ex);
+
+      const auto offset = size_of_header;
+      oc << "      }\n";
+      for (auto* ex : declared_exceptions) {
+        const auto initial_size = offset + ex->size;
+
+        always_full_namespace(true);
+        oc << "      catch(" << ns(ex->nm) << ex->name << "& e) {\n"
+              "        assert(ctx.tx_buffer != nullptr);\n"
+              "        auto& obuf = *ctx.tx_buffer;\n"
+              "        obuf.consume(obuf.size());\n"
+              "        std::size_t __wire_size = "
+           << initial_size << ";\n";
+        always_full_namespace(false);
+
+        bd = 4;
+        for (size_t i = 1; i < ex->fields.size(); ++i) {
+          auto mb = ex->fields[i];
+          measure_from_cpp_type(mb->type, "__wire_size", "e." + mb->name, oc);
+        }
+
+        always_full_namespace(true);
+        oc << "        if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
+              "obuf, __wire_size))\n"
+              "          obuf.prepare(__wire_size);\n"
+              "        obuf.commit("
+           << initial_size
+           << ");\n"
+              "        "
+           << ns(ex->nm) << "flat::" << ex->name << "_Direct oa(obuf," << offset
+           << ");\n"
+              "        oa.__ex_id() = "
+           << ex->exception_id << ";\n";
+        always_full_namespace(false);
+
+        bd = 4;
+        for (size_t i = 1; i < ex->fields.size(); ++i) {
+          auto mb = ex->fields[i];
+          assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name, oc);
+        }
+
+        oc << "        "
+              "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
+              "size = "
+              "static_cast<uint32_t>(obuf.size());\n"
+              "        "
+              "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
+              "msg_id = "
+              "::nprpc::impl::MessageId::Exception;\n"
+              "        "
+              "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
+              "msg_type "
+              "= ::nprpc::impl::MessageType::Answer;\n"
+              "        " << (fn->is_coroutine ? "co_return" : "return") << ";\n"
+              "      }\n";
+      }
+    }
+
+    if (!fn->out_s) {
+      // Void reliable methods ACK with Success. [unreliable] methods are
+      // fire-and-forget (client uses send_unreliable / no waiter) — leave
+      // tx empty so the session does not send a reply.
+      if (fn->is_reliable) {
+        oc << "      ::nprpc::impl::make_simple_answer(ctx, "
+              "nprpc::impl::MessageId::Success);\n";
+      }
+    } else {
+      if (fn->out_s->flat) { // it means that we are writing output data
+                             // in the input buffer,
+        // so we must pass stack variables first and then assign result
+        // back to the buffer. For Struct types, we already wrote directly
+        // via _Direct accessors.
+        const auto offset = size_of_header;
+        const auto initial_size = offset + fn->out_s->size;
+
+        if (!flat_has_struct_out) {
+          // Only prepare buffer here if we didn't already do it for Struct outputs
+          oc << "      assert(ctx.tx_buffer != nullptr);\n"
+                "      auto& obuf = *ctx.tx_buffer;\n"
+                "      obuf.consume(obuf.size());\n"
+                "      if "
+                "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
+                "obuf, "
+             << initial_size
+             << "))\n"
+                "        obuf.prepare("
+             << initial_size
+             << ");\n"
+                "      obuf.commit("
+             << initial_size
+             << ");\n"
+                "      "
+             << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n";
+        }
+
+        int ix;
+        if (!fn->is_void()) {
+          assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val", oc);
+          ix = 1;
+        } else {
+          ix = 0;
+        }
+
+        for (auto out : fn->args) {
+          if (out->modifier == ArgumentModifier::In)
+            continue;
+          ++ix;
+          // Skip Struct types - they were written directly via _Direct
+          if (!is_struct_type(out)) {
+            auto n = std::to_string(ix);
+            assign_from_cpp_type(out->type, "oa._" + n, "_out_" + n, oc);
+          }
+        }
+      } else if (pre_buffer_out) {
+        // Buffer already prepared (heap); serialize return value if any
+        if (!fn->is_void()) {
+          assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val", oc);
+        }
+        int ix = fn->is_void() ? 0 : 1;
+        for (auto out : fn->args) {
+          if (out->modifier == ArgumentModifier::In)
+            continue;
+          ++ix;
+          if (out->type->id == FieldType::Fd) {
+            auto n = std::to_string(ix);
+            assign_from_cpp_type(out->type, "oa._" + n, "_out_" + n, oc);
+          }
+        }
+      } else {
+        // Measure-after path (return value only, no out-args): measure the
+        // C++ return, reserve exact SHM space, then serialise (true zero-copy).
+        const auto offset = size_of_header;
+        const auto initial_size = offset + fn->out_s->size;
+        oc << "      assert(ctx.tx_buffer != nullptr);\n"
+              "      auto& obuf = *ctx.tx_buffer;\n"
+              "      obuf.consume(obuf.size());\n"
+              "      std::size_t __wire_size = "
+           << initial_size << ";\n";
+        bd = 3;
+        if (!fn->is_void()) {
+          measure_from_cpp_type(fn->ret_value, "__wire_size", "__ret_val", oc);
+        }
+        oc << "      if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
+              "obuf, __wire_size))\n"
+              "        obuf.prepare(__wire_size);\n"
+              "      obuf.commit("
+           << initial_size
+           << ");\n"
+              "      "
+           << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n";
+        if (!fn->is_void()) {
+          assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val", oc);
+        }
+      }
+
+      oc << "      "
+            "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
+            "size = "
+            "static_cast<uint32_t>(obuf.size());\n"
+            "      "
+            "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
+            "msg_id = "
+            "::nprpc::impl::MessageId::BlockResponse;\n"
+            "      "
+            "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
+            "msg_type "
+            "= ::nprpc::impl::MessageType::Answer;\n";
+    }
+
+    bd = bd0;
+}
+
 void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
 {
   // Servant definition
@@ -2501,6 +2898,10 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       default:
         assert(false);
       }
+    } else if (fn->is_coroutine) {
+      oh << "::nprpc::Task<";
+      emit_type(fn->ret_value, oh);
+      oh << ">";
     } else {
       emit_type(fn->ret_value, oh);
     }
@@ -2535,10 +2936,21 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
       }
       oh << ')';
     } else {
+      std::ostringstream args;
       emit_function_arguments(
-          fn, oh, std::bind(&CppBuilder::emit_parameter_type_for_servant_callback, this, _1, _2));
+          fn, args, std::bind(&CppBuilder::emit_parameter_type_for_servant_callback, this, _1, _2));
+      auto text = args.str();
+      if (fn->is_coroutine)
+        text.insert(text.find('(') + 1, fn->args.empty() ? "std::stop_token" : "std::stop_token, ");
+      oh << text;
     }
     oh << " = 0;\n";
+  }
+
+  for (auto fn : ifs->fns) {
+    if (fn->is_coroutine)
+      oh << "private:\n  ::nprpc::Task<> __call_" << fn->name
+         << "(::nprpc::SessionContext& ctx, std::stop_token __stop);\npublic:\n";
   }
 
   oh << "};\n\n";
@@ -2756,6 +3168,16 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
   }
 
+  // The [coroutine] methods' bodies, which outlive dispatch.
+  for (auto fn : ifs->fns) {
+    if (!fn->is_coroutine)
+      continue;
+    oc << "::nprpc::Task<> " << ns(ctx_->nm_cur()) << 'I' << ifs->name << "_Servant::__call_"
+       << fn->name << "(::nprpc::SessionContext& ctx, std::stop_token __stop) {\n";
+    emit_servant_call_body(ifs, fn);
+    oc << "}\n\n";
+  }
+
   // Servant dispatch
   oc << "void " << ns(ctx_->nm_cur()) << 'I' << ifs->name
      << "_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]] "
@@ -2949,400 +3371,16 @@ void CppBuilder::emit_interface(AstInterfaceDecl* ifs)
     }
 
     oc << "    case " << fn->idx << ": {\n";
-
-    if (fn->in_s) {
-      oc << "      assert(ctx.rx_buffer != nullptr);\n"
-            "      "
-         << fn->in_s->name << "_Direct ia(*ctx.rx_buffer, " << get_arguments_offset() << ");\n";
-      if (ifs->trusted == false) {
-        // const auto fixed_size = get_arguments_offset() +
-        // fn->in_s->size;
-        oc << "      if ( !check_" << make_safety_check_name(fn->in_s)
-           << "(*ctx.rx_buffer, ia) ) {\n";
-        // [unreliable] is fire-and-forget: client never waits, so do not reply
-        // even on validation failure (orphan replies confuse SHM/QUIC paths).
-        if (fn->is_reliable) {
-          oc << "        ::nprpc::impl::make_simple_answer(ctx, "
-                "::nprpc::impl::MessageId::Error_BadInput);\n";
-        }
-        oc << "        break;\n"
-              "      }\n";
-      }
-    }
-
-    auto passed_as_direct = [](AstFunctionArgument* arg) {
-      auto real_type = arg->type;
-      if (real_type->id == FieldType::Alias)
-        real_type = calias(real_type)->get_real_type();
-
-      return arg->modifier == ArgumentModifier::Out &&
-             (real_type->id == FieldType::Vector || real_type->id == FieldType::String ||
-              real_type->id == FieldType::Struct);
-    };
-
-    // Helper to check if an argument is a Struct type (resolving aliases)
-    auto is_struct_type = [](AstFunctionArgument* arg) {
-      auto real_type = arg->type;
-      if (real_type->id == FieldType::Alias)
-        real_type = calias(real_type)->get_real_type();
-      return real_type->id == FieldType::Struct || real_type->id == FieldType::Array;
-    };
-
-    // Out-parameters on a non-flat response are filled via Direct / buffer
-    // references during the servant call, so the final wire size is not known
-    // beforehand.  Those paths stay on the heap (session layer does
-    // reserve+copy).  Pure return-value responses are measured after the
-    // servant returns, then reserved exactly for true zero-copy.
-    bool has_out_args = false;
-    if (fn->out_s) {
-      for (auto arg : fn->args) {
-        if (arg->modifier == ArgumentModifier::Out) {
-          has_out_args = true;
-          break;
-        }
-      }
-    }
-    // Non-flat response with out-args (or any Direct-style fill during call)
-    // → prepare heap buffer before servant.
-    const bool pre_buffer_out =
-        fn->out_s && !fn->out_s->flat && has_out_args;
-
-    if (pre_buffer_out) {
-      // Heap path only — do not claim a ring slot with a size guess.
-      const auto offset = size_of_header;
-      const auto initial_size = offset + fn->out_s->size;
-      oc << "      assert(ctx.tx_buffer != nullptr);\n"
-            "      auto& obuf = *ctx.tx_buffer;\n"
-            "      obuf.consume(obuf.size());\n"
-            "      obuf.prepare("
-         << initial_size + 128
-         << ");\n"
-            "      obuf.commit("
-         << initial_size
-         << ");\n"
-            "      "
-         << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n";
-    }
-    auto bd0 = bd;
-    bd = 3;
-    if (!fn->is_void()) {
-      oc << bd;
-      emit_type(fn->ret_value, oc);
-      oc << " __ret_val;\n";
-    }
-
-    // Create stack variables for output parameters BEFORE the try block
-    // For flat output structs: ALL out parameters need stack variables
-    // For non-flat output structs: only Vector/String/Struct need temporary
-    // variables (for _d() access)
-    size_t out_ix = fn->is_void() ? 0 : 1, out_temp_ix = 0;
-
-    // For flat output structs with Struct-type outputs, we need to prepare
-    // the output buffer BEFORE calling the servant so we can pass _Direct types
-    bool flat_has_struct_out = false;
-    if (fn->out_s && fn->out_s->flat) {
-      for (auto arg : fn->args) {
-        if (arg->modifier == ArgumentModifier::Out && is_struct_type(arg)) {
-          flat_has_struct_out = true;
-          break;
-        }
-      }
-    }
-
-    if (flat_has_struct_out) {
-      // Flat layout → exact size known at compile time
-      const auto offset = size_of_header;
-      const auto initial_size = offset + fn->out_s->size;
-      oc << bd << "assert(ctx.tx_buffer != nullptr);\n"
-         << bd << "auto& obuf = *ctx.tx_buffer;\n"
-         << bd << "obuf.consume(obuf.size());\n"
-         << bd << "if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, "
-         << initial_size << "))\n"
-         << bd << "  obuf.prepare(" << initial_size << ");\n"
-         << bd << "obuf.commit(" << initial_size << ");\n"
-         << bd << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n";
-    }
-
-    if (fn->out_s && fn->out_s->flat) {
-      // For flat output structs, create stack variables for non-Struct output
-      // parameters. Struct outputs use _Direct accessors from the output buffer.
-      for (auto arg : fn->args) {
-        if (arg->modifier != ArgumentModifier::Out)
-          continue;
-        ++out_ix;
-        if (!is_struct_type(arg)) {
-          oc << bd;
-          emit_type(arg->type, oc);
-          oc << " _out_" << out_ix << ";\n";
-        }
-      }
-    } else if (fn->out_s && pre_buffer_out) {
-      // Pre-buffered path: create temporary Direct wrappers for complex outs
-      for (auto arg : fn->args) {
-        if (arg->modifier != ArgumentModifier::Out)
-          continue;
-
-        if (!passed_as_direct(arg)) {
-          ++out_ix;
-          // The servant fills in an fd; it is attached after the call.
-          if (arg->type->id == FieldType::Fd)
-            oc << bd << "::nprpc::UniqueFd _out_" << out_ix << ";\n";
-          continue;
-        }
-
-        auto real_type = arg->type;
-        if (real_type->id == FieldType::Alias)
-          real_type = calias(real_type)->get_real_type();
-
-        oc << bd << "auto oa_" << ++out_temp_ix << " = oa._" << ++out_ix
-           << ((real_type->id == FieldType::Vector || real_type->id == FieldType::String)
-                   ? "_d();\n"
-                   : "();\n");
-      }
-    }
-
-    if (fn->ex)
-      oc << bd++ << "try {\n";
-
-    oc << bd << (fn->is_void() ? "" : "__ret_val = ") << fn->name << "(";
-
-    size_t in_ix = 0, idx = 0;
-    out_ix = fn->is_void() ? 0 : 1;
-    out_temp_ix = 0;
-    for (auto arg : fn->args) {
-      if (arg->modifier == ArgumentModifier::Out) {
-        assert(fn->out_s);
-        if (fn->out_s->flat) {
-          ++out_ix;
-          if (is_struct_type(arg)) {
-            // For Struct types in flat output structs, pass _Direct accessor
-            oc << "oa._" << out_ix << "()";
-          } else {
-            // For non-Struct types, pass stack variable reference
-            oc << "_out_" << out_ix;
-          }
-        } else if (passed_as_direct(arg)) {
-          // For non-flat structs with complex types, pass temporary
-          // variable
-          oc << "oa_" << ++out_temp_ix;
-          ++out_ix;
-        } else if (arg->type->id == FieldType::Fd) {
-          oc << "_out_" << ++out_ix;
-        } else {
-          // Simple / Object out: buffer already prepared (pre_buffer_out)
-          oc << "oa._" << ++out_ix << "()";
-        }
-      } else {
-        if (arg->type->id == FieldType::Object) {
-          oc << "::nprpc::impl::create_object_from_flat(ia._" << ++in_ix
-             << "(), ctx.remote_endpoint)";
-        } else if (arg->type->id == FieldType::Fd) {
-          oc << "ia._" << ++in_ix << "().take()";
-        } else {
-          oc << "ia._" << ++in_ix << "()";
-        }
-      }
-      if (++idx != fn->args.size())
-        oc << ", ";
-    }
-    oc << ");\n";
-
-    /*
-    out_ix = fn->is_void() ? 0 : 1;
-    for (auto arg : fn->args) {
-      if (arg->modifier == ArgumentModifier::Out) {
-        ++out_ix;
-        if (arg->type->id == FieldType::Object) {
-          oc <<
-            "{\n"
-            "  auto obj = impl::g_rpc->get_object(" << "oa._" << out_ix <<
-    "().poa_idx(), " << "oa._" << out_ix << "().object_id());\n" "  if (obj)
-    if (auto real_obj = (*obj).get(); real_obj)
-    ref_list.add_ref(real_obj);\n"
-            "}\n"
-            ;
-        }
-      }
-    }
-    */
-
-    if (fn->is_throwing()) {
-      auto declared_exceptions = fn->exceptions;
-      if (declared_exceptions.empty() && fn->ex)
-        declared_exceptions.push_back(fn->ex);
-
-      const auto offset = size_of_header;
-      oc << "      }\n";
-      for (auto* ex : declared_exceptions) {
-        const auto initial_size = offset + ex->size;
-
-        always_full_namespace(true);
-        oc << "      catch(" << ns(ex->nm) << ex->name << "& e) {\n"
-              "        assert(ctx.tx_buffer != nullptr);\n"
-              "        auto& obuf = *ctx.tx_buffer;\n"
-              "        obuf.consume(obuf.size());\n"
-              "        std::size_t __wire_size = "
-           << initial_size << ";\n";
-        always_full_namespace(false);
-
-        bd = 4;
-        for (size_t i = 1; i < ex->fields.size(); ++i) {
-          auto mb = ex->fields[i];
-          measure_from_cpp_type(mb->type, "__wire_size", "e." + mb->name, oc);
-        }
-
-        always_full_namespace(true);
-        oc << "        if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
-              "obuf, __wire_size))\n"
-              "          obuf.prepare(__wire_size);\n"
-              "        obuf.commit("
-           << initial_size
-           << ");\n"
-              "        "
-           << ns(ex->nm) << "flat::" << ex->name << "_Direct oa(obuf," << offset
-           << ");\n"
-              "        oa.__ex_id() = "
-           << ex->exception_id << ";\n";
-        always_full_namespace(false);
-
-        bd = 4;
-        for (size_t i = 1; i < ex->fields.size(); ++i) {
-          auto mb = ex->fields[i];
-          assign_from_cpp_type(mb->type, "oa." + mb->name, "e." + mb->name, oc);
-        }
-
-        oc << "        "
-              "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
-              "size = "
-              "static_cast<uint32_t>(obuf.size());\n"
-              "        "
-              "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
-              "msg_id = "
-              "::nprpc::impl::MessageId::Exception;\n"
-              "        "
-              "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
-              "msg_type "
-              "= ::nprpc::impl::MessageType::Answer;\n"
-              "        return;\n"
-              "      }\n";
-      }
-    }
-
-    if (!fn->out_s) {
-      // Void reliable methods ACK with Success. [unreliable] methods are
-      // fire-and-forget (client uses send_unreliable / no waiter) — leave
-      // tx empty so the session does not send a reply.
-      if (fn->is_reliable) {
-        oc << "      ::nprpc::impl::make_simple_answer(ctx, "
-              "nprpc::impl::MessageId::Success);\n";
-      }
+    if (fn->is_coroutine) {
+      oc << "      ::nprpc::impl::start_deferred_call(ctx, [this](::nprpc::SessionContext& __c, "
+            "std::stop_token __s) { return __call_" << fn->name << "(__c, std::move(__s)); });\n"
+            "      break;\n"
+            "    }\n";
     } else {
-      if (fn->out_s->flat) { // it means that we are writing output data
-                             // in the input buffer,
-        // so we must pass stack variables first and then assign result
-        // back to the buffer. For Struct types, we already wrote directly
-        // via _Direct accessors.
-        const auto offset = size_of_header;
-        const auto initial_size = offset + fn->out_s->size;
-
-        if (!flat_has_struct_out) {
-          // Only prepare buffer here if we didn't already do it for Struct outputs
-          oc << "      assert(ctx.tx_buffer != nullptr);\n"
-                "      auto& obuf = *ctx.tx_buffer;\n"
-                "      obuf.consume(obuf.size());\n"
-                "      if "
-                "(!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
-                "obuf, "
-             << initial_size
-             << "))\n"
-                "        obuf.prepare("
-             << initial_size
-             << ");\n"
-                "      obuf.commit("
-             << initial_size
-             << ");\n"
-                "      "
-             << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n";
-        }
-
-        int ix;
-        if (!fn->is_void()) {
-          assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val", oc);
-          ix = 1;
-        } else {
-          ix = 0;
-        }
-
-        for (auto out : fn->args) {
-          if (out->modifier == ArgumentModifier::In)
-            continue;
-          ++ix;
-          // Skip Struct types - they were written directly via _Direct
-          if (!is_struct_type(out)) {
-            auto n = std::to_string(ix);
-            assign_from_cpp_type(out->type, "oa._" + n, "_out_" + n, oc);
-          }
-        }
-      } else if (pre_buffer_out) {
-        // Buffer already prepared (heap); serialize return value if any
-        if (!fn->is_void()) {
-          assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val", oc);
-        }
-        int ix = fn->is_void() ? 0 : 1;
-        for (auto out : fn->args) {
-          if (out->modifier == ArgumentModifier::In)
-            continue;
-          ++ix;
-          if (out->type->id == FieldType::Fd) {
-            auto n = std::to_string(ix);
-            assign_from_cpp_type(out->type, "oa._" + n, "_out_" + n, oc);
-          }
-        }
-      } else {
-        // Measure-after path (return value only, no out-args): measure the
-        // C++ return, reserve exact SHM space, then serialise (true zero-copy).
-        const auto offset = size_of_header;
-        const auto initial_size = offset + fn->out_s->size;
-        oc << "      assert(ctx.tx_buffer != nullptr);\n"
-              "      auto& obuf = *ctx.tx_buffer;\n"
-              "      obuf.consume(obuf.size());\n"
-              "      std::size_t __wire_size = "
-           << initial_size << ";\n";
-        bd = 3;
-        if (!fn->is_void()) {
-          measure_from_cpp_type(fn->ret_value, "__wire_size", "__ret_val", oc);
-        }
-        oc << "      if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, "
-              "obuf, __wire_size))\n"
-              "        obuf.prepare(__wire_size);\n"
-              "      obuf.commit("
-           << initial_size
-           << ");\n"
-              "      "
-           << fn->out_s->name << "_Direct oa(obuf," << offset << ");\n";
-        if (!fn->is_void()) {
-          assign_from_cpp_type(fn->ret_value, "oa._1", "__ret_val", oc);
-        }
-      }
-
-      oc << "      "
-            "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
-            "size = "
-            "static_cast<uint32_t>(obuf.size());\n"
-            "      "
-            "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
-            "msg_id = "
-            "::nprpc::impl::MessageId::BlockResponse;\n"
-            "      "
-            "static_cast<::nprpc::impl::Header*>(obuf.data().data())->"
-            "msg_type "
-            "= ::nprpc::impl::MessageType::Answer;\n";
+      emit_servant_call_body(ifs, fn);
+      oc << "      break;\n"
+            "    }\n";
     }
-
-    oc << "      break;\n"
-          "    }\n";
-
-    bd = bd0;
   }
 
   oc << "    default:\n"

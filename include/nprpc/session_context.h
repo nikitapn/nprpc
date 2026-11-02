@@ -16,11 +16,13 @@
 namespace nprpc {
 
 class ObjectServant;
+class Poa;
 
 class StreamManager;
 
 namespace impl {
 class ReferenceListImpl;
+class Session;
 class SharedMemoryChannel;
 class StreamManager;
 } // namespace impl
@@ -52,6 +54,8 @@ struct CallContext {
   /// DispatchExecutor or NeverBlockTransport gets one that can stop: a call on
   /// the transport thread holds up the reader that would hear about it.
   std::stop_token stop_token;
+  /// The POA of the servant being called; runtime use.
+  Poa* poa = nullptr;
 };
 
 /// One client connection as seen by a servant: who is calling, and the
@@ -84,6 +88,8 @@ struct SessionContext {
   /// Ignored for all non-HTTP transports.
   std::vector<std::string> set_cookies;
 
+  /// The session this is the context of; runtime use.
+  impl::Session* session = nullptr;
   /// The call being dispatched; runtime use. See `get_call_context()`.
   CallContext call;
 };

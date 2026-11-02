@@ -819,7 +819,9 @@ void SwiftBuilder::emit_protocol(AstInterfaceDecl* ifs)
     bool has_return = !fn->is_void();
     // Note: IDL async methods are not marked async in protocol - async is a client-side concern
     // Only add throws if the function has raises(...)
-    const char* throws_kw = fn->is_throwing() ? " throws" : "";
+    // Except for [coroutine]: the servant itself suspends.
+    const std::string throws_kw =
+        std::string(fn->is_coroutine ? " async" : "") + (fn->is_throwing() ? " throws" : "");
     if (has_return || !out_params.empty()) {
       out << throws_kw << " -> ";
 
@@ -1358,7 +1360,7 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
     }
 
     // Servant methods only have throws if they have raises(...) in IDL
-    out << (fn->is_throwing() ? ") throws" : ")");
+    out << ")" << (fn->is_coroutine ? " async" : "") << (fn->is_throwing() ? " throws" : "");
 
     // Return type - match protocol
     std::vector<AstFunctionArgument*> out_params;
@@ -1502,6 +1504,15 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       }
     }
 
+    // A [coroutine] method carries on without this dispatch, with its own reply
+    // buffer, which shadows `buffer` below.
+    if (fn->is_coroutine) {
+      if (fn->in_s)
+        out << bl() << "nonisolated(unsafe) let __ia = ia\n";
+      out << bl() << "guard let __call = NPRPCDeferredCall.begin() else { return }\n";
+      out << bl() << "__call.start { [self] buffer in\n" << bb(false);
+    }
+
     // Prepare output buffer if needed
     if (fn->out_s && !fn->out_s->flat) {
       const auto offset = size_of_header;
@@ -1527,7 +1538,8 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       }
     }
     bool has_return = !fn->is_void();
-    const std::string try_prefix = fn->is_throwing() ? "try " : "";
+    const std::string try_prefix = std::string(fn->is_throwing() ? "try " : "") +
+                                   (fn->is_coroutine ? "await " : "");
 
     if ((has_return ? 1 : 0) + out_params.size() > 1) {
       // Tuple destructuring
@@ -1562,7 +1574,8 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       if (arg->modifier == ArgumentModifier::In) {
         if (idx > 0) out << ", ";
         ++in_ix;
-        out << arg->name << ": " << (arg->type->id == FieldType::Fd ? "__fd_" : "ia._") << in_ix;
+        out << arg->name << ": "
+            << (arg->type->id == FieldType::Fd ? "__fd_" : fn->is_coroutine ? "__ia._" : "ia._") << in_ix;
         ++idx;
       }
     }
@@ -1637,6 +1650,9 @@ void SwiftBuilder::emit_servant_base(AstInterfaceDecl* ifs)
       out << bl() << "makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)\n";
       out << eb();
     }
+
+    if (fn->is_coroutine)
+      out << eb();
 
     out << eb(false);
   }

@@ -364,6 +364,20 @@ void nprpc_object_send_async_result(void* obj_ptr, void* buffer_ptr, void* conte
                                    swift_rpc_completion callback, uint32_t timeout_ms,
                                    bool receive_response, uint32_t* call_id) noexcept;
 
+// A [coroutine] servant method, begun inside dispatch. Null if the session has too
+// many in flight, in which case the client has been answered.
+void* nprpc_deferred_call_begin() noexcept;
+void* nprpc_deferred_call_tx(void* call) noexcept;
+// Sends the reply built in the buffer from nprpc_deferred_call_tx.
+void nprpc_deferred_call_finish(void* call) noexcept;
+void nprpc_deferred_call_release(void* call) noexcept;
+// Whether the POA has an executor the method has to keep running on.
+bool nprpc_deferred_call_has_executor(void* call) noexcept;
+void nprpc_deferred_call_post(void* call, void* context, void (*fn)(void*)) noexcept;
+// `fire` runs if the client cancels; `release` when the call is destroyed.
+void nprpc_deferred_call_on_stop(void* call, void* context, void (*fire)(void*),
+                                 void (*release)(void*)) noexcept;
+
 // Tells the server a call is no longer wanted. Its completion still runs.
 void nprpc_object_cancel_call(void* obj_ptr, uint32_t call_id) noexcept;
 

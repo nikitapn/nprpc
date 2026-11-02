@@ -148,6 +148,8 @@ class Session_Socket : public nprpc::impl::Session,
     }
   }
 
+  bool supports_deferred_replies() const noexcept override { return true; }
+
   // Runs on the executor, so it has its own tx buffer and posts the reply.
   void process_handed_off(flat_buffer& rx, bool wants_reply) override
   {

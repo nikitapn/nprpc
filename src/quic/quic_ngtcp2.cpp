@@ -634,6 +634,7 @@ public:
   explicit QuicNgtcp2ServerSession(std::shared_ptr<QuicNgtcp2ServerConn> conn)
       : Session(conn->get_executor()), conn_(conn)
   {
+    telemetry_transport_ = static_cast<int>(monitor::Transport::Quic);
     ctx_.stream_manager->set_active_stream_counter(active_stream_counter(monitor::Transport::Quic));
     // Weak: the manager belongs to this session, which the connection owns.
     ctx_.stream_manager->set_send_datagram_callback(
@@ -706,11 +707,13 @@ public:
       process_handed_off(frame, false);
   }
 
+  bool supports_deferred_replies() const noexcept override { return true; }
+
   void process_handed_off(flat_buffer& frame, bool wants_reply) override
   {
     const uint32_t rid = extract_request_id(frame);
     flat_buffer tx;
-    if (measured_dispatch(monitor::Transport::Quic, frame, tx,
+    if (measured_dispatch(*this, monitor::Transport::Quic, frame, tx,
                          [&] { return handle_request(frame, tx); }) &&
         wants_reply && tx.size() > 0) {
       inject_request_id(tx, rid);
