@@ -316,7 +316,7 @@ void WebSocketSession<Derived>::send_receive_async(
 {
   assert(*(uint32_t*)buffer.data().data() == buffer.size());
 
-  uint32_t request_id = generate_request_id();
+  uint32_t request_id = this->call_id_for(buffer);
 
   // Inject request ID into message header
   inject_request_id(buffer, request_id);

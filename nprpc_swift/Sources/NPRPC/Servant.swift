@@ -1,6 +1,13 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+import CNprpc
+
+/// Inside a servant method: whether the client cancelled this call or went away.
+/// A long-running method can check this and stop early. It only ever turns true
+/// on a POA created with a `dispatch:` other than `.inlineOnTransportThread`.
+public var currentCallIsCancelled: Bool { nprpc_current_call_cancelled() }
+
 /// Endpoint information for connecting to remote objects
 public struct NPRPCEndpoint {
     /// Type of transport (TCP, HTTP, WebSocket, etc.)

@@ -241,6 +241,10 @@ boost::system::error_code SharedMemoryConnection::do_send_receive(flat_buffer& b
     return boost::asio::error::message_size;
   }
 
+  // Nothing else sets it here, and whatever a reused buffer holds would otherwise
+  // be taken for this call's id by a cancel.
+  static_cast<impl::flat::Header*>(buffer.data().data())->request_id = 0;
+
   // Peek the slot we will use.  For zero-copy the slot is already claimed;
   // for the copy path we claim inside commit_request — but we need the
   // slot *before* enqueue so the queue is ordered correctly.  So for the
@@ -324,6 +328,8 @@ void SharedMemoryConnection::send_receive_async(
     uint32_t timeout_ms)
 {
   assert(*(uint32_t*)buffer.data().data() == buffer.size());
+  if (buffer.size() >= sizeof(impl::flat::Header))
+    static_cast<impl::flat::Header*>(buffer.data().data())->request_id = buffer.call_id();
 
   struct work_impl : IOWork {
     flat_buffer buf;

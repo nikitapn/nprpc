@@ -212,6 +212,10 @@ enum MessageId: u32 {
   Error_BadInput,
   /// Unknown Exception (for which no specific error code is defined)
   Error_Unknown,
+  /// The client cancelled this call; the client raises `OperationCancelled`
+  Error_Cancelled,
+  /// Client asks the server to stop a call it no longer wants. Gets no reply.
+  CancelCall,
 }
 
 /// Whether a message is a request or the answer to one.
@@ -242,6 +246,12 @@ message CallHeader {
   function_idx: fn_idx_t;
   /// Target object identifier
   object_id: oid_t;
+}
+
+/// Follows `Header` in a `CancelCall`.
+message CancelCallBody {
+  /// `Header.request_id` of the call to cancel
+  request_id: u32;
 }
 
 /// Stream control message types

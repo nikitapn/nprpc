@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <stop_token>
+#include <utility>
 
 #include <nprpc/basic.hpp>
 #include <nprpc/common.hpp>
@@ -95,15 +96,43 @@ protected:
   // anything that does is logged and the message dropped.
   virtual void process_handed_off(nprpc::flat_buffer& rx, bool wants_reply);
 
+  // A request id, never zero and unique on this session. Every transport draws
+  // from here, so an id reserved ahead of sending can't collide with another.
+  uint32_t next_call_id() noexcept
+  {
+    uint32_t id;
+    do id = next_call_id_.fetch_add(1, std::memory_order_relaxed); while (id == 0);
+    return id;
+  }
+  // The id to send this message under.
+  uint32_t call_id_for(const nprpc::flat_buffer& buffer) noexcept
+  {
+    const auto id = buffer.call_id();
+    return id ? id : next_call_id();
+  }
+
 public:
+  // Reserves a request id for a call about to be sent, to pass to cancel_call().
+  uint32_t reserve_call_id(nprpc::flat_buffer& buffer) noexcept
+  {
+    const auto id = next_call_id();
+    buffer.set_call_id(id);
+    return id;
+  }
+  // Tells the server this call is no longer wanted. Its reply still comes.
+  NPRPC_API void cancel_call(uint32_t call_id);
+  // The client is gone: stops the running call's token, and those of calls not
+  // yet started. They still run, since some may be one-way.
+  void notify_peer_gone();
+
   // Throwing API used by generated stubs: ExceptionTimeout if no reply came in
   // time, and ExceptionCommFailure for any other transport failure.
   NPRPC_API virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms);
 
   // Coroutine variant — suspends the caller until the response arrives, then
   // resumes it on this session's executor. A stop request ends the wait at once
-  // with OperationCancelled, and the reply is dropped when it comes: the server
-  // isn't told. Don't make a blocking call from the resumed coroutine: on a socket
+  // with OperationCancelled and tells the server, and the reply is dropped when it
+  // comes. Don't make a blocking call from the resumed coroutine: on a socket
   // session the executor is the strand that has to deliver that call's reply.
   // Built on send_receive_async(), so a transport only needs to provide that.
   NPRPC_API virtual nprpc::Task<> send_receive_coro(flat_buffer& buffer,
@@ -229,6 +258,7 @@ public:
   virtual void shutdown()
   {
     closed_.store(true);
+    notify_peer_gone();
     try {
       timeout_timer_.cancel();
     } catch (...) {
@@ -258,18 +288,30 @@ private:
   struct HandedOff {
     nprpc::flat_buffer rx;
     bool wants_reply;
+    uint32_t call_id;   // of a FunctionCall, otherwise 0
+    bool cancelled;
   };
   struct HandoffKick;
   static void run_handoff_kick(void* kick);
 
   void kick_handoffs(const DispatchExecutor& target);
   void drain_handoffs(const DispatchExecutor& running_on);
+  void on_cancel_call(const nprpc::flat_buffer& rx);
 
   std::mutex handoff_mu_;
   std::deque<HandedOff> handoffs_;
   // A drain is scheduled or running. It stays set until the drain sees an empty
   // queue, so the message it is running still counts as "busy".
   bool handoff_draining_ = false;
+  // The handed-off message running now.
+  uint32_t running_call_id_ = 0;
+  std::stop_source running_call_stop_{std::nostopstate};
+  bool peer_gone_ = false;
+  // Tells handle_request_body the running call was cancelled before it started.
+  // Only the thread running that message touches it.
+  bool skip_running_call_ = false;
+
+  std::atomic<uint32_t> next_call_id_{1};
 
 protected:
   // The blocking call each client transport implements. It may still throw

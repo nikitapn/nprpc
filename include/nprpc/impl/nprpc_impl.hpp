@@ -203,11 +203,9 @@ class SocketConnection : public Session,
   // Write queue and read state — accessed only on the socket strand.
   std::deque<outgoing_message>                          write_queue_;
   std::unordered_map<uint32_t, pending_request>         pending_requests_;
-  std::atomic<uint32_t>                                 next_request_id_{1};
   bool                                                  write_loop_running_{false};
   flat_buffer                                           rx_buffer_{flat_buffer::default_initial_size()};
 
-  uint32_t generate_request_id() { return next_request_id_.fetch_add(1, std::memory_order_relaxed); }
   void inject_request_id(flat_buffer& buf, uint32_t id);
   uint32_t extract_request_id(const flat_buffer& buf);
 
@@ -261,6 +259,9 @@ public:
       std::optional<std::function<void(const boost::system::error_code&,
                                        flat_buffer&)>>&& completion_handler,
       uint32_t timeout_ms) override;
+
+  // Written straight out: these frames get no reply, so nothing may wait for one.
+  bool send_stream_message(flat_buffer&& buffer) override;
 
   // UNTESTED
   void shutdown() override
@@ -547,7 +548,8 @@ make_simple_answer(SessionContext& ctx, MessageId id, uint32_t request_id = 0)
          id == MessageId::Error_CommFailure ||
          id == MessageId::Error_UnknownFunctionIdx ||
          id == MessageId::Error_UnknownMessageId ||
-         id == MessageId::Error_BadAccess || id == MessageId::Error_BadInput);
+         id == MessageId::Error_BadAccess || id == MessageId::Error_BadInput ||
+         id == MessageId::Error_Cancelled);
 
   static_assert(std::is_standard_layout_v<impl::flat::Header>,
                 "impl::flat::Header must be a standard layout type");
@@ -623,6 +625,8 @@ inline int handle_standart_reply(flat_buffer& buf)
     throw ExceptionBadAccess();
   case MessageId::Error_BadInput:
     throw ExceptionBadInput();
+  case MessageId::Error_Cancelled:
+    throw OperationCancelled();
   default:
     return -1;
   }
@@ -631,6 +635,7 @@ inline int handle_standart_reply(flat_buffer& buf)
 inline void Session::close()
 {
   closed_.store(true);
+  notify_peer_gone();
   impl::g_rpc->close_session(this);
 }
 

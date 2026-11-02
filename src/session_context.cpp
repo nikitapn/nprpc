@@ -22,6 +22,8 @@ NPRPC_API SessionContext& get_context()
   return (*ctx);
 }
 
+NPRPC_API const CallContext& get_call_context() { return get_context().call; }
+
 /** Set the current session context.
  * This is called before calling `dispatch()` on the object servant
  * so that the servant can access the session context

@@ -143,6 +143,33 @@ One session still runs one message at a time. While a handed-off call is
 running, later messages from that client wait behind it, whichever POA they are
 for, so a client sees its calls complete in order. Other clients aren't affected.
 
+A handed-off method can notice that its client stopped caring, and stop early. The
+token stops when the client cancels the call or disconnects. A call on the default
+POA can't be told, because its transport isn't reading.
+
+```cpp
+std::vector<Row> Report::Build() {
+  const auto stop = nprpc::get_call_context().stop_token;
+  std::vector<Row> rows;
+  while (!stop.stop_requested() && more_rows())
+    rows.push_back(next_row());
+  if (stop.stop_requested()) throw nprpc::OperationCancelled{};
+  return rows;
+}
+```
+
+```swift
+override func build() throws -> [Row] {
+    var rows: [Row] = []
+    while !currentCallIsCancelled && moreRows() { rows.append(nextRow()) }
+    return rows
+}
+```
+
+A cancelled call that hasn't started yet is skipped. A client that disconnects
+stops the running call, but its queued calls still run, with their tokens already
+stopped, because some may be one-way.
+
 The runtime's thread pool also runs the transports' I/O, so size
 `start_thread_pool` for the number of methods you expect to block at once, plus
 some to spare.

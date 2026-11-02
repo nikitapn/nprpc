@@ -1127,6 +1127,7 @@ public:
         case MessageId::StreamError:
         case MessageId::StreamCancellation:
         case MessageId::StreamWindowUpdate:
+        case MessageId::CancelCall:
           return true;
         default:
           return false;

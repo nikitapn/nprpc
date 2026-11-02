@@ -358,9 +358,18 @@ typedef void (*swift_rpc_completion)(void* context, const NprpcBridgeError* erro
 // receive_response=false discards the reply body, but still waits for a reply.
 // Request storage is moved when dispatch begins. Validation failures before
 // dispatch leave it intact; dispatch failures may already have consumed it.
+// If non-null, call_id receives the id to pass to nprpc_object_cancel_call, and
+// stays zero if the call never went out.
 void nprpc_object_send_async_result(void* obj_ptr, void* buffer_ptr, void* context,
                                    swift_rpc_completion callback, uint32_t timeout_ms,
-                                   bool receive_response) noexcept;
+                                   bool receive_response, uint32_t* call_id) noexcept;
+
+// Tells the server a call is no longer wanted. Its completion still runs.
+void nprpc_object_cancel_call(void* obj_ptr, uint32_t call_id) noexcept;
+
+// Inside a servant method: whether the client cancelled this call or went away.
+// Always false outside one, and on a POA that runs on the transport thread.
+bool nprpc_current_call_cancelled() noexcept;
 
 // Object async RPC call with callback - for Swift async/await integration
 // Used for async methods in IDL

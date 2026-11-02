@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include <boost/asio/buffer.hpp>
@@ -121,6 +122,7 @@ private:
   // index them.  They belong to the message, not to the bytes: dropped
   // (closed) whenever the buffer is emptied for the next one.
   std::vector<UniqueFd> fds_;
+  std::uint32_t call_id_ = 0;
 
   static constexpr std::size_t default_growth_factor = 2;
   static constexpr std::size_t min_allocation = 512;
@@ -306,6 +308,7 @@ public:
       , arena_(other.arena_)
       , arena_backed_(other.arena_backed_)
       , fds_(std::move(other.fds_))
+      , call_id_(std::exchange(other.call_id_, 0))
   {
     other.buffer_ = nullptr;
     other.in_ = 0;
@@ -342,6 +345,7 @@ public:
       arena_ = other.arena_;
       arena_backed_ = other.arena_backed_;
       fds_ = std::move(other.fds_);
+      call_id_ = std::exchange(other.call_id_, 0);
 
       other.buffer_ = nullptr;
       other.in_ = 0;
@@ -529,6 +533,12 @@ public:
     fds_.push_back(std::move(fd));
     return static_cast<std::uint32_t>(fds_.size() - 1);
   }
+
+  /// The request id this message must be sent with, so the caller can name the
+  /// call later to cancel it. Zero lets the transport pick one; runtime use.
+  std::uint32_t call_id() const noexcept { return call_id_; }
+  /// Sets `call_id()`; runtime use.
+  void set_call_id(std::uint32_t id) noexcept { call_id_ = id; }
 
   /// Takes the descriptor at `index` out of the message.  Empty if there is
   /// none there, or it was taken already.

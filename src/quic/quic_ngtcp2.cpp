@@ -1312,6 +1312,7 @@ void QuicNgtcp2ServerConn::remove_self()
   }
   active_connection_.reset();
   limit_slot_.reset();
+  if (session_) session_->notify_peer_gone();
   session_.reset();
   boost::asio::post(listener_->io_context(), [self = shared_from_this()]() {
     self->listener_->remove_connection(self);
@@ -2695,7 +2696,7 @@ void QuicNgtcp2ClientConn::send_receive_async(flat_buffer&&            buf,
           return;
         }
 
-        const uint32_t rid = self->generate_request_id();
+        const uint32_t rid = b.call_id() ? b.call_id() : self->generate_request_id();
         inject_request_id(b, rid);
 
         auto tp = std::chrono::steady_clock::now()
@@ -2873,6 +2874,7 @@ public:
     };
     auto waiter = std::make_shared<Waiter>();
 
+    if (!buf.call_id()) buf.set_call_id(next_call_id());
     conn->send_receive_async(
         std::move(buf),
         [waiter](const boost::system::error_code& ec, flat_buffer& resp) {
@@ -2917,6 +2919,7 @@ public:
       }
       return;
     }
+    if (!buf.call_id()) buf.set_call_id(next_call_id());
     conn->send_receive_async(std::move(buf), std::move(handler), timeout_ms);
   }
 

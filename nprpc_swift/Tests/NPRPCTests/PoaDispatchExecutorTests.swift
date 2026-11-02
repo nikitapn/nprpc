@@ -235,6 +235,35 @@ final class PoaDispatchExecutorTests: XCTestCase {
         )
     }
 
+    /// Cancelling the client's task reaches a servant running on an executor.
+    func testCancellingTaskStopsServant() async throws {
+        final class PollingServant: TestBasicServant, @unchecked Sendable {
+            let entered = DispatchSemaphore(value: 0)
+            let finished = DispatchSemaphore(value: 0)
+            nonisolated(unsafe) var sawCancel = false
+            override func returnU32() throws -> UInt32 {
+                entered.signal()
+                let giveUp = Date().addingTimeInterval(5)
+                while !currentCallIsCancelled && Date() < giveUp {
+                    Thread.sleep(forTimeInterval: 0.001)
+                }
+                sawCancel = currentCallIsCancelled
+                finished.signal()
+                return 1
+            }
+        }
+        // The runtime allows six POAs and has no way to free one, so share this.
+        let servant = PollingServant()
+        let client = try makeShmClient(servant: servant, poa: Self.loopPoa!)
+
+        let call = Task { try await client.returnU32() }
+        await Task.detached { servant.entered.wait() }.value
+        XCTAssertFalse(currentCallIsCancelled, "false outside a servant method")
+        call.cancel()
+        await Task.detached { servant.finished.wait() }.value
+        XCTAssertTrue(servant.sawCancel)
+    }
+
     /// Sequential RPCs on a custom serial executor stay ordered and on-queue.
     func testCustomSerialQueueSequentialCalls() async throws {
         let queue = DispatchQueue(label: "nprpc.test.poa.custom-seq")

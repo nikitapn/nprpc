@@ -135,7 +135,6 @@ class UringClientConnection
   // pending_mutex_: held only for map insert/erase/lookup (~100 ns).
   std::mutex                                 send_mutex_;
   std::mutex                                 pending_mutex_;
-  std::atomic<uint32_t>                      next_request_id_{1};
   std::unordered_map<uint32_t, PendingEntry> pending_requests_;
 
   int      fd_        = -1;
@@ -527,7 +526,7 @@ public:
            buffer.size());
 
     const uint32_t rid =
-        next_request_id_.fetch_add(1, std::memory_order_relaxed);
+        next_call_id();
     inject_request_id(buffer, rid);
 
     // Stack-allocated waiter; valid until this function returns.
@@ -574,7 +573,7 @@ public:
            buffer.size());
 
     const uint32_t rid =
-        next_request_id_.fetch_add(1, std::memory_order_relaxed);
+        next_call_id();
     inject_request_id(buffer, rid);
 
     // Awaiter lives in the coroutine frame.  await_suspend() registers the
@@ -659,7 +658,7 @@ public:
       uint32_t /*timeout_ms*/) override
   {
     const uint32_t rid =
-        next_request_id_.fetch_add(1, std::memory_order_relaxed);
+        call_id_for(buffer);
     inject_request_id(buffer, rid);
 
     // Register waiter before posting the send -- same lost-wakeup guard.

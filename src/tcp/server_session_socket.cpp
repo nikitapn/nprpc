@@ -199,6 +199,7 @@ public:
     net::co_spawn(socket_.get_executor(),
       [self = shared_from_this()]() -> net::awaitable<void> {
         co_await self->read_loop();
+        self->notify_peer_gone();
       },
       net::detached);
   }

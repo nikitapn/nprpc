@@ -675,7 +675,7 @@ template<class Configure>
 BridgeResult<void> start_async_rpc(void* obj_ptr, void* buffer_ptr, void* context,
                                   uint32_t timeout_ms, bool receive_response,
                                   std::shared_ptr<AsyncCompletion>& completion,
-                                  Configure configure) noexcept {
+                                  Configure configure, uint32_t* call_id = nullptr) noexcept {
     return capture([&]() -> BridgeResult<void> {
         if (!obj_ptr || !buffer_ptr)
             return std::unexpected(BridgeError(NPRPC_BRIDGE_INVALID_ARGUMENT, "Invalid RPC arguments"));
@@ -685,6 +685,8 @@ BridgeResult<void> start_async_rpc(void* obj_ptr, void* buffer_ptr, void* contex
 
         completion = std::make_shared<AsyncCompletion>(context, receive_response);
         configure(*completion);
+        if (call_id)
+            *call_id = (*session)->reserve_call_id(*static_cast<nprpc::flat_buffer*>(buffer_ptr));
         auto started = (*session)->send_receive_async_result(
             std::move(*static_cast<nprpc::flat_buffer*>(buffer_ptr)),
             [state = completion](nprpc::Result<void> result, nprpc::flat_buffer& buf) noexcept {
@@ -955,17 +957,35 @@ const uint8_t* nprpc_object_get_origin(void* ptr) {
 
 void nprpc_object_send_async_result(void* obj_ptr, void* buffer_ptr, void* context,
                                    swift_rpc_completion callback, uint32_t timeout_ms,
-                                   bool receive_response) noexcept {
+                                   bool receive_response, uint32_t* call_id) noexcept {
     if (!callback) return;
     std::shared_ptr<AsyncCompletion> completion;
     const auto result = start_async_rpc(obj_ptr, buffer_ptr, context, timeout_ms,
-        receive_response, completion, [callback](AsyncCompletion& state) { state.callback = callback; });
+        receive_response, completion, [callback](AsyncCompletion& state) { state.callback = callback; }, call_id);
     if (!result) {
         if (completion) completion->fail(result.error());
         else {
             const auto error = result.error().view();
             callback(context, &error, nullptr);
         }
+    }
+}
+
+void nprpc_object_cancel_call(void* obj_ptr, uint32_t call_id) noexcept {
+    if (!obj_ptr || call_id == 0) return;
+    (void)capture([&]() -> BridgeResult<void> {
+        auto session = session_for_object(obj_ptr);
+        if (!session) return std::unexpected(session.error());
+        (*session)->cancel_call(call_id);
+        return {};
+    });
+}
+
+bool nprpc_current_call_cancelled() noexcept {
+    try {
+        return nprpc::get_call_context().stop_token.stop_requested();
+    } catch (const std::exception&) {
+        return false; // not inside a servant method
     }
 }
 

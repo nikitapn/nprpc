@@ -103,11 +103,21 @@ nprpc::Task<> Session::send_receive_coro(flat_buffer& buffer,
 
   auto call = std::make_shared<Call>();
   const auto executor = timeout_timer_.get_executor();
+  const auto call_id = reserve_call_id(buffer);
   // Constructed before suspending, so a stop request that lands now finds nothing
-  // to resume, and await_suspend sees it.
-  std::stop_callback on_stop(st, [call, executor]() noexcept {
-    if (auto waiting = call->finish(true))
+  // to resume, and await_suspend sees it. Nothing has gone out in that case, so
+  // there is nothing to cancel.
+  std::stop_callback on_stop(st, [call, executor, call_id, cell = self_cell_]() noexcept {
+    if (auto waiting = call->finish(true)) {
+      if (auto session = cell->lock()) {
+        try {
+          session->cancel_call(call_id);
+        } catch (const std::exception& e) {
+          NPRPC_LOG_ERROR("Could not send a call cancellation: {}", e.what());
+        }
+      }
       boost::asio::post(executor, [waiting] { waiting.resume(); });
+    }
   });
 
   struct Awaiter {
@@ -268,14 +278,83 @@ void Session::run_handoff_kick(void* p)
 
 bool Session::must_hand_off(const flat_buffer& rx)
 {
+  // A cancel has to overtake the queue, so hand_off() takes it on the reader.
+  if (rx.size() >= sizeof(flat::Header) &&
+      static_cast<const flat::Header*>(rx.cdata().data())->msg_id == MessageId::CancelCall)
+    return true;
   if (auto* poa = peek_target_poa(rx); poa && poa->requires_off_transport_dispatch())
     return true;
   std::lock_guard lock(handoff_mu_);
   return handoff_draining_;
 }
 
+void Session::on_cancel_call(const flat_buffer& rx)
+{
+  if (rx.size() < sizeof(flat::Header) + sizeof(flat::CancelCallBody))
+    return;
+  uint32_t call_id = 0;
+  std::memcpy(&call_id,
+              static_cast<const std::byte*>(rx.cdata().data()) + sizeof(flat::Header),
+              sizeof(call_id));
+  if (call_id == 0)
+    return;
+
+  std::stop_source to_stop{std::nostopstate};
+  {
+    std::lock_guard lock(handoff_mu_);
+    if (running_call_id_ == call_id) {
+      to_stop = running_call_stop_;
+    } else {
+      for (auto& queued : handoffs_) {
+        if (queued.call_id == call_id) {
+          queued.cancelled = true;
+          break;
+        }
+      }
+    }
+  }
+  // Unlocked: this runs the servant's stop callbacks.
+  to_stop.request_stop();
+}
+
+void Session::notify_peer_gone()
+{
+  std::stop_source to_stop{std::nostopstate};
+  {
+    std::lock_guard lock(handoff_mu_);
+    peer_gone_ = true;
+    to_stop = running_call_stop_;
+  }
+  to_stop.request_stop();
+}
+
+void Session::cancel_call(uint32_t call_id)
+{
+  constexpr auto total = sizeof(flat::Header) + sizeof(flat::CancelCallBody);
+  flat_buffer fb;
+  fb.prepare(total);
+  fb.commit(total);
+  auto* header = static_cast<flat::Header*>(fb.data().data());
+  header->size = total;
+  header->msg_id = MessageId::CancelCall;
+  header->msg_type = MessageType::Request;
+  header->request_id = 0;
+  std::memcpy(static_cast<std::byte*>(fb.data().data()) + sizeof(flat::Header),
+              &call_id, sizeof(call_id));
+  send_main_stream_message(std::move(fb));
+}
+
 void Session::hand_off(flat_buffer&& rx, bool wants_reply)
 {
+  const auto* header = rx.size() >= sizeof(flat::Header)
+      ? static_cast<const flat::Header*>(rx.cdata().data()) : nullptr;
+  if (header && header->msg_id == MessageId::CancelCall) {
+    on_cancel_call(rx);
+    return;
+  }
+  const uint32_t call_id =
+      header && header->msg_id == MessageId::FunctionCall ? header->request_id : 0;
+
   if (self_cell_->expired()) {
     process_handed_off(rx, wants_reply);
     return;
@@ -285,7 +364,7 @@ void Session::hand_off(flat_buffer&& rx, bool wants_reply)
   const auto target = handoff_target(rx);
   {
     std::lock_guard lock(handoff_mu_);
-    handoffs_.push_back({std::move(rx), wants_reply});
+    handoffs_.push_back({std::move(rx), wants_reply, call_id, false});
     if (handoff_draining_)
       return;
     handoff_draining_ = true;
@@ -329,6 +408,7 @@ void Session::drain_handoffs(const DispatchExecutor& running_on)
 {
   for (;;) {
     HandedOff next;
+    std::stop_source stop{std::nostopstate};
     {
       std::lock_guard lock(handoff_mu_);
       if (handoffs_.empty()) {
@@ -347,11 +427,25 @@ void Session::drain_handoffs(const DispatchExecutor& running_on)
       }
       next = std::move(handoffs_.front());
       handoffs_.pop_front();
+      running_call_id_ = next.call_id;
+      running_call_stop_ = std::stop_source{};
+      stop = running_call_stop_;
+      if (peer_gone_)
+        stop.request_stop(); // no callbacks yet: the servant hasn't started
     }
+    skip_running_call_ = next.cancelled;
+    ctx_.call.stop_token = stop.get_token();
     try {
       process_handed_off(next.rx, next.wants_reply);
     } catch (const std::exception& e) {
       NPRPC_LOG_ERROR("Handed-off message failed: {}", e.what());
+    }
+    ctx_.call = {};
+    skip_running_call_ = false;
+    {
+      std::lock_guard lock(handoff_mu_);
+      running_call_id_ = 0;
+      running_call_stop_ = std::stop_source{std::nostopstate};
     }
   }
 }
@@ -543,6 +637,11 @@ bool Session::handle_request_body(flat_buffer& rx_buffer, flat_buffer& tx_buffer
     needs_reply = false;  // Fire-and-forget
     break;
   }
+  case MessageId::CancelCall:
+    // Only on transports that don't call must_hand_off(); they run calls inline,
+    // so the call it names has already finished.
+    needs_reply = false;
+    break;
   case MessageId::FunctionCall: {
     impl::flat::CallHeader_Direct ch(rx_buffer, sizeof(impl::Header));
 
@@ -550,6 +649,11 @@ bool Session::handle_request_body(flat_buffer& rx_buffer, flat_buffer& tx_buffer
                    "interface_idx: {}, fn_idx: {}, poa_idx: {}, oid: {}]",
                    header->request_id, (uint32_t)ch.interface_idx(),
                    (uint32_t)ch.function_idx(), ch.poa_idx(), ch.object_id());
+
+    if (skip_running_call_) {
+      make_simple_answer(ctx_, MessageId::Error_Cancelled, header->request_id);
+      break;
+    }
 
     bool not_found = true;
     if (auto obj = get_object(ctx_, ch.poa_idx(), ch.object_id()); obj) {
@@ -562,6 +666,8 @@ bool Session::handle_request_body(flat_buffer& rx_buffer, flat_buffer& tx_buffer
           invoke_servant_dispatch(*real_obj, *this, [&] {
             real_obj->dispatch(ctx_, false);
           });
+        } catch (const nprpc::OperationCancelled&) {
+          make_simple_answer(ctx_, MessageId::Error_Cancelled, request_id);
         } catch (const std::exception& e) {
           NPRPC_SESSION_LOG_ERROR("Exception during dispatch: {}", e.what());
           // TODO: find out why Web client does not handle

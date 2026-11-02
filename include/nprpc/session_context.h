@@ -7,6 +7,7 @@
 #include <nprpc/export.hpp>
 #include <nprpc_base_ext.hpp>
 #include <string>
+#include <stop_token>
 #include <string_view>
 #include <vector>
 
@@ -45,6 +46,14 @@ public:
   ~ReferenceList();
 };
 
+/// The call being dispatched, as seen by a servant.
+struct CallContext {
+  /// Stops when the client cancels this call or disconnects. Only a POA with a
+  /// DispatchExecutor or NeverBlockTransport gets one that can stop: a call on
+  /// the transport thread holds up the reader that would hear about it.
+  std::stop_token stop_token;
+};
+
 /// One client connection as seen by a servant: who is calling, and the
 /// state that lives as long as the connection. Get the current one with
 /// `get_context()` inside a servant method.
@@ -74,11 +83,19 @@ struct SessionContext {
   /// Servants append to this via `nprpc::http::set_cookie()`.
   /// Ignored for all non-HTTP transports.
   std::vector<std::string> set_cookies;
+
+  /// The call being dispatched; runtime use. See `get_call_context()`.
+  CallContext call;
 };
 
 /// The session of the call being dispatched on this thread. Only valid
 /// inside a servant method; throws `Exception` elsewhere.
 NPRPC_API SessionContext& get_context();
+
+/// The call being dispatched on this thread. Only valid inside a servant method;
+/// keep a copy of the token to use it after a co_await. Throws `Exception`
+/// elsewhere.
+NPRPC_API const CallContext& get_call_context();
 
 /// Returns the io_context for the current RPC instance.
 /// Safe to call from any thread, including servant dispatch handlers.

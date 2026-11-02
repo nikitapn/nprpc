@@ -1,4 +1,6 @@
+#include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/post.hpp>
+#include <boost/asio/write.hpp>
 
 #include <future>
 #include <latch>
@@ -1231,6 +1233,151 @@ TEST_F(NprpcTest, TestCancellationInFlight)
       ADD_FAILURE() << "Unexpected exception: " << e.what();
     }
   }
+}
+
+// A cancelled call reaches the servant, on every transport that hands off.
+TEST_F(NprpcTest, CancelledCallStopsServant)
+{
+#include "common/tests/basic.inl"
+  struct PollingServant : TestBasicImpl {
+    std::promise<void> entered;
+    std::promise<bool> stopped;
+    std::atomic<int> later_calls{0};
+    uint32_t ReturnU32() override
+    {
+      entered.set_value();
+      const auto token = nprpc::get_call_context().stop_token;
+      const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      while (!token.stop_requested() && std::chrono::steady_clock::now() < give_up)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      stopped.set_value(token.stop_requested());
+      return 42;
+    }
+    bool ReturnBoolean() override
+    {
+      later_calls.fetch_add(1);
+      return true;
+    }
+  };
+
+  auto* pool_poa = rpc->create_poa()
+                       .with_max_objects(8)
+                       .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                       .with_transport_affinity(
+                           nprpc::PoaPolicy::TransportAffinity::NeverBlockTransport)
+                       .build();
+
+  const std::pair<const char*, nprpc::ObjectActivationFlags> transports[] = {
+    {"tcp", nprpc::ObjectActivationFlags::tcp},
+    {"ws", nprpc::ObjectActivationFlags::ws},
+    {"shm", nprpc::ObjectActivationFlags::shm},
+#if defined(NPRPC_HAS_QUIC) || defined(NPRPC_QUIC_ENABLED)
+    {"quic", nprpc::ObjectActivationFlags::quic},
+#endif
+  };
+  for (const auto& [name, flag] : transports) {
+    SCOPED_TRACE(name);
+    PollingServant servant;
+    auto oid = pool_poa->activate_object(&servant, flag);
+    nprpc::Object* raw = nprpc::Object::from_string(oid.to_string());
+    auto obj = nprpc::ObjectPtr(nprpc::narrow<nprpc::test::TestBasic>(raw));
+    ASSERT_TRUE(obj);
+    obj->set_timeout(10000);
+    ASSERT_TRUE(obj->select_endpoint());
+
+    auto entered = servant.entered.get_future();
+    auto stopped = servant.stopped.get_future();
+    std::stop_source running, queued;
+
+    auto running_call = std::async(std::launch::async, [&] {
+      return obj->ReturnU32Async(running.get_token()).get();
+    });
+    ASSERT_EQ(entered.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+
+    // This one waits behind the first, so cancelling it means it never starts.
+    auto queued_call = std::async(std::launch::async, [&] {
+      return obj->ReturnBooleanAsync(queued.get_token()).get();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    queued.request_stop();
+    EXPECT_THROW(queued_call.get(), nprpc::OperationCancelled);
+
+    // Give the cancel for the queued call time to arrive before the queue moves.
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    running.request_stop();
+    EXPECT_THROW(running_call.get(), nprpc::OperationCancelled);
+    ASSERT_EQ(stopped.wait_for(std::chrono::seconds(6)), std::future_status::ready);
+    EXPECT_TRUE(stopped.get()) << "the servant never saw the cancellation";
+
+    // The session is still in step, and only what was cancelled was skipped.
+    EXPECT_TRUE(obj->ReturnBooleanAsync().get());
+    EXPECT_EQ(servant.later_calls.load(), 1);
+
+    pool_poa->deactivate_object(servant.oid());
+  }
+  rpc->destroy_poa(pool_poa);
+}
+
+// A client that disconnects stops the call it left running.
+TEST_F(NprpcTest, DisconnectStopsServant)
+{
+#include "common/tests/basic.inl"
+  struct PollingServant : TestBasicImpl {
+    std::promise<void> entered;
+    std::promise<bool> stopped;
+    uint32_t ReturnU32() override
+    {
+      entered.set_value();
+      const auto token = nprpc::get_call_context().stop_token;
+      const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      while (!token.stop_requested() && std::chrono::steady_clock::now() < give_up)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      stopped.set_value(token.stop_requested());
+      return 42;
+    }
+  } servant;
+
+  auto* pool_poa = rpc->create_poa()
+                       .with_max_objects(8)
+                       .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                       .with_transport_affinity(
+                           nprpc::PoaPolicy::TransportAffinity::NeverBlockTransport)
+                       .build();
+  auto oid = pool_poa->activate_object(&servant, nprpc::ObjectActivationFlags::tcp);
+  nprpc::Object* raw = nprpc::Object::from_string(oid.to_string());
+  auto obj = nprpc::ObjectPtr(nprpc::narrow<nprpc::test::TestBasic>(raw));
+  ASSERT_TRUE(obj);
+  ASSERT_TRUE(obj->select_endpoint());
+  const auto port = obj->get_endpoint().port();
+
+  // A connection of its own, so closing it leaves the runtime's sessions alone.
+  constexpr size_t total = sizeof(nprpc::impl::flat::Header) + sizeof(nprpc::impl::flat::CallHeader);
+  std::vector<std::byte> frame(total);
+  auto* header = reinterpret_cast<nprpc::impl::flat::Header*>(frame.data());
+  header->size = total;
+  header->msg_id = nprpc::impl::MessageId::FunctionCall;
+  header->msg_type = nprpc::impl::MessageType::Request;
+  header->request_id = 7;
+  auto* call = reinterpret_cast<nprpc::impl::flat::CallHeader*>(frame.data() + sizeof(*header));
+  call->poa_idx = obj->poa_idx();
+  call->interface_idx = 0;
+  call->function_idx = 2; // ReturnU32
+  call->object_id = obj->object_id();
+
+  boost::asio::io_context io;
+  boost::asio::ip::tcp::socket socket(io);
+  socket.connect(boost::asio::ip::tcp::endpoint(boost::asio::ip::make_address("127.0.0.1"), port));
+  boost::asio::write(socket, boost::asio::buffer(frame.data(), frame.size()));
+
+  auto entered = servant.entered.get_future();
+  auto stopped = servant.stopped.get_future();
+  ASSERT_EQ(entered.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+  socket.close();
+  ASSERT_EQ(stopped.wait_for(std::chrono::seconds(6)), std::future_status::ready);
+  EXPECT_TRUE(stopped.get());
+
+  pool_poa->deactivate_object(servant.oid());
+  rpc->destroy_poa(pool_poa);
 }
 
 } // namespace nprpctest
