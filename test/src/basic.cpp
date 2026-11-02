@@ -1664,6 +1664,70 @@ TEST_F(NprpcTest, CoroutineMethodKeepsExecutor)
   worker.join();
 }
 
+// A reply too big for the ring fails the call at once, rather than timing it out.
+TEST_F(NprpcTest, SharedMemoryReplyOverLimitFailsTheCall)
+{
+  constexpr size_t over_limit = 13 * 1024 * 1024; // the fixture's rings allow 12 MiB
+
+  struct LargeReplies : CoroutineServant {
+    nprpc::Task<std::string> Echo(std::stop_token, ::nprpc::flat::Span<char>) override
+    {
+      co_return std::string(over_limit, 'x');
+    }
+  };
+
+  auto* poa = rpc->create_poa()
+                  .with_max_objects(4)
+                  .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                  .build();
+  LargeReplies servant;
+  auto obj = resolve_coroutine(poa, servant, nprpc::ObjectActivationFlags::shm);
+  obj->set_timeout(30'000);
+
+  const auto started = std::chrono::steady_clock::now();
+  EXPECT_THROW(obj->Echo("anything"), nprpc::ExceptionCommFailure);
+  EXPECT_THROW(obj->EchoAsync("anything").get(), nprpc::ExceptionCommFailure);
+  EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(10));
+
+  // The session is still usable.
+  EXPECT_EQ(obj->Quick(), 5u);
+
+  poa->deactivate_object(servant.oid());
+  rpc->destroy_poa(poa);
+}
+
+TEST_F(NprpcTest, SharedMemoryPlainReplyOverLimitFailsTheCall)
+{
+#include "common/tests/large_message.inl"
+  struct LargeReplies : TestLargeMessage {
+    void Out(uint32_t& a, ::nprpc::flat::Boolean& b,
+             ::nprpc::flat::Vector_Direct1<uint8_t> c) override
+    {
+      a = 42;
+      b = true;
+      c.length(13 * 1024 * 1024); // the fixture's rings allow 12 MiB
+    }
+  };
+
+  LargeReplies servant;
+  auto obj = bind_and_resolve<nprpc::test::TestLargeMessage>(
+      servant, nprpc::ObjectActivationFlags::shm);
+  obj->set_timeout(30'000);
+
+  const auto started = std::chrono::steady_clock::now();
+  uint32_t a;
+  bool b;
+  std::vector<uint8_t> received;
+  EXPECT_THROW(obj->Out(a, b, received), nprpc::ExceptionCommFailure);
+  EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(10));
+
+  // The session is still usable.
+  std::vector<uint8_t> data(3 * 1024 * 1024);
+  data.front() = 0xAB;
+  data.back() = 0xCD;
+  EXPECT_TRUE(obj->In_(42, true, nprpc::flat::make_read_only_span(data)));
+}
+
 // A client that disconnects stops the call it left running.
 TEST_F(NprpcTest, DisconnectStopsServant)
 {

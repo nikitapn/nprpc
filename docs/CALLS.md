@@ -234,3 +234,11 @@ some may be one-way. A method on the default POA runs to the end.
 Handoff and `[coroutine]` work over TCP, WebSocket, WebTransport, QUIC and shared
 memory. HTTP RPC and the raw `use_epoll_tcp` and `use_uring_tcp` servers keep their
 thread until the method finishes, so a call on them can't be cancelled while it runs.
+
+## Large messages over shared memory
+
+Each RPC message has to fit in one ring entry, 512 KiB by default. A reply over the
+limit fails the call straight away with `ExceptionCommFailure`, and the server logs
+the sizes. So does a reply that still can't get into a full ring after 100 ms. For
+anything large, use a stream or pass a file descriptor, or raise the limit with
+`RpcBuilder::shm_channel_sizes`.

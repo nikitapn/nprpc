@@ -319,6 +319,17 @@ SharedMemoryChannel::reserve_write(size_t max_size)
   return send_ring_->try_reserve_write(max_size);
 }
 
+LockFreeRingBuffer::WriteReservation
+SharedMemoryChannel::reserve_write_waiting(size_t max_size,
+                                           std::chrono::milliseconds timeout,
+                                           const std::atomic<bool>& give_up)
+{
+  if (!send_ring_) {
+    return LockFreeRingBuffer::WriteReservation{nullptr, 0, 0, false};
+  }
+  return send_ring_->reserve_write_waiting(max_size, timeout, give_up);
+}
+
 void SharedMemoryChannel::commit_write(
     const LockFreeRingBuffer::WriteReservation& reservation, size_t actual_size)
 {

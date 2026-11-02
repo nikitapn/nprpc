@@ -98,8 +98,14 @@ protected:
   // anything that does is logged and the message dropped.
   virtual void process_handed_off(nprpc::flat_buffer& rx, bool wants_reply);
 
+  // Sends the reply to a `[coroutine]` call, from any thread.
+  virtual void send_deferred_reply(flat_buffer&& reply)
+  {
+    send_main_stream_message(std::move(reply));
+  }
+
   // Whether this transport can send a reply after handle_request returns, from
-  // any thread, through send_main_stream_message. Otherwise it waits for a
+  // any thread, through send_deferred_reply. Otherwise it waits for a
   // `[coroutine]` call to finish, holding its thread.
   virtual bool supports_deferred_replies() const noexcept { return false; }
 

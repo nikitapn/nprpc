@@ -213,6 +213,15 @@ public:
   LockFreeRingBuffer::WriteReservation reserve_write(size_t max_size);
 
   /**
+   * reserve_write, waiting up to `timeout` for the peer to make room, or until
+   * `give_up` is set.
+   */
+  LockFreeRingBuffer::WriteReservation
+  reserve_write_waiting(size_t max_size,
+                        std::chrono::milliseconds timeout,
+                        const std::atomic<bool>& give_up);
+
+  /**
    * @brief Commit a zero-copy write with actual bytes written
    */
   void commit_write(const LockFreeRingBuffer::WriteReservation& reservation,

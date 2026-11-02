@@ -338,6 +338,12 @@ public:
   // space), or invalid if no space
   WriteReservation try_reserve_write(size_t min_size);
 
+  // try_reserve_write, waiting up to `timeout` for the reader to make room.
+  // Gives up early once `give_up` is set. Nothing wakes a writer, so this polls.
+  WriteReservation reserve_write_waiting(size_t min_size,
+                                         std::chrono::milliseconds timeout,
+                                         const std::atomic<bool>& give_up);
+
   // Commit a reserved write with the actual size written
   // Must be called after try_reserve_write() with the actual bytes written.
   // actual_size == 0 is treated as abort_write() (the consumer would

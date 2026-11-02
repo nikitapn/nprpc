@@ -471,7 +471,7 @@ void DeferredCall::finish()
   }
 
   if (session_->supports_deferred_replies())
-    session_->send_main_stream_message(std::move(tx));
+    session_->send_deferred_reply(std::move(tx));
   else
     done_.release();
 }
