@@ -79,6 +79,7 @@ template <class Derived> class WebSocketSession : public Session
   void on_read(beast::error_code ec, std::size_t bytes_transferred);
   void on_write(beast::error_code ec, std::size_t bytes_transferred);
   void do_write();
+  void process_handed_off(flat_buffer& rx, bool wants_reply) override;
 
   uint32_t generate_request_id() { return next_request_id_.fetch_add(1); }
 

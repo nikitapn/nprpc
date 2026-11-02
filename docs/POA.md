@@ -133,7 +133,19 @@ should run elsewhere, so the transport keeps serving other calls.
 | C++ `with_dispatch_executor(ex)` | Wherever `ex.post` schedules work | Your own executor |
 
 With any of the non-default options, the transport hands the call off and
-immediately moves on. The method and its reply both run on the target.
+immediately moves on. The method and its reply both run on the target. This
+holds for TCP, WebSocket, WebTransport, QUIC and shared memory, with two
+exceptions: HTTP RPC, and the raw `use_epoll_tcp` and `use_uring_tcp` servers.
+Those keep their thread until the method returns, and run a
+`NeverBlockTransport` method on it.
+
+One session still runs one message at a time. While a handed-off call is
+running, later messages from that client wait behind it, whichever POA they are
+for, so a client sees its calls complete in order. Other clients aren't affected.
+
+The runtime's thread pool also runs the transports' I/O, so size
+`start_thread_pool` for the number of methods you expect to block at once, plus
+some to spare.
 
 ### C++
 

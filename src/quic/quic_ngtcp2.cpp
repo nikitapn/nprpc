@@ -685,26 +685,37 @@ public:
   // Called from QuicNgtcp2ServerConn on its strand
   void dispatch_request(flat_buffer& frame)
   {
-    const uint32_t rid = extract_request_id(frame);
     if (frame.size() >= sizeof(impl::flat::Header) + sizeof(uint64_t) &&
         impl::flat::Header_Direct(frame, 0).msg_id() == MessageId::StreamCancellation) {
       uint64_t stream_id = 0;
       std::memcpy(&stream_id, frame.data_ptr() + sizeof(impl::flat::Header), sizeof(stream_id));
       if (auto conn = conn_.lock()) conn->cancel_data_stream(stream_id);
     }
-    flat_buffer tx;
-    if (measured_dispatch(monitor::Transport::Quic, frame, tx,
-                         [&] { return handle_request(frame, tx); }) && tx.size() > 0) {
-      inject_request_id(tx, rid);
-      if (auto conn = conn_.lock()) conn->enqueue_response(std::move(tx));
-    }
+    if (must_hand_off(frame))
+      hand_off(std::move(frame));
+    else
+      process_handed_off(frame, true);
   }
 
   // A datagram gets no reply, whatever the servant leaves behind.
   void dispatch_datagram(flat_buffer& frame)
   {
+    if (must_hand_off(frame))
+      hand_off(std::move(frame), false);
+    else
+      process_handed_off(frame, false);
+  }
+
+  void process_handed_off(flat_buffer& frame, bool wants_reply) override
+  {
+    const uint32_t rid = extract_request_id(frame);
     flat_buffer tx;
-    handle_request(frame, tx);
+    if (measured_dispatch(monitor::Transport::Quic, frame, tx,
+                         [&] { return handle_request(frame, tx); }) &&
+        wants_reply && tx.size() > 0) {
+      inject_request_id(tx, rid);
+      if (auto conn = conn_.lock()) conn->enqueue_response(std::move(tx));
+    }
   }
 
   void timeout_action() override {}

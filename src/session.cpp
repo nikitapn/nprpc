@@ -1,7 +1,11 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include <boost/asio/post.hpp>
+
 #include <coroutine>
+#include <cstddef>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <stop_token>
@@ -193,6 +197,163 @@ void invoke_servant_dispatch(ObjectServant& servant,
     }
     reset_context();
   });
+}
+
+namespace {
+
+// Where a message is addressed, without dispatching it. Unknown or too-short
+// messages give nullptr; handle_request reports those.
+Poa* peek_target_poa(const flat_buffer& rx)
+{
+  if (rx.size() < sizeof(flat::Header) || !g_rpc)
+    return nullptr;
+
+  const auto* data = static_cast<const std::byte*>(rx.cdata().data());
+  size_t poa_idx_offset = 0;
+  switch (reinterpret_cast<const flat::Header*>(data)->msg_id) {
+  case MessageId::FunctionCall:
+    if (rx.size() < sizeof(flat::Header) + sizeof(flat::CallHeader))
+      return nullptr;
+    poa_idx_offset = sizeof(flat::Header) + offsetof(flat::CallHeader, poa_idx);
+    break;
+  case MessageId::StreamInitialization:
+    poa_idx_offset = sizeof(flat::Header) + sizeof(uint64_t); // after stream_id
+    break;
+  case MessageId::AddReference:
+  case MessageId::ReleaseObject:
+    poa_idx_offset = sizeof(flat::Header);
+    break;
+  default:
+    return nullptr;
+  }
+  uint16_t poa_idx = 0;
+  if (rx.size() < poa_idx_offset + sizeof(poa_idx))
+    return nullptr;
+  std::memcpy(&poa_idx, data + poa_idx_offset, sizeof(poa_idx));
+  auto poa = g_rpc->get_poa(poa_idx);
+  return poa ? *poa : nullptr;
+}
+
+// The executor a drain should run on for this message. Empty means the runtime's
+// thread pool. Without is_running_on, invoke_sync could not tell it is already
+// on the executor and would wait for itself, so such an executor is reached
+// from the pool, by post+wait.
+DispatchExecutor handoff_target(const flat_buffer& rx)
+{
+  if (auto* poa = peek_target_poa(rx)) {
+    const auto& ex = poa->dispatch_executor();
+    if (ex && ex.is_running_on)
+      return ex;
+  }
+  return {};
+}
+
+bool same_executor(const DispatchExecutor& a, const DispatchExecutor& b) noexcept
+{
+  return a.post == b.post && a.ctx == b.ctx;
+}
+
+} // namespace
+
+struct Session::HandoffKick {
+  std::shared_ptr<Session> session;
+  DispatchExecutor running_on;
+};
+
+void Session::run_handoff_kick(void* p)
+{
+  std::unique_ptr<HandoffKick> kick(static_cast<HandoffKick*>(p));
+  kick->session->drain_handoffs(kick->running_on);
+}
+
+bool Session::must_hand_off(const flat_buffer& rx)
+{
+  if (auto* poa = peek_target_poa(rx); poa && poa->requires_off_transport_dispatch())
+    return true;
+  std::lock_guard lock(handoff_mu_);
+  return handoff_draining_;
+}
+
+void Session::hand_off(flat_buffer&& rx, bool wants_reply)
+{
+  if (self_cell_->expired()) {
+    process_handed_off(rx, wants_reply);
+    return;
+  }
+
+  // Worked out before rx moves. Only used if this message starts a drain.
+  const auto target = handoff_target(rx);
+  {
+    std::lock_guard lock(handoff_mu_);
+    handoffs_.push_back({std::move(rx), wants_reply});
+    if (handoff_draining_)
+      return;
+    handoff_draining_ = true;
+  }
+  kick_handoffs(target);
+}
+
+void Session::clear_handoffs()
+{
+  std::lock_guard lock(handoff_mu_);
+  handoffs_.clear();
+}
+
+void Session::kick_handoffs(const DispatchExecutor& target)
+{
+  auto self = self_cell_->lock();
+  if (!self) {
+    // The session is going away, and with it whoever was waiting on these.
+    std::lock_guard lock(handoff_mu_);
+    handoffs_.clear();
+    handoff_draining_ = false;
+    return;
+  }
+  if (target) {
+    target.post(target.ctx, &Session::run_handoff_kick,
+                new HandoffKick{std::move(self), target});
+  } else {
+    boost::asio::post(get_io_context(), [self = std::move(self)] {
+      self->drain_handoffs({});
+    });
+  }
+}
+
+void Session::process_handed_off(flat_buffer& rx, bool)
+{
+  flat_buffer tx;
+  handle_request(rx, tx);
+}
+
+void Session::drain_handoffs(const DispatchExecutor& running_on)
+{
+  for (;;) {
+    HandedOff next;
+    {
+      std::lock_guard lock(handoff_mu_);
+      if (handoffs_.empty()) {
+        handoff_draining_ = false;
+        return;
+      }
+      // A message for another executor moves the drain there, so a POA's
+      // servants don't run on, or block, some other POA's thread. Pool-bound
+      // messages (including stream frames) stay wherever the drain is.
+      const auto target = handoff_target(handoffs_.front().rx);
+      if (target && !same_executor(target, running_on)) {
+        // handoff_draining_ stays set: the new drain takes over.
+        target.post(target.ctx, &Session::run_handoff_kick,
+                    new HandoffKick{self_cell_->lock(), target});
+        return;
+      }
+      next = std::move(handoffs_.front());
+      handoffs_.pop_front();
+    }
+    try {
+      process_handed_off(next.rx, next.wants_reply);
+    } catch (const std::exception& e) {
+      NPRPC_LOG_ERROR("Handed-off message failed: {}", e.what());
+    }
+  }
 }
 
 Session::Session(boost::asio::any_io_executor executor)

@@ -92,6 +92,12 @@ void WebSocketSession<Derived>::on_read(
       return;
     }
 
+    if (must_hand_off(rx_buffer_)) {
+      hand_off(std::move(rx_buffer_));
+      do_read();
+      return;
+    }
+
     // Handle incoming request.
     // Pre-size tx_buffer based on the last response we sent — after warm-up
     // this eliminates repeated doubling realloc/memcpy for large responses.
@@ -130,6 +136,25 @@ void WebSocketSession<Derived>::on_read(
 
   // Continue reading immediately - this is the key difference!
   do_read();
+}
+
+template <class Derived>
+void WebSocketSession<Derived>::process_handed_off(flat_buffer& rx, bool wants_reply)
+{
+  const uint32_t request_id = extract_request_id(rx);
+  flat_buffer tx{flat_buffer::default_initial_size()};
+  const bool needs_reply = measured_dispatch(monitor::Transport::WebSocket, rx, tx,
+      [&] { return handle_request(rx, tx); });
+  if (!needs_reply || !wants_reply)
+    return;
+
+  inject_request_id(tx, request_id);
+  boost::asio::post(
+      derived().ws().get_executor(),
+      [this, self = derived().shared_from_this(), tx = std::move(tx)]() mutable {
+        write_queue_.emplace_back(std::move(tx), nullptr);
+        do_write();
+      });
 }
 
 template <class Derived> void WebSocketSession<Derived>::do_write()

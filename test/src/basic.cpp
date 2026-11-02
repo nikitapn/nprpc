@@ -1,3 +1,7 @@
+#include <boost/asio/post.hpp>
+
+#include <future>
+#include <latch>
 #ifdef NPRPC_QUIC_ENABLED
 #include <future>
 #include <nprpc/impl/quic_transport.hpp>
@@ -658,6 +662,242 @@ TEST_F(NprpcTest, PoaDispatchExecutor)
   }
   qctx.cv.notify_one();
   worker.join();
+}
+
+// A POA that asks for it runs off the transport thread on every transport: a
+// servant stuck on its executor doesn't take an I/O thread with it.
+TEST_F(NprpcTest, HandedOffCallLeavesTransportFree)
+{
+#include "common/tests/basic.inl"
+
+  struct Target {
+    nprpc::EndPointType type;
+    nprpc::EndPointType probe;
+  };
+  std::vector<Target> targets = {
+    {nprpc::EndPointType::Tcp, nprpc::EndPointType::WebSocket},
+    {nprpc::EndPointType::WebSocket, nprpc::EndPointType::Tcp},
+    {nprpc::EndPointType::SharedMemory, nprpc::EndPointType::Tcp},
+#if defined(NPRPC_HAS_QUIC) || defined(NPRPC_QUIC_ENABLED)
+    {nprpc::EndPointType::Quic, nprpc::EndPointType::Tcp},
+#endif
+  };
+  const auto flags = nprpc::ObjectActivationFlags::tcp |
+                     nprpc::ObjectActivationFlags::ws |
+                     nprpc::ObjectActivationFlags::shm
+#if defined(NPRPC_HAS_QUIC) || defined(NPRPC_QUIC_ENABLED)
+                     | nprpc::ObjectActivationFlags::quic
+#endif
+      ;
+
+  struct Queue {
+    std::mutex m;
+    std::condition_variable cv;
+    std::deque<std::function<void()>> jobs;
+    bool stop = false;
+    std::atomic<std::thread::id> worker_id{};
+  } queue;
+  std::thread worker([&] {
+    queue.worker_id = std::this_thread::get_id();
+    std::unique_lock lk(queue.m);
+    for (;;) {
+      queue.cv.wait(lk, [&] { return queue.stop || !queue.jobs.empty(); });
+      if (queue.jobs.empty())
+        return;
+      auto job = std::move(queue.jobs.front());
+      queue.jobs.pop_front();
+      lk.unlock();
+      job();
+      lk.lock();
+    }
+  });
+  while (queue.worker_id.load() == std::thread::id{})
+    std::this_thread::yield();
+
+  nprpc::DispatchExecutor ex;
+  ex.ctx = &queue;
+  ex.post = [](void* c, void (*fn)(void*), void* arg) {
+    auto* q = static_cast<Queue*>(c);
+    {
+      std::lock_guard lk(q->m);
+      q->jobs.push_back([fn, arg] { fn(arg); });
+    }
+    q->cv.notify_one();
+  };
+  ex.is_running_on = [](void* c) {
+    return std::this_thread::get_id() == static_cast<Queue*>(c)->worker_id.load();
+  };
+  auto* stuck_poa = rpc->create_poa()
+                        .with_max_objects(8)
+                        .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                        .with_dispatch_executor(ex)
+                        .build();
+
+  class StuckServant : public TestBasicImpl {
+  public:
+    std::promise<std::thread::id> entered;
+    std::shared_future<void> release;
+    uint32_t ReturnU32() override
+    {
+      entered.set_value(std::this_thread::get_id());
+      release.wait();
+      return 42;
+    }
+  };
+
+  auto resolve = [&](nprpc::Poa* p, nprpc::ObjectServant& servant, const char* name,
+                     nprpc::EndPointType type) {
+    auto oid = p->activate_object(&servant, flags);
+    auto nameserver = rpc->get_nameserver("127.0.0.1");
+    nameserver->Bind(oid, name);
+    nprpc::Object* raw = nullptr;
+    EXPECT_TRUE(nameserver->Resolve(name, raw));
+    auto obj = nprpc::ObjectPtr(nprpc::narrow<nprpc::test::TestBasic>(raw));
+    obj->set_preferred_transport(type);
+    EXPECT_TRUE(obj->select_endpoint());
+    EXPECT_EQ(obj->get_endpoint().type(), type);
+    return obj;
+  };
+
+  for (const auto& target : targets) {
+    SCOPED_TRACE(static_cast<int>(target.type));
+    StuckServant stuck;
+    TestBasicImpl plain;
+    std::promise<void> release;
+    stuck.release = release.get_future().share();
+    auto entered = stuck.entered.get_future();
+
+    auto stuck_obj = resolve(stuck_poa, stuck, "nprpc_handoff_stuck", target.type);
+    auto probe_obj = resolve(poa, plain, "nprpc_handoff_probe", target.probe);
+    ASSERT_EQ(probe_obj->ReturnU32(), 42u); // connects before the pool shrinks
+
+    // Leave the shared I/O pool (4 threads) a single thread. A reader blocked
+    // on the stuck servant would then starve the probe.
+    std::promise<void> free_pool;
+    auto pool_freed = free_pool.get_future().share();
+    std::latch occupied{3};
+    for (int i = 0; i < 3; ++i) {
+      boost::asio::post(nprpc::get_io_context(), [&occupied, pool_freed] {
+        occupied.count_down();
+        pool_freed.wait();
+      });
+    }
+    occupied.wait();
+
+    auto stuck_call = std::async(std::launch::async, [&] { return stuck_obj->ReturnU32(); });
+    ASSERT_EQ(entered.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_EQ(entered.get(), queue.worker_id.load());
+
+    auto probe_call = std::async(std::launch::async, [&] { return probe_obj->ReturnU32(); });
+    const auto probe_status = probe_call.wait_for(std::chrono::seconds(3));
+    EXPECT_EQ(probe_status, std::future_status::ready)
+        << "the stuck servant is holding an I/O thread";
+
+    free_pool.set_value();
+    release.set_value();
+    EXPECT_EQ(stuck_call.get(), 42u);
+    EXPECT_EQ(probe_call.get(), 42u);
+
+    stuck_poa->deactivate_object(stuck.oid());
+    poa->deactivate_object(plain.oid());
+  }
+
+  rpc->destroy_poa(stuck_poa);
+  {
+    std::lock_guard lk(queue.m);
+    queue.stop = true;
+  }
+  queue.cv.notify_one();
+  worker.join();
+}
+
+// NeverBlockTransport on every transport: calls from many client threads, mixed
+// with calls to a default POA over the same session, run one at a time and each
+// get their own reply.
+TEST_F(NprpcTest, HandedOffCallsStaySerial)
+{
+#include "common/tests/basic.inl"
+
+  std::vector<nprpc::EndPointType> transports = {
+    nprpc::EndPointType::Tcp,
+    nprpc::EndPointType::WebSocket,
+    nprpc::EndPointType::SharedMemory,
+#if defined(NPRPC_HAS_QUIC) || defined(NPRPC_QUIC_ENABLED)
+    nprpc::EndPointType::Quic,
+#endif
+  };
+  const auto flags = nprpc::ObjectActivationFlags::tcp |
+                     nprpc::ObjectActivationFlags::ws |
+                     nprpc::ObjectActivationFlags::shm
+#if defined(NPRPC_HAS_QUIC) || defined(NPRPC_QUIC_ENABLED)
+                     | nprpc::ObjectActivationFlags::quic
+#endif
+      ;
+
+  auto* pool_poa = rpc->create_poa()
+                       .with_max_objects(8)
+                       .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                       .with_transport_affinity(
+                           nprpc::PoaPolicy::TransportAffinity::NeverBlockTransport)
+                       .build();
+
+  class CountingServant : public TestBasicImpl {
+  public:
+    std::atomic<int>* running;
+    std::atomic<int>* overlaps;
+    uint32_t ReturnU32() override
+    {
+      if (running->fetch_add(1) != 0)
+        overlaps->fetch_add(1);
+      std::this_thread::sleep_for(std::chrono::microseconds(50));
+      running->fetch_sub(1);
+      return 42;
+    }
+  };
+
+  for (auto type : transports) {
+    SCOPED_TRACE(static_cast<int>(type));
+    std::atomic<int> running{0}, overlaps{0};
+    CountingServant pooled, inlined;
+    pooled.running = inlined.running = &running;
+    pooled.overlaps = inlined.overlaps = &overlaps;
+
+    auto resolve = [&](nprpc::Poa* p, nprpc::ObjectServant& servant, const char* name) {
+      auto oid = p->activate_object(&servant, flags);
+      auto nameserver = rpc->get_nameserver("127.0.0.1");
+      nameserver->Bind(oid, name);
+      nprpc::Object* raw = nullptr;
+      EXPECT_TRUE(nameserver->Resolve(name, raw));
+      auto obj = nprpc::ObjectPtr(nprpc::narrow<nprpc::test::TestBasic>(raw));
+      obj->set_preferred_transport(type);
+      EXPECT_TRUE(obj->select_endpoint());
+      return obj;
+    };
+    auto pooled_obj = resolve(pool_poa, pooled, "nprpc_handoff_pooled");
+    auto inlined_obj = resolve(poa, inlined, "nprpc_handoff_inlined");
+
+    std::atomic<int> wrong{0};
+    std::vector<std::thread> callers;
+    for (int t = 0; t < 4; ++t) {
+      callers.emplace_back([&, t] {
+        for (int i = 0; i < 100; ++i) {
+          auto& obj = (i + t) % 2 ? pooled_obj : inlined_obj;
+          if (obj->ReturnU32() != 42u)
+            wrong.fetch_add(1);
+        }
+      });
+    }
+    for (auto& caller : callers)
+      caller.join();
+
+    EXPECT_EQ(wrong.load(), 0);
+    EXPECT_EQ(overlaps.load(), 0);
+
+    pool_poa->deactivate_object(pooled.oid());
+    poa->deactivate_object(inlined.oid());
+  }
+
+  rpc->destroy_poa(pool_poa);
 }
 
 // Bad input validation test

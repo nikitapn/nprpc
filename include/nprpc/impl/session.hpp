@@ -9,7 +9,9 @@
 #include <boost/system/error_code.hpp>
 
 #include <chrono>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <stop_token>
 
 #include <nprpc/basic.hpp>
@@ -18,6 +20,10 @@
 #include <nprpc/session_context.h>
 #include <nprpc/task.hpp>
 #include <nprpc/result.hpp>
+
+namespace nprpc {
+struct DispatchExecutor;
+}
 
 namespace nprpc::impl {
 
@@ -63,6 +69,31 @@ protected:
   // Shared implementation for handle_request / handle_request_async.
   bool handle_request_body(nprpc::flat_buffer& rx_buffer,
                            nprpc::flat_buffer& tx_buffer);
+
+  // ---- Handing calls off the transport thread ------------------------------
+  //
+  // A POA with a DispatchExecutor or NeverBlockTransport must not hold up the
+  // transport, so its messages run from a per-session FIFO instead, and the
+  // reader goes straight back to reading. A session still runs one message at
+  // a time: everything that arrives while the queue is busy joins it, which
+  // keeps ctx_ to one user and calls in order.
+  //
+  //   if (must_hand_off(rx)) hand_off(std::move(rx));
+  //   else process_handed_off(rx, true);
+
+  // Call on the reader, before dispatching rx.
+  bool must_hand_off(const nprpc::flat_buffer& rx);
+  // Needs bind_self(); an unbound session runs the message here instead.
+  void hand_off(nprpc::flat_buffer&& rx, bool wants_reply = true);
+  // Forgets the queued messages. The one already running finishes.
+  void clear_handoffs();
+
+  // Runs one message and sends its reply. Handed-off messages get here on the
+  // executor, so sending must be safe away from the transport's own thread. A
+  // message with wants_reply false never gets a reply, whatever the servant
+  // leaves behind. Must not throw past the transport's own error handling;
+  // anything that does is logged and the message dropped.
+  virtual void process_handed_off(nprpc::flat_buffer& rx, bool wants_reply);
 
 public:
   // Throwing API used by generated stubs: ExceptionTimeout if no reply came in
@@ -222,6 +253,23 @@ public:
   // and must not throw. The response is borrowed for the duration of the call.
   [[nodiscard]] NPRPC_API Result<void> send_receive_async_result(
       flat_buffer&& buffer, ResultHandler handler, uint32_t timeout_ms) noexcept;
+
+private:
+  struct HandedOff {
+    nprpc::flat_buffer rx;
+    bool wants_reply;
+  };
+  struct HandoffKick;
+  static void run_handoff_kick(void* kick);
+
+  void kick_handoffs(const DispatchExecutor& target);
+  void drain_handoffs(const DispatchExecutor& running_on);
+
+  std::mutex handoff_mu_;
+  std::deque<HandedOff> handoffs_;
+  // A drain is scheduled or running. It stays set until the drain sees an empty
+  // queue, so the message it is running still counts as "busy".
+  bool handoff_draining_ = false;
 
 protected:
   // The blocking call each client transport implements. It may still throw
