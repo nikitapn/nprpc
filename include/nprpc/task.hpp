@@ -118,8 +118,27 @@ template<typename A>
 concept HasAwaitMembers = requires(A& a) { a.await_ready(); };
 
 template<typename A>
+concept HasMemberCoAwait = requires(A&& a) { std::forward<A>(a).operator co_await(); };
+
+template<typename A>
+concept HasFreeCoAwait = requires(A&& a) { operator co_await(std::forward<A>(a)); };
+
+template<typename A>
+concept HasCoAwait = HasMemberCoAwait<A> || HasFreeCoAwait<A>;
+
+// What the language would await for a type with operator co_await.
+template<HasCoAwait A>
+decltype(auto) get_awaiter(A&& awaitable) {
+  if constexpr (HasMemberCoAwait<A>)
+    return std::forward<A>(awaitable).operator co_await();
+  else
+    return operator co_await(std::forward<A>(awaitable));
+}
+
+// Aw is a reference to an awaiter that outlives this one, or an awaiter it owns.
+template<typename Aw>
 struct ResumingAwaiter {
-  A&& awaitable;
+  Aw awaitable;
   const std::shared_ptr<const ResumeTarget>& target;
 
   bool await_ready() { return awaitable.await_ready(); }
@@ -150,13 +169,15 @@ template<typename T>
 struct TaskPromiseBase {
   std::shared_ptr<const ResumeTarget> resume_target = current_resume_target();
 
-  template<HasAwaitMembers A>
-  ResumingAwaiter<A> await_transform(A&& awaitable) noexcept {
+  template<HasCoAwait A>
+  auto await_transform(A&& awaitable) {
+    using Awaiter = decltype(get_awaiter(std::forward<A>(awaitable)));
+    return ResumingAwaiter<Awaiter>{get_awaiter(std::forward<A>(awaitable)), resume_target};
+  }
+  template<HasAwaitMembers A> requires (!HasCoAwait<A>)
+  ResumingAwaiter<A&&> await_transform(A&& awaitable) noexcept {
     return {std::forward<A>(awaitable), resume_target};
   }
-  // Awaitables with operator co_await keep their own resume rules.
-  template<typename A> requires (!HasAwaitMembers<A>)
-  A&& await_transform(A&& awaitable) noexcept { return std::forward<A>(awaitable); }
 
   TaskResult<T>           result;
   // Who is waiting. A task starts eagerly, so it can finish on another thread

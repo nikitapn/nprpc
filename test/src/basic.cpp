@@ -1432,6 +1432,22 @@ public:
   void await_resume() noexcept {}
 };
 
+// The same wait, reached through each form of operator co_await.
+struct GateWaiter {
+  Gate& gate;
+  bool await_ready() noexcept { return gate.await_ready(); }
+  bool await_suspend(std::coroutine_handle<> h) { return gate.await_suspend(h); }
+  void await_resume() noexcept {}
+};
+struct MemberCoAwait {
+  Gate& gate;
+  GateWaiter operator co_await() { return {gate}; }
+};
+struct FreeCoAwait {
+  Gate& gate;
+};
+Gate& operator co_await(FreeCoAwait&& awaitable) { return awaitable.gate; }
+
 class CoroutineServant : public nprpc::test::ITestCoroutine_Servant
 {
 public:
@@ -1462,7 +1478,13 @@ public:
   nprpc::Task<std::string> Echo(std::stop_token, ::nprpc::flat::Span<char> text) override
   {
     // Still readable after the session has moved on.
-    co_await *gate;
+    const auto waiting_on = gate;
+    if (std::string_view(text) == "member")
+      co_await MemberCoAwait{*waiting_on};
+    else if (std::string_view(text) == "free")
+      co_await FreeCoAwait{*waiting_on};
+    else
+      co_await *waiting_on;
     check_thread();
     co_return std::string((std::string_view)text);
   }
@@ -1617,13 +1639,17 @@ TEST_F(NprpcTest, CoroutineMethodKeepsExecutor)
     for (int i = 0; i < 20; ++i)
       EXPECT_EQ(obj->Add(1, 2), 8u);
 
-    auto echo = std::async(std::launch::async, [&] { return obj->Echo("after a wait"); });
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    std::thread opener([&] { servant.gate->open(); }); // not the executor
-    EXPECT_EQ(echo.get(), "after a wait");
-    opener.join();
-
-    EXPECT_EQ(servant.resumed_on_wrong_thread.load(), 0);
+    for (const std::string text : {"after a wait", "member", "free"}) {
+      SCOPED_TRACE(text);
+      servant.resumed_on_wrong_thread = 0;
+      servant.gate = std::make_shared<Gate>();
+      auto echo = std::async(std::launch::async, [&] { return obj->Echo(text); });
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      std::thread opener([gate = servant.gate] { gate->open(); }); // not the executor
+      EXPECT_EQ(echo.get(), text);
+      opener.join();
+      EXPECT_EQ(servant.resumed_on_wrong_thread.load(), 0);
+    }
 
     exec_poa->deactivate_object(servant.oid());
     poa->deactivate_object(inner.oid());
