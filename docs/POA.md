@@ -168,7 +168,8 @@ override func build() throws -> [Row] {
 
 A cancelled call that hasn't started yet is skipped. A client that disconnects
 stops the running call, but its queued calls still run, with their tokens already
-stopped, because some may be one-way.
+stopped, because some may be one-way. [CALLS.md](CALLS.md) shows how each client and
+servant style behaves when a call is cancelled.
 
 ### Methods that wait on something else
 
