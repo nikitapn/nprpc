@@ -33,6 +33,8 @@ class SharedMemoryConnection
 
   std::atomic<bool> server_dead_{false};
 
+  void discard_reservation(flat_buffer& buffer);
+
   // Queue a call that's about to be committed.  Must be called with mutex_ held.
   void enqueue(std::shared_ptr<IOWork> w);
 

@@ -1369,5 +1369,42 @@ describe('NPRPC Integration Tests', function() {
             cancellable.timeout = 1000;
             expect(await cancellable.Quick()).to.equal(stopsBefore);
         });
+
+        it('should report why a call was refused with ExceptionCommFailure', async function() {
+            const cancellable = await resolveTestObject('nprpc_test_cancellable', test.TestCoroutine);
+            cancellable.timeout = 10000;
+            const stopsBefore = await cancellable.Quick();
+
+            // A session runs at most 1024 at once, so the last of these are refused.
+            const controller = new AbortController();
+            const refused: any[] = [];
+            let started = 0;
+            const calls = Array.from({ length: 1100 }, () => {
+                ++started;
+                return cancellable.Wait(controller.signal).catch((e: any) => {
+                    if (e.name !== 'AbortError') refused.push(e);
+                });
+            });
+            // Replies come back in order, so this one arrives after the refusals.
+            await cancellable.Quick();
+
+            const running = started - refused.length;
+            controller.abort();
+            await Promise.all(calls);
+
+            expect(refused.length).to.be.at.least(76);
+            for (const e of refused) {
+                expect(e).to.be.instanceOf(NPRPC.ExceptionCommFailure);
+                expect(e.reason).to.equal(NPRPC.CommFailureReason.TooManyCalls);
+                expect(e.message).to.include('1024');
+            }
+
+            // Later tests count stops, so let these finish.
+            for (let i = 0; i < 500; ++i) {
+                if (await cancellable.Quick() >= stopsBefore + running) break;
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+            expect(await cancellable.Quick()).to.equal(stopsBefore + running);
+        });
     }); // describe Cancellation
 });

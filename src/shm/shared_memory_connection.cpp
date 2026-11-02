@@ -1,6 +1,7 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include <chrono>
 #include <iostream>
 
 #include <nprpc/common.hpp>
@@ -103,6 +104,27 @@ void SharedMemoryConnection::enqueue(std::shared_ptr<IOWork> w)
   // so; after the insert, which is what the sweep will look for.
   if (expires && channel_)
     channel_->need_ticks();
+}
+
+namespace {
+// How long a request waits for a full ring before the call fails. The server's
+// reader normally drains it at once; the connection stays up either way.
+constexpr std::chrono::milliseconds kRequestSpaceWait{100};
+} // namespace
+
+// A stub may have built the request in a ring reservation. One that won't be sent
+// has to be released, or the ring stalls at that slot.
+void SharedMemoryConnection::discard_reservation(flat_buffer& buffer)
+{
+  if (!buffer.is_view_mode() || !buffer.has_write_reservation())
+    return;
+  LockFreeRingBuffer::WriteReservation reservation;
+  reservation.data = buffer.data_ptr();
+  reservation.max_size = buffer.max_size();
+  reservation.slot_idx = buffer.reservation_write_idx();
+  reservation.valid = true;
+  channel_->abort_write(reservation);
+  buffer.release_write_view();
 }
 
 void SharedMemoryConnection::deliver_reply(const void* data, size_t size,
@@ -220,11 +242,11 @@ boost::system::error_code SharedMemoryConnection::do_send_receive(flat_buffer& b
     return boost::asio::error::connection_aborted;
   }
 
-  if (buffer.size() == 0 || buffer.size() > max_message_size) {
-    fail(boost::system::error_code(boost::asio::error::message_size,
-                                   boost::system::system_category()),
-         "send_receive");
-    close();
+  if (buffer.size() == 0 || buffer.size() > max_message_size ||
+      buffer.size() > channel_->max_message_size()) {
+    NPRPC_LOG_ERROR("SharedMemoryConnection: request of {} bytes exceeds the limit of {}",
+                    buffer.size(), channel_->max_message_size());
+    discard_reservation(buffer);
     return boost::asio::error::message_size;
   }
 
@@ -239,12 +261,12 @@ boost::system::error_code SharedMemoryConnection::do_send_receive(flat_buffer& b
   bool zero_copy = buffer.is_view_mode() && buffer.has_write_reservation();
 
   if (!zero_copy) {
-    pending_copy_rsv = channel_->reserve_write(buffer.size());
+    pending_copy_rsv =
+        channel_->reserve_write_waiting(buffer.size(), kRequestSpaceWait, server_dead_);
     if (!pending_copy_rsv) {
-      fail(boost::system::error_code(boost::asio::error::no_buffer_space,
-                                     boost::system::system_category()),
-           "send_receive");
-      close();
+      NPRPC_LOG_ERROR("SharedMemoryConnection: no room in the ring for a request of {} "
+                      "bytes after waiting {} ms",
+                      buffer.size(), kRequestSpaceWait.count());
       return boost::asio::error::no_buffer_space;
     }
     std::memcpy(pending_copy_rsv.data, buffer.data().data(), buffer.size());
@@ -369,7 +391,12 @@ void SharedMemoryConnection::send_receive_async(
 
   auto rsv = zero_copy_rsv;
   if (!zero_copy) {
-    rsv = channel_->reserve_write(request_size);
+    if (request_size > channel_->max_message_size()) {
+      w->on_failed(boost::system::error_code(boost::asio::error::message_size,
+                                             boost::system::system_category()));
+      return;
+    }
+    rsv = channel_->reserve_write_waiting(request_size, kRequestSpaceWait, server_dead_);
     if (!rsv) {
       w->on_failed(boost::system::error_code(boost::asio::error::no_buffer_space,
                                              boost::system::system_category()));

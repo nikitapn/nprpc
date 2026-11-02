@@ -535,6 +535,60 @@ make_simple_answer(SessionContext& ctx, MessageId id, uint32_t request_id = 0)
   bout.commit(header_size);
 }
 
+// Builds Error_CommFailure in `out`, which has room for comm_failure_size(message).
+inline constexpr size_t comm_failure_fixed_size =
+    sizeof(impl::flat::Header) + sizeof(::nprpc::flat::ExceptionCommFailure);
+
+inline size_t comm_failure_size(std::string_view message) noexcept
+{
+  return ::nprpc::flat::detail::grow_size(comm_failure_fixed_size, 1, message.size());
+}
+
+inline void write_comm_failure(flat_buffer& out,
+                               CommFailureReason reason,
+                               const std::string& message,
+                               uint32_t request_id)
+{
+  out.commit(comm_failure_fixed_size);
+  ::nprpc::flat::ExceptionCommFailure_Direct body(out, sizeof(impl::flat::Header));
+  body.__ex_id() = 0;
+  body.reason() = reason;
+  body.message(message);
+  auto* header = static_cast<impl::flat::Header*>(out.data().data());
+  header->size = static_cast<uint32_t>(out.size());
+  header->msg_id = MessageId::Error_CommFailure;
+  header->msg_type = impl::MessageType::Answer;
+  header->request_id = request_id;
+}
+
+inline void make_comm_failure_answer(SessionContext& ctx,
+                                     CommFailureReason reason,
+                                     const std::string& message)
+{
+  auto& out = *ctx.tx_buffer;
+  const auto request_id =
+      static_cast<const impl::flat::Header*>(ctx.rx_buffer->cdata().data())->request_id;
+  out.consume(out.size());
+  const auto size = comm_failure_size(message);
+  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, out, size))
+    out.prepare(size);
+  write_comm_failure(out, reason, message, request_id);
+}
+
+// The server's Error_CommFailure. Older servers send no body, and a body that
+// doesn't hold together is treated the same way.
+[[noreturn]] inline void throw_comm_failure(flat_buffer& reply)
+{
+  if (reply.size() >= comm_failure_fixed_size) {
+    ::nprpc::flat::ExceptionCommFailure_Direct body(reply, sizeof(impl::flat::Header));
+    const auto& flat = *static_cast<const ::nprpc::flat::ExceptionCommFailure*>(body.__data());
+    if (flat.message.check_size_align(reply.data().data(),
+                                      static_cast<std::uint32_t>(reply.size())))
+      throw ExceptionCommFailure(body.reason(), std::string((std::string_view)body.message()));
+  }
+  throw ExceptionCommFailure();
+}
+
 NPRPC_API void dump_message(flat_buffer& buffer, bool rx);
 
 //  0 - Success
@@ -570,7 +624,7 @@ inline int handle_standart_reply(flat_buffer& buf)
   case MessageId::Error_ObjectNotExist:
     throw ExceptionObjectNotExist();
   case MessageId::Error_CommFailure:
-    throw ExceptionCommFailure();
+    throw_comm_failure(buf);
   case MessageId::Error_UnknownFunctionIdx:
     throw ExceptionUnknownFunctionIndex();
   case MessageId::Error_UnknownMessageId:

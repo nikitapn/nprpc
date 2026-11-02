@@ -1,6 +1,7 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include <format>
 #include <boost/asio/post.hpp>
 
 #include <coroutine>
@@ -52,11 +53,23 @@ boost::system::error_code Session::do_send_receive(flat_buffer&, uint32_t)
   return boost::asio::error::operation_not_supported;
 }
 
+namespace {
+[[noreturn]] void throw_transport_failure(const boost::system::error_code& ec)
+{
+  auto reason = nprpc::CommFailureReason::ConnectionFailed;
+  if (ec == boost::asio::error::message_size)
+    reason = nprpc::CommFailureReason::MessageTooLarge;
+  else if (ec == boost::asio::error::no_buffer_space)
+    reason = nprpc::CommFailureReason::RingFull;
+  throw nprpc::ExceptionCommFailure(reason, ec.message());
+}
+} // namespace
+
 void Session::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 {
   const auto ec = do_send_receive(buffer, timeout_ms);
   if (ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();
-  if (ec) throw nprpc::ExceptionCommFailure();
+  if (ec) throw_transport_failure(ec);
 }
 
 Result<void> Session::send_receive_result(flat_buffer& buffer, uint32_t timeout_ms) noexcept
@@ -166,7 +179,7 @@ nprpc::Task<> Session::send_receive_coro(flat_buffer& buffer,
 
   if (call->cancelled) throw nprpc::OperationCancelled();
   if (call->ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();
-  if (call->ec) throw nprpc::ExceptionCommFailure();
+  if (call->ec) throw_transport_failure(call->ec);
   buffer = std::move(call->response);
 }
 
@@ -357,7 +370,8 @@ std::shared_ptr<DeferredCall> DeferredCall::begin(SessionContext& session_ctx)
   auto* session = session_ctx.session;
   auto owner = session ? session->self_cell_->lock() : nullptr;
   if (!owner) {
-    make_simple_answer(session_ctx, MessageId::Error_CommFailure);
+    make_comm_failure_answer(session_ctx, CommFailureReason::ConnectionFailed,
+                             "The session is closing");
     return nullptr;
   }
 
@@ -368,7 +382,9 @@ std::shared_ptr<DeferredCall> DeferredCall::begin(SessionContext& session_ctx)
     if (session->deferred_calls_.size() >= Session::max_deferred_calls) {
       NPRPC_LOG_ERROR("Session has {} coroutine calls running, refusing another",
                       session->deferred_calls_.size());
-      make_simple_answer(session_ctx, MessageId::Error_CommFailure);
+      make_comm_failure_answer(session_ctx, CommFailureReason::TooManyCalls,
+                               std::format("The session already has {} coroutine calls running",
+                                           Session::max_deferred_calls));
       return nullptr;
     }
     if (session->peer_gone_)

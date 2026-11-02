@@ -237,8 +237,53 @@ thread until the method finishes, so a call on them can't be cancelled while it 
 
 ## Large messages over shared memory
 
-Each RPC message has to fit in one ring entry, 512 KiB by default. A reply over the
-limit fails the call straight away with `ExceptionCommFailure`, and the server logs
-the sizes. So does a reply that still can't get into a full ring after 100 ms. For
-anything large, use a stream or pass a file descriptor, or raise the limit with
-`RpcBuilder::shm_channel_sizes`.
+Each RPC message has to fit in one ring entry, 512 KiB by default. A request or reply
+over the limit fails the call straight away, and so does one that still can't get into
+a full ring after 100 ms. The connection stays up. For anything large, use a stream or
+pass a file descriptor, or raise the limit with `RpcBuilder::shm_channel_sizes`.
+
+## When a call fails in transport
+
+`ExceptionCommFailure` says why. `reason` is for code to act on, and `message` is for
+people, with sizes and limits where they apply.
+
+| `reason` | Meaning |
+|---|---|
+| `Unknown` | Not known, as when an older server sent the error |
+| `ConnectionFailed` | Couldn't connect, or the connection was lost |
+| `MessageTooLarge` | The request or reply is over the transport's limit |
+| `RingFull` | A shared memory ring stayed full, so the peer has probably stopped reading |
+| `TooManyCalls` | The session already has 1024 `[coroutine]` calls running |
+
+```cpp
+try {
+  auto image = images->Get(id);
+} catch (const nprpc::ExceptionCommFailure& e) {
+  if (e.reason == nprpc::CommFailureReason::MessageTooLarge)
+    return fetch_as_stream(id);
+  log(e.what());
+}
+```
+
+```swift
+do {
+    return try await images.get(id: id)
+} catch let e as ExceptionCommFailure where e.reason == .MessageTooLarge {
+    return try await fetchAsStream(id)
+}
+```
+
+```ts
+try {
+  return await images.Get(id);
+} catch (e) {
+  if (e instanceof NPRPC.ExceptionCommFailure &&
+      e.reason === NPRPC.CommFailureReason.MessageTooLarge)
+    return fetchAsStream(id);
+  throw e;
+}
+```
+
+In C++, `what()` returns an exception's `message` field if it has one and it isn't
+empty, so any IDL exception with a `message: string` works this way. Otherwise `what()`
+returns the type's name.

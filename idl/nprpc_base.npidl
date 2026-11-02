@@ -16,11 +16,27 @@ alias ifs_idx_t = u8;
 /// Index of a method within an interface.
 alias fn_idx_t  = u8;
 
-/// The connection to the object's server failed or was closed while a call
-/// was in flight, or the message was too large to send.
+/// Why a call failed with `ExceptionCommFailure`.
+enum CommFailureReason: u32 {
+  /// Not known, as when an older server sent the error
+  Unknown,
+  /// Couldn't connect to the object's server, or the connection was lost
+  ConnectionFailed,
+  /// The request or reply is over the transport's message limit
+  MessageTooLarge,
+  /// A shared memory ring stayed full, so the peer has probably stopped reading
+  RingFull,
+  /// The session already has as many `[coroutine]` calls running as it allows
+  TooManyCalls,
+}
+
+/// The call failed in transport: the connection failed, or the message couldn't
+/// be delivered. `reason` is for code to act on, and `message` is for people.
 exception ExceptionCommFailure {
-  /// Error message
-  what: string;
+  /// What kind of failure this was
+  reason: CommFailureReason;
+  /// What went wrong, with sizes and limits where they apply
+  message: string;
 }
 
 /// No reply arrived within the call's timeout.

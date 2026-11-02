@@ -8,7 +8,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <format>
 #include <memory>
+#include <string>
 
 #include <nprpc/common.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
@@ -68,21 +70,23 @@ class SharedMemoryServerSession
     }
 
     if (tx_buffer.size() > channel_->max_message_size()) {
-      NPRPC_LOG_ERROR("SharedMemoryServerSession: reply of {} bytes exceeds this "
-                      "ring's {} byte message limit; raise it with "
-                      "RpcBuilder::shm_channel_sizes, or send it as a stream",
-                      tx_buffer.size(), channel_->max_message_size());
-      send_reply_failed(tx_buffer);
+      const auto message = std::format(
+          "Reply of {} bytes exceeds the shared memory ring's {} byte message limit; "
+          "raise it with RpcBuilder::shm_channel_sizes, or send it as a stream",
+          tx_buffer.size(), channel_->max_message_size());
+      NPRPC_LOG_ERROR("SharedMemoryServerSession: {}", message);
+      send_reply_failed(tx_buffer, CommFailureReason::MessageTooLarge, message);
       return;
     }
 
     auto reservation =
         channel_->reserve_write_waiting(tx_buffer.size(), kReplySpaceWait, peer_dead_);
     if (!reservation) {
-      NPRPC_LOG_ERROR("SharedMemoryServerSession: no room in the ring for a reply "
-                      "of {} bytes after waiting {} ms",
-                      tx_buffer.size(), kReplySpaceWait.count());
-      send_reply_failed(tx_buffer);
+      const auto message = std::format(
+          "No room in the shared memory ring for a reply of {} bytes after waiting {} ms",
+          tx_buffer.size(), kReplySpaceWait.count());
+      NPRPC_LOG_ERROR("SharedMemoryServerSession: {}", message);
+      send_reply_failed(tx_buffer, CommFailureReason::RingFull, message);
       return;
     }
     std::memcpy(reservation.data, tx_buffer.data_ptr(), tx_buffer.size());
@@ -91,23 +95,24 @@ class SharedMemoryServerSession
 
   // Tells the client its reply won't arrive, so it fails now instead of timing
   // out. This can fit where the reply didn't.
-  void send_reply_failed(const flat_buffer& reply)
+  void send_reply_failed(const flat_buffer& reply,
+                         CommFailureReason reason,
+                         const std::string& message)
   {
     if (reply.size() < sizeof(flat::Header))
       return;
-    auto reservation = channel_->reserve_write(sizeof(flat::Header));
+    flat_buffer failure;
+    failure.prepare(comm_failure_size(message));
+    write_comm_failure(failure, reason, message,
+                       static_cast<const flat::Header*>(reply.cdata().data())->request_id);
+    auto reservation = channel_->reserve_write(failure.size());
     if (!reservation) {
       NPRPC_LOG_ERROR("SharedMemoryServerSession: no room in the ring to report a "
                       "failed reply; the client will time out");
       return;
     }
-    flat::Header header{};
-    header.size = sizeof(flat::Header);
-    header.msg_id = MessageId::Error_CommFailure;
-    header.msg_type = MessageType::Answer;
-    header.request_id = static_cast<const flat::Header*>(reply.cdata().data())->request_id;
-    std::memcpy(reservation.data, &header, sizeof(header));
-    channel_->commit_write(reservation, sizeof(header));
+    std::memcpy(reservation.data, failure.data_ptr(), failure.size());
+    channel_->commit_write(reservation, failure.size());
   }
 
   void abort_tx_reservation(flat_buffer& tx_buffer)

@@ -1685,8 +1685,20 @@ TEST_F(NprpcTest, SharedMemoryReplyOverLimitFailsTheCall)
   obj->set_timeout(30'000);
 
   const auto started = std::chrono::steady_clock::now();
-  EXPECT_THROW(obj->Echo("anything"), nprpc::ExceptionCommFailure);
-  EXPECT_THROW(obj->EchoAsync("anything").get(), nprpc::ExceptionCommFailure);
+  try {
+    obj->Echo("anything");
+    ADD_FAILURE() << "expected ExceptionCommFailure";
+  } catch (const nprpc::ExceptionCommFailure& e) {
+    EXPECT_EQ(e.reason, nprpc::CommFailureReason::MessageTooLarge);
+    EXPECT_NE(e.message.find("exceeds"), std::string::npos) << e.message;
+  }
+  try {
+    obj->EchoAsync("anything").get();
+    ADD_FAILURE() << "expected ExceptionCommFailure";
+  } catch (const std::exception& e) {
+    // what() is the message, whatever type the exception is caught as.
+    EXPECT_NE(std::string_view(e.what()).find("exceeds"), std::string_view::npos) << e.what();
+  }
   EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(10));
 
   // The session is still usable.
@@ -1726,6 +1738,64 @@ TEST_F(NprpcTest, SharedMemoryPlainReplyOverLimitFailsTheCall)
   data.front() = 0xAB;
   data.back() = 0xCD;
   EXPECT_TRUE(obj->In_(42, true, nprpc::flat::make_read_only_span(data)));
+
+  // A request over the limit fails the same way, and leaves the connection up.
+  std::vector<uint8_t> too_large(13 * 1024 * 1024);
+  try {
+    obj->In_(42, true, nprpc::flat::make_read_only_span(too_large));
+    ADD_FAILURE() << "expected ExceptionCommFailure";
+  } catch (const nprpc::ExceptionCommFailure& e) {
+    EXPECT_EQ(e.reason, nprpc::CommFailureReason::MessageTooLarge);
+  }
+  EXPECT_TRUE(obj->In_(42, true, nprpc::flat::make_read_only_span(data)));
+}
+
+// Older servers send the header alone, and a body can't be trusted to be well formed.
+TEST(CommFailureReply, BodyIsOptionalAndChecked)
+{
+  using nprpc::impl::MessageId;
+  namespace impl = nprpc::impl;
+  constexpr auto header_size = sizeof(impl::flat::Header);
+
+  nprpc::flat_buffer no_body;
+  no_body.prepare(header_size);
+  no_body.commit(header_size);
+  auto* header = static_cast<impl::flat::Header*>(no_body.data().data());
+  header->size = header_size;
+  header->msg_id = MessageId::Error_CommFailure;
+  header->msg_type = impl::MessageType::Answer;
+  header->request_id = 1;
+  try {
+    impl::handle_standart_reply(no_body);
+    ADD_FAILURE() << "expected ExceptionCommFailure";
+  } catch (const nprpc::ExceptionCommFailure& e) {
+    EXPECT_EQ(e.reason, nprpc::CommFailureReason::Unknown);
+    EXPECT_STREQ(e.what(), "ExceptionCommFailure");
+  }
+
+  nprpc::flat_buffer good;
+  const std::string message = "reply of 13 bytes exceeds the limit of 12";
+  good.prepare(impl::comm_failure_size(message));
+  impl::write_comm_failure(good, nprpc::CommFailureReason::RingFull, message, 1);
+  try {
+    impl::handle_standart_reply(good);
+    ADD_FAILURE() << "expected ExceptionCommFailure";
+  } catch (const nprpc::ExceptionCommFailure& e) {
+    EXPECT_EQ(e.reason, nprpc::CommFailureReason::RingFull);
+    EXPECT_EQ(e.message, message);
+    EXPECT_STREQ(e.what(), message.c_str());
+  }
+
+  // Corrupt the string's offset so it points outside the buffer.
+  auto* offset_field = static_cast<std::byte*>(good.data().data()) + header_size + 8;
+  const uint32_t bad_offset = 0x7fffff00;
+  std::memcpy(offset_field, &bad_offset, sizeof(bad_offset));
+  try {
+    impl::handle_standart_reply(good);
+    ADD_FAILURE() << "expected ExceptionCommFailure";
+  } catch (const nprpc::ExceptionCommFailure& e) {
+    EXPECT_EQ(e.reason, nprpc::CommFailureReason::Unknown);
+  }
 }
 
 // A client that disconnects stops the call it left running.

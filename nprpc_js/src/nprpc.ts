@@ -11,6 +11,7 @@ import {
   ExceptionObjectNotExist,
   ExceptionUnknownFunctionIndex,
   ExceptionUnknownMessageId,
+  CommFailureReason,
   ExceptionCommFailure,
   ExceptionTimeout,
   ExceptionBadAccess,
@@ -1263,8 +1264,11 @@ export const handle_standart_reply = (buf: FlatBuffer): number => {
       throw new ExceptionObjectNotExist();
 
     case impl.MessageId.Error_CommFailure:
-      let ex_obj = unmarshal_ExceptionCommFailure(buf, 16);
-      throw new ExceptionCommFailure(ex_obj.what);
+      // An older server sends no body. Skip the header and __ex_id otherwise.
+      if (buf.size <= 20)
+        throw new ExceptionCommFailure(CommFailureReason.Unknown, "");
+      let ex_obj = unmarshal_ExceptionCommFailure(buf, 20);
+      throw new ExceptionCommFailure(ex_obj.reason, ex_obj.message);
 
     case impl.MessageId.Error_UnknownFunctionIdx:
       throw new ExceptionUnknownFunctionIndex();

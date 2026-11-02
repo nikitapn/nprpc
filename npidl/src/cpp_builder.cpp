@@ -1161,7 +1161,7 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
         emit_line_doc(os, "  ", f->doc);
         os << "  ";
         emit_type(f->type, os);
-        os << " " << f->name << ";\n";
+        os << " " << f->name << "{};\n";
       });
       os << '\n';
     }
@@ -1187,6 +1187,16 @@ void CppBuilder::emit_struct2(AstStructDecl* s, std::ostream& os, Target target)
       });
 
       os << "  {\n"
+            "  }\n";
+    }
+
+    // A `message` is what went wrong, so what() reports it. The type name stays
+    // only as the fallback for an exception with nothing better to say.
+    if (std::any_of(s->fields.begin(), s->fields.end(), [](auto f) {
+          return f->name == "message" && f->type->id == FieldType::String;
+        })) {
+      os << "\n  const char* what() const noexcept override {\n"
+            "    return message.empty() ? ::nprpc::Exception::what() : message.c_str();\n"
             "  }\n";
     }
 

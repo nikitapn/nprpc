@@ -94,7 +94,8 @@ TEST(SwiftBridgeErrors, TransportErrorsPreserveNativeDetails) {
 
 TEST(SwiftBridgeErrors, ExceptionBoundaryPreservesCommunicationDiagnostics) {
     auto result = capture([]() -> BridgeResult<void> {
-        throw nprpc::ExceptionCommFailure("TCP was compiled out");
+        throw nprpc::ExceptionCommFailure(nprpc::CommFailureReason::ConnectionFailed,
+                                          "TCP was compiled out");
     });
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error().code, nprpc::ErrorCode::connection_failure);

@@ -318,6 +318,34 @@ final class PoaDispatchExecutorTests: XCTestCase {
         XCTAssertTrue(servant.onLoop, "left the POA's executor")
     }
 
+    /// A reply too big for the ring fails the call, and says why.
+    func testReplyOverRingLimitReportsReason() async throws {
+        final class Servant: TestCoroutineServant, @unchecked Sendable {
+            override func add(a: UInt32, b: UInt32) async throws -> UInt32 { a + b }
+            override func echo(text: String) async -> String {
+                String(repeating: "x", count: 32 * 1024 * 1024)
+            }
+            override func wait() async {}
+            override func quick() -> UInt32 { 5 }
+        }
+        let servant = Servant()
+        let oid = try Self.loopPoa!.activateObject(servant, flags: .shm)
+        guard let obj = NPRPCObject.fromObjectId(oid),
+              let client = narrow(obj, to: TestCoroutine.self) else {
+            throw RuntimeError(message: "no client")
+        }
+
+        do {
+            _ = try await client.echo(text: "anything")
+            XCTFail("expected ExceptionCommFailure")
+        } catch let e as ExceptionCommFailure {
+            XCTAssertEqual(e.reason, .MessageTooLarge)
+            XCTAssertTrue(e.message.contains("exceeds"), e.message)
+        }
+        let quick = try await client.quick()
+        XCTAssertEqual(quick, 5)
+    }
+
     /// Sequential RPCs on a custom serial executor stay ordered and on-queue.
     func testCustomSerialQueueSequentialCalls() async throws {
         let queue = DispatchQueue(label: "nprpc.test.poa.custom-seq")
