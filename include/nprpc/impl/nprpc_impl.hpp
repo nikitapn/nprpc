@@ -108,65 +108,19 @@ NPRPC_API extern RpcImpl* g_rpc;
 NPRPC_API extern std::string g_server_listener_uuid;
 
 struct IOWork {
-  virtual void operator()() = 0;
   virtual void on_failed(const boost::system::error_code& ec) noexcept = 0;
   virtual void on_executed() noexcept = 0;
   virtual flat_buffer& buffer() noexcept = 0;
   virtual ~IOWork() = default;
 
-  // Shared-memory client path: ring slot counter (16-bit, from write_cursor)
-  // used to keep wq_ ordered consistently with ring FIFO.  Unused by other
-  // transports (has_slot_order == false → push_back).
-  uint64_t slot_idx = 0;
-  bool has_slot_order = false;
+  // The request id its reply will carry.
+  uint32_t call_id = 0;
 
   // When the reply stops being worth waiting for; default-constructed means
   // no deadline.  Stamped once when the work is queued and swept
   // periodically, rather than arming a timer per request — on shared memory
   // an asio timer per request measured ~1.7 us, a fifth of the round trip.
   std::chrono::steady_clock::time_point deadline{};
-
-  // The caller gave up, but the peer may still reply.  The entry stays
-  // queued as a tombstone so later replies keep matching their own requests
-  // by position; buffer() must never be touched once this is set — on the
-  // blocking path it refers to the caller's stack, which is already gone.
-  bool abandoned = false;
-};
-
-template <typename T> class CommonConnection
-{
-  T* derived() noexcept { return static_cast<T*>(this); }
-
-protected:
-  // Work queue for ordered execution of async operations.
-  // Not thread-safe; must be accessed only on the strand
-  std::deque<std::shared_ptr<IOWork>> wq_;
-
-  void add_work(std::shared_ptr<IOWork> w)
-  {
-    boost::asio::post(derived()->get_executor(),
-                      [w{std::move(w)}, this]() mutable {
-                        // work may or may not hold shared_ptr to this:
-                        // blocking case - it will reference to this,
-                        // async case - it will hold shared_ptr to this
-                        wq_.push_back(std::move(w));
-                        if (wq_.size() == 1)
-                          (*wq_.front())();
-                      });
-  }
-
-  flat_buffer& current_rx_buffer() noexcept
-  {
-    assert(wq_.size() > 0);
-    return wq_.front()->buffer();
-  }
-
-  void pop_and_execute_next_task()
-  {
-    wq_.pop_front();
-    if (wq_.empty() == false)
-      (*wq_.front())();
-  }
 };
 
 #ifdef NPRPC_TCP_ENABLED

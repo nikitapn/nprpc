@@ -14,15 +14,6 @@ namespace nprpc::impl {
 
 namespace {
 
-// Wrap-aware ordering for the 16-bit ring slot counter.  Valid when both
-// slots are in-flight (distance < 2^15, guaranteed by kRingSlots ≪ 2^15).
-// Returns true if `a` is strictly before `b` in ring order.
-[[nodiscard]] inline bool slot_before(uint64_t a, uint64_t b) noexcept
-{
-  return static_cast<int16_t>(static_cast<uint16_t>(a) -
-                              static_cast<uint16_t>(b)) < 0;
-}
-
 // A zero timeout means "wait indefinitely", as it does on the other
 // transports; steady_clock so a wall-clock jump cannot expire a request.
 [[nodiscard]] inline std::chrono::steady_clock::time_point
@@ -101,29 +92,46 @@ void SharedMemoryConnection::shutdown()
   Session::shutdown();
 }
 
-void SharedMemoryConnection::enqueue_ordered(std::shared_ptr<IOWork> w)
+void SharedMemoryConnection::enqueue(std::shared_ptr<IOWork> w)
 {
   // mutex_ must be held by the caller.
-  auto it = wq_.begin();
-  if (w->has_slot_order) {
-    for (; it != wq_.end(); ++it) {
-      if (!(*it)->has_slot_order)
-        break; // unordered entries (shouldn't happen on this connection)
-      if (slot_before(w->slot_idx, (*it)->slot_idx))
-        break;
-    }
-  } else {
-    it = wq_.end(); // push_back
-  }
-
   const bool expires = w->deadline != std::chrono::steady_clock::time_point{};
-  wq_.insert(it, std::move(w));
+  wq_.push_back(std::move(w));
   // The deadline was stamped on the work before it got here, and
   // sweep_expired_requests() enforces it off the hot path — once the tick it
   // runs on is going.  An idle channel's reader sleeps without one, so say
   // so; after the insert, which is what the sweep will look for.
   if (expires && channel_)
     channel_->need_ticks();
+}
+
+void SharedMemoryConnection::deliver_reply(const void* data, size_t size,
+                                           std::vector<UniqueFd>&& fds)
+{
+  const auto* hdr = static_cast<const impl::flat::Header*>(data);
+
+  std::lock_guard lock(mutex_);
+  // Almost always the oldest: a session's calls run in order on the server.
+  auto it = wq_.begin();
+  while (it != wq_.end() && (*it)->call_id != hdr->request_id)
+    ++it;
+  if (it == wq_.end()) {
+    NPRPC_LOG_WARN("SharedMemoryConnection: dropped a reply nobody is waiting "
+                   "for, msg_id={} request_id={} channel={}",
+                   static_cast<unsigned>(hdr->msg_id), hdr->request_id,
+                   channel_->channel_id());
+    return;
+  }
+
+  auto& buffer = (*it)->buffer();
+  buffer.consume(buffer.size());
+  auto mb = buffer.prepare(size);
+  std::memcpy(mb.data(), data, size);
+  buffer.commit(size);
+  buffer.fds() = std::move(fds);
+
+  (*it)->on_executed();
+  wq_.erase(it);
 }
 
 bool SharedMemoryConnection::sweep_expired_requests()
@@ -134,18 +142,17 @@ bool SharedMemoryConnection::sweep_expired_requests()
 
   {
     std::lock_guard lock(mutex_);
-    for (auto& w : wq_) {
-      if (w->abandoned || w->deadline == std::chrono::steady_clock::time_point{})
-        continue;
-      if (now < w->deadline) {
-        pending = true;
+    for (auto it = wq_.begin(); it != wq_.end();) {
+      auto& w = *it;
+      if (w->deadline == std::chrono::steady_clock::time_point{} || now < w->deadline) {
+        pending = pending || w->deadline != std::chrono::steady_clock::time_point{};
+        ++it;
         continue;
       }
-      // Tombstone rather than remove: replies are matched to requests by
-      // position in this queue, so dropping the entry would hand a late
-      // reply to the wrong caller.
-      w->abandoned = true;
-      expired.push_back(w);
+      // Out of the queue before the caller hears: its buffer may be on a stack
+      // about to go away, and a late reply must not find it.
+      expired.push_back(std::move(w));
+      it = wq_.erase(it);
     }
   }
 
@@ -158,29 +165,15 @@ bool SharedMemoryConnection::sweep_expired_requests()
   return pending;
 }
 
-bool SharedMemoryConnection::consume_reply_for_abandoned()
-{
-  // mutex_ must be held.  A reply belongs to wq_.front(); if that caller has
-  // already given up, swallow the reply so the queue stays aligned with the
-  // ring.  Never touch its buffer() — on the blocking path it refers to a
-  // stack frame that no longer exists.
-  if (wq_.empty() || !wq_.front()->abandoned)
-    return false;
-  wq_.pop_front();
-  return true;
-}
-
 boost::system::error_code SharedMemoryConnection::do_send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 {
-  // Protocol (Option B — commit-before-queue, slot-ordered responses):
+  // Protocol:
   //  1. Request is fully serialised (possibly into a zero-copy reservation).
-  //  2. Enqueue the work ordered by slot_idx under mutex_ (so a response
-  //     can never race an empty/unordered queue).
+  //  2. Enqueue the work under mutex_, so a reply can't beat it to the queue.
   //  3. Commit the ring slot on the *caller* thread — never waits on any
   //     other request's progress.  FIFO ring consumption stays free of
   //     commit-order deadlocks.
-  //  4. Wait for the matching response (delivered when this work is at
-  //     the front of wq_ and the next ring message arrives).
+  //  4. Wait for the reply carrying this call's id.
 
   struct work_impl : IOWork {
     flat_buffer& buf;
@@ -189,12 +182,6 @@ boost::system::error_code SharedMemoryConnection::do_send_receive(flat_buffer& b
 
     std::atomic_bool done{false};
     boost::system::error_code result;
-
-    void operator()() noexcept override
-    {
-      // Already committed, and the deadline is stamped before enqueue —
-      // nothing to do when this work reaches the front of the queue.
-    }
 
     void on_failed(const boost::system::error_code& ec) noexcept override
     {
@@ -241,21 +228,17 @@ boost::system::error_code SharedMemoryConnection::do_send_receive(flat_buffer& b
     return boost::asio::error::message_size;
   }
 
-  // Nothing else sets it here, and whatever a reused buffer holds would otherwise
-  // be taken for this call's id by a cancel.
-  static_cast<impl::flat::Header*>(buffer.data().data())->request_id = 0;
+  const uint32_t call_id = call_id_for(buffer);
+  static_cast<impl::flat::Header*>(buffer.data().data())->request_id = call_id;
 
   // Peek the slot we will use.  For zero-copy the slot is already claimed;
   // for the copy path we claim inside commit_request — but we need the
   // slot *before* enqueue so the queue is ordered correctly.  So for the
   // copy path we claim+copy here and only commit after enqueue.
   LockFreeRingBuffer::WriteReservation pending_copy_rsv{};
-  uint64_t slot = 0;
   bool zero_copy = buffer.is_view_mode() && buffer.has_write_reservation();
 
-  if (zero_copy) {
-    slot = buffer.reservation_write_idx();
-  } else {
+  if (!zero_copy) {
     pending_copy_rsv = channel_->reserve_write(buffer.size());
     if (!pending_copy_rsv) {
       fail(boost::system::error_code(boost::asio::error::no_buffer_space,
@@ -265,12 +248,10 @@ boost::system::error_code SharedMemoryConnection::do_send_receive(flat_buffer& b
       return boost::asio::error::no_buffer_space;
     }
     std::memcpy(pending_copy_rsv.data, buffer.data().data(), buffer.size());
-    slot = pending_copy_rsv.slot_idx;
   }
 
   auto w = std::make_shared<work_impl>(buffer, *this, timeout_ms);
-  w->slot_idx = slot;
-  w->has_slot_order = true;
+  w->call_id = call_id;
   w->deadline = deadline_from_now(timeout_ms);
 
   // Zero-copy path: the request bytes already live in the ring reservation.
@@ -283,7 +264,7 @@ boost::system::error_code SharedMemoryConnection::do_send_receive(flat_buffer& b
   if (zero_copy) {
     pending_zc_rsv.data = buffer.data_ptr();
     pending_zc_rsv.max_size = buffer.max_size();
-    pending_zc_rsv.slot_idx = slot;
+    pending_zc_rsv.slot_idx = buffer.reservation_write_idx();
     pending_zc_rsv.valid = true;
     pending_zc_size = buffer.size();
     buffer.release_write_view(); // buffer is now empty owned; safe for reply
@@ -293,11 +274,10 @@ boost::system::error_code SharedMemoryConnection::do_send_receive(flat_buffer& b
   // cannot land while we are not yet in the queue.
   {
     std::lock_guard lock(mutex_);
-    enqueue_ordered(w);
+    enqueue(w);
   }
 
-  // Commit after enqueue: the ring consumer may now see this slot, but
-  // our work is already positioned so the response is matched correctly.
+  // Commit after enqueue: the ring consumer may now see this slot.
   if (zero_copy) {
     channel_->commit_write(pending_zc_rsv, pending_zc_size, buffer.fds());
   } else {
@@ -311,9 +291,8 @@ boost::system::error_code SharedMemoryConnection::do_send_receive(flat_buffer& b
   }
 
   // A timeout is this request's problem, not the connection's — as on
-  // WebSocket, the session keeps serving other calls.  The entry stays
-  // queued as a tombstone, so a late reply is swallowed rather than handed
-  // to whoever asked next.  Any other error means the transport is done.
+  // WebSocket, the session keeps serving other calls.  Any other error means
+  // the transport is done.
   if (ec != boost::asio::error::timed_out) {
     fail(ec, "send_receive");
     close();
@@ -328,8 +307,8 @@ void SharedMemoryConnection::send_receive_async(
     uint32_t timeout_ms)
 {
   assert(*(uint32_t*)buffer.data().data() == buffer.size());
-  if (buffer.size() >= sizeof(impl::flat::Header))
-    static_cast<impl::flat::Header*>(buffer.data().data())->request_id = buffer.call_id();
+  const uint32_t call_id = call_id_for(buffer);
+  static_cast<impl::flat::Header*>(buffer.data().data())->request_id = call_id;
 
   struct work_impl : IOWork {
     flat_buffer buf;
@@ -338,11 +317,6 @@ void SharedMemoryConnection::send_receive_async(
     std::optional<
         std::function<void(const boost::system::error_code&, flat_buffer&)>>
         handler;
-
-    void operator()() noexcept override
-    {
-      // See the blocking path: the deadline is stamped before enqueue.
-    }
 
     void on_failed(const boost::system::error_code& ec) noexcept override
     {
@@ -403,13 +377,12 @@ void SharedMemoryConnection::send_receive_async(
     }
     std::memcpy(rsv.data, w->buf.data().data(), request_size);
   }
-  w->slot_idx = rsv.slot_idx;
-  w->has_slot_order = true;
+  w->call_id = call_id;
   w->deadline = deadline_from_now(timeout_ms);
 
   {
     std::lock_guard lock(mutex_);
-    enqueue_ordered(w);
+    enqueue(w);
   }
 
   channel_->commit_write(rsv, request_size, w->buf.fds());
@@ -447,12 +420,7 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
   // Demux inbound frames:
   //  - Stream control/data (chunks, complete, error, cancel, window) go to
   //    Session::handle_request → stream_manager (no wq_ entry).
-  //  - RPC replies match wq_.front() by ring-slot ordering.
-  //
-  // Response ↔ request matching relies on wq_ being ordered by ring slot
-  // (enqueue_ordered) and commits happening on the caller thread before the
-  // server can reply — so the next *RPC* ring message always belongs to
-  // wq_.front().  Stream frames may interleave and must not touch wq_.
+  //  - RPC replies go to the call whose id they carry.
   channel_->on_data_received_view =
       [this](const LockFreeRingBuffer::ReadView& read_view) {
         if (read_view.size < sizeof(impl::flat::Header)) {
@@ -485,28 +453,7 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
           return;
         }
 
-        std::lock_guard lock(mutex_);
-        if (wq_.empty()) {
-          NPRPC_LOG_ERROR(
-              "SharedMemoryConnection: unsolicited RPC reply size={} "
-              "msg_id={} request_id={} channel={}",
-              read_view.size, static_cast<unsigned>(msg_id), hdr->request_id,
-              channel_->channel_id());
-          return; // read_loop will still call commit_read
-        }
-
-        if (consume_reply_for_abandoned())
-          return; // reply arrived after its caller gave up
-
-        auto& current_buffer = current_rx_buffer();
-        current_buffer.consume(current_buffer.size());
-        auto mb = current_buffer.prepare(read_view.size);
-        std::memcpy(mb.data(), read_view.data, read_view.size);
-        current_buffer.commit(read_view.size);
-        current_buffer.fds() = channel_->take_received_fds();
-
-        (*wq_.front()).on_executed();
-        pop_and_execute_next_task();
+        deliver_reply(read_view.data, read_view.size, channel_->take_received_fds());
       };
 
   // Set up data receive handler (copy path — same demux rules)
@@ -536,23 +483,7 @@ SharedMemoryConnection::SharedMemoryConnection(const EndPoint& endpoint,
       return;
     }
 
-    std::lock_guard lock(mutex_);
-    if (wq_.empty()) {
-      NPRPC_LOG_ERROR("SharedMemoryConnection: Received unsolicited response");
-      return;
-    }
-
-    if (consume_reply_for_abandoned())
-      return; // reply arrived after its caller gave up
-
-    auto& current_buffer = current_rx_buffer();
-    current_buffer.consume(current_buffer.size());
-    auto mb = current_buffer.prepare(data.size());
-    std::memcpy(mb.data(), data.data(), data.size());
-    current_buffer.commit(data.size());
-
-    (*wq_.front()).on_executed();
-    pop_and_execute_next_task();
+    deliver_reply(data.data(), data.size(), channel_->take_received_fds());
   };
 
   // A shared-memory server that dies leaves the rings mapped and silent, so

@@ -25,6 +25,9 @@
 #include <gtest/gtest.h>
 
 #include <nprpc/impl/nprpc_impl.hpp>
+#include <nprpc/impl/shared_memory_channel.hpp>
+#include <nprpc/impl/shared_memory_connection.hpp>
+#include <nprpc/impl/shared_memory_listener.hpp>
 #include <nprpc/stream_reader.hpp>
 #include <nprpc/stream_writer.hpp>
 #include <nprpc_nameserver.hpp>
@@ -1316,6 +1319,88 @@ TEST_F(NprpcTest, CancelledCallStopsServant)
     pool_poa->deactivate_object(servant.oid());
   }
   rpc->destroy_poa(pool_poa);
+}
+
+// Replies go to the call they name, whatever order they arrive in, and one that
+// names nobody is dropped.
+TEST_F(NprpcTest, SharedMemoryRepliesMatchById)
+{
+  namespace impl = nprpc::impl;
+  using Frame = std::vector<std::byte>;
+  constexpr size_t total = sizeof(impl::flat::Header) + sizeof(uint32_t);
+
+  auto write_frame = [](impl::SharedMemoryChannel& channel, const void* data) {
+    auto reservation = channel.reserve_write(total);
+    ASSERT_TRUE(reservation);
+    std::memcpy(reservation.data, data, total);
+    channel.commit_write(reservation, total);
+  };
+
+  // Holds requests back until it has them all, then answers newest first, after a
+  // reply for a call that doesn't exist.
+  constexpr size_t calls = 3;
+  std::mutex mutex;
+  std::vector<Frame> received;
+  std::unique_ptr<impl::SharedMemoryChannel> server;
+
+  boost::asio::io_context listener_io;
+  const auto name = "test_reply_match_" + std::to_string(::getpid());
+  impl::SharedMemoryListener listener(
+      listener_io, name, [&](std::unique_ptr<impl::SharedMemoryChannel> channel) {
+        auto* raw = channel.get();
+        raw->on_data_received_view = [&, raw](const impl::LockFreeRingBuffer::ReadView& view) {
+          std::lock_guard lock(mutex);
+          const auto* bytes = reinterpret_cast<const std::byte*>(view.data);
+          received.emplace_back(bytes, bytes + view.size);
+          if (received.size() != calls)
+            return;
+          Frame stray = received.back();
+          reinterpret_cast<impl::flat::Header*>(stray.data())->request_id = 0x7fffffff;
+          write_frame(*raw, stray.data());
+          for (auto it = received.rbegin(); it != received.rend(); ++it)
+            write_frame(*raw, it->data());
+        };
+        raw->start_reading();
+        server = std::move(channel);
+      });
+  listener.start();
+
+  auto client = std::make_shared<impl::SharedMemoryConnection>(
+      nprpc::EndPoint(nprpc::EndPointType::SharedMemory, name, 0), nprpc::get_io_context());
+  client->bind_self(client);
+
+  std::atomic<int> right{0}, wrong{0};
+  std::latch finished{calls};
+  for (uint32_t marker = 1; marker <= calls; ++marker) {
+    nprpc::flat_buffer request;
+    request.prepare(total);
+    request.commit(total);
+    auto* header = static_cast<impl::flat::Header*>(request.data().data());
+    header->size = total;
+    header->msg_id = impl::MessageId::Success;
+    header->msg_type = impl::MessageType::Answer;
+    std::memcpy(static_cast<std::byte*>(request.data().data()) + sizeof(*header),
+                &marker, sizeof(marker));
+    client->send_receive_async(
+        std::move(request),
+        [&, marker](const boost::system::error_code& ec, nprpc::flat_buffer& reply) {
+          uint32_t got = 0;
+          if (!ec && reply.size() == total)
+            std::memcpy(&got, static_cast<const std::byte*>(reply.cdata().data()) +
+                                  sizeof(impl::flat::Header), sizeof(got));
+          (got == marker ? right : wrong).fetch_add(1);
+          finished.count_down();
+        },
+        5000);
+  }
+
+  finished.wait();
+  EXPECT_EQ(right.load(), static_cast<int>(calls));
+  EXPECT_EQ(wrong.load(), 0);
+
+  client->shutdown();
+  if (server)
+    server->stop_reading();
 }
 
 // A client that disconnects stops the call it left running.

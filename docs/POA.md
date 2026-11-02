@@ -212,8 +212,8 @@ final class DashboardImpl: DashboardServant, @unchecked Sendable {
 }
 ```
 
-`.queue` must be a **serial** queue. A shared-memory client matches replies
-to requests by order, so a concurrent queue could send them back out of order.
+`.queue` must be a **serial** queue. A session only runs one call at a time, but
+on a concurrent queue, calls from different clients would run at once.
 
 ### A thread with its own event loop (Swift)
 
@@ -242,7 +242,7 @@ Three rules, in order of how badly they fail when broken:
 
 1. **`post` must wake the loop.** Nothing else will tell it a call is waiting.
    An idle loop would otherwise never run the servant.
-2. **Drain in FIFO order**, for the same reason `.queue` must be serial.
+2. **Drain in FIFO order**, so each client's calls run in the order it sent them.
 3. **`isRunningOnExecutor` must be accurate.** It stops the runtime from
    posting to the loop it is already on and then waiting for a drain that
    cannot start until it returns.

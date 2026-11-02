@@ -210,8 +210,6 @@ public:
     }
     rx_buffer.fds() = channel_->take_received_fds();
 
-    // Replies are matched to calls by order on this transport, so this relies
-    // on must_hand_off() keeping the session serial.
     if (must_hand_off(rx_buffer))
       hand_off(std::move(rx_buffer));
     else

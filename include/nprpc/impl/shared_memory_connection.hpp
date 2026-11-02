@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <memory>
+#include <deque>
 #include <mutex>
 
 #include <nprpc/impl/misc/mutex.hpp>
@@ -22,20 +23,22 @@ namespace nprpc::impl {
  */
 class SharedMemoryConnection
     : public Session,
-      public CommonConnection<SharedMemoryConnection>,
       public std::enable_shared_from_this<SharedMemoryConnection>
 {
   boost::asio::io_context& ioc_;
   std::unique_ptr<SharedMemoryChannel> channel_;
-  // Guards wq_ from CommonConnection
+  // Calls waiting for their reply, oldest first.
+  std::deque<std::shared_ptr<IOWork>> wq_;
   std::mutex mutex_;
 
   std::atomic<bool> server_dead_{false};
 
-  // Insert work into wq_ ordered by slot_idx (wrap-aware 16-bit).  Must be
-  // called with mutex_ held.  Arms the front work's timeout if the new
-  // entry is at the front.
-  void enqueue_ordered(std::shared_ptr<IOWork> w);
+  // Queue a call that's about to be committed.  Must be called with mutex_ held.
+  void enqueue(std::shared_ptr<IOWork> w);
+
+  // On the read thread: hands a reply to the call it names.  A reply nobody is
+  // waiting for is dropped; its caller gave up.
+  void deliver_reply(const void* data, size_t size, std::vector<UniqueFd>&& fds);
 
   // The server process went away.  Runs on the channel's read thread: fails
   // everything that is waiting on a reply that can no longer come, then
@@ -51,12 +54,8 @@ class SharedMemoryConnection
   // cost about a fifth of the round-trip latency; the deadline itself is a
   // clock read at enqueue.  Granularity is the poll interval (500 ms).
   // Returns whether any request still has a deadline to watch, which is what
-  // keeps the poll ticking; enqueue_ordered() starts it again.
+  // keeps the poll ticking; enqueue() starts it again.
   bool sweep_expired_requests();
-
-  // mutex_ held: drop a reply whose caller already timed out.  Returns true
-  // if the reply was consumed and must not be delivered.
-  bool consume_reply_for_abandoned();
 
 protected:
   virtual void timeout_action() final;
@@ -111,9 +110,9 @@ public:
     return channel_ && channel_->supports_fd_passing();
   }
 
-  SharedMemoryConnection(const EndPoint& endpoint,
-                         boost::asio::io_context& ioc);
-  ~SharedMemoryConnection();
+  NPRPC_API SharedMemoryConnection(const EndPoint& endpoint,
+                                   boost::asio::io_context& ioc);
+  NPRPC_API ~SharedMemoryConnection();
 };
 
 } // namespace nprpc::impl
