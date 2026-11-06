@@ -1740,7 +1740,7 @@ bool Http3Connection::init()
   params.initial_max_streams_bidi = 100;
   params.initial_max_streams_uni = 3; // Control + QPACK enc + QPACK dec
   params.max_datagram_frame_size = 65535;
-  params.max_idle_timeout = 30 * NGTCP2_SECONDS;
+  params.max_idle_timeout = g_cfg.http3_idle_timeout_ms * NGTCP2_MILLISECONDS;
   params.stateless_reset_token_present = 1;
   params.active_connection_id_limit = 7;
   params.grease_quic_bit = 1;

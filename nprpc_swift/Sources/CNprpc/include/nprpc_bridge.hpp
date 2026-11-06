@@ -83,6 +83,8 @@ struct RpcBuildConfig {
     size_t http_websocket_requests_per_session_per_second;
     size_t http_websocket_requests_burst;
     size_t http3_worker_count;
+    // QUIC max_idle_timeout announced by the HTTP/3 server; 0 = client's only.
+    uint32_t http3_idle_timeout_ms = 30000;
     bool http3_compression_enabled;
     size_t http3_compression_min_size;
     size_t http3_max_active_connections_per_ip;

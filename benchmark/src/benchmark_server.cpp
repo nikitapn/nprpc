@@ -154,6 +154,10 @@ public:
           keep_alive && *keep_alive)
         builder.keep_alive_timeout(
             std::chrono::seconds(std::strtoul(keep_alive, nullptr, 10)));
+      // QUIC idle timeout the HTTP/3 server announces, in milliseconds.
+      if (const char* idle = ::getenv("NPRPC_BENCH_HTTP3_IDLE_MS"); idle && *idle)
+        builder.http3_idle_timeout(
+            std::chrono::milliseconds(std::strtoul(idle, nullptr, 10)));
 
       const char* shm_ingress_env = ::getenv("NPRPC_BENCH_SHM_INGRESS");
       if (shm_egress_env && *shm_egress_env)

@@ -666,6 +666,7 @@ struct BuildConfig {
   size_t http_websocket_requests_per_session_per_second = NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_PER_SESSION_PER_SECOND;
   size_t http_websocket_requests_burst = NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_BURST;
   size_t http3_worker_count = NPRPC_DEFAULT_HTTP3_WORKER_COUNT;
+  uint32_t http3_idle_timeout_ms = NPRPC_DEFAULT_HTTP3_IDLE_TIMEOUT_MS; // 0 = client's value only
   bool http3_compression_enabled = NPRPC_DEFAULT_HTTP3_COMPRESSION_ENABLED;
   size_t http3_compression_min_size = NPRPC_DEFAULT_HTTP3_COMPRESSION_MIN_SIZE;
   size_t quic_max_connections = NPRPC_DEFAULT_QUIC_MAX_CONNECTIONS;
@@ -1114,6 +1115,17 @@ public:
   RpcBuilderHttp& http3_workers(size_t count) noexcept
   {
     cfg_->http3_worker_count = count;
+    return *this;
+  }
+
+  /// QUIC idle timeout the HTTP/3 server announces (max_idle_timeout): a
+  /// connection with nothing sent for the shorter of this and the client's
+  /// value is dropped. The server sends no PINGs to keep connections open;
+  /// a client that wants to keep one does. Zero announces no timeout, so
+  /// only the client's applies. Default: 30 s.
+  RpcBuilderHttp& http3_idle_timeout(std::chrono::milliseconds timeout) noexcept
+  {
+    cfg_->http3_idle_timeout_ms = static_cast<uint32_t>(timeout.count());
     return *this;
   }
 

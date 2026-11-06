@@ -332,6 +332,7 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.http_websocket_requests_burst =
             config->http_websocket_requests_burst;
         cxxConfig.http3_worker_count = config->http3_worker_count;
+        cxxConfig.http3_idle_timeout_ms = config->http3_idle_timeout_ms;
         cxxConfig.http3_compression_enabled = config->http3_compression_enabled;
         cxxConfig.http3_compression_min_size = config->http3_compression_min_size;
         cxxConfig.http3_max_active_connections_per_ip =

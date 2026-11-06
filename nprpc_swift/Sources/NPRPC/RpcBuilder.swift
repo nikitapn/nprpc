@@ -38,6 +38,7 @@ class BuildConfig {
     var httpWebSocketRequestsPerSessionPerSecond: UInt = 0
     var httpWebSocketRequestsBurst: UInt = 0
     var http3WorkerCount: UInt = 4
+    var http3IdleTimeoutMs: UInt32 = 30_000
     var http3CompressionEnabled: Bool = false
     var http3CompressionMinSize: UInt = 256
     var http3MaxActiveConnectionsPerIp: UInt = 0
@@ -254,6 +255,7 @@ extension RpcBuilderInternal {
         cxxConfig.http_websocket_requests_per_session_per_second = numericCast(config.httpWebSocketRequestsPerSessionPerSecond)
         cxxConfig.http_websocket_requests_burst = numericCast(config.httpWebSocketRequestsBurst)
         cxxConfig.http3_worker_count = numericCast(config.http3WorkerCount)
+        cxxConfig.http3_idle_timeout_ms = config.http3IdleTimeoutMs
         cxxConfig.http3_compression_enabled = config.http3CompressionEnabled
         cxxConfig.http3_compression_min_size = numericCast(config.http3CompressionMinSize)
         cxxConfig.http3_max_active_connections_per_ip = numericCast(config.http3MaxActiveConnectionsPerIp)
@@ -439,6 +441,18 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
     @discardableResult
     public func http3Workers(_ count: UInt) -> RpcBuilderHttp {
         config.http3WorkerCount = count
+        return self
+    }
+
+    /// QUIC idle timeout the HTTP/3 server announces (max_idle_timeout): a
+    /// connection with nothing sent for the shorter of this and the client's
+    /// value is dropped. Zero announces no timeout, so only the client's
+    /// applies. Default: 30 s.
+    ///
+    /// - Parameter milliseconds: idle timeout in milliseconds
+    @discardableResult
+    public func http3IdleTimeout(milliseconds: UInt32) -> RpcBuilderHttp {
+        config.http3IdleTimeoutMs = milliseconds
         return self
     }
 

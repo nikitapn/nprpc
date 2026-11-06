@@ -20,6 +20,10 @@
 #define NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_PER_SESSION_PER_SECOND 0
 #define NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_BURST 0
 #define NPRPC_DEFAULT_HTTP3_WORKER_COUNT 4
+// QUIC max_idle_timeout the HTTP/3 server announces, in milliseconds. The
+// connection closes after the shorter of this and the client's value passes
+// with nothing sent. 0 announces none, leaving only the client's.
+#define NPRPC_DEFAULT_HTTP3_IDLE_TIMEOUT_MS 30'000
 // HTTP/3 response compression (gzip/deflate). Off unless asked for; bodies
 // smaller than the minimum are sent as-is, since the coding overhead and the
 // CPU are not worth it there.

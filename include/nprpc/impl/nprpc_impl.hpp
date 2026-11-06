@@ -72,6 +72,7 @@ struct Config {
   size_t http_websocket_requests_per_session_per_second = NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_PER_SESSION_PER_SECOND;
   size_t http_websocket_requests_burst = NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_BURST;
   size_t http3_worker_count = NPRPC_DEFAULT_HTTP3_WORKER_COUNT; // 0 = auto fallback
+  uint32_t http3_idle_timeout_ms = NPRPC_DEFAULT_HTTP3_IDLE_TIMEOUT_MS; // 0 = client's value only
   bool http3_compression_enabled = NPRPC_DEFAULT_HTTP3_COMPRESSION_ENABLED;
   size_t http3_compression_min_size = NPRPC_DEFAULT_HTTP3_COMPRESSION_MIN_SIZE;
   size_t http3_max_active_connections_per_ip = NPRPC_DEFAULT_HTTP3_MAX_ACTIVE_CONNECTIONS_PER_IP;

@@ -367,6 +367,7 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   g_cfg.http_websocket_requests_burst =
       cfg_->http_websocket_requests_burst;
     g_cfg.http3_worker_count = cfg_->http3_worker_count;
+  g_cfg.http3_idle_timeout_ms = cfg_->http3_idle_timeout_ms;
   g_cfg.http3_compression_enabled = cfg_->http3_compression_enabled;
   g_cfg.http3_compression_min_size = cfg_->http3_compression_min_size;
   g_cfg.http3_max_active_connections_per_ip =
