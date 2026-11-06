@@ -47,7 +47,7 @@ NPRPC_DO_NOT_START_SERVER="${NPRPC_DO_NOT_START_SERVER:-0}"
 NPRPC_HTTP_PORT="${NPRPC_HTTP_PORT:-22223}"
 # io_context threads in benchmark_server, which serve HTTP/1 (HTTP/3 has its
 # own workers). With one, HTTP/1 is capped by a single core.
-NPRPC_BENCH_THREADS="${NPRPC_BENCH_THREADS:-4}"
+NPRPC_BENCH_THREADS="${NPRPC_BENCH_THREADS:-8}"
 
 # Router variant: npquicrouter listens on these public ports, forwards to
 # the backend on NPRPC_ROUTER_BACKEND_* ports via the SHM egress channel.
