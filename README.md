@@ -13,6 +13,7 @@ NPRPC is a high-performance, multi-transport RPC framework for distributed syste
 - **Server-rendered pages** — render HTML in the process that owns the services (see [docs/PAGE_RENDERING.md](docs/PAGE_RENDERING.md))
 - **Cookie auth** — httpOnly cookie-based auth for HTTP/WebSocket (see [docs/HTTP_AUTH.md](docs/HTTP_AUTH.md))
 - **POA** — Portable Object Adapter for lifecycle, transports, and dispatch placement (see [docs/POA.md](docs/POA.md))
+- **Calls and cancellation** — blocking and suspending clients, cancellable calls, and `[coroutine]` servants (see [docs/CALLS.md](docs/CALLS.md))
 - **Nameserver** — service discovery and named object binding
 - **File descriptor passing** — `fd` in IDL hands an open file (pipe, memfd, DMA-BUF) to the peer over shared memory, from C++ and Swift (see [docs/FILE_DESCRIPTORS.md](docs/FILE_DESCRIPTORS.md))
 
@@ -577,6 +578,7 @@ case .msgB(let b): print("B: \(b.code)")
 - `out` — output parameter
 - `raises(E1, E2)` — exception specification
 - `[unreliable]` — best-effort delivery (QUIC/WebTransport only, others ignore)
+- `[coroutine]` — the servant method suspends while it waits, without holding up its connection (see [docs/CALLS.md](docs/CALLS.md))
 - `[force_helpers=1]` — emit helper `from_flat` / `to_flat` functions for a `message`
 - `[trusted=true]` — disable strict bounds checking for untrusted input
 

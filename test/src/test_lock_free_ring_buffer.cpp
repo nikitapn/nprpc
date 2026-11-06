@@ -632,3 +632,49 @@ TEST(LockFreeRingBuffer, KilledReaderDoesNotBlockProducers)
   }
   std::signal(SIGALRM, SIG_DFL);
 }
+
+TEST(LockFreeRingBuffer, ReserveWaitingGetsRoomOnceTheReaderDrains)
+{
+  const std::string name = "test_ring_reserve_waiting_drain";
+  LockFreeRingBuffer::remove(name);
+  auto ring = LockFreeRingBuffer::create(name, 1024 * 1024, 512 * 1024);
+  std::vector<char> message(512 * 1024, 'x');
+  while (ring->try_write(message.data(), message.size())) {}
+
+  std::thread reader([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::vector<char> out(message.size());
+    EXPECT_EQ(ring->try_read(out.data(), out.size()), out.size());
+  });
+
+  std::atomic<bool> give_up{false};
+  auto reservation =
+      ring->reserve_write_waiting(message.size(), std::chrono::seconds(5), give_up);
+  EXPECT_TRUE(reservation);
+  if (reservation)
+    ring->abort_write(reservation);
+  reader.join();
+  LockFreeRingBuffer::remove(name);
+}
+
+TEST(LockFreeRingBuffer, ReserveWaitingGivesUp)
+{
+  const std::string name = "test_ring_reserve_waiting_give_up";
+  LockFreeRingBuffer::remove(name);
+  auto ring = LockFreeRingBuffer::create(name, 1024 * 1024, 512 * 1024);
+  std::vector<char> message(512 * 1024, 'x');
+  while (ring->try_write(message.data(), message.size())) {}
+
+  std::atomic<bool> give_up{false};
+  auto started = std::chrono::steady_clock::now();
+  EXPECT_FALSE(ring->reserve_write_waiting(message.size(), std::chrono::milliseconds(20), give_up));
+  const auto waited = std::chrono::steady_clock::now() - started;
+  EXPECT_GE(waited, std::chrono::milliseconds(20));
+  EXPECT_LT(waited, std::chrono::seconds(5));
+
+  give_up = true;
+  started = std::chrono::steady_clock::now();
+  EXPECT_FALSE(ring->reserve_write_waiting(message.size(), std::chrono::seconds(30), give_up));
+  EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(5));
+  LockFreeRingBuffer::remove(name);
+}

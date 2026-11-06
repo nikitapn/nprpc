@@ -133,7 +133,86 @@ should run elsewhere, so the transport keeps serving other calls.
 | C++ `with_dispatch_executor(ex)` | Wherever `ex.post` schedules work | Your own executor |
 
 With any of the non-default options, the transport hands the call off and
-immediately moves on. The method and its reply both run on the target.
+immediately moves on. The method and its reply both run on the target. This
+holds for TCP, WebSocket, WebTransport, QUIC and shared memory, with two
+exceptions: HTTP RPC, and the raw `use_epoll_tcp` and `use_uring_tcp` servers.
+Those keep their thread until the method returns, and run a
+`NeverBlockTransport` method on it.
+
+One session still runs one message at a time. While a handed-off call is
+running, later messages from that client wait behind it, whichever POA they are
+for, so a client sees its calls complete in order. Other clients aren't affected.
+
+A handed-off method can notice that its client stopped caring, and stop early. The
+token stops when the client cancels the call or disconnects. A call on the default
+POA can't be told, because its transport isn't reading.
+
+```cpp
+std::vector<Row> Report::Build() {
+  const auto stop = nprpc::get_call_context().stop_token;
+  std::vector<Row> rows;
+  while (!stop.stop_requested() && more_rows())
+    rows.push_back(next_row());
+  if (stop.stop_requested()) throw nprpc::OperationCancelled{};
+  return rows;
+}
+```
+
+```swift
+override func build() throws -> [Row] {
+    var rows: [Row] = []
+    while !currentCallIsCancelled && moreRows() { rows.append(nextRow()) }
+    return rows
+}
+```
+
+A cancelled call that hasn't started yet is skipped. A client that disconnects
+stops the running call, but its queued calls still run, with their tokens already
+stopped, because some may be one-way. [CALLS.md](CALLS.md) shows how each client and
+servant style behaves when a call is cancelled.
+
+### Methods that wait on something else
+
+A method marked `[coroutine]` in the IDL doesn't hold anything up while it waits.
+Its connection goes on to the next call, and its reply goes out whenever it's ready,
+so one client's calls can finish in any order. Clients don't change.
+
+```
+interface Report {
+  [coroutine] string Build(id: u32) raises (NotFound);
+}
+```
+
+```cpp
+nprpc::Task<std::string> ReportImpl::Build(std::stop_token stop, uint32_t id) {
+  auto rows = co_await database->QueryAsync(id, stop);
+  co_return render(rows);
+}
+```
+
+```swift
+override func build(id: UInt32) async throws -> String {
+    render(try await database.query(id: id))
+}
+```
+
+The method keeps the POA's choice of thread: after each `co_await` it's back on its
+executor, or on the thread pool or the session's executor if the POA has none. In
+Swift that's only for a POA with a `dispatch:`; otherwise a method runs on the
+concurrency pool. Other calls can run on that thread while it waits, so state read
+before an await may have changed after it.
+
+`stop` fires if the client cancels or disconnects, on any POA. In Swift, the task is
+cancelled: use `Task.isCancelled`. Arguments stay valid for the whole call.
+`get_context()` and `get_call_context()` only work until the first `co_await`.
+
+`[coroutine]` methods can't have out parameters or file descriptors. A session allows
+1024 at once; beyond that, a call fails with `ExceptionCommFailure`. HTTP RPC and the
+raw epoll and io_uring servers wait for the method to finish before replying.
+
+The runtime's thread pool also runs the transports' I/O, so size
+`start_thread_pool` for the number of methods you expect to block at once, plus
+some to spare.
 
 ### C++
 
@@ -173,8 +252,8 @@ final class DashboardImpl: DashboardServant, @unchecked Sendable {
 }
 ```
 
-`.queue` must be a **serial** queue. A shared-memory client matches replies
-to requests by order, so a concurrent queue could send them back out of order.
+`.queue` must be a **serial** queue. A session only runs one call at a time, but
+on a concurrent queue, calls from different clients would run at once.
 
 ### A thread with its own event loop (Swift)
 
@@ -203,7 +282,7 @@ Three rules, in order of how badly they fail when broken:
 
 1. **`post` must wake the loop.** Nothing else will tell it a call is waiting.
    An idle loop would otherwise never run the servant.
-2. **Drain in FIFO order**, for the same reason `.queue` must be serial.
+2. **Drain in FIFO order**, so each client's calls run in the order it sent them.
 3. **`isRunningOnExecutor` must be accurate.** It stops the runtime from
    posting to the loop it is already on and then waiting for a drain that
    cannot start until it returns.

@@ -251,6 +251,14 @@ class Runner:
     def stage_js(self) -> Result:
         js_dir = self.root / "test" / "js"
 
+        r_runtime = self._stage(
+            "JS runtime",
+            [str(self.root / "nprpc_js" / "build_if_stale.sh"), str(self.build_dir)],
+            timeout=300)
+        if not r_runtime.success:
+            return r_runtime
+        self.results.pop()
+
         # Ensure dependencies are installed
         if not (js_dir / "node_modules").exists():
             print(c(C.DIM, "  Installing npm dependencies…"))

@@ -99,6 +99,7 @@ run-cpp-tests *args: (bt "nprpc_test") (bt "nprpc_server_test") (bt "test_http_u
 run-js-tests: (bt "nprpc_server_test")
     #!/usr/bin/env bash
     set -euo pipefail
+    nprpc_js/build_if_stale.sh "{{build_dir}}"
     cd test/js
     if [[ ! -d node_modules ]]; then
       npm ci

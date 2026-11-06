@@ -1,6 +1,85 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+import CNprpc
+
+/// Inside a servant method: whether the client cancelled this call or went away.
+/// A long-running method can check this and stop early. It only ever turns true
+/// on a POA created with a `dispatch:` other than `.inlineOnTransportThread`.
+public var currentCallIsCancelled: Bool { nprpc_current_call_cancelled() }
+
+/// A `[coroutine]` servant method on its way: generated dispatch begins one, and it
+/// sends the reply once the method returns. On a POA with a `dispatch:` other than
+/// `.inlineOnTransportThread`, the method keeps running on that executor across its
+/// awaits. A client's cancellation cancels its task.
+public final class NPRPCDeferredCall: @unchecked Sendable {
+    private let handle: UnsafeMutableRawPointer
+
+    private init(handle: UnsafeMutableRawPointer) { self.handle = handle }
+    deinit { nprpc_deferred_call_release(handle) }
+
+    /// Nil if the session is at its limit; the client has been answered then.
+    public static func begin() -> NPRPCDeferredCall? {
+        nprpc_deferred_call_begin().map { NPRPCDeferredCall(handle: $0) }
+    }
+
+    /// Runs the method's body with the buffer to build the reply in.
+    public func start(_ body: @escaping @Sendable (FlatBuffer) async -> Void) {
+        let buffer = FlatBuffer(wrapping: nprpc_deferred_call_tx(handle))
+        let run: @Sendable () async -> Void = { [self] in
+            await body(buffer)
+            nprpc_deferred_call_finish(handle)
+        }
+
+        let task: Task<Void, Never>
+        if #available(macOS 15.0, iOS 18.0, *), nprpc_deferred_call_has_executor(handle) {
+            task = Task(executorPreference: NPRPCPoaTaskExecutor(call: self)) { await run() }
+        } else {
+            task = Task { await run() }
+        }
+
+        let cancel = Unmanaged.passRetained(CancelBox(task)).toOpaque()
+        nprpc_deferred_call_on_stop(handle, cancel, { context in
+            Unmanaged<CancelBox>.fromOpaque(context!).takeUnretainedValue().task.cancel()
+        }, { context in
+            Unmanaged<CancelBox>.fromOpaque(context!).release()
+        })
+    }
+
+    fileprivate func post(_ context: UnsafeMutableRawPointer, _ fn: @convention(c) (UnsafeMutableRawPointer?) -> Void) {
+        nprpc_deferred_call_post(handle, context, fn)
+    }
+
+    private final class CancelBox {
+        let task: Task<Void, Never>
+        init(_ task: Task<Void, Never>) { self.task = task }
+    }
+}
+
+@available(macOS 15.0, iOS 18.0, *)
+private final class NPRPCPoaTaskExecutor: TaskExecutor, @unchecked Sendable {
+    private let call: NPRPCDeferredCall
+
+    init(call: NPRPCDeferredCall) { self.call = call }
+
+    private final class JobBox {
+        let job: UnownedJob
+        let executor: NPRPCPoaTaskExecutor
+        init(job: UnownedJob, executor: NPRPCPoaTaskExecutor) {
+            self.job = job
+            self.executor = executor
+        }
+    }
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        let box = JobBox(job: UnownedJob(job), executor: self)
+        call.post(Unmanaged.passRetained(box).toOpaque()) { context in
+            let box = Unmanaged<JobBox>.fromOpaque(context!).takeRetainedValue()
+            box.job.runSynchronously(on: box.executor.asUnownedTaskExecutor())
+        }
+    }
+}
+
 /// Endpoint information for connecting to remote objects
 public struct NPRPCEndpoint {
     /// Type of transport (TCP, HTTP, WebSocket, etc.)

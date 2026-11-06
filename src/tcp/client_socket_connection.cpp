@@ -254,7 +254,7 @@ void SocketConnection::send_receive_async(
                                      flat_buffer&)>>&& completion_handler,
     uint32_t timeout_ms)
 {
-  const uint32_t request_id = generate_request_id();
+  const uint32_t request_id = call_id_for(buffer);
   inject_request_id(buffer, request_id);
 
   net::post(
@@ -312,6 +312,16 @@ void SocketConnection::send_receive_async(
 
         self->enqueue_write(std::move(buf), std::move(write_completion));
       });
+}
+
+bool SocketConnection::send_stream_message(flat_buffer&& buffer)
+{
+  net::post(socket_.get_executor(),
+            [self = shared_from_this(), buf = std::move(buffer)]() mutable {
+              self->enqueue_write(std::move(buf),
+                                  [](const boost::system::error_code&) {});
+            });
+  return true;
 }
 
 // ---------------------------------------------------------------------------

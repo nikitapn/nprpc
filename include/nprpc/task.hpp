@@ -18,8 +18,13 @@
 
 #pragma once
 
+#include <nprpc/export.hpp>
+
+#include <atomic>
 #include <coroutine>
 #include <exception>
+#include <memory>
+#include <type_traits>
 #include <functional>
 #include <semaphore>
 #include <stdexcept>
@@ -75,20 +80,129 @@ struct TaskResult<void> {
 // promise_type base — holds result + semaphore + continuation.
 // ---------------------------------------------------------------------------
 
+// Where a `[coroutine]` servant has to keep running: its POA's executor. Tasks
+// started while one is current inherit it, and return to it after every co_await.
+struct ResumeTarget {
+  void (*post)(void* ctx, void (*fn)(void*), void* arg);
+  // Optional; lets a resume already on the right thread skip the post.
+  bool (*is_running_on)(void* ctx);
+  void* ctx;
+  std::shared_ptr<void> owner;
+};
+
+NPRPC_API std::shared_ptr<const ResumeTarget>& current_resume_target() noexcept;
+NPRPC_API void resume_on_target(std::shared_ptr<const ResumeTarget> target,
+                                std::coroutine_handle<> handle) noexcept;
+
+// Passed to an awaited operation in place of the coroutine that awaits it.
+struct ResumeHop {
+  struct promise_type {
+    ResumeHop get_return_object() {
+      return {std::coroutine_handle<promise_type>::from_promise(*this)};
+    }
+    std::suspend_always initial_suspend() noexcept { return {}; }
+    std::suspend_never final_suspend() noexcept { return {}; }
+    void return_void() noexcept {}
+    void unhandled_exception() noexcept { std::terminate(); }
+  };
+  std::coroutine_handle<promise_type> handle;
+};
+
+inline ResumeHop make_resume_hop(std::shared_ptr<const ResumeTarget> target,
+                                 std::coroutine_handle<> awaiting) {
+  resume_on_target(std::move(target), awaiting);
+  co_return;
+}
+
+template<typename A>
+concept HasAwaitMembers = requires(A& a) { a.await_ready(); };
+
+template<typename A>
+concept HasMemberCoAwait = requires(A&& a) { std::forward<A>(a).operator co_await(); };
+
+template<typename A>
+concept HasFreeCoAwait = requires(A&& a) { operator co_await(std::forward<A>(a)); };
+
+template<typename A>
+concept HasCoAwait = HasMemberCoAwait<A> || HasFreeCoAwait<A>;
+
+// What the language would await for a type with operator co_await.
+template<HasCoAwait A>
+decltype(auto) get_awaiter(A&& awaitable) {
+  if constexpr (HasMemberCoAwait<A>)
+    return std::forward<A>(awaitable).operator co_await();
+  else
+    return operator co_await(std::forward<A>(awaitable));
+}
+
+// Aw is a reference to an awaiter that outlives this one, or an awaiter it owns.
+template<typename Aw>
+struct ResumingAwaiter {
+  Aw awaitable;
+  const std::shared_ptr<const ResumeTarget>& target;
+
+  bool await_ready() { return awaitable.await_ready(); }
+
+  bool await_suspend(std::coroutine_handle<> awaiting) {
+    std::coroutine_handle<> next = awaiting;
+    if (target)
+      next = make_resume_hop(target, awaiting).handle;
+    using Result = decltype(awaitable.await_suspend(next));
+    if constexpr (std::is_void_v<Result>) {
+      awaitable.await_suspend(next);
+      return true;
+    } else if constexpr (std::is_same_v<Result, bool>) {
+      const bool suspended = awaitable.await_suspend(next);
+      if (!suspended && target)
+        next.destroy();
+      return suspended;
+    } else {
+      awaitable.await_suspend(next).resume();
+      return true;
+    }
+  }
+
+  decltype(auto) await_resume() { return awaitable.await_resume(); }
+};
+
 template<typename T>
 struct TaskPromiseBase {
+  std::shared_ptr<const ResumeTarget> resume_target = current_resume_target();
+
+  template<HasCoAwait A>
+  auto await_transform(A&& awaitable) {
+    using Awaiter = decltype(get_awaiter(std::forward<A>(awaitable)));
+    return ResumingAwaiter<Awaiter>{get_awaiter(std::forward<A>(awaitable)), resume_target};
+  }
+  template<HasAwaitMembers A> requires (!HasCoAwait<A>)
+  ResumingAwaiter<A&&> await_transform(A&& awaitable) noexcept {
+    return {std::forward<A>(awaitable), resume_target};
+  }
+
   TaskResult<T>           result;
-  std::coroutine_handle<> continuation;  // set by co_await; resumed at end
-  std::binary_semaphore   ready{0};      // released at end; used by get()
+  // Who is waiting. A task starts eagerly, so it can finish on another thread
+  // while its caller is still getting to co_await or get(), and whichever of the
+  // two comes second has to find out from this.
+  std::atomic<void*>      waiter{nullptr};
+  std::binary_semaphore   ready{0};      // released at end for a blocked get()
   std::move_only_function<void(std::exception_ptr)> completion_handler;
 
   // Called by final_suspend's awaiter after the coroutine body finishes.
+  // Nothing may touch this promise after the waiter hears: it's free to destroy
+  // the task.
   void on_final() noexcept {
-    ready.release();                     // unblock any blocking get()
     if (completion_handler)
       completion_handler(result.get_exception());
-    if (continuation) continuation.resume();
+    void* const previous = waiter.exchange(finished(), std::memory_order_acq_rel);
+    if (previous == blocked_in_get())
+      ready.release();
+    else if (previous)
+      std::coroutine_handle<>::from_address(previous).resume();
   }
+
+  // Markers no coroutine frame can be at: addresses inside this promise.
+  void* finished() noexcept { return static_cast<void*>(&result); }
+  void* blocked_in_get() noexcept { return static_cast<void*>(&ready); }
 
   struct FinalAwaiter {
     bool await_ready() noexcept { return false; }
@@ -145,13 +259,14 @@ public:
   // --- Awaitable interface (used inside other coroutines) ------------------
 
   /// `co_await` support: whether the task has already finished.
-  bool await_ready() noexcept { return handle_.done(); }
+  bool await_ready() noexcept { return false; }
 
-  /// `co_await` support: resumes `h` when the task finishes.
-  void await_suspend(std::coroutine_handle<> h) noexcept {
-    handle_.promise().continuation = h;
-    // If the task already finished (race), resume immediately.
-    if (handle_.done()) h.resume();
+  /// `co_await` support: resumes `h` when the task finishes, or carries straight
+  /// on if it already has.
+  bool await_suspend(std::coroutine_handle<> h) noexcept {
+    void* expected = nullptr;
+    return handle_.promise().waiter.compare_exchange_strong(
+        expected, h.address(), std::memory_order_acq_rel, std::memory_order_acquire);
   }
 
   /// `co_await` support: the result, or the exception the task threw.
@@ -163,7 +278,12 @@ public:
   /// result or rethrows its exception. Do not call it on the thread the
   /// task needs in order to finish.
   decltype(auto) get() {
-    handle_.promise().ready.acquire();
+    auto& promise = handle_.promise();
+    void* expected = nullptr;
+    if (promise.waiter.compare_exchange_strong(expected, promise.blocked_in_get(),
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire))
+      promise.ready.acquire();
     return handle_.promise().result.get();
   }
 

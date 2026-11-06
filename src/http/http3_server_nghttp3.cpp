@@ -1054,6 +1054,7 @@ public:
       , throttle_session_key_(http_request_throttler().allocate_session_key())
       , rx_buffer_(4 * 1024 * 1024)
   {
+    telemetry_transport_ = static_cast<int>(monitor::Transport::WebTransport);
     ctx_.stream_manager->set_active_stream_counter(
         active_stream_counter(monitor::Transport::WebTransport));
     ctx_.remote_endpoint = EndPoint(EndPointType::WebTransport,
@@ -1127,6 +1128,7 @@ public:
         case MessageId::StreamError:
         case MessageId::StreamCancellation:
         case MessageId::StreamWindowUpdate:
+        case MessageId::CancelCall:
           return true;
         default:
           return false;
@@ -1142,25 +1144,36 @@ public:
         return false;
       }
 
-      const auto request_id = extract_request_id(rx_buffer_);
-      flat_buffer tx_buffer{std::max(last_tx_size_, flat_buffer::default_initial_size())};
-      const bool needs_reply = measured_dispatch(monitor::Transport::WebTransport, rx_buffer_, tx_buffer,
-          [&] { return handle_request(rx_buffer_, tx_buffer); });
-
-      if (needs_reply) {
-        last_tx_size_ = std::max(tx_buffer.size(), flat_buffer::default_initial_size());
-        inject_request_id(tx_buffer, request_id);
-        if (control_stream_id_ < 0) {
-          NPRPC_LOG_ERROR("[HTTP/3][WT] Cannot reply before control stream is bound");
-          return false;
-        }
-        queue_buffer(control_stream_id_, std::move(tx_buffer));
+      if (control_stream_id_ < 0 && !is_fire_and_forget) {
+        NPRPC_LOG_ERROR("[HTTP/3][WT] Cannot reply before control stream is bound");
+        return false;
       }
+
+      if (must_hand_off(rx_buffer_))
+        hand_off(std::move(rx_buffer_));
+      else
+        process_handed_off(rx_buffer_, true);
 
       receive_buffer.consume(frame_len);
     }
 
     return true;
+  }
+
+  bool supports_deferred_replies() const noexcept override { return true; }
+
+  void process_handed_off(flat_buffer& rx, bool wants_reply) override
+  {
+    const auto request_id = extract_request_id(rx);
+    flat_buffer tx_buffer{std::max(last_tx_size_, flat_buffer::default_initial_size())};
+    const bool needs_reply = measured_dispatch(*this, monitor::Transport::WebTransport, rx, tx_buffer,
+        [&] { return handle_request(rx, tx_buffer); });
+
+    if (needs_reply && wants_reply) {
+      last_tx_size_ = std::max(tx_buffer.size(), flat_buffer::default_initial_size());
+      inject_request_id(tx_buffer, request_id);
+      queue_buffer(control_stream_id_, std::move(tx_buffer));
+    }
   }
 
   nprpc::Task<> send_receive_coro(flat_buffer& buffer,

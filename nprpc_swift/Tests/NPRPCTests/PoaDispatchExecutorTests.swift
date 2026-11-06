@@ -235,6 +235,117 @@ final class PoaDispatchExecutorTests: XCTestCase {
         )
     }
 
+    /// Cancelling the client's task reaches a servant running on an executor.
+    func testCancellingTaskStopsServant() async throws {
+        final class PollingServant: TestBasicServant, @unchecked Sendable {
+            let entered = DispatchSemaphore(value: 0)
+            let finished = DispatchSemaphore(value: 0)
+            nonisolated(unsafe) var sawCancel = false
+            override func returnU32() throws -> UInt32 {
+                entered.signal()
+                let giveUp = Date().addingTimeInterval(5)
+                while !currentCallIsCancelled && Date() < giveUp {
+                    Thread.sleep(forTimeInterval: 0.001)
+                }
+                sawCancel = currentCallIsCancelled
+                finished.signal()
+                return 1
+            }
+        }
+        // The runtime allows six POAs and has no way to free one, so share this.
+        let servant = PollingServant()
+        let client = try makeShmClient(servant: servant, poa: Self.loopPoa!)
+
+        let call = Task { try await client.returnU32() }
+        await Task.detached { servant.entered.wait() }.value
+        XCTAssertFalse(currentCallIsCancelled, "false outside a servant method")
+        call.cancel()
+        await Task.detached { servant.finished.wait() }.value
+        XCTAssertTrue(servant.sawCancel)
+    }
+
+    /// A `[coroutine]` method keeps its POA's executor across awaits, doesn't hold
+    /// up its session, and hears about cancellation through its task.
+    func testCoroutineMethod() async throws {
+        final class Servant: TestCoroutineServant, @unchecked Sendable {
+            let loopThread: Thread
+            nonisolated(unsafe) var onLoop = true
+            init(loopThread: Thread) { self.loopThread = loopThread }
+
+            override func add(a: UInt32, b: UInt32) async throws -> UInt32 {
+                onLoop = onLoop && Thread.current === loopThread
+                try await Task.sleep(nanoseconds: 1_000_000)
+                onLoop = onLoop && Thread.current === loopThread
+                return a + b
+            }
+            override func echo(text: String) async -> String {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                return text
+            }
+            override func wait() async {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 1_000_000)
+                }
+                onLoop = onLoop && Thread.current === loopThread
+            }
+            override func quick() -> UInt32 { 5 }
+        }
+
+        let servant = Servant(loopThread: Self.loop!.thread!)
+        let oid = try Self.loopPoa!.activateObject(servant, flags: .shm)
+        guard let obj = NPRPCObject.fromObjectId(oid),
+              let client = narrow(obj, to: TestCoroutine.self) else {
+            throw RuntimeError(message: "no client")
+        }
+
+        let sum = try await client.add(a: 2, b: 3)
+        XCTAssertEqual(sum, 5)
+
+        // Quick gets its reply while Echo is still asleep.
+        async let echoed = client.echo(text: "later")
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let quick = try await client.quick()
+        XCTAssertEqual(quick, 5)
+        let text = try await echoed
+        XCTAssertEqual(text, "later")
+
+        let waiting = Task { try await client.wait() }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        waiting.cancel()
+        _ = await waiting.result
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertTrue(servant.onLoop, "left the POA's executor")
+    }
+
+    /// A reply too big for the ring fails the call, and says why.
+    func testReplyOverRingLimitReportsReason() async throws {
+        final class Servant: TestCoroutineServant, @unchecked Sendable {
+            override func add(a: UInt32, b: UInt32) async throws -> UInt32 { a + b }
+            override func echo(text: String) async -> String {
+                String(repeating: "x", count: 32 * 1024 * 1024)
+            }
+            override func wait() async {}
+            override func quick() -> UInt32 { 5 }
+        }
+        let servant = Servant()
+        let oid = try Self.loopPoa!.activateObject(servant, flags: .shm)
+        guard let obj = NPRPCObject.fromObjectId(oid),
+              let client = narrow(obj, to: TestCoroutine.self) else {
+            throw RuntimeError(message: "no client")
+        }
+
+        do {
+            _ = try await client.echo(text: "anything")
+            XCTFail("expected ExceptionCommFailure")
+        } catch let e as ExceptionCommFailure {
+            XCTAssertEqual(e.reason, .MessageTooLarge)
+            XCTAssertTrue(e.message.contains("exceeds"), e.message)
+        }
+        let quick = try await client.quick()
+        XCTAssertEqual(quick, 5)
+    }
+
     /// Sequential RPCs on a custom serial executor stay ordered and on-queue.
     func testCustomSerialQueueSequentialCalls() async throws {
         let queue = DispatchQueue(label: "nprpc.test.poa.custom-seq")

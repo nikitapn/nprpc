@@ -58,7 +58,6 @@ template <class Derived> class WebSocketSession : public Session
   std::deque<outgoing_message> write_queue_;
   std::unordered_map<uint32_t, pending_request> pending_requests_;
 
-  std::atomic<uint32_t> next_request_id_{1};
   std::atomic<bool> reading_{false};
   std::atomic<bool> writing_{false};
 
@@ -79,8 +78,8 @@ template <class Derived> class WebSocketSession : public Session
   void on_read(beast::error_code ec, std::size_t bytes_transferred);
   void on_write(beast::error_code ec, std::size_t bytes_transferred);
   void do_write();
-
-  uint32_t generate_request_id() { return next_request_id_.fetch_add(1); }
+  void process_handed_off(flat_buffer& rx, bool wants_reply) override;
+  bool supports_deferred_replies() const noexcept override { return true; }
 
   // Helper methods for request ID correlation
   void inject_request_id(flat_buffer& buffer, uint32_t request_id);

@@ -136,11 +136,26 @@ class Session_Socket : public nprpc::impl::Session,
       msg_buf.commit(msg_size);
       rx_buffer_.consume(msg_size);
 
+      if (must_hand_off(msg_buf)) {
+        hand_off(std::move(msg_buf));
+        continue;
+      }
+
       tx_buffer_.consume(tx_buffer_.size());
       bool needs_reply = handle_request(msg_buf, tx_buffer_);
       if (needs_reply)
         enqueue_write(std::move(tx_buffer_));
     }
+  }
+
+  bool supports_deferred_replies() const noexcept override { return true; }
+
+  // Runs on the executor, so it has its own tx buffer and posts the reply.
+  void process_handed_off(flat_buffer& rx, bool wants_reply) override
+  {
+    flat_buffer tx{flat_buffer::default_initial_size()};
+    if (handle_request(rx, tx) && wants_reply)
+      send_stream_message(std::move(tx));
   }
 
   // ---- Session interface stubs (server-side sessions never initiate RPCs) --
@@ -186,6 +201,7 @@ public:
     net::co_spawn(socket_.get_executor(),
       [self = shared_from_this()]() -> net::awaitable<void> {
         co_await self->read_loop();
+        self->notify_peer_gone();
       },
       net::detached);
   }

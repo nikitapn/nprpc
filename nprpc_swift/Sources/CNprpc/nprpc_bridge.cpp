@@ -1,6 +1,7 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include <nprpc/impl/deferred_call.hpp>
 #include "include/nprpc_bridge.hpp"
 #include "nprpc_bridge_error.hpp"
 
@@ -675,7 +676,7 @@ template<class Configure>
 BridgeResult<void> start_async_rpc(void* obj_ptr, void* buffer_ptr, void* context,
                                   uint32_t timeout_ms, bool receive_response,
                                   std::shared_ptr<AsyncCompletion>& completion,
-                                  Configure configure) noexcept {
+                                  Configure configure, uint32_t* call_id = nullptr) noexcept {
     return capture([&]() -> BridgeResult<void> {
         if (!obj_ptr || !buffer_ptr)
             return std::unexpected(BridgeError(NPRPC_BRIDGE_INVALID_ARGUMENT, "Invalid RPC arguments"));
@@ -685,6 +686,8 @@ BridgeResult<void> start_async_rpc(void* obj_ptr, void* buffer_ptr, void* contex
 
         completion = std::make_shared<AsyncCompletion>(context, receive_response);
         configure(*completion);
+        if (call_id)
+            *call_id = (*session)->reserve_call_id(*static_cast<nprpc::flat_buffer*>(buffer_ptr));
         auto started = (*session)->send_receive_async_result(
             std::move(*static_cast<nprpc::flat_buffer*>(buffer_ptr)),
             [state = completion](nprpc::Result<void> result, nprpc::flat_buffer& buf) noexcept {
@@ -955,17 +958,82 @@ const uint8_t* nprpc_object_get_origin(void* ptr) {
 
 void nprpc_object_send_async_result(void* obj_ptr, void* buffer_ptr, void* context,
                                    swift_rpc_completion callback, uint32_t timeout_ms,
-                                   bool receive_response) noexcept {
+                                   bool receive_response, uint32_t* call_id) noexcept {
     if (!callback) return;
     std::shared_ptr<AsyncCompletion> completion;
     const auto result = start_async_rpc(obj_ptr, buffer_ptr, context, timeout_ms,
-        receive_response, completion, [callback](AsyncCompletion& state) { state.callback = callback; });
+        receive_response, completion, [callback](AsyncCompletion& state) { state.callback = callback; }, call_id);
     if (!result) {
         if (completion) completion->fail(result.error());
         else {
             const auto error = result.error().view();
             callback(context, &error, nullptr);
         }
+    }
+}
+
+namespace {
+using DeferredCallPtr = std::shared_ptr<nprpc::impl::DeferredCall>;
+DeferredCallPtr& deferred(void* call) noexcept { return *static_cast<DeferredCallPtr*>(call); }
+}
+
+void* nprpc_deferred_call_begin() noexcept {
+    try {
+        auto call = nprpc::impl::DeferredCall::begin(nprpc::get_context());
+        return call ? new DeferredCallPtr(std::move(call)) : nullptr;
+    } catch (const std::exception& e) {
+        NPRPC_LOG_ERROR("[SWB] Could not begin a coroutine call: {}", e.what());
+        return nullptr;
+    }
+}
+
+void* nprpc_deferred_call_tx(void* call) noexcept { return &deferred(call)->tx; }
+
+void nprpc_deferred_call_finish(void* call) noexcept {
+    try {
+        deferred(call)->finish();
+    } catch (const std::exception& e) {
+        NPRPC_LOG_ERROR("[SWB] Could not send a coroutine reply: {}", e.what());
+    }
+}
+
+void nprpc_deferred_call_release(void* call) noexcept { delete static_cast<DeferredCallPtr*>(call); }
+
+bool nprpc_deferred_call_has_executor(void* call) noexcept {
+    auto* poa = deferred(call)->ctx.call.poa;
+    return poa && poa->dispatch_executor();
+}
+
+void nprpc_deferred_call_post(void* call, void* context, void (*fn)(void*)) noexcept {
+    const auto& target = *deferred(call)->resume_target;
+    target.post(target.ctx, fn, context);
+}
+
+void nprpc_deferred_call_on_stop(void* call, void* context, void (*fire)(void*),
+                                 void (*release)(void*)) noexcept {
+    try {
+        std::shared_ptr<void> owned(context, release);
+        deferred(call)->on_stop([owned, fire] { fire(owned.get()); });
+    } catch (const std::exception& e) {
+        NPRPC_LOG_ERROR("[SWB] Could not watch for a call's cancellation: {}", e.what());
+    }
+}
+
+void nprpc_object_cancel_call(void* obj_ptr, uint32_t call_id) noexcept {
+    if (!obj_ptr || call_id == 0) return;
+    (void)capture([&]() -> BridgeResult<void> {
+        auto session = session_for_object(obj_ptr);
+        if (!session) return std::unexpected(session.error());
+        (*session)->cancel_call(call_id);
+        return {};
+    });
+}
+
+bool nprpc_current_call_cancelled() noexcept {
+    try {
+        return nprpc::get_call_context().stop_token.stop_requested();
+    } catch (const std::exception&) {
+        return false; // not inside a servant method
     }
 }
 

@@ -1,7 +1,12 @@
 // Copyright (c) 2021-2025, Nikita Pennie <nikitapnn1@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#include <format>
+#include <boost/asio/post.hpp>
+
 #include <coroutine>
+#include <cstddef>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <stop_token>
@@ -14,6 +19,8 @@
 #include <nprpc/impl/nprpc_impl.hpp>
 #include <nprpc/impl/stream_manager.hpp>
 #include <nprpc/impl/async_result.hpp>
+#include <nprpc/impl/deferred_call.hpp>
+#include <nprpc/impl/telemetry.hpp>
 
 #include "logging.hpp"
 
@@ -46,11 +53,23 @@ boost::system::error_code Session::do_send_receive(flat_buffer&, uint32_t)
   return boost::asio::error::operation_not_supported;
 }
 
+namespace {
+[[noreturn]] void throw_transport_failure(const boost::system::error_code& ec)
+{
+  auto reason = nprpc::CommFailureReason::ConnectionFailed;
+  if (ec == boost::asio::error::message_size)
+    reason = nprpc::CommFailureReason::MessageTooLarge;
+  else if (ec == boost::asio::error::no_buffer_space)
+    reason = nprpc::CommFailureReason::RingFull;
+  throw nprpc::ExceptionCommFailure(reason, ec.message());
+}
+} // namespace
+
 void Session::send_receive(flat_buffer& buffer, uint32_t timeout_ms)
 {
   const auto ec = do_send_receive(buffer, timeout_ms);
   if (ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();
-  if (ec) throw nprpc::ExceptionCommFailure();
+  if (ec) throw_transport_failure(ec);
 }
 
 Result<void> Session::send_receive_result(flat_buffer& buffer, uint32_t timeout_ms) noexcept
@@ -99,11 +118,21 @@ nprpc::Task<> Session::send_receive_coro(flat_buffer& buffer,
 
   auto call = std::make_shared<Call>();
   const auto executor = timeout_timer_.get_executor();
+  const auto call_id = reserve_call_id(buffer);
   // Constructed before suspending, so a stop request that lands now finds nothing
-  // to resume, and await_suspend sees it.
-  std::stop_callback on_stop(st, [call, executor]() noexcept {
-    if (auto waiting = call->finish(true))
+  // to resume, and await_suspend sees it. Nothing has gone out in that case, so
+  // there is nothing to cancel.
+  std::stop_callback on_stop(st, [call, executor, call_id, cell = self_cell_]() noexcept {
+    if (auto waiting = call->finish(true)) {
+      if (auto session = cell->lock()) {
+        try {
+          session->cancel_call(call_id);
+        } catch (const std::exception& e) {
+          NPRPC_LOG_ERROR("Could not send a call cancellation: {}", e.what());
+        }
+      }
       boost::asio::post(executor, [waiting] { waiting.resume(); });
+    }
   });
 
   struct Awaiter {
@@ -150,7 +179,7 @@ nprpc::Task<> Session::send_receive_coro(flat_buffer& buffer,
 
   if (call->cancelled) throw nprpc::OperationCancelled();
   if (call->ec == boost::asio::error::timed_out) throw nprpc::ExceptionTimeout();
-  if (call->ec) throw nprpc::ExceptionCommFailure();
+  if (call->ec) throw_transport_failure(call->ec);
   buffer = std::move(call->response);
 }
 
@@ -183,6 +212,7 @@ void invoke_servant_dispatch(ObjectServant& servant,
                              Fn&& body)
 {
   const auto& ex = servant.poa()->dispatch_executor();
+  session.ctx().call.poa = servant.poa();
   ex.invoke_sync([&] {
     set_context(session);
     try {
@@ -195,10 +225,436 @@ void invoke_servant_dispatch(ObjectServant& servant,
   });
 }
 
+namespace {
+
+// Where a message is addressed, without dispatching it. Unknown or too-short
+// messages give nullptr; handle_request reports those.
+Poa* peek_target_poa(const flat_buffer& rx)
+{
+  if (rx.size() < sizeof(flat::Header) || !g_rpc)
+    return nullptr;
+
+  const auto* data = static_cast<const std::byte*>(rx.cdata().data());
+  size_t poa_idx_offset = 0;
+  switch (reinterpret_cast<const flat::Header*>(data)->msg_id) {
+  case MessageId::FunctionCall:
+    if (rx.size() < sizeof(flat::Header) + sizeof(flat::CallHeader))
+      return nullptr;
+    poa_idx_offset = sizeof(flat::Header) + offsetof(flat::CallHeader, poa_idx);
+    break;
+  case MessageId::StreamInitialization:
+    poa_idx_offset = sizeof(flat::Header) + sizeof(uint64_t); // after stream_id
+    break;
+  case MessageId::AddReference:
+  case MessageId::ReleaseObject:
+    poa_idx_offset = sizeof(flat::Header);
+    break;
+  default:
+    return nullptr;
+  }
+  uint16_t poa_idx = 0;
+  if (rx.size() < poa_idx_offset + sizeof(poa_idx))
+    return nullptr;
+  std::memcpy(&poa_idx, data + poa_idx_offset, sizeof(poa_idx));
+  auto poa = g_rpc->get_poa(poa_idx);
+  return poa ? *poa : nullptr;
+}
+
+// The executor a drain should run on for this message. Empty means the runtime's
+// thread pool. Without is_running_on, invoke_sync could not tell it is already
+// on the executor and would wait for itself, so such an executor is reached
+// from the pool, by post+wait.
+DispatchExecutor handoff_target(const flat_buffer& rx)
+{
+  if (auto* poa = peek_target_poa(rx)) {
+    const auto& ex = poa->dispatch_executor();
+    if (ex && ex.is_running_on)
+      return ex;
+  }
+  return {};
+}
+
+bool same_executor(const DispatchExecutor& a, const DispatchExecutor& b) noexcept
+{
+  return a.post == b.post && a.ctx == b.ctx;
+}
+
+} // namespace
+
+struct Session::HandoffKick {
+  std::shared_ptr<Session> session;
+  DispatchExecutor running_on;
+};
+
+void Session::run_handoff_kick(void* p)
+{
+  std::unique_ptr<HandoffKick> kick(static_cast<HandoffKick*>(p));
+  kick->session->drain_handoffs(kick->running_on);
+}
+
+bool Session::must_hand_off(const flat_buffer& rx)
+{
+  // A cancel has to overtake the queue, so hand_off() takes it on the reader.
+  if (rx.size() >= sizeof(flat::Header) &&
+      static_cast<const flat::Header*>(rx.cdata().data())->msg_id == MessageId::CancelCall)
+    return true;
+  if (auto* poa = peek_target_poa(rx); poa && poa->requires_off_transport_dispatch())
+    return true;
+  std::lock_guard lock(handoff_mu_);
+  return handoff_draining_;
+}
+
+void Session::on_cancel_call(const flat_buffer& rx)
+{
+  if (rx.size() < sizeof(flat::Header) + sizeof(flat::CancelCallBody))
+    return;
+  uint32_t call_id = 0;
+  std::memcpy(&call_id,
+              static_cast<const std::byte*>(rx.cdata().data()) + sizeof(flat::Header),
+              sizeof(call_id));
+  if (call_id == 0)
+    return;
+
+  std::stop_source to_stop{std::nostopstate};
+  {
+    std::lock_guard lock(handoff_mu_);
+    if (running_call_id_ == call_id) {
+      to_stop = running_call_stop_;
+    } else {
+      bool queued_call = false;
+      for (auto& queued : handoffs_) {
+        if (queued.call_id == call_id) {
+          queued.cancelled = true;
+          queued_call = true;
+          break;
+        }
+      }
+      if (!queued_call) {
+        if (auto it = deferred_calls_.find(call_id); it != deferred_calls_.end())
+          to_stop = it->second;
+      }
+    }
+  }
+  // Unlocked: this runs the servant's stop callbacks.
+  to_stop.request_stop();
+}
+
+void Session::notify_peer_gone()
+{
+  std::stop_source to_stop{std::nostopstate};
+  std::vector<std::stop_source> deferred;
+  {
+    std::lock_guard lock(handoff_mu_);
+    peer_gone_ = true;
+    to_stop = running_call_stop_;
+    deferred.reserve(deferred_calls_.size());
+    for (auto& [id, stop] : deferred_calls_)
+      deferred.push_back(stop);
+  }
+  to_stop.request_stop();
+  for (auto& stop : deferred)
+    stop.request_stop();
+}
+
+// ---- [coroutine] calls -----------------------------------------------------
+
+DeferredCall::DeferredCall(std::shared_ptr<Session> session)
+    : session_(std::move(session))
+{
+}
+
+DeferredCall::~DeferredCall() = default;
+
+std::shared_ptr<DeferredCall> DeferredCall::begin(SessionContext& session_ctx)
+{
+  auto* session = session_ctx.session;
+  auto owner = session ? session->self_cell_->lock() : nullptr;
+  if (!owner) {
+    make_comm_failure_answer(session_ctx, CommFailureReason::ConnectionFailed,
+                             "The session is closing");
+    return nullptr;
+  }
+
+  const auto id = static_cast<const flat::Header*>(session_ctx.rx_buffer->cdata().data())->request_id;
+  auto call = std::make_shared<DeferredCall>(owner);
+  {
+    std::lock_guard lock(session->handoff_mu_);
+    if (session->deferred_calls_.size() >= Session::max_deferred_calls) {
+      NPRPC_LOG_ERROR("Session has {} coroutine calls running, refusing another",
+                      session->deferred_calls_.size());
+      make_comm_failure_answer(session_ctx, CommFailureReason::TooManyCalls,
+                               std::format("The session already has {} coroutine calls running",
+                                           Session::max_deferred_calls));
+      return nullptr;
+    }
+    if (session->peer_gone_)
+      call->stop_.request_stop();
+    // A client could reuse an id, or send 0; only the first can be cancelled then.
+    session->deferred_calls_.try_emplace(id, call->stop_);
+  }
+
+  call->id_ = id;
+  call->received_ = session_ctx.rx_buffer->size();
+  call->started_ = std::chrono::steady_clock::now();
+  call->rx = std::move(*session_ctx.rx_buffer);
+  call->ctx.remote_endpoint = session_ctx.remote_endpoint;
+  call->ctx.quic_client_authenticated = session_ctx.quic_client_authenticated;
+  call->ctx.stream_manager = session_ctx.stream_manager;
+  call->ctx.session = session;
+  call->ctx.rx_buffer = &call->rx;
+  call->ctx.tx_buffer = &call->tx;
+  call->ctx.call.stop_token = call->stop_.get_token();
+  call->ctx.call.poa = session_ctx.call.poa;
+
+  // Where the coroutine keeps running: the POA's executor, or else the pool for
+  // NeverBlockTransport, or else this session's own executor.
+  struct AsioTarget {
+    boost::asio::any_io_executor executor;
+    static void post(void* ctx, void (*fn)(void*), void* arg)
+    {
+      boost::asio::post(static_cast<AsioTarget*>(ctx)->executor, [fn, arg] { fn(arg); });
+    }
+  };
+  auto target = std::make_shared<detail::ResumeTarget>();
+  auto* poa = session_ctx.call.poa;
+  if (poa && poa->dispatch_executor()) {
+    const auto& ex = poa->dispatch_executor();
+    target->post = ex.post;
+    target->is_running_on = ex.is_running_on;
+    target->ctx = ex.ctx;
+  } else {
+    auto asio_target = std::make_shared<AsioTarget>(AsioTarget{
+        poa && poa->requires_off_transport_dispatch()
+            ? boost::asio::any_io_executor(get_io_context().get_executor())
+            : session->timeout_timer_.get_executor()});
+    target->post = &AsioTarget::post;
+    target->is_running_on = nullptr;
+    target->ctx = asio_target.get();
+    target->owner = std::move(asio_target);
+  }
+  call->resume_target = std::move(target);
+
+  session->call_deferred_ = true;
+  if (!session->supports_deferred_replies())
+    session->blocking_deferred_call_ = call;
+  return call;
+}
+
+void DeferredCall::on_stop(std::function<void()> on_stop)
+{
+  on_stop_.emplace(stop_.get_token(), std::move(on_stop));
+}
+
+void DeferredCall::fail(std::exception_ptr error)
+{
+  tx.consume(tx.size());
+  try {
+    std::rethrow_exception(error);
+  } catch (const nprpc::OperationCancelled&) {
+    make_simple_answer(ctx, MessageId::Error_Cancelled, id_);
+  } catch (const std::exception& e) {
+    NPRPC_LOG_ERROR("Exception in a coroutine call: {}", e.what());
+    make_simple_answer(ctx, MessageId::Error_BadInput, id_);
+  } catch (...) {
+    NPRPC_LOG_ERROR("Unknown exception in a coroutine call");
+    make_simple_answer(ctx, MessageId::Error_BadInput, id_);
+  }
+}
+
+void DeferredCall::finish()
+{
+  if (std::exchange(finished_, true))
+    return;
+
+  if (tx.size() < sizeof(flat::Header))
+    make_simple_answer(ctx, MessageId::Error_BadInput, id_);
+  auto* header = static_cast<flat::Header*>(tx.data().data());
+  header->request_id = id_;
+  const bool error = header->msg_id >= MessageId::Exception;
+  const size_t sent = tx.size();
+
+  {
+    std::lock_guard lock(session_->handoff_mu_);
+    session_->deferred_calls_.erase(id_);
+  }
+
+  if (session_->telemetry_transport_ >= 0 && telemetry_enabled()) {
+    record_telemetry(static_cast<monitor::Transport>(session_->telemetry_transport_),
+                     received_, sent,
+                     std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         std::chrono::steady_clock::now() - started_).count(),
+                     error);
+  }
+
+  if (session_->supports_deferred_replies())
+    session_->send_deferred_reply(std::move(tx));
+  else
+    done_.release();
+}
+
+void start_deferred_call(SessionContext& session_ctx,
+                         std::function<Task<>(SessionContext&, std::stop_token)> body)
+{
+  struct Detached {
+    struct promise_type {
+      Detached get_return_object() noexcept { return {}; }
+      std::suspend_never initial_suspend() noexcept { return {}; }
+      std::suspend_never final_suspend() noexcept { return {}; }
+      void return_void() noexcept {}
+      void unhandled_exception() noexcept { std::terminate(); }
+    };
+  };
+  struct Runner {
+    static Detached run(std::shared_ptr<DeferredCall> call, Task<> task)
+    {
+      try {
+        co_await task;
+      } catch (...) {
+        call->fail(std::current_exception());
+      }
+      call->finish();
+    }
+  };
+
+  auto call = DeferredCall::begin(session_ctx);
+  if (!call)
+    return;
+
+  auto& current = detail::current_resume_target();
+  auto previous = std::exchange(current, call->resume_target);
+  Task<> task = body(call->ctx, call->stop_token());
+  current = std::move(previous);
+  Runner::run(call, std::move(task));
+}
+
+
+void Session::cancel_call(uint32_t call_id)
+{
+  constexpr auto total = sizeof(flat::Header) + sizeof(flat::CancelCallBody);
+  flat_buffer fb;
+  fb.prepare(total);
+  fb.commit(total);
+  auto* header = static_cast<flat::Header*>(fb.data().data());
+  header->size = total;
+  header->msg_id = MessageId::CancelCall;
+  header->msg_type = MessageType::Request;
+  header->request_id = 0;
+  std::memcpy(static_cast<std::byte*>(fb.data().data()) + sizeof(flat::Header),
+              &call_id, sizeof(call_id));
+  send_main_stream_message(std::move(fb));
+}
+
+void Session::hand_off(flat_buffer&& rx, bool wants_reply)
+{
+  const auto* header = rx.size() >= sizeof(flat::Header)
+      ? static_cast<const flat::Header*>(rx.cdata().data()) : nullptr;
+  if (header && header->msg_id == MessageId::CancelCall) {
+    on_cancel_call(rx);
+    return;
+  }
+  const uint32_t call_id =
+      header && header->msg_id == MessageId::FunctionCall ? header->request_id : 0;
+
+  if (self_cell_->expired()) {
+    process_handed_off(rx, wants_reply);
+    return;
+  }
+
+  // Worked out before rx moves. Only used if this message starts a drain.
+  const auto target = handoff_target(rx);
+  {
+    std::lock_guard lock(handoff_mu_);
+    handoffs_.push_back({std::move(rx), wants_reply, call_id, false});
+    if (handoff_draining_)
+      return;
+    handoff_draining_ = true;
+  }
+  kick_handoffs(target);
+}
+
+void Session::clear_handoffs()
+{
+  std::lock_guard lock(handoff_mu_);
+  handoffs_.clear();
+}
+
+void Session::kick_handoffs(const DispatchExecutor& target)
+{
+  auto self = self_cell_->lock();
+  if (!self) {
+    // The session is going away, and with it whoever was waiting on these.
+    std::lock_guard lock(handoff_mu_);
+    handoffs_.clear();
+    handoff_draining_ = false;
+    return;
+  }
+  if (target) {
+    target.post(target.ctx, &Session::run_handoff_kick,
+                new HandoffKick{std::move(self), target});
+  } else {
+    boost::asio::post(get_io_context(), [self = std::move(self)] {
+      self->drain_handoffs({});
+    });
+  }
+}
+
+void Session::process_handed_off(flat_buffer& rx, bool)
+{
+  flat_buffer tx;
+  handle_request(rx, tx);
+}
+
+void Session::drain_handoffs(const DispatchExecutor& running_on)
+{
+  for (;;) {
+    HandedOff next;
+    std::stop_source stop{std::nostopstate};
+    {
+      std::lock_guard lock(handoff_mu_);
+      if (handoffs_.empty()) {
+        handoff_draining_ = false;
+        return;
+      }
+      // A message for another executor moves the drain there, so a POA's
+      // servants don't run on, or block, some other POA's thread. Pool-bound
+      // messages (including stream frames) stay wherever the drain is.
+      const auto target = handoff_target(handoffs_.front().rx);
+      if (target && !same_executor(target, running_on)) {
+        // handoff_draining_ stays set: the new drain takes over.
+        target.post(target.ctx, &Session::run_handoff_kick,
+                    new HandoffKick{self_cell_->lock(), target});
+        return;
+      }
+      next = std::move(handoffs_.front());
+      handoffs_.pop_front();
+      running_call_id_ = next.call_id;
+      running_call_stop_ = std::stop_source{};
+      stop = running_call_stop_;
+      if (peer_gone_)
+        stop.request_stop(); // no callbacks yet: the servant hasn't started
+    }
+    skip_running_call_ = next.cancelled;
+    ctx_.call.stop_token = stop.get_token();
+    try {
+      process_handed_off(next.rx, next.wants_reply);
+    } catch (const std::exception& e) {
+      NPRPC_LOG_ERROR("Handed-off message failed: {}", e.what());
+    }
+    ctx_.call = {};
+    skip_running_call_ = false;
+    {
+      std::lock_guard lock(handoff_mu_);
+      running_call_id_ = 0;
+      running_call_stop_ = std::stop_source{std::nostopstate};
+    }
+  }
+}
+
 Session::Session(boost::asio::any_io_executor executor)
     : timeout_timer_{executor}
     , inactive_timer_{executor}
 {
+  ctx_.session = this;
   // Owned via shared_ptr (not a bare `new`) so external holders reachable
   // only through ctx_.stream_manager's raw pointer — the Swift
   // NPRPCStreamWriter/NPRPCStreamReader, via external_retain()/
@@ -382,6 +838,11 @@ bool Session::handle_request_body(flat_buffer& rx_buffer, flat_buffer& tx_buffer
     needs_reply = false;  // Fire-and-forget
     break;
   }
+  case MessageId::CancelCall:
+    // Only on transports that don't call must_hand_off(); they run calls inline,
+    // so the call it names has already finished.
+    needs_reply = false;
+    break;
   case MessageId::FunctionCall: {
     impl::flat::CallHeader_Direct ch(rx_buffer, sizeof(impl::Header));
 
@@ -389,6 +850,11 @@ bool Session::handle_request_body(flat_buffer& rx_buffer, flat_buffer& tx_buffer
                    "interface_idx: {}, fn_idx: {}, poa_idx: {}, oid: {}]",
                    header->request_id, (uint32_t)ch.interface_idx(),
                    (uint32_t)ch.function_idx(), ch.poa_idx(), ch.object_id());
+
+    if (skip_running_call_) {
+      make_simple_answer(ctx_, MessageId::Error_Cancelled, header->request_id);
+      break;
+    }
 
     bool not_found = true;
     if (auto obj = get_object(ctx_, ch.poa_idx(), ch.object_id()); obj) {
@@ -401,11 +867,20 @@ bool Session::handle_request_body(flat_buffer& rx_buffer, flat_buffer& tx_buffer
           invoke_servant_dispatch(*real_obj, *this, [&] {
             real_obj->dispatch(ctx_, false);
           });
+        } catch (const nprpc::OperationCancelled&) {
+          make_simple_answer(ctx_, MessageId::Error_Cancelled, request_id);
         } catch (const std::exception& e) {
           NPRPC_SESSION_LOG_ERROR("Exception during dispatch: {}", e.what());
           // TODO: find out why Web client does not handle
           // Error_BadInput properly
           make_simple_answer(ctx_, MessageId::Error_BadInput, request_id);
+        }
+        // A transport that can't reply later waits here, on its own thread, not
+        // on the executor the call needs to finish.
+        if (blocking_deferred_call_) {
+          auto call = std::exchange(blocking_deferred_call_, nullptr);
+          call->done_.acquire();
+          tx_buffer = std::move(call->tx);
         }
         // Propagate request_id to response: generated dispatch code only sets
         // msg_type = Answer, never request_id. make_simple_answer already does

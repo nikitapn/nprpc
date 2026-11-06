@@ -66,15 +66,21 @@ inline bool telemetry_enabled() noexcept { return g_telemetry_enabled.load(std::
 // Measures synchronous handler execution, not response delivery.  Only calls
 // and stream openings count; rx_buffer is captured first because stream data
 // dispatch moves it out.
-template <typename Handle>
-bool measured_dispatch(monitor::Transport transport, flat_buffer& rx_buffer, flat_buffer& tx_buffer, Handle&& handle)
+template <typename SessionT, typename Handle>
+bool measured_dispatch(SessionT& session, monitor::Transport transport, flat_buffer& rx_buffer, flat_buffer& tx_buffer, Handle&& handle)
 {
-  if (!telemetry_enabled()) return handle();
+  if (!telemetry_enabled()) {
+    const bool needs_reply = handle();
+    session.take_call_deferred();
+    return needs_reply;
+  }
   const auto kind = rx_buffer.size() >= sizeof(flat::Header)
     ? flat::Header_Direct(rx_buffer, 0).msg_id() : MessageId::Error_BadInput;
   const auto received = rx_buffer.size();
   const auto start = std::chrono::steady_clock::now();
   const bool needs_reply = handle();
+  // A `[coroutine]` call records itself when it finishes.
+  if (session.take_call_deferred()) return needs_reply;
   if (kind == MessageId::FunctionCall || kind == MessageId::StreamInitialization) {
     const bool error = tx_buffer.size() >= sizeof(flat::Header) &&
       flat::Header_Direct(tx_buffer, 0).msg_id() >= MessageId::Exception;

@@ -39,7 +39,7 @@ class TestObject : public nprpc::Object {};
 TEST(SwiftBridgeErrors, InvalidArgumentsCompleteInlineExactlyOnce) {
     for (bool response : {false, true}) {
         CompletionResult result;
-        nprpc_object_send_async_result(nullptr, nullptr, &result, CompletionResult::receive, 1, response);
+        nprpc_object_send_async_result(nullptr, nullptr, &result, CompletionResult::receive, 1, response, nullptr);
         EXPECT_EQ(result.calls, 1);
         EXPECT_EQ(result.kind, NPRPC_BRIDGE_INVALID_ARGUMENT);
         EXPECT_FALSE(result.message.empty());
@@ -51,7 +51,7 @@ TEST(SwiftBridgeErrors, MissingRuntimeIsReportedWithoutDereferencingIt) {
     TestObject object;
     nprpc::flat_buffer buffer;
     CompletionResult result;
-    nprpc_object_send_async_result(&object, &buffer, &result, CompletionResult::receive, 1, true);
+    nprpc_object_send_async_result(&object, &buffer, &result, CompletionResult::receive, 1, true, nullptr);
     EXPECT_EQ(result.calls, 1);
     EXPECT_EQ(result.kind, NPRPC_BRIDGE_NOT_INITIALIZED);
     EXPECT_EQ(nprpc_object_get_session(&object), nullptr);
@@ -94,7 +94,8 @@ TEST(SwiftBridgeErrors, TransportErrorsPreserveNativeDetails) {
 
 TEST(SwiftBridgeErrors, ExceptionBoundaryPreservesCommunicationDiagnostics) {
     auto result = capture([]() -> BridgeResult<void> {
-        throw nprpc::ExceptionCommFailure("TCP was compiled out");
+        throw nprpc::ExceptionCommFailure(nprpc::CommFailureReason::ConnectionFailed,
+                                          "TCP was compiled out");
     });
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error().code, nprpc::ErrorCode::connection_failure);
@@ -209,7 +210,7 @@ TEST_F(SessionResultTests, UnsupportedTransportRejectionReachesSwiftCompletion) 
     std::memcpy(buffer.prepare(4).data(), "test", 4);
     buffer.commit(4);
     CompletionResult completed;
-    nprpc_object_send_async_result(&object, &buffer, &completed, CompletionResult::receive, 1, true);
+    nprpc_object_send_async_result(&object, &buffer, &completed, CompletionResult::receive, 1, true, nullptr);
     EXPECT_EQ(completed.calls, 1);
     EXPECT_EQ(completed.kind, NPRPC_BRIDGE_UNSUPPORTED_TRANSPORT);
     EXPECT_EQ(buffer.size(), 4);

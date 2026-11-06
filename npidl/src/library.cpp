@@ -1674,9 +1674,33 @@ class Parser : public IParser
         for (const auto& a : fn_attr) {
           if (a.first == "unreliable")
             f->is_reliable = !(a.second.empty() || a.second == "1");
+          else if (a.first == "coroutine")
+            f->is_coroutine = a.second.empty() || a.second == "1";
           else
             throw_error("Unknown attribute: " + a.first + " for function " +
                         f->name);
+        }
+
+        if (f->is_coroutine) {
+          if (f->is_stream)
+            throw_error("Function '" + f->name +
+                        "' marked [coroutine] cannot be a stream: stream methods "
+                        "already run as coroutines");
+          if (!f->is_reliable)
+            throw_error("Function '" + f->name +
+                        "' cannot be both [coroutine] and [unreliable]");
+          for (auto& arg : f->args) {
+            if (arg->modifier == ArgumentModifier::Out)
+              throw_error("Function '" + f->name +
+                          "' marked [coroutine] cannot have out parameters: "
+                          "use its return value");
+            if (arg->type->id == FieldType::Fd)
+              throw_error("Function '" + f->name +
+                          "' marked [coroutine] cannot take a file descriptor");
+          }
+          if (f->ret_value && f->ret_value->id == FieldType::Fd)
+            throw_error("Function '" + f->name +
+                        "' marked [coroutine] cannot return a file descriptor");
         }
 
         // [unreliable] = client fire-and-forget (no reply waiter) for RPC, or

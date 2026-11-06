@@ -634,6 +634,7 @@ public:
   explicit QuicNgtcp2ServerSession(std::shared_ptr<QuicNgtcp2ServerConn> conn)
       : Session(conn->get_executor()), conn_(conn)
   {
+    telemetry_transport_ = static_cast<int>(monitor::Transport::Quic);
     ctx_.stream_manager->set_active_stream_counter(active_stream_counter(monitor::Transport::Quic));
     // Weak: the manager belongs to this session, which the connection owns.
     ctx_.stream_manager->set_send_datagram_callback(
@@ -685,26 +686,39 @@ public:
   // Called from QuicNgtcp2ServerConn on its strand
   void dispatch_request(flat_buffer& frame)
   {
-    const uint32_t rid = extract_request_id(frame);
     if (frame.size() >= sizeof(impl::flat::Header) + sizeof(uint64_t) &&
         impl::flat::Header_Direct(frame, 0).msg_id() == MessageId::StreamCancellation) {
       uint64_t stream_id = 0;
       std::memcpy(&stream_id, frame.data_ptr() + sizeof(impl::flat::Header), sizeof(stream_id));
       if (auto conn = conn_.lock()) conn->cancel_data_stream(stream_id);
     }
-    flat_buffer tx;
-    if (measured_dispatch(monitor::Transport::Quic, frame, tx,
-                         [&] { return handle_request(frame, tx); }) && tx.size() > 0) {
-      inject_request_id(tx, rid);
-      if (auto conn = conn_.lock()) conn->enqueue_response(std::move(tx));
-    }
+    if (must_hand_off(frame))
+      hand_off(std::move(frame));
+    else
+      process_handed_off(frame, true);
   }
 
   // A datagram gets no reply, whatever the servant leaves behind.
   void dispatch_datagram(flat_buffer& frame)
   {
+    if (must_hand_off(frame))
+      hand_off(std::move(frame), false);
+    else
+      process_handed_off(frame, false);
+  }
+
+  bool supports_deferred_replies() const noexcept override { return true; }
+
+  void process_handed_off(flat_buffer& frame, bool wants_reply) override
+  {
+    const uint32_t rid = extract_request_id(frame);
     flat_buffer tx;
-    handle_request(frame, tx);
+    if (measured_dispatch(*this, monitor::Transport::Quic, frame, tx,
+                         [&] { return handle_request(frame, tx); }) &&
+        wants_reply && tx.size() > 0) {
+      inject_request_id(tx, rid);
+      if (auto conn = conn_.lock()) conn->enqueue_response(std::move(tx));
+    }
   }
 
   void timeout_action() override {}
@@ -1301,6 +1315,7 @@ void QuicNgtcp2ServerConn::remove_self()
   }
   active_connection_.reset();
   limit_slot_.reset();
+  if (session_) session_->notify_peer_gone();
   session_.reset();
   boost::asio::post(listener_->io_context(), [self = shared_from_this()]() {
     self->listener_->remove_connection(self);
@@ -2684,7 +2699,7 @@ void QuicNgtcp2ClientConn::send_receive_async(flat_buffer&&            buf,
           return;
         }
 
-        const uint32_t rid = self->generate_request_id();
+        const uint32_t rid = b.call_id() ? b.call_id() : self->generate_request_id();
         inject_request_id(b, rid);
 
         auto tp = std::chrono::steady_clock::now()
@@ -2862,6 +2877,7 @@ public:
     };
     auto waiter = std::make_shared<Waiter>();
 
+    if (!buf.call_id()) buf.set_call_id(next_call_id());
     conn->send_receive_async(
         std::move(buf),
         [waiter](const boost::system::error_code& ec, flat_buffer& resp) {
@@ -2906,6 +2922,7 @@ public:
       }
       return;
     }
+    if (!buf.call_id()) buf.set_call_id(next_call_id());
     conn->send_receive_async(std::move(buf), std::move(handler), timeout_ms);
   }
 

@@ -64,6 +64,11 @@ public func handleStandardReply(buffer: FlatBuffer) throws -> Int32 {
     case impl.MessageId.Error_ObjectNotExist.rawValue:
         throw ExceptionObjectNotExist()
     case impl.MessageId.Error_CommFailure.rawValue:
+        // An older server sends no body.
+        if buffer.size > 16,
+           let failure = try? unmarshal_ExceptionCommFailure(buffer: data, bufferSize: buffer.size, offset: 16) {
+            throw failure
+        }
         throw ExceptionCommFailure()
     case impl.MessageId.Error_UnknownFunctionIdx.rawValue:
         throw ExceptionUnknownFunctionIndex()

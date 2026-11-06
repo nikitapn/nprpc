@@ -326,8 +326,8 @@ public:
   }
 
   /// Route servant dispatch through @p ex (post+wait). Empty = inline.
-  /// Setting a non-empty executor implies off-transport dispatch for SHM
-  /// (same effect as NeverBlockTransport for the ring hand-off decision).
+  /// Setting a non-empty executor implies off-transport dispatch, as
+  /// NeverBlockTransport does.
   PoaBuilder& with_dispatch_executor(DispatchExecutor ex)
   {
     dispatch_executor_ = ex;

@@ -48,6 +48,14 @@ exception SimpleException {
 	code: u32;
 }
 
+// Servants that suspend rather than hold up their connection.
+interface TestCoroutine {
+	[coroutine] u32 Add(a: u32, b: u32) raises (SimpleException);
+	[coroutine] string Echo(text: string);
+	[coroutine] void Wait();
+	u32 Quick();
+}
+
 interface TestBasic {
 	boolean ReturnBoolean() raises (AssertionFailed);
 	IdArray ReturnIdArray() raises (AssertionFailed);

@@ -108,65 +108,19 @@ NPRPC_API extern RpcImpl* g_rpc;
 NPRPC_API extern std::string g_server_listener_uuid;
 
 struct IOWork {
-  virtual void operator()() = 0;
   virtual void on_failed(const boost::system::error_code& ec) noexcept = 0;
   virtual void on_executed() noexcept = 0;
   virtual flat_buffer& buffer() noexcept = 0;
   virtual ~IOWork() = default;
 
-  // Shared-memory client path: ring slot counter (16-bit, from write_cursor)
-  // used to keep wq_ ordered consistently with ring FIFO.  Unused by other
-  // transports (has_slot_order == false → push_back).
-  uint64_t slot_idx = 0;
-  bool has_slot_order = false;
+  // The request id its reply will carry.
+  uint32_t call_id = 0;
 
   // When the reply stops being worth waiting for; default-constructed means
   // no deadline.  Stamped once when the work is queued and swept
   // periodically, rather than arming a timer per request — on shared memory
   // an asio timer per request measured ~1.7 us, a fifth of the round trip.
   std::chrono::steady_clock::time_point deadline{};
-
-  // The caller gave up, but the peer may still reply.  The entry stays
-  // queued as a tombstone so later replies keep matching their own requests
-  // by position; buffer() must never be touched once this is set — on the
-  // blocking path it refers to the caller's stack, which is already gone.
-  bool abandoned = false;
-};
-
-template <typename T> class CommonConnection
-{
-  T* derived() noexcept { return static_cast<T*>(this); }
-
-protected:
-  // Work queue for ordered execution of async operations.
-  // Not thread-safe; must be accessed only on the strand
-  std::deque<std::shared_ptr<IOWork>> wq_;
-
-  void add_work(std::shared_ptr<IOWork> w)
-  {
-    boost::asio::post(derived()->get_executor(),
-                      [w{std::move(w)}, this]() mutable {
-                        // work may or may not hold shared_ptr to this:
-                        // blocking case - it will reference to this,
-                        // async case - it will hold shared_ptr to this
-                        wq_.push_back(std::move(w));
-                        if (wq_.size() == 1)
-                          (*wq_.front())();
-                      });
-  }
-
-  flat_buffer& current_rx_buffer() noexcept
-  {
-    assert(wq_.size() > 0);
-    return wq_.front()->buffer();
-  }
-
-  void pop_and_execute_next_task()
-  {
-    wq_.pop_front();
-    if (wq_.empty() == false)
-      (*wq_.front())();
-  }
 };
 
 #ifdef NPRPC_TCP_ENABLED
@@ -203,11 +157,9 @@ class SocketConnection : public Session,
   // Write queue and read state — accessed only on the socket strand.
   std::deque<outgoing_message>                          write_queue_;
   std::unordered_map<uint32_t, pending_request>         pending_requests_;
-  std::atomic<uint32_t>                                 next_request_id_{1};
   bool                                                  write_loop_running_{false};
   flat_buffer                                           rx_buffer_{flat_buffer::default_initial_size()};
 
-  uint32_t generate_request_id() { return next_request_id_.fetch_add(1, std::memory_order_relaxed); }
   void inject_request_id(flat_buffer& buf, uint32_t id);
   uint32_t extract_request_id(const flat_buffer& buf);
 
@@ -261,6 +213,9 @@ public:
       std::optional<std::function<void(const boost::system::error_code&,
                                        flat_buffer&)>>&& completion_handler,
       uint32_t timeout_ms) override;
+
+  // Written straight out: these frames get no reply, so nothing may wait for one.
+  bool send_stream_message(flat_buffer&& buffer) override;
 
   // UNTESTED
   void shutdown() override
@@ -547,7 +502,8 @@ make_simple_answer(SessionContext& ctx, MessageId id, uint32_t request_id = 0)
          id == MessageId::Error_CommFailure ||
          id == MessageId::Error_UnknownFunctionIdx ||
          id == MessageId::Error_UnknownMessageId ||
-         id == MessageId::Error_BadAccess || id == MessageId::Error_BadInput);
+         id == MessageId::Error_BadAccess || id == MessageId::Error_BadInput ||
+         id == MessageId::Error_Cancelled);
 
   static_assert(std::is_standard_layout_v<impl::flat::Header>,
                 "impl::flat::Header must be a standard layout type");
@@ -577,6 +533,60 @@ make_simple_answer(SessionContext& ctx, MessageId id, uint32_t request_id = 0)
   header->request_id = request_id;
 
   bout.commit(header_size);
+}
+
+// Builds Error_CommFailure in `out`, which has room for comm_failure_size(message).
+inline constexpr size_t comm_failure_fixed_size =
+    sizeof(impl::flat::Header) + sizeof(::nprpc::flat::ExceptionCommFailure);
+
+inline size_t comm_failure_size(std::string_view message) noexcept
+{
+  return ::nprpc::flat::detail::grow_size(comm_failure_fixed_size, 1, message.size());
+}
+
+inline void write_comm_failure(flat_buffer& out,
+                               CommFailureReason reason,
+                               const std::string& message,
+                               uint32_t request_id)
+{
+  out.commit(comm_failure_fixed_size);
+  ::nprpc::flat::ExceptionCommFailure_Direct body(out, sizeof(impl::flat::Header));
+  body.__ex_id() = 0;
+  body.reason() = reason;
+  body.message(message);
+  auto* header = static_cast<impl::flat::Header*>(out.data().data());
+  header->size = static_cast<uint32_t>(out.size());
+  header->msg_id = MessageId::Error_CommFailure;
+  header->msg_type = impl::MessageType::Answer;
+  header->request_id = request_id;
+}
+
+inline void make_comm_failure_answer(SessionContext& ctx,
+                                     CommFailureReason reason,
+                                     const std::string& message)
+{
+  auto& out = *ctx.tx_buffer;
+  const auto request_id =
+      static_cast<const impl::flat::Header*>(ctx.rx_buffer->cdata().data())->request_id;
+  out.consume(out.size());
+  const auto size = comm_failure_size(message);
+  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, out, size))
+    out.prepare(size);
+  write_comm_failure(out, reason, message, request_id);
+}
+
+// The server's Error_CommFailure. Older servers send no body, and a body that
+// doesn't hold together is treated the same way.
+[[noreturn]] inline void throw_comm_failure(flat_buffer& reply)
+{
+  if (reply.size() >= comm_failure_fixed_size) {
+    ::nprpc::flat::ExceptionCommFailure_Direct body(reply, sizeof(impl::flat::Header));
+    const auto& flat = *static_cast<const ::nprpc::flat::ExceptionCommFailure*>(body.__data());
+    if (flat.message.check_size_align(reply.data().data(),
+                                      static_cast<std::uint32_t>(reply.size())))
+      throw ExceptionCommFailure(body.reason(), std::string((std::string_view)body.message()));
+  }
+  throw ExceptionCommFailure();
 }
 
 NPRPC_API void dump_message(flat_buffer& buffer, bool rx);
@@ -614,7 +624,7 @@ inline int handle_standart_reply(flat_buffer& buf)
   case MessageId::Error_ObjectNotExist:
     throw ExceptionObjectNotExist();
   case MessageId::Error_CommFailure:
-    throw ExceptionCommFailure();
+    throw_comm_failure(buf);
   case MessageId::Error_UnknownFunctionIdx:
     throw ExceptionUnknownFunctionIndex();
   case MessageId::Error_UnknownMessageId:
@@ -623,6 +633,8 @@ inline int handle_standart_reply(flat_buffer& buf)
     throw ExceptionBadAccess();
   case MessageId::Error_BadInput:
     throw ExceptionBadInput();
+  case MessageId::Error_Cancelled:
+    throw OperationCancelled();
   default:
     return -1;
   }
@@ -631,6 +643,7 @@ inline int handle_standart_reply(flat_buffer& buf)
 inline void Session::close()
 {
   closed_.store(true);
+  notify_peer_gone();
   impl::g_rpc->close_session(this);
 }
 

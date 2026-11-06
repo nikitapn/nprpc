@@ -588,6 +588,24 @@ LockFreeRingBuffer::try_reserve_write(size_t min_size)
   return result;
 }
 
+LockFreeRingBuffer::WriteReservation
+LockFreeRingBuffer::reserve_write_waiting(size_t min_size,
+                                          std::chrono::milliseconds timeout,
+                                          const std::atomic<bool>& give_up)
+{
+  auto reservation = try_reserve_write(min_size);
+  if (reservation || min_size == 0 || min_size > header_->max_message_size)
+    return reservation;
+
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (!reservation && !give_up.load(std::memory_order_acquire) &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
+    reservation = try_reserve_write(min_size);
+  }
+  return reservation;
+}
+
 void LockFreeRingBuffer::commit_write(const WriteReservation& reservation,
                                       size_t actual_size,
                                       bool has_fds)

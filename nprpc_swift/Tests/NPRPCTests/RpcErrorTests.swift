@@ -54,7 +54,7 @@ final class RpcErrorTests: XCTestCase {
                     } else {
                         box.continuation.resume()
                     }
-                }, 1, true)
+                }, 1, true, nil)
             }
             XCTFail("Invalid arguments must fail")
         } catch let error as RpcError {

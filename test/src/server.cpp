@@ -1,7 +1,12 @@
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <coroutine>
+#include <memory>
+#include <mutex>
 #include <iostream>
 #include <signal.h>
+#include <stop_token>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -43,6 +48,57 @@ class ServerControlImpl : public ::nprpc::test::IServerControl_Servant
     (void)handler;
     assert(false && "Should not be called in server");
   }
+};
+
+// A cancel from a client shows up as a stop, which Quick() reports back to it.
+class CancellableImpl : public ::nprpc::test::ITestCoroutine_Servant
+{
+  class Gate
+  {
+    std::mutex mutex_;
+    std::coroutine_handle<> waiting_;
+    bool open_ = false;
+  public:
+    void open()
+    {
+      std::coroutine_handle<> waiting;
+      {
+        std::lock_guard lock(mutex_);
+        open_ = true;
+        waiting = std::exchange(waiting_, {});
+      }
+      if (waiting) waiting.resume();
+    }
+    bool await_ready() noexcept { return false; }
+    bool await_suspend(std::coroutine_handle<> h)
+    {
+      std::lock_guard lock(mutex_);
+      if (open_) return false;
+      waiting_ = h;
+      return true;
+    }
+    void await_resume() noexcept {}
+  };
+
+  std::atomic<uint32_t> stops_{0};
+
+public:
+  nprpc::Task<uint32_t> Add(std::stop_token, uint32_t a, uint32_t b) override { co_return a + b; }
+  nprpc::Task<std::string> Echo(std::stop_token, ::nprpc::flat::Span<char> text) override
+  {
+    co_return std::string((std::string_view)text);
+  }
+  nprpc::Task<> Wait(std::stop_token stop) override
+  {
+    auto gate = std::make_shared<Gate>();
+    std::stop_callback on_stop(stop, [this, gate] {
+      stops_.fetch_add(1);
+      gate->open();
+    });
+    co_await *gate;
+    throw nprpc::OperationCancelled{};
+  }
+  uint32_t Quick() override { return stops_.load(); }
 };
 
 int main(int argc, char** argv)
@@ -99,6 +155,9 @@ int main(int argc, char** argv)
   #include "common/tests/variant.inl"
   TestVariantRpcImpl test_variant_rpc;
   nprpctest::bind<nprpc::test::TestVariantRpc>(test_variant_rpc, flags, "nprpc_test_variant_rpc");
+
+  CancellableImpl test_cancellable;
+  nprpctest::bind<nprpc::test::TestCoroutine>(test_cancellable, flags, "nprpc_test_cancellable");
 
   // Capture interrupt signal to allow graceful shutdown
   signal(SIGINT, [](int signum) {

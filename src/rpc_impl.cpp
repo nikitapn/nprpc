@@ -837,7 +837,8 @@ NPRPC_API std::shared_ptr<Session>
 RpcImpl::get_session(const EndPoint& endpoint)
 {
   auto session = get_session_impl(endpoint);
-  if (!session) throw nprpc::ExceptionCommFailure(session.error().message.data());
+  if (!session) throw nprpc::ExceptionCommFailure(nprpc::CommFailureReason::ConnectionFailed,
+                                     session.error().message.data());
   return std::move(*session);
 }
 

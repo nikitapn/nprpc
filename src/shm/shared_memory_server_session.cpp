@@ -7,9 +7,10 @@
 #include <boost/asio/post.hpp>
 
 #include <atomic>
-#include <deque>
+#include <chrono>
+#include <format>
 #include <memory>
-#include <mutex>
+#include <string>
 
 #include <nprpc/common.hpp>
 #include <nprpc/impl/nprpc_impl.hpp>
@@ -19,13 +20,6 @@
 
 namespace nprpc::impl {
 
-class SharedMemoryServerSession;
-
-// Heap token for DispatchExecutor::post (C function-pointer API).
-struct ShmDrainKick {
-  std::shared_ptr<SharedMemoryServerSession> session;
-};
-
 /**
  * @brief Server-side shared memory session
  *
@@ -33,13 +27,8 @@ struct ShmDrainKick {
  *   1. Always copy the payload out of the ring (commit_read after return).
  *   2. Fast path — default POA with AllowBlockTransport and no DispatchExecutor:
  *        handle_request() on the ring thread (extreme low latency).
- *   3. Offload path — custom executor and/or NeverBlockTransport, or when a
- *      serial drain is already in flight (FIFO with the client matcher):
- *        - If the head message's POA has a DispatchExecutor: fire-and-forget
- *          executor.post(drain) from the ring (e.g. dispatch_async_f / main).
- *          No Asio hop; servant dispatch runs on that queue (is_running_on
- *          makes invoke_sync a no-op).
- *        - Else (NeverBlock without executor): asio::post(ioc) drain.
+ *   3. Otherwise Session::hand_off() runs it from the session's FIFO, so
+ *      commit_read can free the slot before the servant finishes.
  *
  * Death detection:
  *   Shared memory has no connection to break — a client that is SIGKILLed
@@ -55,85 +44,12 @@ class SharedMemoryServerSession
   std::unique_ptr<SharedMemoryChannel> channel_;
   boost::asio::io_context& ioc_;
 
-  // Serial work queue.  Guarded by mu_.
-  std::mutex mu_;
-  std::deque<flat_buffer> pending_;
-  bool processing_ = false;
-
   std::atomic<bool> peer_dead_{false};
 
-  // ---- message peeks -------------------------------------------------------
-
-  static bool peek_poa_idx(const flat_buffer& rx, uint16_t& poa_idx_out)
-  {
-    if (rx.size() < sizeof(flat::Header))
-      return false;
-
-    const auto* header =
-        static_cast<const flat::Header*>(rx.cdata().data());
-
-    switch (header->msg_id) {
-    case MessageId::FunctionCall: {
-      if (rx.size() < sizeof(flat::Header) + sizeof(flat::CallHeader))
-        return false;
-      const auto* ch = reinterpret_cast<const flat::CallHeader*>(
-          static_cast<const std::byte*>(rx.cdata().data()) +
-          sizeof(flat::Header));
-      poa_idx_out = ch->poa_idx;
-      return true;
-    }
-    case MessageId::StreamInitialization: {
-      constexpr size_t kMin =
-          sizeof(flat::Header) + sizeof(uint64_t) + sizeof(uint16_t);
-      if (rx.size() < kMin)
-        return false;
-      const auto* p = static_cast<const std::byte*>(rx.cdata().data()) +
-                      sizeof(flat::Header) + sizeof(uint64_t);
-      std::memcpy(&poa_idx_out, p, sizeof(poa_idx_out));
-      return true;
-    }
-    case MessageId::AddReference:
-    case MessageId::ReleaseObject: {
-      if (rx.size() < sizeof(flat::Header) + sizeof(uint16_t))
-        return false;
-      const auto* p = static_cast<const std::byte*>(rx.cdata().data()) +
-                      sizeof(flat::Header);
-      std::memcpy(&poa_idx_out, p, sizeof(poa_idx_out));
-      return true;
-    }
-    default:
-      return false;
-    }
-  }
-
-  static Poa* peek_poa(const flat_buffer& rx)
-  {
-    uint16_t poa_idx = 0;
-    if (!peek_poa_idx(rx, poa_idx) || !g_rpc)
-      return nullptr;
-    auto r = g_rpc->get_poa(poa_idx);
-    return r ? *r : nullptr;
-  }
-
-  // True when dispatch must leave the ring thread.
-  static bool message_requires_offload(const flat_buffer& rx)
-  {
-    if (auto* poa = peek_poa(rx))
-      return poa->requires_off_transport_dispatch();
-    // No poa_idx (stream data/control) or unknown POA → stay on the ring;
-    // handle_request will report Error_PoaNotExist if needed.
-    return false;
-  }
-
-  // Non-empty DispatchExecutor on the target POA, if any.
-  static DispatchExecutor peek_dispatch_executor(const flat_buffer& rx)
-  {
-    if (auto* poa = peek_poa(rx)) {
-      if (poa->dispatch_executor())
-        return poa->dispatch_executor();
-    }
-    return {};
-  }
+  // How long a reply waits for a full ring. The client's reader normally drains
+  // it at once, so a full ring that lasts this long means the client has stopped.
+  // Bounded, because this can run on the ring thread or a user's executor.
+  static constexpr std::chrono::milliseconds kReplySpaceWait{100};
 
   // ---- process / reply -----------------------------------------------------
 
@@ -150,18 +66,53 @@ class SharedMemoryServerSession
       reservation.valid = true;
       channel_->commit_write(reservation, tx_buffer.size(), tx_buffer.fds());
       tx_buffer.release_write_view();
-    } else {
-      auto new_reservation = channel_->reserve_write(tx_buffer.size());
-      if (new_reservation) {
-        std::memcpy(new_reservation.data, tx_buffer.data_ptr(),
-                    tx_buffer.size());
-        channel_->commit_write(new_reservation, tx_buffer.size(),
-                               tx_buffer.fds());
-      } else {
-        NPRPC_LOG_ERROR(
-            "SharedMemoryServerSession: Failed to allocate response buffer");
-      }
+      return;
     }
+
+    if (tx_buffer.size() > channel_->max_message_size()) {
+      const auto message = std::format(
+          "Reply of {} bytes exceeds the shared memory ring's {} byte message limit; "
+          "raise it with RpcBuilder::shm_channel_sizes, or send it as a stream",
+          tx_buffer.size(), channel_->max_message_size());
+      NPRPC_LOG_ERROR("SharedMemoryServerSession: {}", message);
+      send_reply_failed(tx_buffer, CommFailureReason::MessageTooLarge, message);
+      return;
+    }
+
+    auto reservation =
+        channel_->reserve_write_waiting(tx_buffer.size(), kReplySpaceWait, peer_dead_);
+    if (!reservation) {
+      const auto message = std::format(
+          "No room in the shared memory ring for a reply of {} bytes after waiting {} ms",
+          tx_buffer.size(), kReplySpaceWait.count());
+      NPRPC_LOG_ERROR("SharedMemoryServerSession: {}", message);
+      send_reply_failed(tx_buffer, CommFailureReason::RingFull, message);
+      return;
+    }
+    std::memcpy(reservation.data, tx_buffer.data_ptr(), tx_buffer.size());
+    channel_->commit_write(reservation, tx_buffer.size(), tx_buffer.fds());
+  }
+
+  // Tells the client its reply won't arrive, so it fails now instead of timing
+  // out. This can fit where the reply didn't.
+  void send_reply_failed(const flat_buffer& reply,
+                         CommFailureReason reason,
+                         const std::string& message)
+  {
+    if (reply.size() < sizeof(flat::Header))
+      return;
+    flat_buffer failure;
+    failure.prepare(comm_failure_size(message));
+    write_comm_failure(failure, reason, message,
+                       static_cast<const flat::Header*>(reply.cdata().data())->request_id);
+    auto reservation = channel_->reserve_write(failure.size());
+    if (!reservation) {
+      NPRPC_LOG_ERROR("SharedMemoryServerSession: no room in the ring to report a "
+                      "failed reply; the client will time out");
+      return;
+    }
+    std::memcpy(reservation.data, failure.data_ptr(), failure.size());
+    channel_->commit_write(reservation, failure.size());
   }
 
   void abort_tx_reservation(flat_buffer& tx_buffer)
@@ -177,7 +128,7 @@ class SharedMemoryServerSession
     }
   }
 
-  void process_one(flat_buffer& rx)
+  void process_handed_off(flat_buffer& rx, bool) override
   {
     flat_buffer tx;
     try {
@@ -191,69 +142,6 @@ class SharedMemoryServerSession
       NPRPC_LOG_ERROR(
           "SharedMemoryServerSession: Error processing message: {}", e.what());
       abort_tx_reservation(tx);
-    }
-  }
-
-  // Serial drain of pending_.  Runs on ring (inline path never calls this),
-  // Asio ioc, or the POA DispatchExecutor queue.
-  void drain_pending()
-  {
-    // Keep the session alive for the whole drain (GCD/Asio may outlive the
-    // ring callback's stack).
-    auto keep_alive = shared_from_this();
-    for (;;) {
-      flat_buffer rx;
-      {
-        std::lock_guard lock(mu_);
-        if (pending_.empty()) {
-          processing_ = false;
-          return;
-        }
-        rx = std::move(pending_.front());
-        pending_.pop_front();
-      }
-      process_one(rx);
-    }
-    (void)keep_alive;
-  }
-
-  // C trampoline for DispatchExecutor::post (ring → GCD / main, no wait).
-  static void drain_kick_f(void* p)
-  {
-    std::unique_ptr<ShmDrainKick> kick(static_cast<ShmDrainKick*>(p));
-    kick->session->drain_pending();
-  }
-
-  void enqueue_and_kick(flat_buffer rx)
-  {
-    DispatchExecutor head_ex;
-    bool should_kick = false;
-    {
-      std::lock_guard lock(mu_);
-      // Capture executor of the first message when starting a drain so the
-      // whole serial batch runs on that queue (FIFO on a serial GCD queue).
-      if (!processing_)
-        head_ex = peek_dispatch_executor(rx);
-      pending_.push_back(std::move(rx));
-      if (!processing_) {
-        processing_ = true;
-        should_kick = true;
-      }
-    }
-    if (!should_kick)
-      return;
-
-    // Leave the ring thread immediately so commit_read can free the slot.
-    if (head_ex) {
-      // Direct hop: ring → DispatchExecutor (Swift: dispatch_async_f /
-      // DispatchQueue.async).  No Asio.
-      auto* kick = new ShmDrainKick{shared_from_this()};
-      head_ex.post(head_ex.ctx, &drain_kick_f, kick);
-    } else {
-      // NeverBlockTransport without a custom executor — generic C++ worker.
-      boost::asio::post(ioc_, [self = shared_from_this()]() {
-        self->drain_pending();
-      });
     }
   }
 
@@ -306,10 +194,7 @@ public:
         channel_->on_peer_lost = nullptr;
       }
     }
-    {
-      std::lock_guard lock(mu_);
-      pending_.clear();
-    }
+    clear_handoffs();
     Session::shutdown();
   }
 
@@ -347,8 +232,16 @@ public:
       return false;
     }
     std::memcpy(rsv.data, buffer.data().data(), buffer.size());
-    channel_->commit_write(rsv, buffer.size());
+    channel_->commit_write(rsv, buffer.size(), buffer.fds());
     return true;
+  }
+
+  bool supports_deferred_replies() const noexcept override { return true; }
+
+  void send_deferred_reply(flat_buffer&& reply) override
+  {
+    if (channel_)
+      send_reply(reply);
   }
 
   bool supports_fd_passing() const noexcept override
@@ -368,21 +261,10 @@ public:
     }
     rx_buffer.fds() = channel_->take_received_fds();
 
-    // Prefer ring-thread dispatch for cheap servants (default POA).  Must
-    // not interleave with an in-flight offload drain — client matches FIFO.
-    bool try_inline = !message_requires_offload(rx_buffer);
-    if (try_inline) {
-      std::lock_guard lock(mu_);
-      if (processing_ || !pending_.empty())
-        try_inline = false;
-    }
-
-    if (try_inline) {
-      process_one(rx_buffer);
-      return;
-    }
-
-    enqueue_and_kick(std::move(rx_buffer));
+    if (must_hand_off(rx_buffer))
+      hand_off(std::move(rx_buffer));
+    else
+      process_handed_off(rx_buffer, true);
   }
 
   SharedMemoryServerSession(boost::asio::io_context& ioc,

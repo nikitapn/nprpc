@@ -9,8 +9,12 @@
 #include <boost/system/error_code.hpp>
 
 #include <chrono>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <stop_token>
+#include <unordered_map>
+#include <utility>
 
 #include <nprpc/basic.hpp>
 #include <nprpc/common.hpp>
@@ -18,6 +22,11 @@
 #include <nprpc/session_context.h>
 #include <nprpc/task.hpp>
 #include <nprpc/result.hpp>
+
+namespace nprpc {
+struct DispatchExecutor;
+namespace impl { class DeferredCall; }
+}
 
 namespace nprpc::impl {
 
@@ -64,15 +73,85 @@ protected:
   bool handle_request_body(nprpc::flat_buffer& rx_buffer,
                            nprpc::flat_buffer& tx_buffer);
 
+  // ---- Handing calls off the transport thread ------------------------------
+  //
+  // A POA with a DispatchExecutor or NeverBlockTransport must not hold up the
+  // transport, so its messages run from a per-session FIFO instead, and the
+  // reader goes straight back to reading. A session still runs one message at
+  // a time: everything that arrives while the queue is busy joins it, which
+  // keeps ctx_ to one user and calls in order.
+  //
+  //   if (must_hand_off(rx)) hand_off(std::move(rx));
+  //   else process_handed_off(rx, true);
+
+  // Call on the reader, before dispatching rx.
+  bool must_hand_off(const nprpc::flat_buffer& rx);
+  // Needs bind_self(); an unbound session runs the message here instead.
+  void hand_off(nprpc::flat_buffer&& rx, bool wants_reply = true);
+  // Forgets the queued messages. The one already running finishes.
+  void clear_handoffs();
+
+  // Runs one message and sends its reply. Handed-off messages get here on the
+  // executor, so sending must be safe away from the transport's own thread. A
+  // message with wants_reply false never gets a reply, whatever the servant
+  // leaves behind. Must not throw past the transport's own error handling;
+  // anything that does is logged and the message dropped.
+  virtual void process_handed_off(nprpc::flat_buffer& rx, bool wants_reply);
+
+  // Sends the reply to a `[coroutine]` call, from any thread.
+  virtual void send_deferred_reply(flat_buffer&& reply)
+  {
+    send_main_stream_message(std::move(reply));
+  }
+
+  // Whether this transport can send a reply after handle_request returns, from
+  // any thread, through send_deferred_reply. Otherwise it waits for a
+  // `[coroutine]` call to finish, holding its thread.
+  virtual bool supports_deferred_replies() const noexcept { return false; }
+
+  // monitor::Transport for telemetry on deferred calls; -1 if this one isn't measured.
+  int telemetry_transport_ = -1;
+
+  // A request id, never zero and unique on this session. Every transport draws
+  // from here, so an id reserved ahead of sending can't collide with another.
+  uint32_t next_call_id() noexcept
+  {
+    uint32_t id;
+    do id = next_call_id_.fetch_add(1, std::memory_order_relaxed); while (id == 0);
+    return id;
+  }
+  // The id to send this message under.
+  uint32_t call_id_for(const nprpc::flat_buffer& buffer) noexcept
+  {
+    const auto id = buffer.call_id();
+    return id ? id : next_call_id();
+  }
+
 public:
+  // Reserves a request id for a call about to be sent, to pass to cancel_call().
+  uint32_t reserve_call_id(nprpc::flat_buffer& buffer) noexcept
+  {
+    const auto id = next_call_id();
+    buffer.set_call_id(id);
+    return id;
+  }
+  // A `[coroutine]` call left dispatch without a reply. Reads and clears.
+  bool take_call_deferred() noexcept { return std::exchange(call_deferred_, false); }
+
+  // Tells the server this call is no longer wanted. Its reply still comes.
+  NPRPC_API void cancel_call(uint32_t call_id);
+  // The client is gone: stops the running call's token, and those of calls not
+  // yet started. They still run, since some may be one-way.
+  void notify_peer_gone();
+
   // Throwing API used by generated stubs: ExceptionTimeout if no reply came in
   // time, and ExceptionCommFailure for any other transport failure.
   NPRPC_API virtual void send_receive(flat_buffer& buffer, uint32_t timeout_ms);
 
   // Coroutine variant — suspends the caller until the response arrives, then
   // resumes it on this session's executor. A stop request ends the wait at once
-  // with OperationCancelled, and the reply is dropped when it comes: the server
-  // isn't told. Don't make a blocking call from the resumed coroutine: on a socket
+  // with OperationCancelled and tells the server, and the reply is dropped when it
+  // comes. Don't make a blocking call from the resumed coroutine: on a socket
   // session the executor is the strand that has to deliver that call's reply.
   // Built on send_receive_async(), so a transport only needs to provide that.
   NPRPC_API virtual nprpc::Task<> send_receive_coro(flat_buffer& buffer,
@@ -198,6 +277,7 @@ public:
   virtual void shutdown()
   {
     closed_.store(true);
+    notify_peer_gone();
     try {
       timeout_timer_.cancel();
     } catch (...) {
@@ -222,6 +302,43 @@ public:
   // and must not throw. The response is borrowed for the duration of the call.
   [[nodiscard]] NPRPC_API Result<void> send_receive_async_result(
       flat_buffer&& buffer, ResultHandler handler, uint32_t timeout_ms) noexcept;
+
+private:
+  struct HandedOff {
+    nprpc::flat_buffer rx;
+    bool wants_reply;
+    uint32_t call_id;   // of a FunctionCall, otherwise 0
+    bool cancelled;
+  };
+  struct HandoffKick;
+  static void run_handoff_kick(void* kick);
+
+  void kick_handoffs(const DispatchExecutor& target);
+  void drain_handoffs(const DispatchExecutor& running_on);
+  void on_cancel_call(const nprpc::flat_buffer& rx);
+
+  std::mutex handoff_mu_;
+  std::deque<HandedOff> handoffs_;
+  // A drain is scheduled or running. It stays set until the drain sees an empty
+  // queue, so the message it is running still counts as "busy".
+  bool handoff_draining_ = false;
+  // The handed-off message running now.
+  uint32_t running_call_id_ = 0;
+  std::stop_source running_call_stop_{std::nostopstate};
+  bool peer_gone_ = false;
+  // Tells handle_request_body the running call was cancelled before it started.
+  // Only the thread running that message touches it.
+  bool skip_running_call_ = false;
+
+  std::atomic<uint32_t> next_call_id_{1};
+
+  // Calls running with no thread of their own. Guarded by handoff_mu_.
+  friend class DeferredCall;
+  static constexpr size_t max_deferred_calls = 1024;
+  std::unordered_map<uint32_t, std::stop_source> deferred_calls_;
+  // Set during dispatch, on the thread running it.
+  bool call_deferred_ = false;
+  std::shared_ptr<DeferredCall> blocking_deferred_call_;
 
 protected:
   // The blocking call each client transport implements. It may still throw

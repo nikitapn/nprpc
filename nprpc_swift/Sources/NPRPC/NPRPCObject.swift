@@ -15,6 +15,7 @@ private final class PendingCall: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<FlatBuffer?, Error>?
     private var cancelled = false
+    private var callId: UInt32 = 0
 
     // False if the task was already cancelled, in which case nothing should be sent.
     func start(_ continuation: CheckedContinuation<FlatBuffer?, Error>) -> Bool {
@@ -26,13 +27,25 @@ private final class PendingCall: @unchecked Sendable {
         return !wasCancelled
     }
 
-    func cancel() {
+    // The id of the call to cancel on the server, if it went out already.
+    func cancel() -> UInt32 {
         lock.lock()
         cancelled = true
         let waiting = continuation
         continuation = nil
+        let id = callId
         lock.unlock()
         waiting?.resume(throwing: CancellationError())
+        return id
+    }
+
+    // The id of the call to cancel on the server, if cancel() came too early to.
+    func sent(callId: UInt32) -> UInt32 {
+        lock.lock()
+        self.callId = callId
+        let wasCancelled = cancelled
+        lock.unlock()
+        return wasCancelled ? callId : 0
     }
 
     func finish(_ result: Result<FlatBuffer?, Error>) {
@@ -208,9 +221,9 @@ open class NPRPCObject: Codable, @unchecked Sendable {
                             receiveResponse: Bool) async throws -> FlatBuffer? {
         try Task.checkCancellation()
         let call = PendingCall()
-        // Cancelling stops this task waiting. The request itself stays pending
-        // underneath until its reply or timeout, because transports match replies
-        // to requests, and the server has no way to hear about it anyway.
+        // Cancelling stops this task waiting and tells the server. The request stays
+        // pending underneath until its reply or timeout, because transports match
+        // replies to requests.
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<FlatBuffer?, Error>) in
                 guard call.start(continuation) else { return }
@@ -226,11 +239,13 @@ open class NPRPCObject: Codable, @unchecked Sendable {
                 }
                 // Completion consumes the context exactly once, even for an inline
                 // setup failure. There is no separate startup-error ownership path.
+                var callId: UInt32 = 0
                 nprpc_object_send_async_result(handle, buffer.handle, context, callback,
-                                               timeout, receiveResponse)
+                                               timeout, receiveResponse, &callId)
+                nprpc_object_cancel_call(handle, call.sent(callId: callId))
             }
         } onCancel: {
-            call.cancel()
+            nprpc_object_cancel_call(handle, call.cancel())
         }
     }
 

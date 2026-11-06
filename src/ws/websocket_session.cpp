@@ -92,11 +92,17 @@ void WebSocketSession<Derived>::on_read(
       return;
     }
 
+    if (must_hand_off(rx_buffer_)) {
+      hand_off(std::move(rx_buffer_));
+      do_read();
+      return;
+    }
+
     // Handle incoming request.
     // Pre-size tx_buffer based on the last response we sent — after warm-up
     // this eliminates repeated doubling realloc/memcpy for large responses.
     flat_buffer tx_buffer{last_tx_size_};
-    bool needs_reply = measured_dispatch(monitor::Transport::WebSocket, rx_buffer_, tx_buffer,
+    bool needs_reply = measured_dispatch(*this, monitor::Transport::WebSocket, rx_buffer_, tx_buffer,
         [&] { return handle_request(rx_buffer_, tx_buffer); });
 
     if (needs_reply) {
@@ -130,6 +136,25 @@ void WebSocketSession<Derived>::on_read(
 
   // Continue reading immediately - this is the key difference!
   do_read();
+}
+
+template <class Derived>
+void WebSocketSession<Derived>::process_handed_off(flat_buffer& rx, bool wants_reply)
+{
+  const uint32_t request_id = extract_request_id(rx);
+  flat_buffer tx{flat_buffer::default_initial_size()};
+  const bool needs_reply = measured_dispatch(*this, monitor::Transport::WebSocket, rx, tx,
+      [&] { return handle_request(rx, tx); });
+  if (!needs_reply || !wants_reply)
+    return;
+
+  inject_request_id(tx, request_id);
+  boost::asio::post(
+      derived().ws().get_executor(),
+      [this, self = derived().shared_from_this(), tx = std::move(tx)]() mutable {
+        write_queue_.emplace_back(std::move(tx), nullptr);
+        do_write();
+      });
 }
 
 template <class Derived> void WebSocketSession<Derived>::do_write()
@@ -291,7 +316,7 @@ void WebSocketSession<Derived>::send_receive_async(
 {
   assert(*(uint32_t*)buffer.data().data() == buffer.size());
 
-  uint32_t request_id = generate_request_id();
+  uint32_t request_id = this->call_id_for(buffer);
 
   // Inject request ID into message header
   inject_request_id(buffer, request_id);
@@ -348,6 +373,7 @@ bool WebSocketSession<Derived>::send_stream_message(flat_buffer&& buffer)
 
 template <class Derived> void WebSocketSession<Derived>::start_read_loop()
 {
+  telemetry_transport_ = static_cast<int>(monitor::Transport::WebSocket);
   do_read();
 }
 

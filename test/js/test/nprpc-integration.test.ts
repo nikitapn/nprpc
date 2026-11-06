@@ -3,6 +3,8 @@ import './websocket-polyfill';
 
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
+import * as http from 'http';
+import type { AddressInfo } from 'net';
 import { installHttp3Fetch, http3Fetch } from './http3-fetch-polyfill';
 // Use the Node.js compatible build
 // const NPRPC = require('nprpc/index.node.js');
@@ -1312,6 +1314,172 @@ describe('NPRPC Integration Tests', function() {
                 expect(e.name).to.equal('AbortError');
             }
             expect(threw, 'expected AbortError to be thrown').to.be.true;
+        });
+
+        it('should stop the servant when a running call is aborted', async function() {
+            const cancellable = await resolveTestObject('nprpc_test_cancellable', test.TestCoroutine);
+            const stopsBefore = await cancellable.Quick();
+
+            const ac = new AbortController();
+            const waiting = cancellable.Wait(ac.signal);
+            // Quick is answered after Wait has started, because the session reads in order.
+            expect(await cancellable.Quick()).to.equal(stopsBefore);
+
+            ac.abort();
+            let errorName = '';
+            try {
+                await waiting;
+            } catch (e: any) {
+                errorName = e.name;
+            }
+            expect(errorName).to.equal('AbortError');
+
+            let stops = stopsBefore;
+            for (let i = 0; i < 100 && stops === stopsBefore; ++i) {
+                await new Promise(resolve => setTimeout(resolve, 10));
+                stops = await cancellable.Quick();
+            }
+            expect(stops).to.equal(stopsBefore + 1);
+        });
+
+        it('should keep working after a call is aborted and its late reply arrives', async function() {
+            const ac = new AbortController();
+            const call = testBasic.ReturnU32(ac.signal);
+            ac.abort();
+            await call.catch(() => undefined);
+            expect(await testBasic.ReturnU32()).to.equal(42);
+        });
+
+        it('should fail a call with ExceptionTimeout when no reply arrives in time', async function() {
+            const cancellable = await resolveTestObject('nprpc_test_cancellable', test.TestCoroutine);
+            const stopsBefore = await cancellable.Quick();
+            cancellable.timeout = 50;
+
+            const started = Date.now();
+            let error: any;
+            try {
+                await cancellable.Wait();
+            } catch (e: any) {
+                error = e;
+            }
+            const elapsed = Date.now() - started;
+            expect(error).to.be.instanceOf(NPRPC.ExceptionTimeout);
+            expect(elapsed).to.be.at.least(40);
+            expect(elapsed).to.be.below(1000);
+
+            // The connection still works, and a timeout doesn't stop the servant.
+            cancellable.timeout = 1000;
+            expect(await cancellable.Quick()).to.equal(stopsBefore);
+        });
+
+        describe('over HTTP', function() {
+            let server: http.Server;       // never responds
+            let stallServer: http.Server;  // sends headers, then stalls
+            let silent: test.TestBasic;
+            let stalling: test.TestBasic;
+
+            before(async function() {
+                server = http.createServer(() => {});
+                stallServer = http.createServer((_req, res) => {
+                    res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+                    res.write('x');
+                });
+                await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()));
+                await new Promise<void>(resolve => stallServer.listen(0, '127.0.0.1', () => resolve()));
+
+                const pointAt = async (s: http.Server) => {
+                    const obj = await resolveTestObject('nprpc_test_basic', test.TestBasic);
+                    (obj as any).endpoint_ = new NPRPC.EndPoint(
+                        EndPointType.Http, '127.0.0.1', (s.address() as AddressInfo).port);
+                    obj.timeout = 50;
+                    return obj;
+                };
+                silent = await pointAt(server);
+                stalling = await pointAt(stallServer);
+            });
+
+            after(function() {
+                for (const s of [server, stallServer]) {
+                    s.closeAllConnections();
+                    s.close();
+                }
+            });
+
+            const expectTimeout = async (call: Promise<unknown>) => {
+                const started = Date.now();
+                let error: any;
+                try {
+                    await call;
+                } catch (e: any) {
+                    error = e;
+                }
+                expect(error).to.be.instanceOf(NPRPC.ExceptionTimeout);
+                expect(Date.now() - started).to.be.below(1000);
+            };
+
+            it('should time out when the server never responds', async function() {
+                await expectTimeout(silent.http.ReturnU32());
+            });
+
+            it('should time out when the response stalls partway', async function() {
+                await expectTimeout(stalling.http.ReturnU32());
+            });
+
+            it('should report an abort as an abort, not a timeout', async function() {
+                silent.timeout = 5000;
+                const controller = new AbortController();
+                const call = silent.http.ReturnU32(controller.signal);
+                setTimeout(() => controller.abort(), 10);
+                let errorName = '';
+                try {
+                    await call;
+                } catch (e: any) {
+                    errorName = e.name;
+                }
+                silent.timeout = 50;
+                expect(errorName).to.equal('AbortError');
+            });
+
+            it('should still get a reply from a real server', async function() {
+                expect(await testBasic.http.ReturnU32()).to.equal(42);
+            });
+        });
+
+        it('should report why a call was refused with ExceptionCommFailure', async function() {
+            const cancellable = await resolveTestObject('nprpc_test_cancellable', test.TestCoroutine);
+            cancellable.timeout = 10000;
+            const stopsBefore = await cancellable.Quick();
+
+            // A session runs at most 1024 at once, so the last of these are refused.
+            const controller = new AbortController();
+            const refused: any[] = [];
+            let started = 0;
+            const calls = Array.from({ length: 1100 }, () => {
+                ++started;
+                return cancellable.Wait(controller.signal).catch((e: any) => {
+                    if (e.name !== 'AbortError') refused.push(e);
+                });
+            });
+            // Replies come back in order, so this one arrives after the refusals.
+            await cancellable.Quick();
+
+            const running = started - refused.length;
+            controller.abort();
+            await Promise.all(calls);
+
+            expect(refused.length).to.be.at.least(76);
+            for (const e of refused) {
+                expect(e).to.be.instanceOf(NPRPC.ExceptionCommFailure);
+                expect(e.reason).to.equal(NPRPC.CommFailureReason.TooManyCalls);
+                expect(e.message).to.include('1024');
+            }
+
+            // Later tests count stops, so let these finish.
+            for (let i = 0; i < 500; ++i) {
+                if (await cancellable.Quick() >= stopsBefore + running) break;
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+            expect(await cancellable.Quick()).to.equal(stopsBefore + running);
         });
     }); // describe Cancellation
 });
