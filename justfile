@@ -368,8 +368,8 @@ devtools-pack:
 # ── examples ─────────────────────────────────────────────────────────────────
 
 # Live-blog: generate stubs
-live-blog-stubs:
-    python3 examples/live-blog/scripts/gen_stubs.py
+live-blog-stubs: (bt "npidl")
+    python3 examples/live-blog/scripts/gen_stubs.py --npidl "{{build_dir}}/npidl/npidl"
 
 # Live-blog: build Swift server
 live-blog-build-swift *args:

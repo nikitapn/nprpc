@@ -655,6 +655,29 @@ endif()
 
 # Optional components
 
+# The root package.json is an npm workspace (nprpc_js, examples/live-blog/client)
+# sharing one node_modules. Install it once, from the root: `npm ci` run inside
+# a workspace folder deletes the shared node_modules and reinstalls only that
+# workspace's dependencies. Everything that uses node_modules depends on this.
+if((NPRPC_BUILD_JS AND UNIX) OR NPRPC_BUILD_EXAMPLES)
+  find_program(NPM_EXECUTABLE NAMES npm REQUIRED)
+  set(NPRPC_NPM_WORKSPACE_STAMP ${CMAKE_BINARY_DIR}/npm_workspace.stamp)
+  add_custom_command(
+    OUTPUT ${NPRPC_NPM_WORKSPACE_STAMP}
+    COMMAND ${NPM_EXECUTABLE} ci
+    COMMAND ${CMAKE_COMMAND} -E touch ${NPRPC_NPM_WORKSPACE_STAMP}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    DEPENDS
+      ${CMAKE_SOURCE_DIR}/package.json
+      ${CMAKE_SOURCE_DIR}/package-lock.json
+      ${CMAKE_SOURCE_DIR}/nprpc_js/package.json
+      ${CMAKE_SOURCE_DIR}/examples/live-blog/client/package.json
+    COMMENT "Installing npm workspace dependencies (npm ci at the repo root)"
+    VERBATIM
+  )
+  add_custom_target(npm_workspace DEPENDS ${NPRPC_NPM_WORKSPACE_STAMP})
+endif()
+
 if(NPRPC_BUILD_JS AND UNIX)
   add_subdirectory(nprpc_js)
   add_subdirectory(nprpc_devtools)

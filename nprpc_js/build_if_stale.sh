@@ -31,7 +31,9 @@ if [[ -f "$newest_output" ]] && [[ -z "$(find src package.json tsconfig.json web
 fi
 
 echo "Rebuilding JS runtime"
-[[ -d node_modules ]] || npm ci
+# nprpc_js is an npm workspace: install from the root, since `npm ci` run in a
+# workspace folder replaces the shared node_modules with that workspace's deps.
+[[ -d "$root/node_modules/nprpc" ]] || (cd "$root" && npm ci)
 npm run build
 # Webpack may leave a file alone when its content is unchanged.
 touch dist/index.js dist/index.esm.js dist/index.node.js
