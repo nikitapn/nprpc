@@ -132,3 +132,61 @@ int main(int argc, char** argv)
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+TEST(HttpUtils, ParsesImfFixdate)
+{
+  using namespace std::chrono;
+  auto const t = nprpc::impl::parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT");
+  ASSERT_TRUE(t.has_value());
+  auto const sys = clock_cast<system_clock>(*t);
+  EXPECT_EQ(floor<seconds>(sys).time_since_epoch().count(), 784111777);
+}
+
+TEST(HttpUtils, ParsesLeapDay)
+{
+  using namespace std::chrono;
+  auto const t = nprpc::impl::parse_http_date("Thu, 29 Feb 2024 00:00:00 GMT");
+  ASSERT_TRUE(t.has_value());
+  EXPECT_EQ(floor<seconds>(clock_cast<system_clock>(*t)).time_since_epoch().count(),
+            1709164800);
+}
+
+TEST(HttpUtils, RejectsOtherDateFormats)
+{
+  using nprpc::impl::parse_http_date;
+  EXPECT_FALSE(parse_http_date(""));
+  EXPECT_FALSE(parse_http_date("Sunday, 06-Nov-94 08:49:37 GMT"));  // RFC 850
+  EXPECT_FALSE(parse_http_date("Sun Nov  6 08:49:37 1994"));        // asctime
+  EXPECT_FALSE(parse_http_date("Sun, 06 Foo 1994 08:49:37 GMT"));
+  EXPECT_FALSE(parse_http_date("Sun, 06 Nov 1994 25:49:37 GMT"));
+  EXPECT_FALSE(parse_http_date("Sun, 06 Nov 1994 08:49:37 UTC"));
+}
+
+TEST(HttpUtils, NotModifiedSinceComparesWholeSeconds)
+{
+  using namespace std::chrono;
+  using nprpc::impl::not_modified_since;
+  // Last-Modified drops the sub-second part; a client echoing it back must
+  // still get a 304.
+  auto const mtime = clock_cast<std::filesystem::file_time_type::clock>(
+      sys_seconds{seconds{784111777}} + milliseconds{750});
+  EXPECT_TRUE(not_modified_since(mtime, "Sun, 06 Nov 1994 08:49:37 GMT"));
+  EXPECT_TRUE(not_modified_since(mtime, "Sun, 06 Nov 1994 08:49:38 GMT"));
+  EXPECT_FALSE(not_modified_since(mtime, "Sun, 06 Nov 1994 08:49:36 GMT"));
+  EXPECT_FALSE(not_modified_since(mtime, "garbage"));
+}
+
+TEST(HttpUtils, IfNoneMatchComparesWeakly)
+{
+  using nprpc::impl::if_none_match_matches;
+  constexpr std::string_view etag = "\"1a2b-gzip\"";
+  EXPECT_TRUE(if_none_match_matches("\"1a2b-gzip\"", etag));
+  EXPECT_TRUE(if_none_match_matches("W/\"1a2b-gzip\"", etag));
+  EXPECT_TRUE(if_none_match_matches("*", etag));
+  EXPECT_TRUE(if_none_match_matches("\"x\", \"1a2b-gzip\"", etag));
+  EXPECT_TRUE(if_none_match_matches("\"x\",W/\"1a2b-gzip\" ", etag));
+  EXPECT_TRUE(if_none_match_matches("\"1a2b\"", "W/\"1a2b\""));
+  EXPECT_FALSE(if_none_match_matches("\"1a2b\"", etag));
+  EXPECT_FALSE(if_none_match_matches("\"x\", \"y\"", etag));
+  EXPECT_FALSE(if_none_match_matches("", etag));
+  EXPECT_FALSE(if_none_match_matches(" , ", etag));
+}

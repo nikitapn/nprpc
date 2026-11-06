@@ -154,6 +154,21 @@ public:
           keep_alive && *keep_alive)
         builder.keep_alive_timeout(
             std::chrono::seconds(std::strtoul(keep_alive, nullptr, 10)));
+      // gzip/deflate for static files and pages, over HTTP/1.1 and HTTP/3.
+      if (::getenv("NPRPC_BENCH_COMPRESSION"))
+        builder.compression();
+      // A rendered page at /page, for checking page responses end to end.
+      if (::getenv("NPRPC_BENCH_PAGE"))
+        builder.with_page_handler(
+            [](const nprpc::PageRequest& req) -> std::optional<nprpc::PageResponse> {
+              if (req.path != "/page") return std::nullopt;
+              nprpc::PageResponse res;
+              res.body = "<!doctype html><html><body>";
+              for (int i = 0; i < 200; ++i)
+                res.body += "<p>rendered paragraph " + std::to_string(i) + "</p>";
+              res.body += "</body></html>";
+              return res;
+            });
       // QUIC idle timeout the HTTP/3 server announces, in milliseconds.
       if (const char* idle = ::getenv("NPRPC_BENCH_HTTP3_IDLE_MS"); idle && *idle)
         builder.http3_idle_timeout(

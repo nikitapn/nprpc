@@ -39,8 +39,8 @@ class BuildConfig {
     var httpWebSocketRequestsBurst: UInt = 0
     var http3WorkerCount: UInt = 4
     var http3IdleTimeoutMs: UInt32 = 30_000
-    var http3CompressionEnabled: Bool = false
-    var http3CompressionMinSize: UInt = 256
+    var httpCompressionEnabled: Bool = false
+    var httpCompressionMinSize: UInt = 256
     var http3MaxActiveConnectionsPerIp: UInt = 0
     var http3MaxNewConnectionsPerIpPerSecond: UInt = 0
     var http3MaxNewConnectionsBurst: UInt = 0
@@ -256,8 +256,8 @@ extension RpcBuilderInternal {
         cxxConfig.http_websocket_requests_burst = numericCast(config.httpWebSocketRequestsBurst)
         cxxConfig.http3_worker_count = numericCast(config.http3WorkerCount)
         cxxConfig.http3_idle_timeout_ms = config.http3IdleTimeoutMs
-        cxxConfig.http3_compression_enabled = config.http3CompressionEnabled
-        cxxConfig.http3_compression_min_size = numericCast(config.http3CompressionMinSize)
+        cxxConfig.http_compression_enabled = config.httpCompressionEnabled
+        cxxConfig.http_compression_min_size = numericCast(config.httpCompressionMinSize)
         cxxConfig.http3_max_active_connections_per_ip = numericCast(config.http3MaxActiveConnectionsPerIp)
         cxxConfig.http3_max_new_connections_per_ip_per_second = numericCast(config.http3MaxNewConnectionsPerIpPerSecond)
         cxxConfig.http3_max_new_connections_burst = numericCast(config.http3MaxNewConnectionsBurst)
@@ -456,12 +456,13 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
         return self
     }
 
-    /// Compress HTTP/3 responses (gzip/deflate, per Accept-Encoding): static
-    /// text-like files and page-handler responses of at least `minSize` bytes.
+    /// Compress HTTP/1.1 and HTTP/3 responses (gzip/deflate, per
+    /// Accept-Encoding): static text-like files and page-handler responses of
+    /// at least `minSize` bytes.
     @discardableResult
-    public func http3Compression(_ enabled: Bool = true, minSize: UInt = 256) -> RpcBuilderHttp {
-        config.http3CompressionEnabled = enabled
-        config.http3CompressionMinSize = minSize
+    public func compression(_ enabled: Bool = true, minSize: UInt = 256) -> RpcBuilderHttp {
+        config.httpCompressionEnabled = enabled
+        config.httpCompressionMinSize = minSize
         return self
     }
 

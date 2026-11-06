@@ -667,8 +667,8 @@ struct BuildConfig {
   size_t http_websocket_requests_burst = NPRPC_DEFAULT_HTTP_WEBSOCKET_REQUESTS_BURST;
   size_t http3_worker_count = NPRPC_DEFAULT_HTTP3_WORKER_COUNT;
   uint32_t http3_idle_timeout_ms = NPRPC_DEFAULT_HTTP3_IDLE_TIMEOUT_MS; // 0 = client's value only
-  bool http3_compression_enabled = NPRPC_DEFAULT_HTTP3_COMPRESSION_ENABLED;
-  size_t http3_compression_min_size = NPRPC_DEFAULT_HTTP3_COMPRESSION_MIN_SIZE;
+  bool http_compression_enabled = NPRPC_DEFAULT_HTTP_COMPRESSION_ENABLED;
+  size_t http_compression_min_size = NPRPC_DEFAULT_HTTP_COMPRESSION_MIN_SIZE;
   size_t quic_max_connections = NPRPC_DEFAULT_QUIC_MAX_CONNECTIONS;
   size_t quic_max_connections_per_ip = NPRPC_DEFAULT_QUIC_MAX_CONNECTIONS_PER_IP;
   size_t quic_new_connections_per_ip_per_second = NPRPC_DEFAULT_QUIC_NEW_CONNECTIONS_PER_IP_PER_SECOND;
@@ -1060,6 +1060,22 @@ public:
     cfg_->http_keep_alive_timeout_sec = static_cast<uint32_t>(timeout.count());
     return *this;
   }
+
+  /// Compress HTTP/1.1 and HTTP/3 responses with gzip or deflate, whichever
+  /// the client's Accept-Encoding prefers. Applies to static files of
+  /// text-like types (HTML, CSS, JS, JSON, SVG, WASM, ...) — each is
+  /// compressed once and kept in the file cache — and to page-handler
+  /// responses, which are compressed per request. RPC traffic,
+  /// already-compressed media, and bodies smaller than @p min_size bytes are
+  /// sent as-is.
+  RpcBuilderHttp& compression(
+      bool enabled = true,
+      size_t min_size = NPRPC_DEFAULT_HTTP_COMPRESSION_MIN_SIZE) noexcept
+  {
+    cfg_->http_compression_enabled = enabled;
+    cfg_->http_compression_min_size = min_size;
+    return *this;
+  }
 #if defined(NPRPC_ENABLE_WEBSOCKET)
   /// Negotiates permessage-deflate on WebSocket connections.
   RpcBuilderHttp& websocket_compression(bool enabled = true) noexcept
@@ -1126,21 +1142,6 @@ public:
   RpcBuilderHttp& http3_idle_timeout(std::chrono::milliseconds timeout) noexcept
   {
     cfg_->http3_idle_timeout_ms = static_cast<uint32_t>(timeout.count());
-    return *this;
-  }
-
-  /// Compress HTTP/3 responses with gzip or deflate, whichever the client's
-  /// Accept-Encoding prefers. Applies to static files of text-like types
-  /// (HTML, CSS, JS, JSON, SVG, WASM, ...) — each is compressed once and kept
-  /// in the file cache — and to page-handler responses, which are compressed
-  /// per request. RPC traffic, already-compressed media, and bodies smaller
-  /// than @p min_size bytes are sent as-is.
-  RpcBuilderHttp& http3_compression(
-      bool enabled = true,
-      size_t min_size = NPRPC_DEFAULT_HTTP3_COMPRESSION_MIN_SIZE) noexcept
-  {
-    cfg_->http3_compression_enabled = enabled;
-    cfg_->http3_compression_min_size = min_size;
     return *this;
   }
 

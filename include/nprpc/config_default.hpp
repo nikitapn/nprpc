@@ -24,11 +24,11 @@
 // connection closes after the shorter of this and the client's value passes
 // with nothing sent. 0 announces none, leaving only the client's.
 #define NPRPC_DEFAULT_HTTP3_IDLE_TIMEOUT_MS 30'000
-// HTTP/3 response compression (gzip/deflate). Off unless asked for; bodies
+// HTTP/1.1 and HTTP/3 response compression (gzip/deflate). Off unless asked for; bodies
 // smaller than the minimum are sent as-is, since the coding overhead and the
 // CPU are not worth it there.
-#define NPRPC_DEFAULT_HTTP3_COMPRESSION_ENABLED false
-#define NPRPC_DEFAULT_HTTP3_COMPRESSION_MIN_SIZE 256
+#define NPRPC_DEFAULT_HTTP_COMPRESSION_ENABLED false
+#define NPRPC_DEFAULT_HTTP_COMPRESSION_MIN_SIZE 256
 #define NPRPC_DEFAULT_QUIC_MAX_CONNECTIONS 10000
 #define NPRPC_DEFAULT_QUIC_MAX_CONNECTIONS_PER_IP 256
 #define NPRPC_DEFAULT_QUIC_NEW_CONNECTIONS_PER_IP_PER_SECOND 50

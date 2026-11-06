@@ -43,19 +43,27 @@ struct cached_file_body {
   /// The type of the value returned by the body
   struct value_type {
     CachedFileGuard guard;
+    // The bytes to send: the file, or a compressed copy of it. Either way
+    // the pinned CachedFile owns them for as long as the guard lives.
+    const std::uint8_t* bytes = nullptr;
+    std::size_t length = 0;
 
     value_type() = default;
-    explicit value_type(CachedFileGuard g)
+    explicit value_type(CachedFileGuard g,
+                        const CachedFile::EncodedVariant* variant = nullptr)
         : guard(std::move(g))
     {
+      if (variant) {
+        bytes = variant->data.data();
+        length = variant->data.size();
+      } else if (guard) {
+        bytes = guard->data();
+        length = guard->size();
+      }
     }
 
     bool is_open() const noexcept { return static_cast<bool>(guard); }
-    std::uint64_t size() const noexcept { return guard ? guard->size() : 0; }
-    std::string_view content_type() const noexcept
-    {
-      return guard ? guard->content_type() : "application/octet-stream";
-    }
+    std::uint64_t size() const noexcept { return length; }
   };
 
   /// Returns the size of the body
@@ -83,16 +91,16 @@ struct cached_file_body {
     {
       ec = {};
 
-      if (!body_.guard || offset_ >= body_.guard->size()) {
+      if (!body_.bytes || offset_ >= body_.length) {
         return boost::none;
       }
 
       // Bound each serializer step so large responses do not turn into a
       // single oversized write on the underlying stream.
-      auto remaining = body_.guard->size() - offset_;
+      auto remaining = body_.length - offset_;
       auto chunk_size = std::min(remaining, kHttpResponseChunkSize);
       auto result = std::make_pair(
-          const_buffers_type(body_.guard->data() + offset_, chunk_size),
+          const_buffers_type(body_.bytes + offset_, chunk_size),
           chunk_size < remaining
       );
       offset_ += chunk_size;
@@ -111,6 +119,32 @@ template <class Response> void add_alt_svc_header(Response& res)
     res.set("Alt-Svc",
             std::format("h3=\":{}\"; ma=86400", g_cfg.listen_http_port));
   }
+}
+
+// Whether a response of this media type varies by Accept-Encoding, i.e. we
+// would compress it for a client that asked.
+static bool response_varies_by_encoding(std::string_view content_type) noexcept
+{
+  return g_cfg.http_compression_enabled &&
+         is_compressible_content_type(content_type);
+}
+
+// The coding to send a body of @p body_size bytes in, from the request's
+// Accept-Encoding. Identity unless compression is on and the body is big
+// enough to be worth it.
+template <class Fields>
+static ContentEncoding choose_response_encoding(Fields const& req_fields,
+                                                std::size_t body_size)
+{
+  if (!g_cfg.http_compression_enabled ||
+      body_size < g_cfg.http_compression_min_size) {
+    return ContentEncoding::Identity;
+  }
+  auto const it = req_fields.find(http::field::accept_encoding);
+  if (it == req_fields.end())
+    return ContentEncoding::Identity;
+  return negotiate_content_encoding(
+      std::string_view(it->value().data(), it->value().size()));
 }
 
 // The generator hides the status, so read it here on the way out.
@@ -346,6 +380,30 @@ handle_request(beast::string_view doc_root,
         }
         add_alt_svc_header(res);
         res.keep_alive(req.keep_alive());
+
+        // Compress the rendered body unless the handler already encoded it
+        // itself, or the response has no body to speak of.
+        auto const content_type = std::string_view(
+            res[http::field::content_type].data(),
+            res[http::field::content_type].size());
+        if (res.find(http::field::content_encoding) == res.end() &&
+            page->status != 204 && page->status != 304 &&
+            response_varies_by_encoding(content_type)) {
+          res.set(http::field::vary, "accept-encoding");
+          auto const encoding = choose_response_encoding(req, page->body.size());
+          if (encoding != ContentEncoding::Identity) {
+            auto compressed = compress_body(
+                reinterpret_cast<const std::uint8_t*>(page->body.data()),
+                page->body.size(), encoding);
+            if (compressed && compressed->size() < page->body.size()) {
+              res.set(http::field::content_encoding,
+                      content_encoding_token(encoding));
+              page->body.assign(
+                  reinterpret_cast<const char*>(compressed->data()),
+                  compressed->size());
+            }
+          }
+        }
         // A HEAD response carries the headers of the GET but no body; Beast
         // still needs the length, so set it before clearing.
         if (req.method() == http::verb::head) {
@@ -381,31 +439,75 @@ handle_request(beast::string_view doc_root,
     return counted(not_found(req.target()));
   }
 
-  // Cache the size since we need it for headers
-  auto const size = cached_file->size();
   auto const content_type = cached_file->content_type();
 
-  // Respond to HEAD request
+  // Pick the representation first: a compressed copy carries its own ETag,
+  // and a conditional request is answered for the one we would send. The
+  // copy is built once per cached file, then served zero-copy.
+  const CachedFile::EncodedVariant* variant = nullptr;
+  if (cached_file->compressible()) {
+    auto const encoding = choose_response_encoding(req, cached_file->size());
+    if (encoding != ContentEncoding::Identity)
+      variant = cached_file->encoded(encoding);
+  }
+  auto const etag =
+      variant ? std::string_view{variant->etag} : cached_file->etag();
+  auto const varies = response_varies_by_encoding(content_type);
+
+  // Validators and caching policy, the same on a 200, a HEAD and a 304.
+  auto const set_cache_headers = [&](auto& res) {
+    res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+    res.set(http::field::etag, etag);
+    res.set(http::field::last_modified, cached_file->last_modified_str());
+    res.set(http::field::cache_control, k_static_file_cache_control);
+    if (varies)
+      res.set(http::field::vary, "accept-encoding");
+    add_alt_svc_header(res);
+    res.keep_alive(req.keep_alive());
+  };
+
+  // Conditional GET: If-None-Match takes precedence over If-Modified-Since
+  // (RFC 9110 §13.2.2).
+  bool not_modified = false;
+  if (auto const inm = req.find(http::field::if_none_match); inm != req.end()) {
+    not_modified = if_none_match_matches(
+        std::string_view(inm->value().data(), inm->value().size()), etag);
+  } else if (auto const ims = req.find(http::field::if_modified_since);
+             ims != req.end()) {
+    not_modified = not_modified_since(
+        cached_file->mtime(),
+        std::string_view(ims->value().data(), ims->value().size()));
+  }
+  if (not_modified) {
+    http::response<http::empty_body> res{http::status::not_modified,
+                                         req.version()};
+    set_cache_headers(res);
+    return counted(std::move(res));
+  }
+
+  auto const length = variant ? variant->data.size() : cached_file->size();
+
+  // HEAD gets exactly the headers a GET would.
   if (req.method() == http::verb::head) {
     http::response<http::empty_body> res{http::status::ok, req.version()};
-    res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+    set_cache_headers(res);
     res.set(http::field::content_type, content_type);
-    add_alt_svc_header(res);
-    res.content_length(size);
-    res.keep_alive(req.keep_alive());
+    if (variant)
+      res.set(http::field::content_encoding,
+              content_encoding_token(variant->encoding));
+    res.content_length(length);
     return counted(std::move(res));
   }
 
   // Respond to GET request using cached file body (zero-copy)
-  http::response<cached_file_body> res{
-      std::piecewise_construct,
-      std::make_tuple(cached_file_body::value_type(std::move(cached_file))),
-      std::make_tuple(http::status::ok, req.version())};
-  res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
+  http::response<cached_file_body> res{http::status::ok, req.version()};
+  set_cache_headers(res);
   res.set(http::field::content_type, content_type);
-  add_alt_svc_header(res);
-  res.content_length(size);
-  res.keep_alive(req.keep_alive());
+  if (variant)
+    res.set(http::field::content_encoding,
+            content_encoding_token(variant->encoding));
+  res.body() = cached_file_body::value_type(std::move(cached_file), variant);
+  res.content_length(length);
   return counted(std::move(res));
 }
 
