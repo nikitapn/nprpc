@@ -1,5 +1,72 @@
 # TODO.md
 
+## Roadmap (survey, 2026-11-06)
+
+Gaps found by checking the code, not this file, in rough priority order.
+Each area lists what to build; the sections further down keep their older,
+more specific items.
+
+### 1. HTTP/1.1 parity with HTTP/3 for static files and pages
+The first visit, and every client that can't use QUIC, arrives over HTTP/1.1.
+* [x] ETag, Last-Modified, `Cache-Control`, `Vary`, and 304s for
+  `If-None-Match` / `If-Modified-Since`, as HTTP/3 already had.
+* [x] gzip/deflate for static files (the cached compressed copies HTTP/3
+  uses) and for page-handler responses. One `compression()` builder option
+  now covers both protocols (was `http3_compression()`).
+* [x] `If-None-Match` compared weakly with list and `*` support, and
+  `If-Modified-Since` at whole seconds, on both protocols.
+* [ ] Configurable `Cache-Control` per path or extension: hashed assets
+  `immutable, max-age=31536000`, HTML `no-cache`. Today every static file gets
+  a fixed `public, max-age=3600`.
+* [ ] Range requests (206) on both protocols, for video seeking and resumable
+  downloads.
+* [ ] Brotli, precompressed alongside gzip in the file cache.
+
+### 2. IDL evolution without breaking deployed clients
+The schema hash in the class ID makes any interface change fail `narrow()`,
+so a browser holding cached JS breaks on the next server deploy.
+* [ ] Additive changes that keep the hash compatible: new trailing struct
+  fields, new methods; `[deprecated]` for old ones.
+* [ ] An `npidl` compatibility check that diffs two versions of an interface
+  and reports breaking vs compatible changes.
+* [ ] `map<K, V>` in the IDL.
+
+### 3. Operational hooks
+* [ ] Interceptors/middleware around every call (auth, logging, per-method
+  metrics, rate limits), in C++, Swift and TS.
+* [ ] Per-call metadata independent of the connection (trace ID, auth token),
+  enough for W3C `traceparent` propagation.
+* [ ] Server-side deadlines: pass the caller's timeout to the servant through
+  `CallContext`, so it can stop work nobody is waiting for.
+* [ ] Metrics export (Prometheus/OpenMetrics endpoint or OTLP), next to the
+  NPRPC Monitor feed.
+* [ ] Health/readiness endpoint for systemd, Docker healthchecks and load
+  balancers.
+* [ ] Graceful drain for HTTP/1.1, WebSocket and TCP (HTTP/3 has GOAWAY):
+  stop accepting, finish in-flight calls, then exit.
+
+### 4. CI and robustness testing
+* [ ] A CI workflow that runs `run_all_tests.py` (C++ and JS at least). The only
+  workflow today packages devtools.
+* [ ] Fuzzing of generated deserializers, the HTTP/1.1 path, WebSocket framing
+  and QUIC (see Stability & Security below).
+* [ ] Soak and 1k+ connection churn tests (see Stability & Security below).
+
+### 5. Transports and platforms
+* [ ] HTTP/2, for browsers that can't use QUIC (HTTP/1.1 caps them at ~6
+  connections per origin).
+* [ ] Opt-in 0-RTT for idempotent requests on QUIC/HTTP/3, with replay
+  protection; it is disabled outright today.
+* [ ] Decide on platforms: fix Windows (shared memory, see below) and macOS,
+  or document Linux-only.
+* [ ] Another client language, Python first, for scripting and tests against
+  live services.
+
+### 6. Developer experience
+* [ ] More examples beside live-blog: a minimal C++ server with a browser
+  client, a streaming example, an fd-passing example.
+* [ ] Packaging: a vcpkg or Conan port, and `nprpc` published on npm.
+
 ## STD
 * [ ] Replace std::unordered_map with absl::flat_hash_map in performance-critical paths. (Partially done in http3_server_nghttp3, need to audit the rest of the codebase for hot paths like pending request tracking, connection maps, etc.)
 
@@ -27,11 +94,11 @@
 * [ ] Encryption support (TLS) for TCP transport.
 * [ ] Deflate or zlib compression for large messages.
 * [ ] Async socket connect with timeout.
-* [ ] **[Cancellation refactor]** `send_receive_coro` is currently only a true coroutine in `UringClientConnection`; all other transports (`SocketConnection`, WebSocket, shared memory, QUIC) inherit the blocking base-class stub that ignores the `stop_token`. Until they are ported, the only cancellation that works is pre-flight (`stop_requested()` checked at the top of every generated `*Async` body). Proper mid-flight cancellation on non-uring transports requires each one to track pending requests by ID, register a `stop_callback`, and post a resume with `status = -2` when triggered — the same pattern already used in `UringClientConnection::send_receive_coro`.
+* [x] **[Cancellation refactor]** Done: `Session::send_receive_coro` now cancels mid-flight on every transport (see docs/CALLS.md). Original note: `send_receive_coro` is currently only a true coroutine in `UringClientConnection`; all other transports (`SocketConnection`, WebSocket, shared memory, QUIC) inherit the blocking base-class stub that ignores the `stop_token`. Until they are ported, the only cancellation that works is pre-flight (`stop_requested()` checked at the top of every generated `*Async` body). Proper mid-flight cancellation on non-uring transports requires each one to track pending requests by ID, register a `stop_callback`, and post a resume with `status = -2` when triggered — the same pattern already used in `UringClientConnection::send_receive_coro`.
 
 ## WebSocket/WebTransport
 * [ ] Support openning another WebSocket connection on demand when existing one is busy (for high-throughput clients).
-* [ ] **[HIGH]** Add cancellation support for in-flight regular (non-streaming) RPC calls via `AbortSignal`. When triggered, send a `Cancel` message with the matching request ID over the transport before the reply arrives, then reject the pending promise on the client. Server-side cooperative cancellation is a bonus but not required — letting the handler finish and dropping the reply on the client is acceptable. Requires tracking in-flight request IDs in `PendingRequestMap` (or equivalent) and wiring `AbortSignal` through the generated proxy call signatures.
+* [x] **[HIGH]** Done: the TS client takes an `AbortSignal` (`send_receive`, nprpc_js/src/nprpc.ts). Original note: Add cancellation support for in-flight regular (non-streaming) RPC calls via `AbortSignal`. When triggered, send a `Cancel` message with the matching request ID over the transport before the reply arrives, then reject the pending promise on the client. Server-side cooperative cancellation is a bonus but not required — letting the handler finish and dropping the reply on the client is acceptable. Requires tracking in-flight request IDs in `PendingRequestMap` (or equivalent) and wiring `AbortSignal` through the generated proxy call signatures.
 
 ## HTTP/3 Server
 
@@ -63,14 +130,14 @@
 ### Ideas for Future Enhancements
 | Area | Improvement | Complexity |
 |------|-------------|------------|
-| Compression | Add gzip/brotli compression for text files (cache compressed versions) | Medium |
-| ETag/Caching | Add ETag and If-None-Match support for 304 responses | Low |
-| Range requests | Support Range header for video streaming / resumable downloads | Medium |
+| Compression | ~~gzip~~ done (HTTP/1.1 and HTTP/3); brotli still open | Medium |
+| ETag/Caching | ~~ETag and If-None-Match 304s~~ done (HTTP/1.1 and HTTP/3) | Low |
+| Range requests | Support Range header for video streaming / resumable downloads (Roadmap 1) | Medium |
 | Cache warming | Pre-load common files at startup | Low |
 | Metrics | Expose cache stats (hit rate, memory usage) via /stats endpoint | Low |
 | HTTP/2 | Add HTTP/2 support via nghttp2 (between HTTP/1.1 and HTTP/3) | High |
 | sendfile() | For non-cached large files, use sendfile() syscall | Medium |
-| Cache-Control | Respect/set Cache-Control headers for browser caching | Low |
+| Cache-Control | Set, but fixed at `public, max-age=3600`; per-path policy open (Roadmap 1) | Low |
 
 ## Architecture Overview
 
