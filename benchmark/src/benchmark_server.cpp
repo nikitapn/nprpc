@@ -156,7 +156,10 @@ public:
 
       rpc = builder.build();
 
-      rpc->start_thread_pool(1);
+      // Threads running the shared io_context: TCP, HTTP/1 and WebSocket
+      // all run on them (HTTP/3 has its own workers). One keeps the RPC
+      // benchmarks as they were; the HTTP shootout asks for more.
+      rpc->start_thread_pool(parse_port(::getenv("NPRPC_BENCH_THREADS"), 1));
 
       // Use the new PoaBuilder API
       poa = rpc->create_poa()

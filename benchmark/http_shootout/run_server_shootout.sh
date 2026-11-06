@@ -45,6 +45,9 @@ fi
 
 NPRPC_DO_NOT_START_SERVER="${NPRPC_DO_NOT_START_SERVER:-0}"
 NPRPC_HTTP_PORT="${NPRPC_HTTP_PORT:-22223}"
+# io_context threads in benchmark_server, which serve HTTP/1 (HTTP/3 has its
+# own workers). With one, HTTP/1 is capped by a single core.
+NPRPC_BENCH_THREADS="${NPRPC_BENCH_THREADS:-4}"
 
 # Router variant: npquicrouter listens on these public ports, forwards to
 # the backend on NPRPC_ROUTER_BACKEND_* ports via the SHM egress channel.
@@ -398,6 +401,7 @@ start_nprpc() {
     env
     "NPRPC_HTTP_ROOT_DIR=$WWW_DIR"
     "NPRPC_BENCH_ENABLE_HTTP3=1"
+    "NPRPC_BENCH_THREADS=$NPRPC_BENCH_THREADS"
     "$BUILD_DIR/benchmark/benchmark_server"
   )
 
@@ -681,6 +685,7 @@ start_nprpc_via_router() {
     exec env \
       "NPRPC_HTTP_ROOT_DIR=$WWW_DIR" \
       "NPRPC_BENCH_ENABLE_HTTP3=1" \
+      "NPRPC_BENCH_THREADS=${NPRPC_BENCH_THREADS}" \
       "NPRPC_BENCH_HTTP_PORT=${NPRPC_ROUTER_BACKEND_HTTP_PORT}" \
       "NPRPC_BENCH_SHM_EGRESS=${NPRPC_ROUTER_SHM_CHANNEL}" \
       "NPRPC_BENCH_SHM_INGRESS=${NPRPC_ROUTER_SHM_CHANNEL}" \
@@ -846,6 +851,7 @@ capture_environment_report() {
 - Build dir: ${BUILD_DIR}
 - Benchmark host: ${BENCH_HOST}
 - Payload sizes: ${PAYLOAD_SIZES[*]}
+- NPRPC_BENCH_THREADS: ${NPRPC_BENCH_THREADS}
 - H2LOAD_BIN: ${H2LOAD_BIN}
 - h2load version: ${h2load_version:-unknown}
 - OHA_BIN: ${OHA_BIN}
@@ -975,6 +981,8 @@ Environment:
   - CADDY_MODE=auto|system|docker (default: auto)
   - BENCH_HOST=localhost|127.0.0.1 (default: localhost)
   - NPRPC_ROUTER_NUM_WORKERS=N (default: 4) router UDP worker threads
+  - NPRPC_BENCH_THREADS=N (default: 4) benchmark_server io threads, which
+    serve HTTP/1
   - TRACE_SYSCALLS=1 (default: 0) attach strace to each server (system-mode
     nginx/caddy, plus nprpc) and report network syscall counts alongside the
     final results.
