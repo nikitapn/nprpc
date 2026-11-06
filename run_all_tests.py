@@ -19,7 +19,7 @@ Usage:
   python3 run_all_tests.py --swift-host
 
 Options:
-  --build-dir DIR        CMake build dir (default: .build_relwith_debinfo from .env)
+  --build-dir DIR        CMake build dir (default: .build_relwith_debinfo)
   --skip-cmake           Skip CMake build step
   --skip-cpp             Skip C++ tests
   --skip-js              Skip JavaScript/TypeScript tests
@@ -70,17 +70,6 @@ def c(color: str, text: str) -> str:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _env_build_dir() -> str:
-    """Read BUILD_DIR from .env if it exists."""
-    env_file = Path(__file__).parent / ".env"
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            m = re.match(r"^\s*BUILD_DIR\s*=\s*(.+)", line)
-            if m:
-                return m.group(1).strip()
-    return ".build_relwith_debinfo"
-
 
 def ensure_nprpc_bpf_capabilities(binary: Path) -> None:
     """Grant cap_net_admin,cap_bpf so HTTP/3 reuseport eBPF can attach."""
@@ -468,7 +457,7 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--build-dir", default=None,
-                   help="CMake build directory (default: from .env or .build_relwith_debinfo)")
+                   help="CMake build directory (default: .build_relwith_debinfo)")
     p.add_argument("--skip-cmake",  action="store_true", help="Skip CMake build")
     p.add_argument("--skip-cpp",    action="store_true", help="Skip C++ tests")
     p.add_argument("--skip-js",     action="store_true", help="Skip JS/TS tests")
@@ -498,7 +487,7 @@ def main() -> int:
     USE_COLOR = _use_color(args.color)
 
     root = Path(__file__).parent.resolve()
-    build_dir_str = args.build_dir or _env_build_dir()
+    build_dir_str = args.build_dir or ".build_relwith_debinfo"
     build_dir = root / build_dir_str if not Path(build_dir_str).is_absolute() else Path(build_dir_str)
 
     print(c(C.BOLD, f"\nNPRPC unified build + test runner"))

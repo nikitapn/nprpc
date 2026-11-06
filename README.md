@@ -740,7 +740,7 @@ See [nprpc_swift/README.md](nprpc_swift/README.md) and [nprpc_swift/EXAMPLES.md]
 ## Building
 
 ```bash
-# Standard dev build (Ninja, RelWithDebInfo, all features) — see `.env` for BUILD_DIR
+# Standard dev build (Ninja, RelWithDebInfo, all features)
 just configure
 just build
 

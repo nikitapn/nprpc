@@ -1,5 +1,4 @@
 # NPRPC task runner — run `just` to list recipes.
-# Config: source `.env` for BUILD_DIR / BUILD_TYPE (defaults below).
 
 set dotenv-load := true
 set shell := ["bash", "-euo", "pipefail", "-c"]
