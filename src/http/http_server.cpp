@@ -900,6 +900,12 @@ private:
     if (!running_)
       return;
 
+    // Without TCP_NODELAY, Nagle holds back the last partial segment of each
+    // response until the client ACKs the previous one, and the client delays
+    // that ACK by up to 40 ms: every multi-segment response stalls for it.
+    beast::error_code nodelay_ec;
+    socket.set_option(tcp::no_delay(true), nodelay_ec);
+
     // Create the detector http_session and run it.
     // The SSL context is read here rather than cached in the listener, so a
     // certificate reload is picked up by the next connection.
