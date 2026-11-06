@@ -8,6 +8,9 @@
 
 #define NPRPC_DEFAULT_LOG_LEVEL_U32 3
 #define NPRPC_DEFAULT_HTTP_MAX_REQUEST_BODY_SIZE 10'000
+// How long an HTTP/1.1 connection may sit idle waiting for its next request.
+// 0 closes the connection after every response.
+#define NPRPC_DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_SEC 6
 #define NPRPC_DEFAULT_HTTP_WEBSOCKET_COMPRESSION_ENABLED true
 #define NPRPC_DEFAULT_HTTP_WEBSOCKET_MAX_MESSAGE_SIZE (2 * 1024 * 1024)
 #define NPRPC_DEFAULT_HTTP_WEBTRANSPORT_MAX_MESSAGE_SIZE (2 * 1024 * 1024)

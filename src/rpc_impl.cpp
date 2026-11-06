@@ -352,6 +352,7 @@ NPRPC_API Rpc* RpcBuilderBase::build()
   g_cfg.http_root_dir = cfg_->http_root_dir;
   g_cfg.http_allowed_origins = cfg_->http_allowed_origins;
   g_cfg.http_max_request_body_size = cfg_->http_max_request_body_size;
+  g_cfg.http_keep_alive_timeout_sec = cfg_->http_keep_alive_timeout_sec;
   g_cfg.http_websocket_max_message_size = cfg_->http_websocket_max_message_size;
   g_cfg.http_webtransport_max_message_size =
       cfg_->http_webtransport_max_message_size;

@@ -28,6 +28,7 @@ class BuildConfig {
     var httpRootDir: String = ""
     var httpAllowedOrigins: [String] = []
     var httpMaxRequestBodySize: UInt = 10_000
+    var httpKeepAliveTimeoutSec: UInt32 = 6
     var httpWebSocketCompressionEnabled: Bool = true
     var httpWebSocketMaxMessageSize: UInt = 2 * 1024 * 1024
     var httpWebTransportMaxMessageSize: UInt = 2 * 1024 * 1024
@@ -243,6 +244,7 @@ extension RpcBuilderInternal {
         cxxConfig.http_root_dir = std.string(config.httpRootDir)
         cxxConfig.http_allowed_origins = std.string(config.httpAllowedOrigins.joined(separator: "\n"))
         cxxConfig.http_max_request_body_size = numericCast(config.httpMaxRequestBodySize)
+        cxxConfig.http_keep_alive_timeout_sec = config.httpKeepAliveTimeoutSec
         cxxConfig.http_websocket_compression_enabled = config.httpWebSocketCompressionEnabled
         cxxConfig.http_websocket_max_message_size = numericCast(config.httpWebSocketMaxMessageSize)
         cxxConfig.http_webtransport_max_message_size = numericCast(config.httpWebTransportMaxMessageSize)
@@ -397,6 +399,17 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
     @discardableResult
     public func maxRequestBodySize(_ bytes: UInt) -> RpcBuilderHttp {
         config.httpMaxRequestBodySize = bytes
+        return self
+    }
+
+    /// How long an HTTP/1.1 connection may stay idle between requests before
+    /// it is closed. Zero turns keep-alive off: every response closes the
+    /// connection.
+    ///
+    /// - Parameter seconds: idle timeout in seconds
+    @discardableResult
+    public func keepAliveTimeout(seconds: UInt32) -> RpcBuilderHttp {
+        config.httpKeepAliveTimeoutSec = seconds
         return self
     }
 

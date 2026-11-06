@@ -62,6 +62,7 @@ struct Config {
   std::string http_root_dir;
   std::vector<std::string> http_allowed_origins;
   size_t http_max_request_body_size = NPRPC_DEFAULT_HTTP_MAX_REQUEST_BODY_SIZE;
+  uint32_t http_keep_alive_timeout_sec = NPRPC_DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_SEC; // 0 = no keep-alive
   bool http_websocket_compression_enabled = NPRPC_DEFAULT_HTTP_WEBSOCKET_COMPRESSION_ENABLED;
   size_t http_websocket_max_message_size = NPRPC_DEFAULT_HTTP_WEBSOCKET_MAX_MESSAGE_SIZE;
   size_t http_webtransport_max_message_size = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_MAX_MESSAGE_SIZE;

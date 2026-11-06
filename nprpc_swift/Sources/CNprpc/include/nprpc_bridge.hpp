@@ -72,6 +72,8 @@ struct RpcBuildConfig {
     std::string http_root_dir;
     std::string http_allowed_origins;
     size_t http_max_request_body_size;
+    // Idle seconds allowed between HTTP/1.1 requests; 0 disables keep-alive.
+    uint32_t http_keep_alive_timeout_sec = 6;
     bool http_websocket_compression_enabled;
     size_t http_websocket_max_message_size;
     size_t http_webtransport_max_message_size;

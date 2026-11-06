@@ -432,6 +432,10 @@ template <class Derived> class http_session
   // the life of the connection, so one getpeername() serves every request.
   boost::optional<net::ip::address> remote_ip_;
 
+  // The first request gets timeout_sec like the handshake; the reads after
+  // it wait out the keep-alive idle time instead.
+  bool first_request_ = true;
+
 protected:
   flat_buffer buffer_;
 
@@ -453,8 +457,12 @@ public:
     // of the body in bytes to prevent abuse.
     parser_->body_limit(g_cfg.http_max_request_body_size);
 
-    // Set the timeout.
-    beast::get_lowest_layer(derived().stream()).expires_after(timeout_sec);
+    // Set the timeout. Only the read is affected while a response is still
+    // being written: expires_after leaves a pending operation's timer alone.
+    beast::get_lowest_layer(derived().stream()).expires_after(
+        first_request_
+            ? timeout_sec
+            : std::chrono::seconds(g_cfg.http_keep_alive_timeout_sec));
 
     // Read a request using the parser-oriented interface
     http::async_read(derived().stream(), buffer_, *parser_,
@@ -567,11 +575,21 @@ public:
 #endif // NPRPC_WEBSOCKET_ENABLED
     }
 
+    first_request_ = false;
+
+    // Every response mirrors the request's keep-alive, so clearing it here
+    // makes the response carry "Connection: close" and on_write close.
+    if (g_cfg.http_keep_alive_timeout_sec == 0)
+      parser_->get().keep_alive(false);
+    const bool keep_alive = parser_->get().keep_alive();
+
     // Send the response
     queue_write(handle_request(*doc_root_, parser_->release(), remote_ip));
 
-    // If we aren't at the queue limit, try to pipeline another request
-    if (response_queue_.size() < queue_limit)
+    // If we aren't at the queue limit, try to pipeline another request. Not
+    // on a connection that closes after this response: that read could only
+    // time out, and a timed-out read closes the socket under the write.
+    if (keep_alive && response_queue_.size() < queue_limit)
       do_read();
   }
 

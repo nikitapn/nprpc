@@ -149,6 +149,12 @@ public:
                   .http3_workers(http3_workers)
                   .max_websocket_message_size(12 * 1024 * 1024);
 
+      // HTTP/1.1 keep-alive idle timeout in seconds; 0 disables keep-alive.
+      if (const char* keep_alive = ::getenv("NPRPC_BENCH_HTTP_KEEPALIVE_SEC");
+          keep_alive && *keep_alive)
+        builder.keep_alive_timeout(
+            std::chrono::seconds(std::strtoul(keep_alive, nullptr, 10)));
+
       const char* shm_ingress_env = ::getenv("NPRPC_BENCH_SHM_INGRESS");
       if (shm_egress_env && *shm_egress_env)
         builder.shm_egress_channel(shm_egress_env,

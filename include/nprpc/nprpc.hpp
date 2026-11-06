@@ -656,6 +656,7 @@ struct BuildConfig {
   std::string http_root_dir;
   std::vector<std::string> http_allowed_origins;
   size_t http_max_request_body_size = NPRPC_DEFAULT_HTTP_MAX_REQUEST_BODY_SIZE;
+  uint32_t http_keep_alive_timeout_sec = NPRPC_DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_SEC; // 0 = no keep-alive
   bool http_websocket_compression_enabled = NPRPC_DEFAULT_HTTP_WEBSOCKET_COMPRESSION_ENABLED;
   size_t http_websocket_max_message_size = NPRPC_DEFAULT_HTTP_WEBSOCKET_MAX_MESSAGE_SIZE;
   size_t http_webtransport_max_message_size = NPRPC_DEFAULT_HTTP_WEBTRANSPORT_MAX_MESSAGE_SIZE;
@@ -1046,6 +1047,16 @@ public:
   RpcBuilderHttp& max_request_body_size(size_t bytes) noexcept
   {
     cfg_->http_max_request_body_size = bytes;
+    return *this;
+  }
+
+  /// How long an HTTP/1.1 connection may stay idle between requests before
+  /// it is closed. Zero turns keep-alive off: every response closes the
+  /// connection. The TLS handshake, the first request and every write keep
+  /// their own fixed 6 s limit.
+  RpcBuilderHttp& keep_alive_timeout(std::chrono::seconds timeout) noexcept
+  {
+    cfg_->http_keep_alive_timeout_sec = static_cast<uint32_t>(timeout.count());
     return *this;
   }
 #if defined(NPRPC_ENABLE_WEBSOCKET)
