@@ -763,16 +763,27 @@ capture_environment_report() {
   fi
 
   if command -v lscpu >/dev/null 2>&1; then
-    architecture="$(lscpu | awk -F: '/^Architecture:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
-    cpu_model="$(lscpu | awk -F: '/^Model name:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
-    cpu_count="$(lscpu | awk -F: '/^CPU\(s\):/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
-    sockets="$(lscpu | awk -F: '/^Socket\(s\):/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
-    cores_per_socket="$(lscpu | awk -F: '/^Core\(s\) per socket:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
-    threads_per_core="$(lscpu | awk -F: '/^Thread\(s\) per core:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
-    numa_nodes="$(lscpu | awk -F: '/^NUMA node\(s\):/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
-    max_mhz="$(lscpu | awk -F: '/^CPU max MHz:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
-    min_mhz="$(lscpu | awk -F: '/^CPU min MHz:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
-    virtualization="$(lscpu | awk -F: '/^Virtualization:/ {sub(/^[ 	]+/, "", $2); print $2; exit}')"
+    # Parse one captured copy: piping lscpu straight into `awk '... exit'`
+    # kills lscpu with SIGPIPE (it writes line by line), which pipefail
+    # turns into a fatal error.
+    local lscpu_out
+    lscpu_out="$(lscpu 2>/dev/null || true)"
+    lscpu_field() {
+      awk -v key="$1" 'index($0, ":") {
+        k = substr($0, 1, index($0, ":") - 1)
+        if (k == key) { v = substr($0, index($0, ":") + 1); sub(/^[ \t]+/, "", v); print v; exit }
+      }' <<<"$lscpu_out"
+    }
+    architecture="$(lscpu_field "Architecture")"
+    cpu_model="$(lscpu_field "Model name")"
+    cpu_count="$(lscpu_field "CPU(s)")"
+    sockets="$(lscpu_field "Socket(s)")"
+    cores_per_socket="$(lscpu_field "Core(s) per socket")"
+    threads_per_core="$(lscpu_field "Thread(s) per core")"
+    numa_nodes="$(lscpu_field "NUMA node(s)")"
+    max_mhz="$(lscpu_field "CPU max MHz")"
+    min_mhz="$(lscpu_field "CPU min MHz")"
+    virtualization="$(lscpu_field "Virtualization")"
   fi
 
   if [[ -r /proc/meminfo ]]; then
