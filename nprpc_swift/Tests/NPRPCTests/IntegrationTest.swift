@@ -120,7 +120,10 @@ final class IntegrationTests: XCTestCase {
                          keyFile: "\(nprpcRepoRoot)/certs/out/localhost.key")
                     .enableHttp3()
                     .rootDir("/workspace")
-                    .http3Workers(2)
+                    // One worker needs no reuseport BPF program, so the
+                    // test binary needs no file capabilities (which would
+                    // also stop it loading its $ORIGIN-relative libraries).
+                    .http3Workers(1)
                     .maxRequestBodySize(10_000)
                     .maxWebSocketMessageSize(24 * 1024 * 1024)
                     .maxWebTransportMessageSize(24 * 1024 * 1024)

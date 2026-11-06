@@ -25,7 +25,7 @@ Options:
   --skip-js              Skip JavaScript/TypeScript tests
   --skip-swift           Skip Swift tests
   --swift-host           Run Swift tests on the host against --build-dir
-                         (skips Docker rebuild of nprpc; needs host Swift + setcap)
+                         (skips Docker rebuild of nprpc; needs host Swift)
   --cmake-target TARGET  CMake build target (default: all)
   --cpp-filter FILTER    CTest regex filter for C++ tests (e.g. 'HTTP3Transport|HttpUtils')
   --color                Force coloured output even when not a TTY
@@ -126,20 +126,6 @@ def ensure_test_certificate(root: Path) -> None:
     if out.returncode != 0:
         raise RuntimeError(f"certs/create.sh failed:\n{out.stdout}")
     print(c(C.DIM, f"cert      : {out.stdout.strip().splitlines()[-1]}"))
-
-
-def find_swift_test_binaries(swift_dir: Path) -> list[Path]:
-    """Locate NPRPCPackageTests.xctest products under nprpc_swift/.build."""
-    build_root = swift_dir / ".build"
-    if not build_root.is_dir():
-        return []
-    found: dict[Path, Path] = {}
-    for path in build_root.rglob("NPRPCPackageTests.xctest"):
-        if path.is_file() or path.is_symlink():
-            resolved = path.resolve()
-            if resolved.is_file():
-                found[resolved] = resolved
-    return sorted(found.values())
 
 
 @dataclass
@@ -326,8 +312,8 @@ class Runner:
     def stage_swift_host(self) -> Result:
         """Host path: link against the existing CMake build_dir and run swift test.
 
-        Avoids the long Docker rebuild of nprpc. The XCTest binary needs
-        cap_net_admin+cap_bpf for HTTP/3 reuseport (sudo setcap).
+        Avoids the long Docker rebuild of nprpc. The tests run one HTTP/3
+        worker, so they need no reuseport BPF program and no setcap.
         """
         swift_dir = self.root / "nprpc_swift"
 
@@ -385,36 +371,10 @@ class Runner:
         # Collapse build into the final test result line
         self.results.pop()
 
-        binaries = find_swift_test_binaries(swift_dir)
-        if not binaries:
-            r = Result(
-                stage="Swift tests (host)",
-                success=False,
-                duration=0,
-                output="NPRPCPackageTests.xctest not found under nprpc_swift/.build after swift build\n",
-            )
-            self.results.append(r)
-            print(r.output)
-            return r
-
-        try:
-            for binary in binaries:
-                ensure_nprpc_bpf_capabilities(binary)
-        except (RuntimeError, subprocess.CalledProcessError) as exc:
-            r = Result(
-                stage="Swift tests (host) setcap",
-                success=False,
-                duration=0,
-                output=f"Failed to grant eBPF capabilities to Swift test binary: {exc}\n",
-            )
-            self.results.append(r)
-            print(r.output)
-            return r
-
         # Kill leftover test processes from previous runs that might still hold ports open
-        subprocess.run(["pkill", "-9", "-f", "NPRPCPackageTests"], capture_output=True)
+        for name in ("NPRPCPackageTests", "NPRPCTests-test-runner"):
+            subprocess.run(["pkill", "-9", "-f", name], capture_output=True)
 
-        # --skip-build keeps setcap intact (a rebuild would strip file capabilities)
         return self._stage(
             "Swift tests (host)",
             ["swift", "test", "--skip-build"],
@@ -467,7 +427,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Run Swift tests on the host against the CMake build dir "
-            "(no Docker rebuild; requires host Swift and sudo setcap for eBPF)"
+            "(no Docker rebuild; requires host Swift)"
         ),
     )
     p.add_argument("--cmake-target", default="all",

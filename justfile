@@ -119,7 +119,7 @@ run-swift-tests: gen-swift-stubs
     bash docker-build-nprpc.sh
     bash docker-build-swift.sh --test
 
-# Host Swift tests against the local CMake build (no Docker; needs sudo setcap)
+# Host Swift tests against the local CMake build (no Docker)
 run-swift-tests-host *args:
     python3 run_all_tests.py --skip-cmake --skip-cpp --skip-js --swift-host {{args}}
 

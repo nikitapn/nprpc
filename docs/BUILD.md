@@ -170,9 +170,9 @@ Run the whole suite (C++, TypeScript and Swift) before merging to `main`:
 just test-all --swift-host
 ```
 
-Host Swift tests need `sudo setcap cap_net_admin,cap_bpf+ep` on the test
-binary so HTTP/3 can attach its eBPF socket router; the script does this and
-may prompt for your password.
+Host Swift tests need no `setcap`: they run HTTP/3 with a single worker, which
+needs no eBPF socket router. (File capabilities would also stop the test
+runners loading their libraries, which they find relative to themselves.)
 
 ### Docs
 
