@@ -428,6 +428,10 @@ template <class Derived> class http_session
   // construct it from scratch it at the beginning of each new message.
   boost::optional<http::request_parser<http::string_body>> parser_;
 
+  // The peer's address, looked up on the first request: it can't change for
+  // the life of the connection, so one getpeername() serves every request.
+  boost::optional<net::ip::address> remote_ip_;
+
 protected:
   flat_buffer buffer_;
 
@@ -469,9 +473,19 @@ public:
     if (ec)
       return fail(ec, "read");
 
-    const auto remote_ep =
-        beast::get_lowest_layer(derived().stream()).socket().remote_endpoint();
-    const auto remote_ip = remote_ep.address();
+    if (!remote_ip_) {
+      // Not the throwing overload: a peer that resets the connection right
+      // after its request makes getpeername() fail with ENOTCONN, and an
+      // exception here would escape io_context::run() and end the process.
+      beast::error_code ep_ec;
+      const auto remote_ep =
+          beast::get_lowest_layer(derived().stream()).socket().remote_endpoint(
+              ep_ec);
+      if (ep_ec)
+        return fail(ep_ec, "remote_endpoint");
+      remote_ip_ = remote_ep.address();
+    }
+    const auto remote_ip = *remote_ip_;
 
     // See if it is a WebSocket Upgrade
     if (beast::websocket::is_upgrade(parser_->get())) {
