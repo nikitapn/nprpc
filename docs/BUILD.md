@@ -5,9 +5,8 @@
 - **Linux.** The TCP transport is built on epoll and io_uring, so any build
   with TCP enabled is Linux-only. On other platforms, configure with
   `-DNPRPC_ENABLE_TCP=OFF`; that configuration is not tested.
-- **A C++23 compiler:** GCC 14+, or a Clang whose standard library has
-  `std::expected`. GCC 13 (Ubuntu 24.04's default) lacks deducing `this`, and
-  Clang 18 with GCC 13's libstdc++ has no `std::expected`; both fail in npidl.
+- **A C++23 compiler:** a recent GCC or Clang (GCC 14+; npidl uses
+  deducing `this` and `std::expected`).
 - **CMake 3.15+**, and **pkg-config**.
 - **Boost** (headers; Boost.ProgramOptions for the tools).
 - **liburing**, when TCP is enabled.
@@ -161,19 +160,9 @@ removes what was installed.
 - **GTest not found:** install it, pass `-DGTest_DIR=...`, or disable tests
   with `-DNPRPC_BUILD_TESTS=OFF`.
 - **liburing not found:** install `liburing-dev`, or build without TCP.
-- **`expected identifier before 'this'` or `no template named 'expected'`
-  in npidl:** the compiler is too old; use GCC 14 (see Prerequisites).
-- **Undefined `boost::program_options` symbols linking npidl:** install
-  `libboost-program-options-dev`; the Boost headers alone are not enough.
 - **Submodule clone fails with `Permission denied (publickey)`:**
   `.gitmodules` uses SSH URLs. Without a GitHub SSH key, run
-  `git -c url."https://github.com/".insteadOf="git@github.com:" submodule update --init --recursive`,
-  which is what the setup script does.
-- **BoringSSL clone fails (googlesource.com unreachable):** fetch the pinned
-  commit from the GitHub mirror, `https://github.com/google/boringssl.git`;
-  the setup script falls back to it on its own.
-- **`Cannot find source file: sfparse/sfparse.c`:** nghttp3's own
-  submodules are missing; update with `--recursive`.
+  `git -c url."https://github.com/".insteadOf="git@github.com:" submodule update --init --recursive`.
 
 ## For contributors
 

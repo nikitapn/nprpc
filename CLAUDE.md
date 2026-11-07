@@ -1,7 +1,9 @@
-# Notes for working in this repo
+# Notes for Claude Code cloud sessions
 
-Build and test instructions for people live in [docs/BUILD.md](docs/BUILD.md).
-This file keeps what a fresh machine, such as a cloud session, trips over.
+Build and test instructions live in [docs/BUILD.md](docs/BUILD.md). The
+maintainer develops on Arch with current toolchains, where none of the below
+comes up. These notes are for the Claude Code cloud sandbox (Ubuntu 24.04,
+no SSH key, an HTTPS proxy, no IPv6), which needed all of it.
 
 ## Setting up a fresh checkout
 
@@ -14,9 +16,9 @@ cmake -G Ninja -S . -B .build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
 cmake --build .build -j"$(nproc)"
 ```
 
-- Submodules start empty in a fresh clone. `.gitmodules` uses SSH URLs and
-  BoringSSL lives on googlesource.com; the script rewrites the URLs to HTTPS
-  and falls back to BoringSSL's GitHub mirror.
+- Submodules start empty. `.gitmodules` uses SSH URLs, and the proxy
+  refuses BoringSSL's googlesource.com host; the script rewrites the URLs to
+  HTTPS and falls back to BoringSSL's GitHub mirror.
 - Use GCC 14. Ubuntu 24.04's GCC 13, and Clang 18 on its libstdc++, both fail
   to compile npidl.
 - `just` may not be installed; the recipes in `justfile` are thin wrappers
