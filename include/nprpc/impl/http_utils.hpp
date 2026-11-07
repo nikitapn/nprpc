@@ -4,18 +4,71 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace nprpc::impl {
 
 inline constexpr std::size_t k_max_http_request_body_size = 10'000;
 
-/// Cache-Control sent with static files, over HTTP/1.1 and HTTP/3 alike.
-/// Browsers revalidate with the ETag once it runs out.
+/// Cache-Control sent with static files that no cache_control() rule
+/// matches, over HTTP/1.1 and HTTP/3 alike. Browsers revalidate with the ETag
+/// once it runs out.
 inline constexpr std::string_view k_static_file_cache_control =
     "public, max-age=3600";
+
+/// (pattern, Cache-Control value) pairs, tried in order; see
+/// select_static_cache_control().
+using CacheControlRules = std::vector<std::pair<std::string, std::string>>;
+
+/// Whether a URL path matches a cache_control() pattern.
+/// A pattern without '/' is matched against the last path segment
+/// ("*.html", "favicon.ico"); one with '/' against the whole path
+/// ("/assets/**", "/static/*.css"). '*' matches any run of characters within
+/// a segment, '**' any run across segments, '?' one character within a
+/// segment. The match is case-sensitive, like the paths it serves.
+bool cache_control_pattern_matches(std::string_view pattern,
+                                   std::string_view path) noexcept;
+
+/// The Cache-Control value for a static file at request path @p path (query
+/// and fragment ignored): the value of the first rule whose pattern matches,
+/// or k_static_file_cache_control. An empty result means send no
+/// Cache-Control. Points into @p rules or static storage.
+std::string_view select_static_cache_control(const CacheControlRules& rules,
+                                             std::string_view path) noexcept;
+
+/// A Range request header resolved against a representation of @p size
+/// bytes (RFC 9110 §14).
+struct ByteRangeSelection {
+  enum class Kind : uint8_t {
+    Full,          // no usable Range: send the whole representation, 200
+    Partial,       // send [offset, offset + length), 206
+    Unsatisfiable, // 416 with Content-Range: bytes */size
+  };
+  Kind kind = Kind::Full;
+  uint64_t offset = 0;
+  uint64_t length = 0;
+};
+
+/// Resolve a Range header value. Only a single "bytes" range is served
+/// ("bytes=0-499", "bytes=500-", "bytes=-500"); anything else — another
+/// unit, several ranges, a malformed value — gives Full, which RFC 9110
+/// §14.2 allows a server to answer with the whole representation.
+ByteRangeSelection select_byte_range(std::string_view range,
+                                     uint64_t size) noexcept;
+
+/// Whether an If-Range header value lets the Range apply (RFC 9110 §13.1.5):
+/// an entity tag must equal @p etag by strong comparison (a weak tag never
+/// matches); an HTTP-date must equal the Last-Modified of @p mtime, to the
+/// second.
+bool if_range_matches(std::string_view if_range,
+                      std::string_view etag,
+                      std::filesystem::file_time_type mtime) noexcept;
 
 /// Return a reasonable MIME type based on the file extension.
 /// The returned string_view points to static storage and is always valid.

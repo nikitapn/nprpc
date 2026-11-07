@@ -152,6 +152,31 @@ void decode_allowed_origins(std::string_view encoded,
         start = end + 1;
     }
 }
+
+// "pattern\nvalue\n..." -> (pattern, value) pairs. Unlike origins, empty
+// lines are kept: an empty value means "send no Cache-Control".
+void decode_cache_control_rules(
+    std::string_view encoded,
+    std::vector<std::pair<std::string, std::string>>& out) {
+    if (encoded.empty()) {
+        return;
+    }
+    std::vector<std::string_view> lines;
+    size_t start = 0;
+    while (true) {
+        const auto end = encoded.find('\n', start);
+        lines.push_back(encoded.substr(
+            start, end == std::string_view::npos ? std::string_view::npos
+                                                 : end - start));
+        if (end == std::string_view::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    for (size_t i = 0; i + 1 < lines.size(); i += 2) {
+        out.emplace_back(lines[i], lines[i + 1]);
+    }
+}
 }
 
 struct RpcHandleImpl {
@@ -335,6 +360,8 @@ bool RpcHandle::initialize(RpcBuildConfig* config) {
         cxxConfig.http3_idle_timeout_ms = config->http3_idle_timeout_ms;
         cxxConfig.http_compression_enabled = config->http_compression_enabled;
         cxxConfig.http_compression_min_size = config->http_compression_min_size;
+        decode_cache_control_rules(config->http_cache_control_rules,
+                                   cxxConfig.http_cache_control_rules);
         cxxConfig.http3_max_active_connections_per_ip =
             config->http3_max_active_connections_per_ip;
         cxxConfig.http3_max_new_connections_per_ip_per_second =

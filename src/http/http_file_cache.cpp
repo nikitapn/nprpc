@@ -224,7 +224,8 @@ CachedFile::encoded(ContentEncoding encoding) const
   const auto index = content_encoding_index(encoding);
   auto& slot = encoded_->variants[index];
   std::call_once(encoded_->once[index], [&] {
-    auto body = compress_body(data_, size_, encoding);
+    auto body = compress_body(data_, size_, encoding,
+                              static_compression_level(encoding, size_));
     if (!body || body->size() >= size_) return;
 
     // A coded response is a different representation, so it needs its own

@@ -87,6 +87,9 @@ struct RpcBuildConfig {
     uint32_t http3_idle_timeout_ms = 30000;
     bool http_compression_enabled;
     size_t http_compression_min_size;
+    // Static-file Cache-Control rules as alternating lines:
+    // "pattern\nvalue\npattern\nvalue". Values may be empty.
+    std::string http_cache_control_rules;
     size_t http3_max_active_connections_per_ip;
     size_t http3_max_new_connections_per_ip_per_second;
     size_t http3_max_new_connections_burst;

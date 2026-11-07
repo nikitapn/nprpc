@@ -41,6 +41,7 @@ class BuildConfig {
     var http3IdleTimeoutMs: UInt32 = 30_000
     var httpCompressionEnabled: Bool = false
     var httpCompressionMinSize: UInt = 256
+    var httpCacheControlRules: [(pattern: String, value: String)] = []
     var http3MaxActiveConnectionsPerIp: UInt = 0
     var http3MaxNewConnectionsPerIpPerSecond: UInt = 0
     var http3MaxNewConnectionsBurst: UInt = 0
@@ -258,6 +259,8 @@ extension RpcBuilderInternal {
         cxxConfig.http3_idle_timeout_ms = config.http3IdleTimeoutMs
         cxxConfig.http_compression_enabled = config.httpCompressionEnabled
         cxxConfig.http_compression_min_size = numericCast(config.httpCompressionMinSize)
+        cxxConfig.http_cache_control_rules = std.string(
+            config.httpCacheControlRules.flatMap { [$0.pattern, $0.value] }.joined(separator: "\n"))
         cxxConfig.http3_max_active_connections_per_ip = numericCast(config.http3MaxActiveConnectionsPerIp)
         cxxConfig.http3_max_new_connections_per_ip_per_second = numericCast(config.http3MaxNewConnectionsPerIpPerSecond)
         cxxConfig.http3_max_new_connections_burst = numericCast(config.http3MaxNewConnectionsBurst)
@@ -456,13 +459,28 @@ public final class RpcBuilderHttp: RpcBuilderInternal {
         return self
     }
 
-    /// Compress HTTP/1.1 and HTTP/3 responses (gzip/deflate, per
+    /// Compress HTTP/1.1 and HTTP/3 responses (br/gzip/deflate, per
     /// Accept-Encoding): static text-like files and page-handler responses of
     /// at least `minSize` bytes.
     @discardableResult
     public func compression(_ enabled: Bool = true, minSize: UInt = 256) -> RpcBuilderHttp {
         config.httpCompressionEnabled = enabled
         config.httpCompressionMinSize = minSize
+        return self
+    }
+
+    /// Send `value` as the Cache-Control of static files whose request path
+    /// matches `pattern` (HTTP/1.1 and HTTP/3). First matching rule wins;
+    /// unmatched files get `public, max-age=3600`; an empty `value` sends no
+    /// Cache-Control. A pattern without "/" matches the file name in any
+    /// directory (`*.html`), one with "/" the whole path (`/assets/**`); `*`
+    /// stays within a path segment, `**` crosses them, `?` is one character.
+    ///
+    ///     .cacheControl("/assets/**", "public, max-age=31536000, immutable")
+    ///     .cacheControl("*.html", "no-cache")
+    @discardableResult
+    public func cacheControl(_ pattern: String, _ value: String) -> RpcBuilderHttp {
+        config.httpCacheControlRules.append((pattern: pattern, value: value))
         return self
     }
 
