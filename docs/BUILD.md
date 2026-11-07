@@ -5,7 +5,9 @@
 - **Linux.** The TCP transport is built on epoll and io_uring, so any build
   with TCP enabled is Linux-only. On other platforms, configure with
   `-DNPRPC_ENABLE_TCP=OFF`; that configuration is not tested.
-- **A C++23 compiler:** a recent GCC or Clang.
+- **A C++23 compiler:** GCC 14+, or a Clang whose standard library has
+  `std::expected`. GCC 13 (Ubuntu 24.04's default) lacks deducing `this`, and
+  Clang 18 with GCC 13's libstdc++ has no `std::expected`; both fail in npidl.
 - **CMake 3.15+**, and **pkg-config**.
 - **Boost** (headers; Boost.ProgramOptions for the tools).
 - **liburing**, when TCP is enabled.
@@ -17,12 +19,19 @@
   package, **Swift 6.4.1** for the Swift package, **libclang** and **md4c** for
   the API docs tool.
 
-On Debian or Ubuntu:
+On Ubuntu 24.04, `scripts/setup-dev-ubuntu.sh` (or `just setup-ubuntu`)
+installs the packages below, fetches every submodule over HTTPS, and creates
+the test certificate. By hand:
 
 ```bash
-sudo apt install -y build-essential cmake ninja-build pkg-config \
-  libboost-dev libboost-program-options-dev liburing-dev libssl-dev libgtest-dev
+sudo apt install -y build-essential cmake ninja-build pkg-config gcc-14 g++-14 \
+  libboost-dev libboost-program-options-dev liburing-dev libssl-dev \
+  libgtest-dev libgmock-dev libbenchmark-dev
 ```
+
+and configure with `-DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14`.
+`libbenchmark-dev` is optional; without it the benchmarks, `benchmark_server`
+included, are skipped.
 
 ## Building
 
@@ -152,6 +161,19 @@ removes what was installed.
 - **GTest not found:** install it, pass `-DGTest_DIR=...`, or disable tests
   with `-DNPRPC_BUILD_TESTS=OFF`.
 - **liburing not found:** install `liburing-dev`, or build without TCP.
+- **`expected identifier before 'this'` or `no template named 'expected'`
+  in npidl:** the compiler is too old; use GCC 14 (see Prerequisites).
+- **Undefined `boost::program_options` symbols linking npidl:** install
+  `libboost-program-options-dev`; the Boost headers alone are not enough.
+- **Submodule clone fails with `Permission denied (publickey)`:**
+  `.gitmodules` uses SSH URLs. Without a GitHub SSH key, run
+  `git -c url."https://github.com/".insteadOf="git@github.com:" submodule update --init --recursive`,
+  which is what the setup script does.
+- **BoringSSL clone fails (googlesource.com unreachable):** fetch the pinned
+  commit from the GitHub mirror, `https://github.com/google/boringssl.git`;
+  the setup script falls back to it on its own.
+- **`Cannot find source file: sfparse/sfparse.c`:** nghttp3's own
+  submodules are missing; update with `--recursive`.
 
 ## For contributors
 
