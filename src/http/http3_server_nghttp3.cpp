@@ -373,9 +373,10 @@ enum class RawWritePriority : uint8_t {
 
 struct PreparedResponseHeaders {
   // Inline capacity 12 covers every built-in response without allocating —
-  // CORS RPC (9) or static file + cache headers (7):
+  // CORS RPC (9) or static file + cache headers (up to 11):
   //   status, server, content-type, content-length,
-  //   cache-control, etag, last-modified,
+  //   cache-control, etag, last-modified, accept-ranges,
+  //   content-encoding, vary, content-range;
   //   access-control-allow-origin, access-control-allow-credentials,
   //   vary, access-control-allow-methods, access-control-allow-headers.
   // A page handler may add arbitrary headers on top, so it grows past that
@@ -385,6 +386,7 @@ struct PreparedResponseHeaders {
   std::string content_length;
   std::string content_type;
   std::string allow_origin;
+  std::string content_range;
 };
 
 namespace {
@@ -670,10 +672,13 @@ private:
   int start_response(Http3Stream* stream);
   // Zero-copy response using cached file
   // A non-null @p variant sends that compressed copy instead of the file.
+  // A static file: the whole of it or its compressed copy (Full), a slice
+  // of the file (Partial, 206), or a 416 (Unsatisfiable).
   int send_cached_response(Http3Stream* stream,
-                           unsigned int status_code,
                            CachedFileGuard cached_file,
-                           const CachedFile::EncodedVariant* variant);
+                           const CachedFile::EncodedVariant* variant,
+                           std::string_view cache_control,
+                           const ByteRangeSelection& range);
   // Zero-copy response for static content
   int send_static_response(Http3Stream* stream,
                            unsigned int status_code,
@@ -692,7 +697,8 @@ private:
   int send_cors_preflight(Http3Stream* stream);
   int send_not_modified(Http3Stream* stream,
                         CachedFileGuard cached_file,
-                        const CachedFile::EncodedVariant* variant);
+                        const CachedFile::EncodedVariant* variant,
+                        std::string_view cache_control);
   int send_webtransport_connect_response(Http3Stream* stream);
 
   // In-process page rendering (nprpc/page_handler.hpp).  Returns nullopt when
@@ -2618,11 +2624,30 @@ int Http3Connection::start_response(Http3Stream* stream)
 
     NPRPC_HTTP3_TRACE("File size: {} (from cache)", cached_file->size());
 
+    // Points into g_cfg or static storage, so it outlives the submit.
+    const auto cache_control = select_static_cache_control(
+        g_cfg.http_cache_control_rules, request_path);
+
+    // A Range applies to GET only (RFC 9110 §14.2), and with an If-Range only
+    // while the file is the one the client already holds part of. Ranges are
+    // served from the file itself, never a compressed copy.
+    ByteRangeSelection range{};
+    if (stream->method == "GET") {
+      if (const auto* r = find_stream_header(stream->headers, "range")) {
+        const auto* ir = find_stream_header(stream->headers, "if-range");
+        if (!ir || if_range_matches(*ir, cached_file->etag(),
+                                    cached_file->mtime())) {
+          range = select_byte_range(*r, cached_file->size());
+        }
+      }
+    }
+
     // Pick the representation first: a compressed copy carries its own ETag,
     // and a conditional request is answered for the one we would send.
     // The copy is built once per cached file, then served zero-copy.
     const CachedFile::EncodedVariant* variant = nullptr;
-    if (cached_file->compressible()) {
+    if (range.kind == ByteRangeSelection::Kind::Full &&
+        cached_file->compressible()) {
       const auto encoding =
           choose_response_encoding(stream, cached_file->size());
       if (encoding != ContentEncoding::Identity) {
@@ -2639,20 +2664,23 @@ int Http3Connection::start_response(Http3Stream* stream)
       const auto* inm = find_stream_header(stream->headers, "if-none-match");
       if (inm) {
         if (if_none_match_matches(*inm, etag)) {
-          return send_not_modified(stream, std::move(cached_file), variant);
+          return send_not_modified(stream, std::move(cached_file), variant,
+                                   cache_control);
         }
       } else {
         const auto* ims = find_stream_header(stream->headers, "if-modified-since");
         if (ims) {
           if (not_modified_since(cached_file->mtime(), *ims)) {
-            return send_not_modified(stream, std::move(cached_file), variant);
+            return send_not_modified(stream, std::move(cached_file), variant,
+                                   cache_control);
           }
         }
       }
     }
 
     // Use zero-copy response; a HEAD gets the same headers and no body.
-    return send_cached_response(stream, 200, std::move(cached_file), variant);
+    return send_cached_response(stream, std::move(cached_file), variant,
+                                cache_control, range);
   } else if (stream->method == "OPTIONS") {
     if (is_rpc_http_target(stream->path)) {
       return send_cors_preflight(stream);
@@ -2683,10 +2711,17 @@ int Http3Connection::start_response(Http3Stream* stream)
 
 int Http3Connection::send_cached_response(
     Http3Stream* stream,
-    unsigned int status_code,
     CachedFileGuard cached_file,
-    const CachedFile::EncodedVariant* variant)
+    const CachedFile::EncodedVariant* variant,
+    std::string_view cache_control,
+    const ByteRangeSelection& range)
 {
+  using RangeKind = ByteRangeSelection::Kind;
+  const unsigned int status_code =
+      range.kind == RangeKind::Partial         ? 206
+      : range.kind == RangeKind::Unsatisfiable ? 416
+                                               : 200;
+
   NPRPC_HTTP3_TRACE(
       "Sending cached response: {} Content-Type: {} Body length: {}",
       status_code, cached_file->content_type(), cached_file->size());
@@ -2703,6 +2738,14 @@ int Http3Connection::send_cached_response(
   stream->response_len =
       variant ? variant->data.size() : stream->cached_file->size();
   stream->response_offset = 0;
+  const auto file_size = stream->cached_file->size();
+  if (range.kind == RangeKind::Partial) {
+    // select_byte_range() kept the slice within the file.
+    stream->response_data += range.offset;
+    stream->response_len = static_cast<size_t>(range.length);
+  } else if (range.kind == RangeKind::Unsatisfiable) {
+    stream->response_len = 0;
+  }
     auto& headers = make_response_headers(stream, status_code,
                       stream->cached_file->content_type(),
                       stream->response_len, false);
@@ -2711,11 +2754,19 @@ int Http3Connection::send_cached_response(
   // pre-computed strings. No per-request allocation.
   constexpr uint8_t ncnv =
       NGHTTP3_NV_FLAG_NO_COPY_NAME | NGHTTP3_NV_FLAG_NO_COPY_VALUE;
-  headers.headers.push_back({
-      .name    = reinterpret_cast<uint8_t*>(const_cast<char*>("cache-control")),
-      .value   = reinterpret_cast<uint8_t*>(const_cast<char*>(k_static_file_cache_control.data())),
-      .namelen  = 13, .valuelen = k_static_file_cache_control.size(), .flags = ncnv,
-  });
+  if (!cache_control.empty()) {
+    push_static_header(headers, "cache-control", cache_control);
+  }
+  push_static_header(headers, "accept-ranges", "bytes");
+  if (range.kind == RangeKind::Partial) {
+    headers.content_range = std::format("bytes {}-{}/{}", range.offset,
+                                        range.offset + range.length - 1,
+                                        file_size);
+    push_static_header(headers, "content-range", headers.content_range);
+  } else if (range.kind == RangeKind::Unsatisfiable) {
+    headers.content_range = std::format("bytes */{}", file_size);
+    push_static_header(headers, "content-range", headers.content_range);
+  }
   const std::string_view etag =
       variant ? std::string_view{variant->etag} : stream->cached_file->etag();
   headers.headers.push_back({
@@ -2745,11 +2796,13 @@ int Http3Connection::send_cached_response(
                             stream->response_len);
 
   // HEAD: the GET's headers, content-length included, but no body; without
-  // a data reader nghttp3 ends the stream after the headers.
-  const bool head = stream->method == "HEAD";
+  // a data reader nghttp3 ends the stream after the headers. A 416 has no
+  // body either.
+  const bool no_body =
+      stream->method == "HEAD" || range.kind == RangeKind::Unsatisfiable;
   int rv = nghttp3_conn_submit_response(httpconn_, stream->stream_id,
                       headers.headers.data(),
-                      headers.headers.size(), head ? nullptr : &dr);
+                      headers.headers.size(), no_body ? nullptr : &dr);
   if (rv != 0) {
     NPRPC_HTTP3_ERROR("nghttp3_conn_submit_response: {}", nghttp3_strerror(rv));
     return -1;
@@ -3019,7 +3072,8 @@ int Http3Connection::send_cors_preflight(Http3Stream* stream)
 int Http3Connection::send_not_modified(
     Http3Stream* stream,
     CachedFileGuard cached_file,
-    const CachedFile::EncodedVariant* variant)
+    const CachedFile::EncodedVariant* variant,
+    std::string_view cache_control)
 {
   // Pin the file in the stream so its pre-computed strings stay alive until
   // nghttp3 finishes draining the 304 headers (stream close).
@@ -3045,8 +3099,11 @@ int Http3Connection::send_not_modified(
   add_sv(":status",       7,  prepared.status);
   add_sv("etag",          4,  variant ? std::string_view{variant->etag}
                                       : stream->cached_file->etag());
-  add_sv("cache-control", 13, k_static_file_cache_control);
+  if (!cache_control.empty()) {
+    add_sv("cache-control", 13, cache_control);
+  }
   add_sv("last-modified", 13, stream->cached_file->last_modified_str());
+  add_sv("accept-ranges", 13, "bytes");
   if (g_cfg.http_compression_enabled && stream->cached_file->compressible()) {
     add_sv("vary", 4, "accept-encoding");
   }

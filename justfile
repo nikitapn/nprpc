@@ -15,6 +15,10 @@ default:
 
 # ── configure / build ────────────────────────────────────────────────────────
 
+# Install Ubuntu 24.04 packages, fetch all submodules, make the test cert
+setup-ubuntu *args:
+    scripts/setup-dev-ubuntu.sh {{args}}
+
 # Configure the CMake project (Ninja, all features)
 configure:
     cmake -G Ninja -S . -B "{{build_dir}}" \

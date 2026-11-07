@@ -190,3 +190,131 @@ TEST(HttpUtils, IfNoneMatchComparesWeakly)
   EXPECT_FALSE(if_none_match_matches("", etag));
   EXPECT_FALSE(if_none_match_matches(" , ", etag));
 }
+
+TEST(HttpUtils, CacheControlPatternWithoutSlashMatchesLastSegment)
+{
+  using nprpc::impl::cache_control_pattern_matches;
+  EXPECT_TRUE(cache_control_pattern_matches("*.html", "/index.html"));
+  EXPECT_TRUE(cache_control_pattern_matches("*.html", "/blog/post/a.html"));
+  EXPECT_FALSE(cache_control_pattern_matches("*.html", "/a.html/x.js"));
+  EXPECT_FALSE(cache_control_pattern_matches("*.html", "/index.htm"));
+  EXPECT_TRUE(cache_control_pattern_matches("favicon.ico", "/favicon.ico"));
+  EXPECT_TRUE(cache_control_pattern_matches("app.????????.js", "/js/app.1a2b3c4d.js"));
+  EXPECT_FALSE(cache_control_pattern_matches("app.????????.js", "/js/app.1a2b3c.js"));
+  EXPECT_FALSE(cache_control_pattern_matches("*.HTML", "/index.html"));
+  EXPECT_FALSE(cache_control_pattern_matches("", "/index.html"));
+}
+
+TEST(HttpUtils, CacheControlPatternWithSlashMatchesWholePath)
+{
+  using nprpc::impl::cache_control_pattern_matches;
+  EXPECT_TRUE(cache_control_pattern_matches("/assets/**", "/assets/app.js"));
+  EXPECT_TRUE(cache_control_pattern_matches("/assets/**", "/assets/img/logo.svg"));
+  EXPECT_FALSE(cache_control_pattern_matches("/assets/**", "/index.html"));
+  EXPECT_FALSE(cache_control_pattern_matches("/assets/**", "/static/assets/a.js"));
+  EXPECT_TRUE(cache_control_pattern_matches("/assets/*", "/assets/app.js"));
+  EXPECT_FALSE(cache_control_pattern_matches("/assets/*", "/assets/img/logo.svg"));
+  EXPECT_TRUE(cache_control_pattern_matches("/**/*.css", "/a/b/c.css"));
+  EXPECT_TRUE(cache_control_pattern_matches("/**/*.css", "/c.css"));
+  EXPECT_TRUE(cache_control_pattern_matches("/a/**/b", "/a/b"));
+  EXPECT_TRUE(cache_control_pattern_matches("/a/**/b", "/a/x/y/b"));
+  EXPECT_TRUE(cache_control_pattern_matches("**", "/anything/at/all"));
+  EXPECT_FALSE(cache_control_pattern_matches("/?", "/"));
+}
+
+TEST(HttpUtils, SelectsFirstMatchingCacheControlRule)
+{
+  using nprpc::impl::k_static_file_cache_control;
+  using nprpc::impl::select_static_cache_control;
+  const nprpc::impl::CacheControlRules rules{
+      {"/assets/**", "public, max-age=31536000, immutable"},
+      {"*.html", "no-cache"},
+      {"*.js", "public, max-age=60"},
+      {"robots.txt", ""},
+  };
+  EXPECT_EQ(select_static_cache_control(rules, "/assets/app.js"),
+            "public, max-age=31536000, immutable");
+  EXPECT_EQ(select_static_cache_control(rules, "/assets/page.html"),
+            "public, max-age=31536000, immutable");
+  EXPECT_EQ(select_static_cache_control(rules, "/index.html"), "no-cache");
+  EXPECT_EQ(select_static_cache_control(rules, "/index.html?v=2"), "no-cache");
+  EXPECT_EQ(select_static_cache_control(rules, "/lib.js#x"), "public, max-age=60");
+  EXPECT_EQ(select_static_cache_control(rules, "/robots.txt"), "");
+  EXPECT_EQ(select_static_cache_control(rules, "/logo.png"),
+            k_static_file_cache_control);
+  EXPECT_EQ(select_static_cache_control({}, "/index.html"),
+            k_static_file_cache_control);
+}
+
+namespace {
+using Kind = nprpc::impl::ByteRangeSelection::Kind;
+
+void expect_range(std::string_view header, uint64_t size, Kind kind,
+                  uint64_t offset = 0, uint64_t length = 0)
+{
+  SCOPED_TRACE(std::string(header));
+  const auto r = nprpc::impl::select_byte_range(header, size);
+  EXPECT_EQ(r.kind, kind);
+  if (kind == Kind::Partial) {
+    EXPECT_EQ(r.offset, offset);
+    EXPECT_EQ(r.length, length);
+  }
+}
+} // namespace
+
+TEST(HttpUtils, SelectsSingleByteRange)
+{
+  expect_range("bytes=0-499", 1000, Kind::Partial, 0, 500);
+  expect_range("bytes=500-999", 1000, Kind::Partial, 500, 500);
+  expect_range("bytes=500-", 1000, Kind::Partial, 500, 500);
+  expect_range("bytes=-200", 1000, Kind::Partial, 800, 200);
+  expect_range("bytes=0-0", 1000, Kind::Partial, 0, 1);
+  expect_range("bytes=999-", 1000, Kind::Partial, 999, 1);
+  // last-pos past the end and suffixes longer than the file are clamped.
+  expect_range("bytes=900-5000", 1000, Kind::Partial, 900, 100);
+  expect_range("bytes=-5000", 1000, Kind::Partial, 0, 1000);
+  // Unit is case-insensitive; OWS and empty list elements are allowed.
+  expect_range("Bytes=1-2", 1000, Kind::Partial, 1, 2);
+  expect_range(" bytes = 1-2 ", 1000, Kind::Partial, 1, 2);
+  expect_range("bytes=, 1-2 ,", 1000, Kind::Partial, 1, 2);
+}
+
+TEST(HttpUtils, UnsatisfiableByteRanges)
+{
+  expect_range("bytes=1000-", 1000, Kind::Unsatisfiable);
+  expect_range("bytes=1000-1500", 1000, Kind::Unsatisfiable);
+  expect_range("bytes=-0", 1000, Kind::Unsatisfiable);
+  expect_range("bytes=0-", 0, Kind::Unsatisfiable);
+  expect_range("bytes=-10", 0, Kind::Unsatisfiable);
+}
+
+TEST(HttpUtils, IgnoresRangesItDoesNotServe)
+{
+  expect_range("", 1000, Kind::Full);
+  expect_range("items=0-1", 1000, Kind::Full);
+  expect_range("bytes", 1000, Kind::Full);
+  expect_range("bytes=", 1000, Kind::Full);
+  expect_range("bytes=0-1,5-6", 1000, Kind::Full);
+  expect_range("bytes=5-1", 1000, Kind::Full);
+  expect_range("bytes=a-1", 1000, Kind::Full);
+  expect_range("bytes=1", 1000, Kind::Full);
+  expect_range("bytes=-", 1000, Kind::Full);
+  expect_range("bytes=99999999999999999999-", 1000, Kind::Full);
+}
+
+TEST(HttpUtils, IfRangeComparesStronglyOrByExactDate)
+{
+  using namespace std::chrono;
+  using nprpc::impl::if_range_matches;
+  auto const mtime = clock_cast<std::filesystem::file_time_type::clock>(
+      sys_seconds{seconds{784111777}} + milliseconds{750});
+  EXPECT_TRUE(if_range_matches("\"1a2b\"", "\"1a2b\"", mtime));
+  EXPECT_TRUE(if_range_matches(" \"1a2b\" ", "\"1a2b\"", mtime));
+  EXPECT_FALSE(if_range_matches("W/\"1a2b\"", "\"1a2b\"", mtime));
+  EXPECT_FALSE(if_range_matches("\"1a2c\"", "\"1a2b\"", mtime));
+  EXPECT_TRUE(if_range_matches("Sun, 06 Nov 1994 08:49:37 GMT", "\"x\"", mtime));
+  // Unlike If-Modified-Since, a later date is not a match.
+  EXPECT_FALSE(if_range_matches("Sun, 06 Nov 1994 08:49:38 GMT", "\"x\"", mtime));
+  EXPECT_FALSE(if_range_matches("garbage", "\"x\"", mtime));
+  EXPECT_FALSE(if_range_matches("", "\"x\"", mtime));
+}

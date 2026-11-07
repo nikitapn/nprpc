@@ -62,6 +62,14 @@ struct cached_file_body {
       }
     }
 
+    /// Narrow the body to [offset, offset + len), for a 206. The caller has
+    /// checked the range against size().
+    void slice(std::uint64_t offset, std::uint64_t len) noexcept
+    {
+      bytes += offset;
+      length = static_cast<std::size_t>(len);
+    }
+
     bool is_open() const noexcept { return static_cast<bool>(guard); }
     std::uint64_t size() const noexcept { return length; }
   };
@@ -440,12 +448,33 @@ handle_request(beast::string_view doc_root,
   }
 
   auto const content_type = cached_file->content_type();
+  auto const cache_control =
+      select_static_cache_control(g_cfg.http_cache_control_rules, request_target);
+
+  // A Range applies to GET only (RFC 9110 §14.2), and with an If-Range only
+  // while the file is the one the client already holds part of. Ranges are
+  // served from the file itself, never a compressed copy, so a client that
+  // resumes a download gets byte offsets into what it can store.
+  ByteRangeSelection range{};
+  if (req.method() == http::verb::get) {
+    if (auto const r = req.find(http::field::range); r != req.end()) {
+      auto const ir = req.find(http::field::if_range);
+      if (ir == req.end() ||
+          if_range_matches(std::string_view(ir->value().data(), ir->value().size()),
+                           cached_file->etag(), cached_file->mtime())) {
+        range = select_byte_range(
+            std::string_view(r->value().data(), r->value().size()),
+            cached_file->size());
+      }
+    }
+  }
+  auto const ranged = range.kind != ByteRangeSelection::Kind::Full;
 
   // Pick the representation first: a compressed copy carries its own ETag,
   // and a conditional request is answered for the one we would send. The
   // copy is built once per cached file, then served zero-copy.
   const CachedFile::EncodedVariant* variant = nullptr;
-  if (cached_file->compressible()) {
+  if (!ranged && cached_file->compressible()) {
     auto const encoding = choose_response_encoding(req, cached_file->size());
     if (encoding != ContentEncoding::Identity)
       variant = cached_file->encoded(encoding);
@@ -459,7 +488,9 @@ handle_request(beast::string_view doc_root,
     res.set(http::field::server, BOOST_BEAST_VERSION_STRING);
     res.set(http::field::etag, etag);
     res.set(http::field::last_modified, cached_file->last_modified_str());
-    res.set(http::field::cache_control, k_static_file_cache_control);
+    if (!cache_control.empty())
+      res.set(http::field::cache_control, cache_control);
+    res.set(http::field::accept_ranges, "bytes");
     if (varies)
       res.set(http::field::vary, "accept-encoding");
     add_alt_svc_header(res);
@@ -482,6 +513,31 @@ handle_request(beast::string_view doc_root,
     http::response<http::empty_body> res{http::status::not_modified,
                                          req.version()};
     set_cache_headers(res);
+    return counted(std::move(res));
+  }
+
+  // Range: one satisfiable range gets a 206 with that slice, one past the
+  // end a 416; anything else falls through to the whole file.
+  if (range.kind == ByteRangeSelection::Kind::Unsatisfiable) {
+    http::response<http::empty_body> res{http::status::range_not_satisfiable,
+                                         req.version()};
+    set_cache_headers(res);
+    res.set(http::field::content_range,
+            std::format("bytes */{}", cached_file->size()));
+    res.content_length(0);
+    return counted(std::move(res));
+  }
+  if (range.kind == ByteRangeSelection::Kind::Partial) {
+    http::response<cached_file_body> res{http::status::partial_content,
+                                         req.version()};
+    set_cache_headers(res);
+    res.set(http::field::content_type, content_type);
+    res.set(http::field::content_range,
+            std::format("bytes {}-{}/{}", range.offset,
+                        range.offset + range.length - 1, cached_file->size()));
+    res.body() = cached_file_body::value_type(std::move(cached_file));
+    res.body().slice(range.offset, range.length);
+    res.content_length(range.length);
     return counted(std::move(res));
   }
 

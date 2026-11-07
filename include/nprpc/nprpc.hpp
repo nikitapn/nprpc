@@ -669,6 +669,8 @@ struct BuildConfig {
   uint32_t http3_idle_timeout_ms = NPRPC_DEFAULT_HTTP3_IDLE_TIMEOUT_MS; // 0 = client's value only
   bool http_compression_enabled = NPRPC_DEFAULT_HTTP_COMPRESSION_ENABLED;
   size_t http_compression_min_size = NPRPC_DEFAULT_HTTP_COMPRESSION_MIN_SIZE;
+  // (pattern, Cache-Control value) for static files, first match wins.
+  std::vector<std::pair<std::string, std::string>> http_cache_control_rules;
   size_t quic_max_connections = NPRPC_DEFAULT_QUIC_MAX_CONNECTIONS;
   size_t quic_max_connections_per_ip = NPRPC_DEFAULT_QUIC_MAX_CONNECTIONS_PER_IP;
   size_t quic_new_connections_per_ip_per_second = NPRPC_DEFAULT_QUIC_NEW_CONNECTIONS_PER_IP_PER_SECOND;
@@ -1061,19 +1063,41 @@ public:
     return *this;
   }
 
-  /// Compress HTTP/1.1 and HTTP/3 responses with gzip or deflate, whichever
-  /// the client's Accept-Encoding prefers. Applies to static files of
-  /// text-like types (HTML, CSS, JS, JSON, SVG, WASM, ...) — each is
-  /// compressed once and kept in the file cache — and to page-handler
+  /// Compress HTTP/1.1 and HTTP/3 responses with br, gzip or deflate,
+  /// whichever the client's Accept-Encoding prefers (br on a tie). Applies
+  /// to static files of text-like types (HTML, CSS, JS, JSON, SVG, WASM,
+  /// ...) — each is compressed once per coding and kept in the file cache,
+  /// brotli at its best quality for files up to 64 KiB — and to page-handler
   /// responses, which are compressed per request. RPC traffic,
-  /// already-compressed media, and bodies smaller than @p min_size bytes are
-  /// sent as-is.
+  /// already-compressed media, Range requests, and bodies smaller than
+  /// @p min_size bytes are sent as-is.
   RpcBuilderHttp& compression(
       bool enabled = true,
       size_t min_size = NPRPC_DEFAULT_HTTP_COMPRESSION_MIN_SIZE) noexcept
   {
     cfg_->http_compression_enabled = enabled;
     cfg_->http_compression_min_size = min_size;
+    return *this;
+  }
+
+  /// Send @p value as the Cache-Control of static files whose request path
+  /// matches @p pattern, over HTTP/1.1 and HTTP/3 (200, 206 and 304 alike).
+  /// Rules are tried in the order added and the first match wins; files no
+  /// rule matches get `public, max-age=3600`. An empty @p value sends no
+  /// Cache-Control at all. Page-handler responses are not affected.
+  ///
+  /// A pattern without '/' matches the file name in any directory
+  /// (`*.html`); one with '/' matches the whole path (`/assets/**`). `*`
+  /// matches within one path segment, `**` across segments, `?` one
+  /// character. For example, content-hashed assets cached for good and HTML
+  /// always revalidated:
+  ///
+  ///   .cache_control("/assets/**", "public, max-age=31536000, immutable")
+  ///   .cache_control("*.html", "no-cache")
+  RpcBuilderHttp& cache_control(std::string pattern, std::string value)
+  {
+    cfg_->http_cache_control_rules.emplace_back(std::move(pattern),
+                                                std::move(value));
     return *this;
   }
 #if defined(NPRPC_ENABLE_WEBSOCKET)

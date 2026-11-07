@@ -381,6 +381,30 @@ target_link_libraries(test_http_utils
 )
 
 add_test(NAME HttpUtils COMMAND test_http_utils)
+
+# Content-coding negotiation and the encoders, checked by round-tripping
+# through the decoders. The sources are compiled in because libnprpc keeps
+# these symbols hidden.
+add_executable(test_http_compression
+  src/test_http_compression.cpp
+  ../src/http/http_compression.cpp
+)
+
+target_include_directories(test_http_compression
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+target_link_libraries(test_http_compression
+  PRIVATE
+    zlibstatic
+    brotlienc
+    brotlidec
+    GTest::gtest
+    GTest::gtest_main
+)
+
+add_test(NAME HttpCompression COMMAND test_http_compression)
 endif() # NPRPC_ENABLE_HTTP
 
 # HTTP/3 Shell Script Tests (requires server to be started manually or via wrapper)
