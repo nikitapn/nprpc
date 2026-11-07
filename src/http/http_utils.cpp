@@ -369,4 +369,153 @@ bool not_modified_since(std::filesystem::file_time_type mtime,
          std::chrono::floor<std::chrono::seconds>(mtime) <= *since;
 }
 
+namespace {
+
+std::string_view trim_ows(std::string_view s) noexcept
+{
+  while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
+  while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.remove_suffix(1);
+  return s;
+}
+
+// Glob match with '*' (within a segment), '**' (across segments) and '?'.
+// A '*' only scans one segment, so the backtracking stays bounded by segment
+// length; only '**' scans the rest of the path, and patterns are short.
+bool glob_match(std::string_view p, std::string_view s) noexcept
+{
+  while (!p.empty()) {
+    if (p.starts_with("**")) {
+      p.remove_prefix(2);
+      // "**/" may also stand for no segments at all: "/a/**/b" matches "/a/b".
+      if (p.starts_with('/') && glob_match(p.substr(1), s)) return true;
+      for (size_t i = 0; i <= s.size(); ++i)
+        if (glob_match(p, s.substr(i))) return true;
+      return false;
+    }
+    if (p.front() == '*') {
+      p.remove_prefix(1);
+      for (size_t i = 0;; ++i) {
+        if (glob_match(p, s.substr(i))) return true;
+        if (i == s.size() || s[i] == '/') return false;
+      }
+    }
+    if (s.empty()) return false;
+    if (p.front() == '?' ? s.front() == '/' : p.front() != s.front())
+      return false;
+    p.remove_prefix(1);
+    s.remove_prefix(1);
+  }
+  return s.empty();
+}
+
+// Parse a run of decimal digits; nullopt if empty, not all digits, or it
+// overflows.
+std::optional<uint64_t> parse_u64(std::string_view s) noexcept
+{
+  if (s.empty()) return std::nullopt;
+  uint64_t v = 0;
+  for (char c : s) {
+    if (c < '0' || c > '9') return std::nullopt;
+    const uint64_t d = static_cast<uint64_t>(c - '0');
+    if (v > (UINT64_MAX - d) / 10) return std::nullopt;
+    v = v * 10 + d;
+  }
+  return v;
+}
+
+} // namespace
+
+bool cache_control_pattern_matches(std::string_view pattern,
+                                   std::string_view path) noexcept
+{
+  if (pattern.empty()) return false;
+  if (pattern.find('/') == std::string_view::npos) {
+    const auto slash = path.rfind('/');
+    if (slash != std::string_view::npos) path.remove_prefix(slash + 1);
+  }
+  return glob_match(pattern, path);
+}
+
+std::string_view select_static_cache_control(const CacheControlRules& rules,
+                                             std::string_view path) noexcept
+{
+  path = path.substr(0, path.find_first_of("?#"));
+  for (const auto& [pattern, value] : rules) {
+    if (cache_control_pattern_matches(pattern, path)) return value;
+  }
+  return k_static_file_cache_control;
+}
+
+ByteRangeSelection select_byte_range(std::string_view range,
+                                     uint64_t size) noexcept
+{
+  using Kind = ByteRangeSelection::Kind;
+  constexpr ByteRangeSelection full{};
+
+  range = trim_ows(range);
+  const auto eq = range.find('=');
+  if (eq == std::string_view::npos) return full;
+  const auto unit = trim_ows(range.substr(0, eq));
+  if (unit.size() != 5 ||
+      !std::equal(unit.begin(), unit.end(), "bytes", [](char a, char b) {
+        return (a >= 'A' && a <= 'Z' ? a - 'A' + 'a' : a) == b;
+      })) {
+    return full;
+  }
+
+  // One range-spec; empty list elements are allowed and skipped.
+  std::string_view spec;
+  auto list = range.substr(eq + 1);
+  while (!list.empty()) {
+    const auto comma = list.find(',');
+    const auto element = trim_ows(list.substr(0, comma));
+    list.remove_prefix(comma == std::string_view::npos ? list.size() : comma + 1);
+    if (element.empty()) continue;
+    if (!spec.empty()) return full; // several ranges: serve the whole thing
+    spec = element;
+  }
+  if (spec.empty()) return full;
+
+  const auto dash = spec.find('-');
+  if (dash == std::string_view::npos) return full;
+  const auto first_str = spec.substr(0, dash);
+  const auto last_str = spec.substr(dash + 1);
+
+  if (first_str.empty()) {
+    // suffix-range: the last N bytes.
+    const auto suffix = parse_u64(last_str);
+    if (!suffix) return full;
+    if (*suffix == 0 || size == 0) return {Kind::Unsatisfiable, 0, 0};
+    const uint64_t length = std::min(*suffix, size);
+    return {Kind::Partial, size - length, length};
+  }
+
+  const auto first = parse_u64(first_str);
+  if (!first) return full;
+  uint64_t last = UINT64_MAX;
+  if (!last_str.empty()) {
+    const auto parsed = parse_u64(last_str);
+    if (!parsed || *parsed < *first) return full; // invalid range-spec
+    last = *parsed;
+  }
+  if (*first >= size) return {Kind::Unsatisfiable, 0, 0};
+  last = std::min(last, size - 1);
+  return {Kind::Partial, *first, last - *first + 1};
+}
+
+bool if_range_matches(std::string_view if_range,
+                      std::string_view etag,
+                      std::filesystem::file_time_type mtime) noexcept
+{
+  if_range = trim_ows(if_range);
+  if (if_range.empty()) return false;
+  if (if_range.front() == '"') {
+    // Strong comparison: our tags are strong, so equal bytes is enough.
+    return if_range == etag;
+  }
+  if (if_range.starts_with("W/")) return false;
+  const auto date = parse_http_date(if_range);
+  return date && std::chrono::floor<std::chrono::seconds>(mtime) == *date;
+}
+
 } // namespace nprpc::impl

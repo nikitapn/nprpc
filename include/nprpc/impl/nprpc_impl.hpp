@@ -75,6 +75,7 @@ struct Config {
   uint32_t http3_idle_timeout_ms = NPRPC_DEFAULT_HTTP3_IDLE_TIMEOUT_MS; // 0 = client's value only
   bool http_compression_enabled = NPRPC_DEFAULT_HTTP_COMPRESSION_ENABLED;
   size_t http_compression_min_size = NPRPC_DEFAULT_HTTP_COMPRESSION_MIN_SIZE;
+  std::vector<std::pair<std::string, std::string>> http_cache_control_rules;
   size_t http3_max_active_connections_per_ip = NPRPC_DEFAULT_HTTP3_MAX_ACTIVE_CONNECTIONS_PER_IP;
   size_t http3_max_new_connections_per_ip_per_second = NPRPC_DEFAULT_HTTP3_MAX_NEW_CONNECTIONS_PER_IP_PER_SECOND;
   size_t http3_max_new_connections_burst = NPRPC_DEFAULT_HTTP3_MAX_NEW_CONNECTIONS_BURST;

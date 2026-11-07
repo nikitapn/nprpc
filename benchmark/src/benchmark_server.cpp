@@ -1,9 +1,12 @@
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
 #include <fcntl.h>
 #include <iostream>
 #include <signal.h>
+#include <string>
+#include <string_view>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -154,9 +157,21 @@ public:
           keep_alive && *keep_alive)
         builder.keep_alive_timeout(
             std::chrono::seconds(std::strtoul(keep_alive, nullptr, 10)));
-      // gzip/deflate for static files and pages, over HTTP/1.1 and HTTP/3.
+      // br/gzip/deflate for static files and pages, over HTTP/1.1 and HTTP/3.
       if (::getenv("NPRPC_BENCH_COMPRESSION"))
         builder.compression();
+      // Static-file Cache-Control rules, "pattern=value;pattern=value", e.g.
+      // "/assets/**=public, max-age=31536000, immutable;*.html=no-cache".
+      if (const char* rules = ::getenv("NPRPC_BENCH_CACHE_CONTROL"); rules) {
+        std::string_view rest = rules;
+        while (!rest.empty()) {
+          const auto rule = rest.substr(0, rest.find(';'));
+          rest.remove_prefix(std::min(rest.size(), rule.size() + 1));
+          if (const auto eq = rule.find('='); eq != std::string_view::npos)
+            builder.cache_control(std::string(rule.substr(0, eq)),
+                                  std::string(rule.substr(eq + 1)));
+        }
+      }
       // A rendered page at /page, for checking page responses end to end.
       if (::getenv("NPRPC_BENCH_PAGE"))
         builder.with_page_handler(

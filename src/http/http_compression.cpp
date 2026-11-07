@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <limits>
 
+#include <brotli/encode.h>
 #include <zlib.h>
 
 namespace nprpc::impl {
@@ -69,6 +70,8 @@ std::string_view content_encoding_token(ContentEncoding e) noexcept
     return "gzip";
   case ContentEncoding::Deflate:
     return "deflate";
+  case ContentEncoding::Brotli:
+    return "br";
   case ContentEncoding::Identity:
     break;
   }
@@ -78,6 +81,7 @@ std::string_view content_encoding_token(ContentEncoding e) noexcept
 ContentEncoding negotiate_content_encoding(std::string_view accept_encoding) noexcept
 {
   // -1 = not mentioned
+  int q_br = -1;
   int q_gzip = -1;
   int q_deflate = -1;
   int q_any = -1;
@@ -105,7 +109,9 @@ ContentEncoding negotiate_content_encoding(std::string_view accept_encoding) noe
       }
     }
 
-    if (iequals(coding, "gzip") || iequals(coding, "x-gzip")) {
+    if (iequals(coding, "br")) {
+      q_br = std::max(q_br, q);
+    } else if (iequals(coding, "gzip") || iequals(coding, "x-gzip")) {
       q_gzip = std::max(q_gzip, q);
     } else if (iequals(coding, "deflate")) {
       q_deflate = std::max(q_deflate, q);
@@ -114,9 +120,13 @@ ContentEncoding negotiate_content_encoding(std::string_view accept_encoding) noe
     }
   }
 
-  const int gzip = q_gzip >= 0 ? q_gzip : std::max(q_any, 0);
-  const int deflate = q_deflate >= 0 ? q_deflate : std::max(q_any, 0);
+  const auto effective = [q_any](int q) { return q >= 0 ? q : std::max(q_any, 0); };
+  const int br = effective(q_br);
+  const int gzip = effective(q_gzip);
+  const int deflate = effective(q_deflate);
 
+  // Highest q wins; ties go to the better coding.
+  if (br > 0 && br >= gzip && br >= deflate) return ContentEncoding::Brotli;
   if (gzip > 0 && gzip >= deflate) return ContentEncoding::Gzip;
   if (deflate > 0) return ContentEncoding::Deflate;
   return ContentEncoding::Identity;
@@ -151,12 +161,52 @@ bool is_compressible_content_type(std::string_view content_type) noexcept
   return false;
 }
 
+namespace {
+
+// Quality 5 compresses about as fast as gzip's default and still smaller.
+constexpr int k_brotli_dynamic_quality = 5;
+
+std::optional<std::vector<uint8_t>> compress_brotli(const uint8_t* data,
+                                                    size_t len,
+                                                    int quality)
+{
+  if (quality < BROTLI_MIN_QUALITY || quality > BROTLI_MAX_QUALITY)
+    quality = k_brotli_dynamic_quality;
+
+  size_t out_len = BrotliEncoderMaxCompressedSize(len);
+  if (out_len == 0) return std::nullopt; // input too large to bound
+  std::vector<uint8_t> out(out_len);
+  // Text mode tunes the context modelling for UTF-8; everything we compress
+  // is text or text-like.
+  if (!BrotliEncoderCompress(quality, BROTLI_DEFAULT_WINDOW, BROTLI_MODE_TEXT,
+                             len, data, &out_len, out.data())) {
+    return std::nullopt;
+  }
+  out.resize(out_len);
+  return out;
+}
+
+} // namespace
+
+int static_compression_level(ContentEncoding encoding, size_t size) noexcept
+{
+  if (encoding != ContentEncoding::Brotli) return -1;
+  // Measured on minified JS: quality 11 runs at ~0.7 MB/s, 9 at ~17 MB/s,
+  // 6 at ~33 MB/s. The copy is built on the first request for the file, so
+  // keep that to ~100 ms; 11 gains only a few percent over 9 anyway.
+  if (size <= 64 * 1024) return BROTLI_MAX_QUALITY;
+  if (size <= 1024 * 1024) return 9;
+  return 6;
+}
+
 std::optional<std::vector<uint8_t>> compress_body(const uint8_t* data,
                                                   size_t len,
                                                   ContentEncoding encoding,
                                                   int level)
 {
   if (encoding == ContentEncoding::Identity) return std::nullopt;
+  if (encoding == ContentEncoding::Brotli)
+    return compress_brotli(data, len, level);
   // zlib counts in uInt; bodies this large are never worth compressing inline.
   if (len > std::numeric_limits<uInt>::max() / 2) return std::nullopt;
 

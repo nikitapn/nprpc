@@ -461,6 +461,23 @@ if(NPRPC_ENABLE_HTTP OR NPRPC_ENABLE_HTTP3)
   # definition reaches both zlib's sources and ours.
   target_compile_definitions(zlibstatic PUBLIC Z_PREFIX)
   target_link_libraries(nprpc PRIVATE zlibstatic)
+
+  # Brotli ("br" content-coding), built the same way: static PIC from the
+  # submodule. A function scope keeps BUILD_SHARED_LIBS=OFF from leaking out.
+  # Hidden visibility keeps its symbols out of libnprpc's exports, so it never
+  # clashes with a system libbrotli loaded in the same process.
+  function(nprpc_add_brotli)
+    set(BUILD_SHARED_LIBS OFF)
+    set(BROTLI_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(BROTLI_DISABLE_TESTS ON CACHE BOOL "" FORCE)
+    set(BROTLI_BUNDLED_MODE ON)
+    add_subdirectory(third_party/brotli EXCLUDE_FROM_ALL)
+    set_target_properties(brotlicommon brotlienc brotlidec PROPERTIES
+      POSITION_INDEPENDENT_CODE ON
+      C_VISIBILITY_PRESET hidden)
+  endfunction()
+  nprpc_add_brotli()
+  target_link_libraries(nprpc PRIVATE brotlienc)
 endif()
 
 # Add alias for namespaced target (modern CMake practice)

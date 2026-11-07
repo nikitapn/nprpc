@@ -15,12 +15,19 @@ The first visit, and every client that can't use QUIC, arrives over HTTP/1.1.
   now covers both protocols (was `http3_compression()`).
 * [x] `If-None-Match` compared weakly with list and `*` support, and
   `If-Modified-Since` at whole seconds, on both protocols.
-* [ ] Configurable `Cache-Control` per path or extension: hashed assets
-  `immutable, max-age=31536000`, HTML `no-cache`. Today every static file gets
-  a fixed `public, max-age=3600`.
-* [ ] Range requests (206) on both protocols, for video seeking and resumable
-  downloads.
-* [ ] Brotli, precompressed alongside gzip in the file cache.
+* [x] Configurable `Cache-Control` per path or extension:
+  `cache_control(pattern, value)` (`cacheControl(_:_:)` in Swift), first match
+  wins, e.g. `/assets/**` → `public, max-age=31536000, immutable`, `*.html` →
+  `no-cache`. Unmatched files keep `public, max-age=3600`.
+* [x] Range requests on both protocols: a single `bytes` range gets a 206
+  (416 past the end), with `If-Range` and `Accept-Ranges`. Several ranges get
+  the whole file; ranges are served from the file, never a compressed copy.
+* [x] Brotli (`br`), compressed once alongside gzip in the file cache (best
+  quality up to 64 KiB, lower above so a first request stays ~100 ms) and per
+  request for pages; preferred over gzip on a tie. Vendored as a submodule.
+* [ ] Serve `.br`/`.gz` files a build step already wrote next to the
+  original, instead of compressing at runtime.
+* [ ] Multi-range requests (`multipart/byteranges`), if anything needs them.
 
 ### 2. IDL evolution without breaking deployed clients
 The schema hash in the class ID makes any interface change fail `narrow()`,
@@ -130,14 +137,14 @@ so a browser holding cached JS breaks on the next server deploy.
 ### Ideas for Future Enhancements
 | Area | Improvement | Complexity |
 |------|-------------|------------|
-| Compression | ~~gzip~~ done (HTTP/1.1 and HTTP/3); brotli still open | Medium |
+| Compression | ~~gzip~~ ~~brotli~~ done (HTTP/1.1 and HTTP/3); precompressed files on disk open | Medium |
 | ETag/Caching | ~~ETag and If-None-Match 304s~~ done (HTTP/1.1 and HTTP/3) | Low |
-| Range requests | Support Range header for video streaming / resumable downloads (Roadmap 1) | Medium |
+| Range requests | ~~Single-range 206/416 with If-Range~~ done; multipart/byteranges open | Medium |
 | Cache warming | Pre-load common files at startup | Low |
 | Metrics | Expose cache stats (hit rate, memory usage) via /stats endpoint | Low |
 | HTTP/2 | Add HTTP/2 support via nghttp2 (between HTTP/1.1 and HTTP/3) | High |
 | sendfile() | For non-cached large files, use sendfile() syscall | Medium |
-| Cache-Control | Set, but fixed at `public, max-age=3600`; per-path policy open (Roadmap 1) | Low |
+| Cache-Control | ~~Per-path policy~~ done via `cache_control(pattern, value)` | Low |
 
 ## Architecture Overview
 
